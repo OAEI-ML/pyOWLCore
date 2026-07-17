@@ -31,6 +31,7 @@ VALID = (
     b"Ontology(SubObjectPropertyOf(ObjectPropertyChain(<urn:p> <urn:q>) <urn:r>))",
     b'Ontology(DataPropertyAssertion(<urn:p> _:subject "3"^^<http://www.w3.org/2001/XMLSchema#integer>))',
     b"Ontology(HasKey(<urn:C> (<urn:p> ObjectInverseOf(<urn:q>)) (<urn:d>)))",
+    b"Prefix(:=<urn:key#>) Ontology(HasKey(:A (:r) ()))",
     b'Ontology(DatatypeDefinition(<urn:D> DatatypeRestriction(<urn:B> <urn:f> "1")))',
 )
 

@@ -640,7 +640,11 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn parse_class_expression(&mut self) -> NativeResult<Node> {
-        let Some(name) = self.call_name().map(str::to_owned) else {
+        let Some(name) = self
+            .call_name()
+            .filter(|value| is_class_expression_constructor(value))
+            .map(str::to_owned)
+        else {
             return self.parse_class();
         };
         self.take()?;
@@ -1215,6 +1219,29 @@ fn axiom_tag(value: &str) -> Option<u64> {
         "AnnotationPropertyRange" => 123,
         _ => return None,
     })
+}
+
+fn is_class_expression_constructor(value: &str) -> bool {
+    matches!(
+        value,
+        "ObjectIntersectionOf"
+            | "ObjectUnionOf"
+            | "ObjectComplementOf"
+            | "ObjectOneOf"
+            | "ObjectSomeValuesFrom"
+            | "ObjectAllValuesFrom"
+            | "ObjectHasValue"
+            | "ObjectHasSelf"
+            | "ObjectMinCardinality"
+            | "ObjectMaxCardinality"
+            | "ObjectExactCardinality"
+            | "DataSomeValuesFrom"
+            | "DataAllValuesFrom"
+            | "DataHasValue"
+            | "DataMinCardinality"
+            | "DataMaxCardinality"
+            | "DataExactCardinality"
+    )
 }
 
 fn object_characteristic(value: &str) -> bool {

@@ -100,6 +100,20 @@ def test_plain_literal_at_sign_is_not_reinterpreted_as_a_language_tag() -> None:
     assert assertion.value.language is None
 
 
+def test_prefixed_has_key_class_is_not_mistaken_for_a_constructor() -> None:
+    source = b"Prefix(:=<urn:key#>) Ontology(HasKey(:A (:r) ()))"
+    document = parse_document(source, format="functional", options=PYTHON_OPTIONS)
+    assert document.axioms == m.CanonicalSet(
+        (
+            m.HasKey(
+                m.Class(m.IRI("urn:key#A")),
+                m.CanonicalSet((m.ObjectProperty(m.IRI("urn:key#r")),)),
+                m.CanonicalSet(),
+            ),
+        )
+    )
+
+
 def test_partial_rdf_mapping_is_expert_only_and_reported() -> None:
     source = f"""\
 @prefix owl: <http://www.w3.org/2002/07/owl#> .

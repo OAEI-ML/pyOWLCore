@@ -510,7 +510,7 @@ class FunctionalParser:
 
     def _parse_class_expression(self) -> m.ClassExpression:
         name = self._call_name()
-        if name is None:
+        if name not in _CLASS_EXPRESSION_CONSTRUCTORS:
             return self._parse_class()
         self._take()
         self._open()
@@ -858,6 +858,23 @@ _OBJECT_CARDINALITIES = frozenset(
 )
 _DATA_CARDINALITIES = frozenset(
     {"DataMinCardinality", "DataMaxCardinality", "DataExactCardinality"}
+)
+_CLASS_EXPRESSION_CONSTRUCTORS = frozenset(
+    {
+        "ObjectIntersectionOf",
+        "ObjectUnionOf",
+        "ObjectComplementOf",
+        "ObjectOneOf",
+        "ObjectSomeValuesFrom",
+        "ObjectAllValuesFrom",
+        "ObjectHasValue",
+        "ObjectHasSelf",
+        "DataSomeValuesFrom",
+        "DataAllValuesFrom",
+        "DataHasValue",
+        *_OBJECT_CARDINALITIES,
+        *_DATA_CARDINALITIES,
+    }
 )
 _DATA_RANGE_CONSTRUCTORS = frozenset(
     {"DataIntersectionOf", "DataUnionOf", "DataComplementOf", "DataOneOf", "DatatypeRestriction"}
