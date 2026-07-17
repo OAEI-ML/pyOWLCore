@@ -1,0 +1,1177 @@
+{
+  "constructor_count": 76,
+  "model_schema": 1,
+  "note": "SWRL rows are extension productions, not OWL 2 axiom productions.",
+  "production_count": 81,
+  "rows": [
+    {
+      "category": "primitive",
+      "constructor": "IRI",
+      "fields": [
+        "value"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Entities.2C_Literals.2C_and_Anonymous_Individuals",
+      "production": "IRI",
+      "productions": [
+        "IRI"
+      ],
+      "schema_tag": 1,
+      "schema_tag_name": "IRI"
+    },
+    {
+      "category": "primitive",
+      "constructor": "Entity",
+      "fields": [
+        "kind",
+        "iri"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Entities.2C_Literals.2C_and_Anonymous_Individuals",
+      "production": "Entity and typed entity productions",
+      "productions": [
+        "Class",
+        "Datatype",
+        "ObjectProperty",
+        "DataProperty",
+        "AnnotationProperty",
+        "NamedIndividual"
+      ],
+      "schema_tag": 2,
+      "schema_tag_name": "ENTITY"
+    },
+    {
+      "category": "primitive",
+      "constructor": "AnonymousIndividual",
+      "fields": [
+        "document_scope",
+        "local_key"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Entities.2C_Literals.2C_and_Anonymous_Individuals",
+      "production": "AnonymousIndividual",
+      "productions": [
+        "AnonymousIndividual"
+      ],
+      "schema_tag": 3,
+      "schema_tag_name": "ANONYMOUS_INDIVIDUAL"
+    },
+    {
+      "category": "primitive",
+      "constructor": "Literal",
+      "fields": [
+        "lexical_form",
+        "datatype",
+        "language"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Entities.2C_Literals.2C_and_Anonymous_Individuals",
+      "production": "Literal",
+      "productions": [
+        "Literal"
+      ],
+      "schema_tag": 4,
+      "schema_tag_name": "LITERAL"
+    },
+    {
+      "category": "annotation",
+      "constructor": "Annotation",
+      "fields": [
+        "property",
+        "value",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Annotations",
+      "production": "Annotation",
+      "productions": [
+        "Annotation"
+      ],
+      "schema_tag": 5,
+      "schema_tag_name": "ANNOTATION"
+    },
+    {
+      "category": "property_expression",
+      "constructor": "ObjectInverseOf",
+      "fields": [
+        "property"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Object_Property_Expressions",
+      "production": "ObjectInverseOf",
+      "productions": [
+        "ObjectInverseOf"
+      ],
+      "schema_tag": 10,
+      "schema_tag_name": "OBJECT_INVERSE_OF"
+    },
+    {
+      "category": "sub_object_property_expression",
+      "constructor": "ObjectPropertyChain",
+      "fields": [
+        "properties"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Object_Property_Expressions",
+      "production": "ObjectPropertyChain",
+      "productions": [
+        "ObjectPropertyChain"
+      ],
+      "schema_tag": 11,
+      "schema_tag_name": "OBJECT_PROPERTY_CHAIN"
+    },
+    {
+      "category": "facet_restriction",
+      "constructor": "FacetRestriction",
+      "fields": [
+        "facet",
+        "value"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Data_Ranges",
+      "production": "FacetRestriction",
+      "productions": [
+        "FacetRestriction"
+      ],
+      "schema_tag": 20,
+      "schema_tag_name": "FACET_RESTRICTION"
+    },
+    {
+      "category": "data_range",
+      "constructor": "DataIntersectionOf",
+      "fields": [
+        "operands"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Data_Ranges",
+      "production": "DataIntersectionOf",
+      "productions": [
+        "DataIntersectionOf"
+      ],
+      "schema_tag": 21,
+      "schema_tag_name": "DATA_INTERSECTION_OF"
+    },
+    {
+      "category": "data_range",
+      "constructor": "DataUnionOf",
+      "fields": [
+        "operands"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Data_Ranges",
+      "production": "DataUnionOf",
+      "productions": [
+        "DataUnionOf"
+      ],
+      "schema_tag": 22,
+      "schema_tag_name": "DATA_UNION_OF"
+    },
+    {
+      "category": "data_range",
+      "constructor": "DataComplementOf",
+      "fields": [
+        "operand"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Data_Ranges",
+      "production": "DataComplementOf",
+      "productions": [
+        "DataComplementOf"
+      ],
+      "schema_tag": 23,
+      "schema_tag_name": "DATA_COMPLEMENT_OF"
+    },
+    {
+      "category": "data_range",
+      "constructor": "DataOneOf",
+      "fields": [
+        "values"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Data_Ranges",
+      "production": "DataOneOf",
+      "productions": [
+        "DataOneOf"
+      ],
+      "schema_tag": 24,
+      "schema_tag_name": "DATA_ONE_OF"
+    },
+    {
+      "category": "data_range",
+      "constructor": "DatatypeRestriction",
+      "fields": [
+        "datatype",
+        "restrictions"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Data_Ranges",
+      "production": "DatatypeRestriction",
+      "productions": [
+        "DatatypeRestriction"
+      ],
+      "schema_tag": 25,
+      "schema_tag_name": "DATATYPE_RESTRICTION"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectIntersectionOf",
+      "fields": [
+        "operands"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectIntersectionOf",
+      "productions": [
+        "ObjectIntersectionOf"
+      ],
+      "schema_tag": 30,
+      "schema_tag_name": "OBJECT_INTERSECTION_OF"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectUnionOf",
+      "fields": [
+        "operands"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectUnionOf",
+      "productions": [
+        "ObjectUnionOf"
+      ],
+      "schema_tag": 31,
+      "schema_tag_name": "OBJECT_UNION_OF"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectComplementOf",
+      "fields": [
+        "operand"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectComplementOf",
+      "productions": [
+        "ObjectComplementOf"
+      ],
+      "schema_tag": 32,
+      "schema_tag_name": "OBJECT_COMPLEMENT_OF"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectOneOf",
+      "fields": [
+        "individuals"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectOneOf",
+      "productions": [
+        "ObjectOneOf"
+      ],
+      "schema_tag": 33,
+      "schema_tag_name": "OBJECT_ONE_OF"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectSomeValuesFrom",
+      "fields": [
+        "property",
+        "filler"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectSomeValuesFrom",
+      "productions": [
+        "ObjectSomeValuesFrom"
+      ],
+      "schema_tag": 34,
+      "schema_tag_name": "OBJECT_SOME_VALUES_FROM"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectAllValuesFrom",
+      "fields": [
+        "property",
+        "filler"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectAllValuesFrom",
+      "productions": [
+        "ObjectAllValuesFrom"
+      ],
+      "schema_tag": 35,
+      "schema_tag_name": "OBJECT_ALL_VALUES_FROM"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectHasValue",
+      "fields": [
+        "property",
+        "value"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectHasValue",
+      "productions": [
+        "ObjectHasValue"
+      ],
+      "schema_tag": 36,
+      "schema_tag_name": "OBJECT_HAS_VALUE"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectHasSelf",
+      "fields": [
+        "property"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectHasSelf",
+      "productions": [
+        "ObjectHasSelf"
+      ],
+      "schema_tag": 37,
+      "schema_tag_name": "OBJECT_HAS_SELF"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectMinCardinality",
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectMinCardinality",
+      "productions": [
+        "ObjectMinCardinality"
+      ],
+      "schema_tag": 38,
+      "schema_tag_name": "OBJECT_MIN_CARDINALITY"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectMaxCardinality",
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectMaxCardinality",
+      "productions": [
+        "ObjectMaxCardinality"
+      ],
+      "schema_tag": 39,
+      "schema_tag_name": "OBJECT_MAX_CARDINALITY"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectExactCardinality",
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "ObjectExactCardinality",
+      "productions": [
+        "ObjectExactCardinality"
+      ],
+      "schema_tag": 40,
+      "schema_tag_name": "OBJECT_EXACT_CARDINALITY"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataSomeValuesFrom",
+      "fields": [
+        "properties",
+        "filler"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "DataSomeValuesFrom",
+      "productions": [
+        "DataSomeValuesFrom"
+      ],
+      "schema_tag": 41,
+      "schema_tag_name": "DATA_SOME_VALUES_FROM"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataAllValuesFrom",
+      "fields": [
+        "properties",
+        "filler"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "DataAllValuesFrom",
+      "productions": [
+        "DataAllValuesFrom"
+      ],
+      "schema_tag": 42,
+      "schema_tag_name": "DATA_ALL_VALUES_FROM"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataHasValue",
+      "fields": [
+        "property",
+        "value"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "DataHasValue",
+      "productions": [
+        "DataHasValue"
+      ],
+      "schema_tag": 43,
+      "schema_tag_name": "DATA_HAS_VALUE"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataMinCardinality",
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "DataMinCardinality",
+      "productions": [
+        "DataMinCardinality"
+      ],
+      "schema_tag": 44,
+      "schema_tag_name": "DATA_MIN_CARDINALITY"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataMaxCardinality",
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "DataMaxCardinality",
+      "productions": [
+        "DataMaxCardinality"
+      ],
+      "schema_tag": 45,
+      "schema_tag_name": "DATA_MAX_CARDINALITY"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataExactCardinality",
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Class_Expressions",
+      "production": "DataExactCardinality",
+      "productions": [
+        "DataExactCardinality"
+      ],
+      "schema_tag": 46,
+      "schema_tag_name": "DATA_EXACT_CARDINALITY"
+    },
+    {
+      "category": "declaration_axiom",
+      "constructor": "Declaration",
+      "fields": [
+        "entity",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Declarations",
+      "production": "Declaration",
+      "productions": [
+        "Declaration"
+      ],
+      "schema_tag": 60,
+      "schema_tag_name": "DECLARATION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "SubClassOf",
+      "fields": [
+        "sub_class",
+        "super_class",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "SubClassOf",
+      "productions": [
+        "SubClassOf"
+      ],
+      "schema_tag": 61,
+      "schema_tag_name": "SUB_CLASS_OF"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "EquivalentClasses",
+      "fields": [
+        "expressions",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "EquivalentClasses",
+      "productions": [
+        "EquivalentClasses"
+      ],
+      "schema_tag": 62,
+      "schema_tag_name": "EQUIVALENT_CLASSES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DisjointClasses",
+      "fields": [
+        "expressions",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "DisjointClasses",
+      "productions": [
+        "DisjointClasses"
+      ],
+      "schema_tag": 63,
+      "schema_tag_name": "DISJOINT_CLASSES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DisjointUnion",
+      "fields": [
+        "defined_class",
+        "expressions",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "DisjointUnion",
+      "productions": [
+        "DisjointUnion"
+      ],
+      "schema_tag": 64,
+      "schema_tag_name": "DISJOINT_UNION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "SubObjectPropertyOf",
+      "fields": [
+        "sub_property",
+        "super_property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "SubObjectPropertyOf",
+      "productions": [
+        "SubObjectPropertyOf"
+      ],
+      "schema_tag": 70,
+      "schema_tag_name": "SUB_OBJECT_PROPERTY_OF"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "EquivalentObjectProperties",
+      "fields": [
+        "properties",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "EquivalentObjectProperties",
+      "productions": [
+        "EquivalentObjectProperties"
+      ],
+      "schema_tag": 71,
+      "schema_tag_name": "EQUIVALENT_OBJECT_PROPERTIES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DisjointObjectProperties",
+      "fields": [
+        "properties",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "DisjointObjectProperties",
+      "productions": [
+        "DisjointObjectProperties"
+      ],
+      "schema_tag": 72,
+      "schema_tag_name": "DISJOINT_OBJECT_PROPERTIES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "InverseObjectProperties",
+      "fields": [
+        "first",
+        "second",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "InverseObjectProperties",
+      "productions": [
+        "InverseObjectProperties"
+      ],
+      "schema_tag": 73,
+      "schema_tag_name": "INVERSE_OBJECT_PROPERTIES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "ObjectPropertyDomain",
+      "fields": [
+        "property",
+        "domain",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "ObjectPropertyDomain",
+      "productions": [
+        "ObjectPropertyDomain"
+      ],
+      "schema_tag": 74,
+      "schema_tag_name": "OBJECT_PROPERTY_DOMAIN"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "ObjectPropertyRange",
+      "fields": [
+        "property",
+        "range",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "ObjectPropertyRange",
+      "productions": [
+        "ObjectPropertyRange"
+      ],
+      "schema_tag": 75,
+      "schema_tag_name": "OBJECT_PROPERTY_RANGE"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "FunctionalObjectProperty",
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "FunctionalObjectProperty",
+      "productions": [
+        "FunctionalObjectProperty"
+      ],
+      "schema_tag": 76,
+      "schema_tag_name": "FUNCTIONAL_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "InverseFunctionalObjectProperty",
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "InverseFunctionalObjectProperty",
+      "productions": [
+        "InverseFunctionalObjectProperty"
+      ],
+      "schema_tag": 77,
+      "schema_tag_name": "INVERSE_FUNCTIONAL_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "ReflexiveObjectProperty",
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "ReflexiveObjectProperty",
+      "productions": [
+        "ReflexiveObjectProperty"
+      ],
+      "schema_tag": 78,
+      "schema_tag_name": "REFLEXIVE_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "IrreflexiveObjectProperty",
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "IrreflexiveObjectProperty",
+      "productions": [
+        "IrreflexiveObjectProperty"
+      ],
+      "schema_tag": 79,
+      "schema_tag_name": "IRREFLEXIVE_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "SymmetricObjectProperty",
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "SymmetricObjectProperty",
+      "productions": [
+        "SymmetricObjectProperty"
+      ],
+      "schema_tag": 80,
+      "schema_tag_name": "SYMMETRIC_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "AsymmetricObjectProperty",
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "AsymmetricObjectProperty",
+      "productions": [
+        "AsymmetricObjectProperty"
+      ],
+      "schema_tag": 81,
+      "schema_tag_name": "ASYMMETRIC_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "TransitiveObjectProperty",
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "TransitiveObjectProperty",
+      "productions": [
+        "TransitiveObjectProperty"
+      ],
+      "schema_tag": 82,
+      "schema_tag_name": "TRANSITIVE_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "SubDataPropertyOf",
+      "fields": [
+        "sub_property",
+        "super_property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "SubDataPropertyOf",
+      "productions": [
+        "SubDataPropertyOf"
+      ],
+      "schema_tag": 90,
+      "schema_tag_name": "SUB_DATA_PROPERTY_OF"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "EquivalentDataProperties",
+      "fields": [
+        "properties",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "EquivalentDataProperties",
+      "productions": [
+        "EquivalentDataProperties"
+      ],
+      "schema_tag": 91,
+      "schema_tag_name": "EQUIVALENT_DATA_PROPERTIES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DisjointDataProperties",
+      "fields": [
+        "properties",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "DisjointDataProperties",
+      "productions": [
+        "DisjointDataProperties"
+      ],
+      "schema_tag": 92,
+      "schema_tag_name": "DISJOINT_DATA_PROPERTIES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DataPropertyDomain",
+      "fields": [
+        "property",
+        "domain",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "DataPropertyDomain",
+      "productions": [
+        "DataPropertyDomain"
+      ],
+      "schema_tag": 93,
+      "schema_tag_name": "DATA_PROPERTY_DOMAIN"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DataPropertyRange",
+      "fields": [
+        "property",
+        "range",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "DataPropertyRange",
+      "productions": [
+        "DataPropertyRange"
+      ],
+      "schema_tag": 94,
+      "schema_tag_name": "DATA_PROPERTY_RANGE"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "FunctionalDataProperty",
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "FunctionalDataProperty",
+      "productions": [
+        "FunctionalDataProperty"
+      ],
+      "schema_tag": 95,
+      "schema_tag_name": "FUNCTIONAL_DATA_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DatatypeDefinition",
+      "fields": [
+        "datatype",
+        "data_range",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "DatatypeDefinition",
+      "productions": [
+        "DatatypeDefinition"
+      ],
+      "schema_tag": 100,
+      "schema_tag_name": "DATATYPE_DEFINITION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "HasKey",
+      "fields": [
+        "class_expression",
+        "object_properties",
+        "data_properties",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "HasKey",
+      "productions": [
+        "HasKey"
+      ],
+      "schema_tag": 101,
+      "schema_tag_name": "HAS_KEY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "SameIndividual",
+      "fields": [
+        "individuals",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "SameIndividual",
+      "productions": [
+        "SameIndividual"
+      ],
+      "schema_tag": 110,
+      "schema_tag_name": "SAME_INDIVIDUAL"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DifferentIndividuals",
+      "fields": [
+        "individuals",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "DifferentIndividuals",
+      "productions": [
+        "DifferentIndividuals"
+      ],
+      "schema_tag": 111,
+      "schema_tag_name": "DIFFERENT_INDIVIDUALS"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "ClassAssertion",
+      "fields": [
+        "class_expression",
+        "individual",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "ClassAssertion",
+      "productions": [
+        "ClassAssertion"
+      ],
+      "schema_tag": 112,
+      "schema_tag_name": "CLASS_ASSERTION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "ObjectPropertyAssertion",
+      "fields": [
+        "property",
+        "source",
+        "target",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "ObjectPropertyAssertion",
+      "productions": [
+        "ObjectPropertyAssertion"
+      ],
+      "schema_tag": 113,
+      "schema_tag_name": "OBJECT_PROPERTY_ASSERTION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "NegativeObjectPropertyAssertion",
+      "fields": [
+        "property",
+        "source",
+        "target",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "NegativeObjectPropertyAssertion",
+      "productions": [
+        "NegativeObjectPropertyAssertion"
+      ],
+      "schema_tag": 114,
+      "schema_tag_name": "NEGATIVE_OBJECT_PROPERTY_ASSERTION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DataPropertyAssertion",
+      "fields": [
+        "property",
+        "source",
+        "value",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "DataPropertyAssertion",
+      "productions": [
+        "DataPropertyAssertion"
+      ],
+      "schema_tag": 115,
+      "schema_tag_name": "DATA_PROPERTY_ASSERTION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "NegativeDataPropertyAssertion",
+      "fields": [
+        "property",
+        "source",
+        "value",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Axioms",
+      "production": "NegativeDataPropertyAssertion",
+      "productions": [
+        "NegativeDataPropertyAssertion"
+      ],
+      "schema_tag": 116,
+      "schema_tag_name": "NEGATIVE_DATA_PROPERTY_ASSERTION"
+    },
+    {
+      "category": "annotation_axiom",
+      "constructor": "AnnotationAssertion",
+      "fields": [
+        "property",
+        "subject",
+        "value",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Annotation_Axioms",
+      "production": "AnnotationAssertion",
+      "productions": [
+        "AnnotationAssertion"
+      ],
+      "schema_tag": 120,
+      "schema_tag_name": "ANNOTATION_ASSERTION"
+    },
+    {
+      "category": "annotation_axiom",
+      "constructor": "SubAnnotationPropertyOf",
+      "fields": [
+        "sub_property",
+        "super_property",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Annotation_Axioms",
+      "production": "SubAnnotationPropertyOf",
+      "productions": [
+        "SubAnnotationPropertyOf"
+      ],
+      "schema_tag": 121,
+      "schema_tag_name": "SUB_ANNOTATION_PROPERTY_OF"
+    },
+    {
+      "category": "annotation_axiom",
+      "constructor": "AnnotationPropertyDomain",
+      "fields": [
+        "property",
+        "domain",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Annotation_Axioms",
+      "production": "AnnotationPropertyDomain",
+      "productions": [
+        "AnnotationPropertyDomain"
+      ],
+      "schema_tag": 122,
+      "schema_tag_name": "ANNOTATION_PROPERTY_DOMAIN"
+    },
+    {
+      "category": "annotation_axiom",
+      "constructor": "AnnotationPropertyRange",
+      "fields": [
+        "property",
+        "range",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/TR/owl2-syntax/#Annotation_Axioms",
+      "production": "AnnotationPropertyRange",
+      "productions": [
+        "AnnotationPropertyRange"
+      ],
+      "schema_tag": 123,
+      "schema_tag_name": "ANNOTATION_PROPERTY_RANGE"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "Variable",
+      "fields": [
+        "iri"
+      ],
+      "normative_source": "https://www.w3.org/Submission/SWRL/#2.1",
+      "production": "SWRL Variable",
+      "productions": [
+        "SWRL Variable"
+      ],
+      "schema_tag": 140,
+      "schema_tag_name": "VARIABLE"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "ClassAtom",
+      "fields": [
+        "predicate",
+        "argument"
+      ],
+      "normative_source": "https://www.w3.org/Submission/SWRL/#2.1",
+      "production": "SWRL ClassAtom",
+      "productions": [
+        "SWRL ClassAtom"
+      ],
+      "schema_tag": 141,
+      "schema_tag_name": "CLASS_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "DataRangeAtom",
+      "fields": [
+        "predicate",
+        "argument"
+      ],
+      "normative_source": "https://www.w3.org/Submission/SWRL/#2.1",
+      "production": "SWRL DataRangeAtom",
+      "productions": [
+        "SWRL DataRangeAtom"
+      ],
+      "schema_tag": 142,
+      "schema_tag_name": "DATA_RANGE_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "ObjectPropertyAtom",
+      "fields": [
+        "predicate",
+        "source",
+        "target"
+      ],
+      "normative_source": "https://www.w3.org/Submission/SWRL/#2.1",
+      "production": "SWRL IndividualPropertyAtom",
+      "productions": [
+        "SWRL IndividualPropertyAtom"
+      ],
+      "schema_tag": 143,
+      "schema_tag_name": "OBJECT_PROPERTY_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "DataPropertyAtom",
+      "fields": [
+        "predicate",
+        "source",
+        "target"
+      ],
+      "normative_source": "https://www.w3.org/Submission/SWRL/#2.1",
+      "production": "SWRL DatavaluedPropertyAtom",
+      "productions": [
+        "SWRL DatavaluedPropertyAtom"
+      ],
+      "schema_tag": 144,
+      "schema_tag_name": "DATA_PROPERTY_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "BuiltInAtom",
+      "fields": [
+        "predicate",
+        "arguments"
+      ],
+      "normative_source": "https://www.w3.org/Submission/SWRL/#2.1",
+      "production": "SWRL BuiltinAtom",
+      "productions": [
+        "SWRL BuiltinAtom"
+      ],
+      "schema_tag": 145,
+      "schema_tag_name": "BUILT_IN_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "SameIndividualAtom",
+      "fields": [
+        "first",
+        "second"
+      ],
+      "normative_source": "https://www.w3.org/Submission/SWRL/#2.1",
+      "production": "SWRL SameIndividualAtom",
+      "productions": [
+        "SWRL SameIndividualAtom"
+      ],
+      "schema_tag": 146,
+      "schema_tag_name": "SAME_INDIVIDUAL_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "DifferentIndividualsAtom",
+      "fields": [
+        "first",
+        "second"
+      ],
+      "normative_source": "https://www.w3.org/Submission/SWRL/#2.1",
+      "production": "SWRL DifferentIndividualsAtom",
+      "productions": [
+        "SWRL DifferentIndividualsAtom"
+      ],
+      "schema_tag": 147,
+      "schema_tag_name": "DIFFERENT_INDIVIDUALS_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "SWRLRule",
+      "fields": [
+        "body",
+        "head",
+        "annotations"
+      ],
+      "normative_source": "https://www.w3.org/Submission/SWRL/#2.1",
+      "production": "SWRL Imp",
+      "productions": [
+        "SWRL Imp"
+      ],
+      "schema_tag": 148,
+      "schema_tag_name": "SWRL_RULE"
+    }
+  ]
+}

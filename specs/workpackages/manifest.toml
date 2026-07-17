@@ -17,7 +17,7 @@ id = "WP01"
 brief = "WP01-structural-model.md"
 wave = 1
 depends = ["WP00"]
-owns = ["src/pyowl_core/model/", "schemas/model-v1.toml", "tests/unit/model/", "tests/generated/model/"]
+owns = ["src/pyowl_core/model/", "src/pyowl_core/extensions/", "src/pyowl_core/__init__.py", "schemas/model-v1.toml", "tools/schema/tags.py", "tools/audit/public-api-v0.txt", "tests/unit/model/", "tests/generated/model/"]
 
 [[package]]
 id = "WP02"
@@ -102,4 +102,3 @@ brief = "WP13-docs-api-stabilization.md"
 wave = 12
 depends = ["WP11", "WP12"]
 owns = ["README.md", "CHANGELOG.md", "MIGRATION.md", "docs/", "src/pyowl_core/__init__.py", "tests/docs/", "tests/release/"]
-

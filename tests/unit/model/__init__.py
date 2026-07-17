@@ -1,0 +1,1 @@
+"""Structural model unit tests."""

@@ -1,11 +1,8 @@
-"""Public foundation contracts for the shared Java-free OWL 2 kernel.
-
-Ontology model and parsing exports arrive in later work packages. This module
-is deliberately curated: consumers must not depend on private backend modules.
-"""
+"""Curated public contracts for the shared Java-free OWL 2 kernel."""
 
 from __future__ import annotations
 
+from . import model as model
 from .cancellation import CancellationSource, CancellationToken
 from .config import BackendPreference, DocumentFormat, ImportPolicy, LoadOptions
 from .diagnostics import Diagnostic, DiagnosticScalar, Severity, SourceSpan
@@ -52,6 +49,7 @@ from .exceptions import (
     WireVersionError,
 )
 from .limits import ParseLimits
+from .model import *  # noqa: F403
 from .progress import (
     ProgressBuffer,
     ProgressCallback,
@@ -130,5 +128,7 @@ __all__ = [
     "WireLimitError",
     "WireVersionError",
     "__version__",
+    "model",
     "report_progress",
+    *model.__all__,
 ]

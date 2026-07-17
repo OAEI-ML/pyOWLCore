@@ -1,0 +1,41 @@
+"""Public SWRL namespace backed by the shared structural model values."""
+
+from pyowl_core.model.swrl import (
+    ATOM_TYPES,
+    DATA_ARGUMENT_TYPES,
+    EXTENSION_COMPONENT_TYPES,
+    INDIVIDUAL_ARGUMENT_TYPES,
+    Atom,
+    BuiltInAtom,
+    ClassAtom,
+    DataArgument,
+    DataPropertyAtom,
+    DataRangeAtom,
+    DifferentIndividualsAtom,
+    ExtensionComponent,
+    IndividualArgument,
+    ObjectPropertyAtom,
+    SameIndividualAtom,
+    SWRLRule,
+    Variable,
+)
+
+__all__ = [
+    "ATOM_TYPES",
+    "DATA_ARGUMENT_TYPES",
+    "EXTENSION_COMPONENT_TYPES",
+    "INDIVIDUAL_ARGUMENT_TYPES",
+    "Atom",
+    "BuiltInAtom",
+    "ClassAtom",
+    "DataArgument",
+    "DataPropertyAtom",
+    "DataRangeAtom",
+    "DifferentIndividualsAtom",
+    "ExtensionComponent",
+    "IndividualArgument",
+    "ObjectPropertyAtom",
+    "SWRLRule",
+    "SameIndividualAtom",
+    "Variable",
+]

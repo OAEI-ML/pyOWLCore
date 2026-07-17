@@ -17,8 +17,11 @@ WP00.
 
 ## Owned paths
 
-`src/pyowl_core/model/`, `schemas/model-v1.toml`, and model tests. Do not add
-format parsers, snapshot/import behavior, reasoner IR, or consumer quirks.
+`src/pyowl_core/model/`, `src/pyowl_core/extensions/`,
+`schemas/model-v1.toml`, and model tests. This work package also owns the
+coordinated WP01 additions to the root public exports/snapshot and model tag
+generator. Do not add format parsers, snapshot/import behavior, reasoner IR,
+or consumer quirks.
 
 ## Deliverables
 
@@ -33,6 +36,8 @@ format parsers, snapshot/import behavior, reasoner IR, or consumer quirks.
 - Source-lexical provenance hooks without putting tag case/prefix/blank labels
   in equality.
 - Machine-generated W3C production coverage table and one fixture per branch.
+- SWRL values remain public only through `pyowl_core.extensions.swrl`; the
+  closed canonical registry retains their extension tags for round trips.
 
 ## Acceptance
 
@@ -43,4 +48,3 @@ format parsers, snapshot/import behavior, reasoner IR, or consumer quirks.
 - no model import depends on io/backend/consumer and stdlib-only leaf policy;
 - 100% constructor dispatch coverage and clean schema generation; and
 - WP02 receives stable constructors/tags/visitor interfaces.
-

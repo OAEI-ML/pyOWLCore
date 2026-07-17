@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import re
 import sys
 from collections.abc import Sequence
@@ -138,7 +139,7 @@ class TagLedger:
         lines = [
             '"""Generated tag constants; do not edit by hand."""',
             "",
-            f"SCHEMA_NAMESPACE = {self.namespace!r}",
+            f"SCHEMA_NAMESPACE = {json.dumps(self.namespace)}",
             f"SCHEMA_VERSION = {self.schema}",
             "",
         ]
@@ -149,7 +150,9 @@ class TagLedger:
                 exported.append(tag.name)
             else:
                 lines.append(f"# retired: {tag.name} = {tag.value}")
-        lines.extend(["", f"__all__ = {sorted(exported)!r}", ""])
+        lines.extend(["", "__all__ = ["])
+        lines.extend(f"    {json.dumps(name)}," for name in sorted(exported))
+        lines.extend(["]", ""])
         return "\n".join(lines)
 
 

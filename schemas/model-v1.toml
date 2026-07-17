@@ -1,0 +1,382 @@
+schema = 1
+namespace = "model"
+
+[[tag]]
+name = "IRI"
+value = 1
+status = "active"
+
+[[tag]]
+name = "ENTITY"
+value = 2
+status = "active"
+
+[[tag]]
+name = "ANONYMOUS_INDIVIDUAL"
+value = 3
+status = "active"
+
+[[tag]]
+name = "LITERAL"
+value = 4
+status = "active"
+
+[[tag]]
+name = "ANNOTATION"
+value = 5
+status = "active"
+
+[[tag]]
+name = "OBJECT_INVERSE_OF"
+value = 10
+status = "active"
+
+[[tag]]
+name = "OBJECT_PROPERTY_CHAIN"
+value = 11
+status = "active"
+
+[[tag]]
+name = "FACET_RESTRICTION"
+value = 20
+status = "active"
+
+[[tag]]
+name = "DATA_INTERSECTION_OF"
+value = 21
+status = "active"
+
+[[tag]]
+name = "DATA_UNION_OF"
+value = 22
+status = "active"
+
+[[tag]]
+name = "DATA_COMPLEMENT_OF"
+value = 23
+status = "active"
+
+[[tag]]
+name = "DATA_ONE_OF"
+value = 24
+status = "active"
+
+[[tag]]
+name = "DATATYPE_RESTRICTION"
+value = 25
+status = "active"
+
+[[tag]]
+name = "OBJECT_INTERSECTION_OF"
+value = 30
+status = "active"
+
+[[tag]]
+name = "OBJECT_UNION_OF"
+value = 31
+status = "active"
+
+[[tag]]
+name = "OBJECT_COMPLEMENT_OF"
+value = 32
+status = "active"
+
+[[tag]]
+name = "OBJECT_ONE_OF"
+value = 33
+status = "active"
+
+[[tag]]
+name = "OBJECT_SOME_VALUES_FROM"
+value = 34
+status = "active"
+
+[[tag]]
+name = "OBJECT_ALL_VALUES_FROM"
+value = 35
+status = "active"
+
+[[tag]]
+name = "OBJECT_HAS_VALUE"
+value = 36
+status = "active"
+
+[[tag]]
+name = "OBJECT_HAS_SELF"
+value = 37
+status = "active"
+
+[[tag]]
+name = "OBJECT_MIN_CARDINALITY"
+value = 38
+status = "active"
+
+[[tag]]
+name = "OBJECT_MAX_CARDINALITY"
+value = 39
+status = "active"
+
+[[tag]]
+name = "OBJECT_EXACT_CARDINALITY"
+value = 40
+status = "active"
+
+[[tag]]
+name = "DATA_SOME_VALUES_FROM"
+value = 41
+status = "active"
+
+[[tag]]
+name = "DATA_ALL_VALUES_FROM"
+value = 42
+status = "active"
+
+[[tag]]
+name = "DATA_HAS_VALUE"
+value = 43
+status = "active"
+
+[[tag]]
+name = "DATA_MIN_CARDINALITY"
+value = 44
+status = "active"
+
+[[tag]]
+name = "DATA_MAX_CARDINALITY"
+value = 45
+status = "active"
+
+[[tag]]
+name = "DATA_EXACT_CARDINALITY"
+value = 46
+status = "active"
+
+[[tag]]
+name = "DECLARATION"
+value = 60
+status = "active"
+
+[[tag]]
+name = "SUB_CLASS_OF"
+value = 61
+status = "active"
+
+[[tag]]
+name = "EQUIVALENT_CLASSES"
+value = 62
+status = "active"
+
+[[tag]]
+name = "DISJOINT_CLASSES"
+value = 63
+status = "active"
+
+[[tag]]
+name = "DISJOINT_UNION"
+value = 64
+status = "active"
+
+[[tag]]
+name = "SUB_OBJECT_PROPERTY_OF"
+value = 70
+status = "active"
+
+[[tag]]
+name = "EQUIVALENT_OBJECT_PROPERTIES"
+value = 71
+status = "active"
+
+[[tag]]
+name = "DISJOINT_OBJECT_PROPERTIES"
+value = 72
+status = "active"
+
+[[tag]]
+name = "INVERSE_OBJECT_PROPERTIES"
+value = 73
+status = "active"
+
+[[tag]]
+name = "OBJECT_PROPERTY_DOMAIN"
+value = 74
+status = "active"
+
+[[tag]]
+name = "OBJECT_PROPERTY_RANGE"
+value = 75
+status = "active"
+
+[[tag]]
+name = "FUNCTIONAL_OBJECT_PROPERTY"
+value = 76
+status = "active"
+
+[[tag]]
+name = "INVERSE_FUNCTIONAL_OBJECT_PROPERTY"
+value = 77
+status = "active"
+
+[[tag]]
+name = "REFLEXIVE_OBJECT_PROPERTY"
+value = 78
+status = "active"
+
+[[tag]]
+name = "IRREFLEXIVE_OBJECT_PROPERTY"
+value = 79
+status = "active"
+
+[[tag]]
+name = "SYMMETRIC_OBJECT_PROPERTY"
+value = 80
+status = "active"
+
+[[tag]]
+name = "ASYMMETRIC_OBJECT_PROPERTY"
+value = 81
+status = "active"
+
+[[tag]]
+name = "TRANSITIVE_OBJECT_PROPERTY"
+value = 82
+status = "active"
+
+[[tag]]
+name = "SUB_DATA_PROPERTY_OF"
+value = 90
+status = "active"
+
+[[tag]]
+name = "EQUIVALENT_DATA_PROPERTIES"
+value = 91
+status = "active"
+
+[[tag]]
+name = "DISJOINT_DATA_PROPERTIES"
+value = 92
+status = "active"
+
+[[tag]]
+name = "DATA_PROPERTY_DOMAIN"
+value = 93
+status = "active"
+
+[[tag]]
+name = "DATA_PROPERTY_RANGE"
+value = 94
+status = "active"
+
+[[tag]]
+name = "FUNCTIONAL_DATA_PROPERTY"
+value = 95
+status = "active"
+
+[[tag]]
+name = "DATATYPE_DEFINITION"
+value = 100
+status = "active"
+
+[[tag]]
+name = "HAS_KEY"
+value = 101
+status = "active"
+
+[[tag]]
+name = "SAME_INDIVIDUAL"
+value = 110
+status = "active"
+
+[[tag]]
+name = "DIFFERENT_INDIVIDUALS"
+value = 111
+status = "active"
+
+[[tag]]
+name = "CLASS_ASSERTION"
+value = 112
+status = "active"
+
+[[tag]]
+name = "OBJECT_PROPERTY_ASSERTION"
+value = 113
+status = "active"
+
+[[tag]]
+name = "NEGATIVE_OBJECT_PROPERTY_ASSERTION"
+value = 114
+status = "active"
+
+[[tag]]
+name = "DATA_PROPERTY_ASSERTION"
+value = 115
+status = "active"
+
+[[tag]]
+name = "NEGATIVE_DATA_PROPERTY_ASSERTION"
+value = 116
+status = "active"
+
+[[tag]]
+name = "ANNOTATION_ASSERTION"
+value = 120
+status = "active"
+
+[[tag]]
+name = "SUB_ANNOTATION_PROPERTY_OF"
+value = 121
+status = "active"
+
+[[tag]]
+name = "ANNOTATION_PROPERTY_DOMAIN"
+value = 122
+status = "active"
+
+[[tag]]
+name = "ANNOTATION_PROPERTY_RANGE"
+value = 123
+status = "active"
+
+[[tag]]
+name = "VARIABLE"
+value = 140
+status = "active"
+
+[[tag]]
+name = "CLASS_ATOM"
+value = 141
+status = "active"
+
+[[tag]]
+name = "DATA_RANGE_ATOM"
+value = 142
+status = "active"
+
+[[tag]]
+name = "OBJECT_PROPERTY_ATOM"
+value = 143
+status = "active"
+
+[[tag]]
+name = "DATA_PROPERTY_ATOM"
+value = 144
+status = "active"
+
+[[tag]]
+name = "BUILT_IN_ATOM"
+value = 145
+status = "active"
+
+[[tag]]
+name = "SAME_INDIVIDUAL_ATOM"
+value = 146
+status = "active"
+
+[[tag]]
+name = "DIFFERENT_INDIVIDUALS_ATOM"
+value = 147
+status = "active"
+
+[[tag]]
+name = "SWRL_RULE"
+value = 148
+status = "active"
