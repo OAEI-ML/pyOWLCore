@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+from collections import defaultdict, deque
+from collections.abc import Mapping
 from pathlib import Path
 
 from pyowl_core.cancellation import CancellationToken
@@ -18,14 +21,14 @@ from pyowl_core.exceptions import (
     OptionConflictError,
     PyOWLCoreError,
 )
-from pyowl_core.io.formats.common import ParsedOntology
+from pyowl_core.io.formats.common import ParseContext, ParsedOntology
 from pyowl_core.io.formats.detection import coerce_format, detect_format
-from pyowl_core.io.formats.functional import parse_functional
+from pyowl_core.io.formats.functional import FunctionalLexer, parse_functional
 from pyowl_core.io.formats.owlxml import parse_owlxml
 from pyowl_core.io.formats.rdfxml import parse_rdfxml
-from pyowl_core.io.formats.turtle import parse_turtle
+from pyowl_core.io.formats.turtle import TurtleLexer, parse_turtle
 from pyowl_core.io.source import DocumentSource, acquire_source
-from pyowl_core.model import IRI, StructuralNode, structural_digest
+from pyowl_core.model import IRI, Literal, StructuralNode, structural_digest, walk
 
 _NATIVE_AUTO_MIN_SOURCE_BYTES = 256 * 1024
 
@@ -136,10 +139,38 @@ class PythonParser:
         source_map = None
         if selected_options.preserve_source_map:
             builder = SourceMapBuilder(dict(parsed.prefixes))
+            language_details = _language_details(
+                parsed,
+                _source_language_tags(
+                    payload.data,
+                    detection.format,
+                    selected_options,
+                    cancellation_token,
+                ),
+            )
+            source_map_entries = 0
             for occurrence, (original, span) in enumerate(parsed.occurrences):
                 frozen, digest = matcher.match(original)
                 if frozen is not None:
-                    builder.add_digest(digest, occurrence, span)
+                    details = language_details[occurrence]
+                    builder.add_digest(
+                        digest,
+                        occurrence,
+                        span,
+                        _root_lexical_details(details),
+                    )
+                    source_map_entries += 1
+                    for literal, spelling in details:
+                        builder.add(
+                            literal,
+                            occurrence,
+                            span,
+                            {"language-tag": spelling},
+                        )
+                        source_map_entries += 1
+                    selected_options.limits.enforce(
+                        "max_source_map_entries", source_map_entries
+                    )
             source_map = builder.freeze()
         provisional = OntologyDocument(
             parsed.ontology_id,
@@ -189,6 +220,63 @@ def parse_document(
         options=options,
         cancellation_token=cancellation_token,
     )
+
+
+def _source_language_tags(
+    data: bytes,
+    format: DocumentFormat,
+    options: LoadOptions,
+    cancellation_token: CancellationToken | None,
+) -> tuple[str, ...]:
+    if format in (DocumentFormat.FUNCTIONAL, DocumentFormat.TURTLE):
+        text = data.decode("utf-8-sig", errors="strict")
+        context = ParseContext(options.limits, cancellation_token)
+        tokens = (
+            FunctionalLexer(text, context).tokenize()
+            if format is DocumentFormat.FUNCTIONAL
+            else TurtleLexer(text, context).tokenize()
+        )
+        return tuple(token.value for token in tokens if token.kind == "LANG")
+    root = ET.fromstring(data)
+    xml_language = "{http://www.w3.org/XML/1998/namespace}lang"
+    return tuple(
+        language
+        for element in root.iter()
+        if (language := element.get(xml_language) or element.get("lang")) is not None
+    )
+
+
+def _language_details(
+    parsed: ParsedOntology,
+    spellings: tuple[str, ...],
+) -> tuple[tuple[tuple[Literal, str], ...], ...]:
+    by_language: dict[str, deque[str]] = defaultdict(deque)
+    for spelling in spellings:
+        by_language[spelling.lower()].append(spelling)
+    result: list[tuple[tuple[Literal, str], ...]] = []
+    for value, _span in parsed.occurrences:
+        details: list[tuple[Literal, str]] = []
+        for node in walk(value):
+            if not isinstance(node, Literal) or node.language is None:
+                continue
+            candidates = by_language[node.language]
+            if candidates:
+                details.append((node, candidates.popleft()))
+        result.append(tuple(details))
+    return tuple(result)
+
+
+def _root_lexical_details(details: tuple[tuple[Literal, str], ...]) -> Mapping[str, str]:
+    if not details:
+        return {}
+    result = {"language-tag": details[0][1]}
+    result.update(
+        {
+            f"language-tag:{index}": spelling
+            for index, (_literal, spelling) in enumerate(details[1:], 2)
+        }
+    )
+    return result
 
 
 def _parse_payload(
