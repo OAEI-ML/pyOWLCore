@@ -141,7 +141,16 @@ def test_import_cycle_manifest_and_safe_metadata_round_trip() -> None:
     )
     encoded = encode_snapshot(source)
     decoded = decode_snapshot(encoded)
-    assert decoded.import_manifest == source.import_manifest
+    assert decoded.import_manifest.canonical_bytes() == source.import_manifest.canonical_bytes()
+    assert decoded.import_manifest.edges == source.import_manifest.edges
+    assert any(
+        decoded_record.source_sha256 != source_record.source_sha256
+        for decoded_record, source_record in zip(
+            decoded.import_manifest.documents,
+            source.import_manifest.documents,
+            strict=True,
+        )
+    )
     assert len(decoded.documents) == 2
     assert decoded.is_complete
     secret = "file:///private/ontology?authorization=Bearer-SECRET"

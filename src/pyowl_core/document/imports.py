@@ -453,7 +453,11 @@ class SnapshotLoader:
                         cancellation_token,
                     )
                     counters["document_cache_hits"] += int(cache_hit)
-                    candidate = _node(document, DocumentStatus.RESOLVED)
+                    candidate = _node(
+                        document,
+                        DocumentStatus.RESOLVED,
+                        import_iri=item.import_iri,
+                    )
                     retained = source_identity.get(_source_identity(document))
                     if retained is None:
                         _register_identity(candidate, ontology_identity, version_identity)
@@ -619,16 +623,25 @@ def clear_import_caches() -> None:
     _DEFAULT_DOCUMENT_CACHE.clear()
 
 
-def _node(document: OntologyDocument, status: DocumentStatus) -> _Node:
-    return _Node(_document_key(document), document, status)
+def _node(
+    document: OntologyDocument,
+    status: DocumentStatus,
+    *,
+    import_iri: IRI | None = None,
+) -> _Node:
+    return _Node(_document_key(document, import_iri=import_iri), document, status)
 
 
-def _document_key(document: OntologyDocument) -> str:
+def _document_key(document: OntologyDocument, *, import_iri: IRI | None = None) -> str:
     identity = _identity_claim(document)
     if identity is None:
-        payload = (
-            b"anonymous" + document.provenance.source_sha256 + document.document_fingerprint.digest
-        )
+        # Acquisition bytes are diagnostic provenance, not document identity.
+        # A root uses canonical structure; an imported anonymous document also
+        # includes the semantic import IRI so equal documents reached at two
+        # graph locations retain distinct document/blank-node scopes.
+        payload = b"anonymous" + document.document_fingerprint.digest
+        if import_iri is not None:
+            payload += _frame(canonical_bytes(import_iri))
     else:
         payload = b"named" + b"".join(_frame(item.encode("utf-8")) for item in identity)
     digest = hashlib.sha256(b"pyowl-core:document-key:v1\x00" + payload).hexdigest()
@@ -912,10 +925,7 @@ def _record_bytes(record: DocumentRecord) -> bytes:
             _frame(record.document_key.encode("ascii")),
             _optional_iri(ontology.ontology_iri),
             _optional_iri(ontology.version_iri),
-            _optional_iri(record.document_iri),
-            record.source_sha256,
             record.document_fingerprint.digest,
-            _frame(record.format.value.encode("ascii")),
             _frame(record.status.value.encode("ascii")),
         )
     )

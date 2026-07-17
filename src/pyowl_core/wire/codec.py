@@ -98,6 +98,8 @@ from .schema import (
 )
 
 _NONE_U64 = 0xFFFF_FFFF_FFFF_FFFF
+_CANONICAL_WIRE_PARSER = "pyowl_core.wire.canonical"
+_CANONICAL_WIRE_BACKEND = "wire"
 
 _FORMATS = {
     DocumentFormat.RDF_XML: 1,
@@ -604,10 +606,10 @@ def _collect_sections(
                     observed=temporary,
                     allowed=limits.max_temporary_bytes,
                 )
-    for record, document in snapshot.iter_documents():
+    for record, _document in snapshot.iter_documents():
         strings.add(record.document_key.encode("utf-8"))
-        strings.add(document.provenance.parser.encode("utf-8"))
-        strings.add(document.provenance.backend.encode("utf-8"))
+        strings.add(_CANONICAL_WIRE_PARSER.encode("utf-8"))
+        strings.add(_CANONICAL_WIRE_BACKEND.encode("utf-8"))
     for edge in snapshot.import_manifest.edges:
         strings.add(edge.importing_document_key.encode("utf-8"))
         if edge.resolved_document_key is not None:
@@ -648,11 +650,8 @@ def _structural_roots(snapshot: OntologySnapshot) -> Iterator[StructuralNode]:
         for value in (
             document.ontology_id.ontology_iri,
             document.ontology_id.version_iri,
-            document.document_iri,
-            document.provenance.document_iri,
             record.ontology_id.ontology_iri,
             record.ontology_id.version_iri,
-            record.document_iri,
         ):
             if value is not None:
                 yield value
@@ -748,34 +747,36 @@ def _document_row(
     document: OntologyDocument,
     ids: Mapping[SectionKind, Mapping[bytes, int]],
 ) -> bytes:
+    # Required wire sections describe canonical ontology structure. Exact
+    # acquisition provenance remains available on direct documents and may be
+    # carried by an explicitly requested provenance record; serializing it here
+    # would make ordinary wire depend on syntax, path, layout, and backend.
+    canonical_source_digest = record.document_fingerprint.digest
     writer = ByteWriter()
     writer.u32(_string_id(record.document_key, ids))
     writer.u32(_node_id(document.ontology_id.ontology_iri, SectionKind.IRIS, ids))
     writer.u32(_node_id(document.ontology_id.version_iri, SectionKind.IRIS, ids))
-    writer.u32(_node_id(document.document_iri, SectionKind.IRIS, ids))
+    writer.u32(0)
     writer.u32(_node_id(record.ontology_id.ontology_iri, SectionKind.IRIS, ids))
     writer.u32(_node_id(record.ontology_id.version_iri, SectionKind.IRIS, ids))
-    writer.u32(_node_id(record.document_iri, SectionKind.IRIS, ids))
-    writer.raw(record.source_sha256)
+    writer.u32(0)
+    writer.raw(canonical_source_digest)
     _write_fingerprint(writer, record.document_fingerprint)
-    writer.u8(_FORMATS[record.format])
+    writer.u8(_FORMATS[DocumentFormat.FUNCTIONAL])
     writer.u8(_DOCUMENT_STATUSES[record.status])
-    provenance = document.provenance
-    writer.raw(provenance.source_sha256)
-    writer.u8(_DIGEST_KINDS[provenance.digest_kind])
-    writer.u64(provenance.byte_length)
-    writer.u64(provenance.decoded_codepoint_length)
-    writer.u32(_node_id(provenance.document_iri, SectionKind.IRIS, ids))
-    writer.u8(_FORMATS[provenance.format])
-    writer.u8(_DETECTION_BASES[provenance.detection_basis])
-    writer.u8(1 if provenance.expected_sha256 is not None else 0)
-    if provenance.expected_sha256 is not None:
-        writer.raw(provenance.expected_sha256)
-    writer.u32(_string_id(provenance.parser, ids))
-    writer.u32(_string_id(provenance.backend, ids))
-    writer.u16(provenance.api_version[0])
-    writer.u16(provenance.api_version[1])
-    writer.u32(provenance.model_schema)
+    writer.raw(canonical_source_digest)
+    writer.u8(_DIGEST_KINDS[DigestKind.EXACT_BYTES])
+    writer.u64(0)
+    writer.u64(0)
+    writer.u32(0)
+    writer.u8(_FORMATS[DocumentFormat.FUNCTIONAL])
+    writer.u8(_DETECTION_BASES[DetectionBasis.EXPLICIT])
+    writer.u8(0)
+    writer.u32(_string_id(_CANONICAL_WIRE_PARSER, ids))
+    writer.u32(_string_id(_CANONICAL_WIRE_BACKEND, ids))
+    writer.u16(0)
+    writer.u16(1)
+    writer.u32(MODEL_SCHEMA)
     _write_references(writer, document.direct_imports, SectionKind.IRIS, ids)
     _write_references(writer, document.ontology_annotations, SectionKind.ANNOTATIONS, ids)
     _write_references(writer, document.axioms, SectionKind.AXIOMS, ids)
@@ -909,7 +910,13 @@ def _origin_rows(
 ) -> list[bytes]:
     rows: list[bytes] = []
     for digest, occurrences in sorted(origins.entries.items()):
-        canonical_occurrences = tuple(sorted(occurrences, key=_origin_sort_key))
+        # Repeated source occurrences and spans are acquisition evidence.  The
+        # required ORIGINS section preserves only structural document ownership
+        # so layout and redundant source axioms cannot perturb canonical wire.
+        canonical_occurrences = tuple(
+            OriginOccurrence(document_key, 0)
+            for document_key in sorted({item.document_key for item in occurrences})
+        )
         writer = ByteWriter()
         writer.raw(digest)
         writer.u64(len(canonical_occurrences))
@@ -1994,23 +2001,6 @@ def _enum_tag(value: int, values: Mapping[int, object], label: str) -> object:
 
 def _optional_u64(value: int) -> int | None:
     return None if value == _NONE_U64 else value
-
-
-def _origin_sort_key(value: OriginOccurrence) -> tuple[bytes, int, tuple[int, ...]]:
-    span = value.span
-    components = (
-        None if span is None else span.byte_start,
-        None if span is None else span.byte_end,
-        None if span is None else span.line_start,
-        None if span is None else span.column_start,
-        None if span is None else span.line_end,
-        None if span is None else span.column_end,
-    )
-    return (
-        value.document_key.encode("utf-8"),
-        value.occurrence,
-        tuple(_NONE_U64 if item is None else item for item in components),
-    )
 
 
 def _translate_model_error(error: Exception) -> WireCorruptionError | WireLimitError:
