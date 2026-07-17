@@ -34,7 +34,6 @@ from pyowl_core.model.axioms import AxiomNode
 from .provenance import DocumentProvenance, OriginIndex, RDFMappingReport, SourceMap
 
 A = TypeVar("A", bound=AxiomNode)
-_DOCUMENT_DOMAIN = b"pyowl-core:document-fingerprint:v1\x00"
 _LEXICAL_KEY = b"pyowl-core:parser-blank-label:v1\x00"
 _PROVISIONAL_SCOPE = hashlib.sha256(b"pyowl-core:provisional-document-scope:v1\x00").digest()
 
@@ -162,7 +161,9 @@ class OntologyDocument:
 
     @property
     def document_fingerprint(self) -> Fingerprint:
-        return Fingerprint("sha256", 1, hashlib.sha256(_document_bytes(self)).digest())
+        from .fingerprint import document_fingerprint
+
+        return document_fingerprint(self)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, OntologyDocument):
@@ -369,23 +370,9 @@ def _replace_blanks(value: object, replacements: Mapping[str, AnonymousIndividua
 
 
 def _document_bytes(document: OntologyDocument) -> bytes:
-    pieces: list[bytes] = [_DOCUMENT_DOMAIN]
-    for iri in (document.ontology_id.ontology_iri, document.ontology_id.version_iri):
-        if iri is None:
-            pieces.append(b"0")
-        else:
-            encoded = canonical_bytes(iri)
-            pieces.append(b"1" + encode_varint(len(encoded)) + encoded)
-    for collection in (
-        document.direct_imports,
-        document.ontology_annotations,
-        document.axioms,
-        document.extension_components,
-    ):
-        members = tuple(canonical_bytes(item) for item in collection)
-        pieces.append(encode_varint(len(members)))
-        pieces.extend(encode_varint(len(item)) + item for item in members)
-    return b"".join(pieces)
+    from .fingerprint import document_fingerprint_bytes
+
+    return document_fingerprint_bytes(document)
 
 
 def _decode_varint(value: bytes) -> tuple[int, int]:

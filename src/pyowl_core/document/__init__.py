@@ -1,6 +1,17 @@
 """Immutable document contracts."""
 
+from .composite import CompositeMember, OntologyComposite, compose_views
+from .delta import DeltaPolicy, OntologyDelta
 from .document import Fingerprint, OntologyDocument, OntologyID
+from .fingerprint import (
+    StructuralContext,
+    StructuralContextKind,
+    document_fingerprint,
+    effective_structural_fingerprint,
+    logical_fingerprint,
+    signature_fingerprint,
+    snapshot_structural_fingerprint,
+)
 from .imports import (
     AcquiredImport,
     AcquisitionCache,
@@ -14,6 +25,7 @@ from .imports import (
     SnapshotLoader,
     clear_import_caches,
 )
+from .overlay import OntologyOverlay, apply_delta
 from .provenance import (
     DetectionBasis,
     DigestKind,
@@ -39,7 +51,9 @@ __all__ = [
     "AcquiredImport",
     "AcquisitionCache",
     "AxiomScope",
+    "CompositeMember",
     "CoreCapabilities",
+    "DeltaPolicy",
     "DetectionBasis",
     "DigestKind",
     "DocumentInput",
@@ -51,9 +65,12 @@ __all__ = [
     "ImportManifest",
     "ImportStatus",
     "LoadReport",
+    "OntologyComposite",
+    "OntologyDelta",
     "OntologyDocument",
     "OntologyID",
     "OntologyInput",
+    "OntologyOverlay",
     "OntologySnapshot",
     "OntologyView",
     "OriginIndex",
@@ -65,5 +82,14 @@ __all__ = [
     "SnapshotProvider",
     "SourceMap",
     "SourceOccurrence",
+    "StructuralContext",
+    "StructuralContextKind",
+    "apply_delta",
     "clear_import_caches",
+    "compose_views",
+    "document_fingerprint",
+    "effective_structural_fingerprint",
+    "logical_fingerprint",
+    "signature_fingerprint",
+    "snapshot_structural_fingerprint",
 ]

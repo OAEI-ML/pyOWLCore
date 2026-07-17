@@ -1,10 +1,12 @@
-# Reviewed WP03 public surface. One name per line; order is non-semantic.
+# Reviewed WP04 public surface. One name per line; order is non-semantic.
 AcquiredImport
 AcquisitionCache
 AxiomScope
 CatalogResolver
 CompositeResolver
+CompositeMember
 CoreCapabilities
+DeltaPolicy
 DirectoryNamingStrategy
 DirectoryResolver
 DocumentInput
@@ -22,6 +24,9 @@ LoadReport
 MappingResolver
 MappingTarget
 OntologyInput
+OntologyComposite
+OntologyDelta
+OntologyOverlay
 OntologySnapshot
 OntologyView
 ParsedDocumentCache
@@ -34,9 +39,16 @@ ResolverOutcome
 SnapshotLoader
 SnapshotProvider
 clear_import_caches
+apply_delta
 coerce_snapshot
+compose_views
+document_fingerprint
+effective_structural_fingerprint
 load_snapshot
+logical_fingerprint
 resolver_configuration_fingerprint
+signature_fingerprint
+snapshot_structural_fingerprint
 ADAPTER_PROTOCOL_VERSION
 ANNOTATION_AXIOM_TYPES
 API_VERSION
@@ -188,6 +200,7 @@ OntologyID
 OntologySyntaxError
 OperationCancelledError
 OptionConflictError
+OverlayPerformanceWarning
 OriginIndex
 OriginOccurrence
 ParseError
@@ -225,6 +238,8 @@ SourceSpan
 SourceMap
 SourceOccurrence
 StructuralConstraintError
+StructuralContext
+StructuralContextKind
 StructuralNode
 StructuralReport
 SubAnnotationPropertyOf

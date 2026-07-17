@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from enum import Enum
-from typing import Protocol, TypeAlias, TypeVar, cast, runtime_checkable
+from typing import Protocol, TypeAlias, TypeGuard, TypeVar, cast, runtime_checkable
 
 from pyowl_core._immutable import FrozenMap, freeze_mapping
 from pyowl_core.config import LoadOptions
@@ -15,7 +16,6 @@ from pyowl_core.exceptions import ProfileError, ResourceLimitError
 from pyowl_core.io.source import DocumentSource
 from pyowl_core.model import (
     IRI,
-    LOGICAL_AXIOM_TYPES,
     Annotation,
     AnonymousIndividual,
     CanonicalSet,
@@ -36,6 +36,14 @@ from pyowl_core.model.axioms import AxiomNode
 from pyowl_core.model.validation import OWL2DLReport
 
 from .document import Fingerprint, OntologyDocument
+from .fingerprint import (
+    StructuralContext,
+    effective_structural_fingerprint,
+    fingerprint_bytes,
+    logical_fingerprint,
+    signature_fingerprint,
+    snapshot_structural_fingerprint,
+)
 from .imports import DocumentRecord, ImportManifest
 from .provenance import OriginIndex, OriginOccurrence
 
@@ -164,6 +172,13 @@ class OntologyView(Protocol):
         document_key: str | None = None,
     ) -> bool: ...
 
+    def ontology_annotations(
+        self,
+        *,
+        scope: AxiomScope = AxiomScope.CLOSURE,
+        document_key: str | None = None,
+    ) -> CanonicalSet[Annotation]: ...
+
     def signature(
         self,
         kind: EntityKind | None = None,
@@ -174,6 +189,12 @@ class OntologyView(Protocol):
     ) -> tuple[Entity, ...]: ...
 
     def view(self, view_type: type[V], /, **options: object) -> V: ...
+
+    @property
+    def origin_index(self) -> OriginIndex: ...
+
+    @property
+    def is_complete(self) -> bool: ...
 
     @property
     def structural_fingerprint(self) -> Fingerprint: ...
@@ -191,6 +212,33 @@ class OntologyView(Protocol):
 @runtime_checkable
 class SnapshotProvider(Protocol):
     def owl_snapshot(self) -> OntologyView: ...
+
+
+_ONTOLOGY_VIEW_ATTRIBUTES = (
+    "capabilities",
+    "iter_axioms",
+    "iter_extensions",
+    "contains",
+    "ontology_annotations",
+    "signature",
+    "view",
+    "origin_index",
+    "is_complete",
+    "structural_fingerprint",
+    "logical_fingerprint",
+    "signature_fingerprint",
+    "report",
+)
+_MISSING_VIEW_ATTRIBUTE = object()
+
+
+def _is_ontology_view(value: object) -> TypeGuard[OntologyView]:
+    """Check the runtime protocol without invoking descriptors on Python 3.10."""
+
+    return all(
+        inspect.getattr_static(value, name, _MISSING_VIEW_ATTRIBUTE) is not _MISSING_VIEW_ATTRIBUTE
+        for name in _ONTOLOGY_VIEW_ATTRIBUTES
+    )
 
 
 OntologyInput: TypeAlias = DocumentSource | OntologyDocument | OntologyView | SnapshotProvider
@@ -221,7 +269,9 @@ class OntologySnapshot:
         init=False, repr=False, compare=False
     )
     _closure_axioms: CanonicalSet[AxiomNode] = field(init=False, repr=False, compare=False)
+    _closure_annotations: CanonicalSet[Annotation] = field(init=False, repr=False, compare=False)
     _closure_extensions: CanonicalSet[StructuralNode] = field(init=False, repr=False, compare=False)
+    _anonymous_scopes: frozenset[bytes] = field(init=False, repr=False, compare=False)
     _origin_index: OriginIndex = field(init=False, repr=False, compare=False)
     _capabilities: CoreCapabilities = field(init=False, repr=False, compare=False)
     _structural_fingerprint: Fingerprint = field(init=False, repr=False, compare=False)
@@ -229,6 +279,13 @@ class OntologySnapshot:
     _signature_fingerprint: Fingerprint = field(init=False, repr=False, compare=False)
     _owl2_dl_report: OWL2DLReport | None = field(init=False, repr=False, compare=False)
     _report: LoadReport = field(init=False, repr=False, compare=False)
+    _preserve_document_scopes: bool = field(default=False, repr=False, compare=False)
+    _origin_index_override: OriginIndex | None = field(default=None, repr=False, compare=False)
+    _structural_context: StructuralContext | None = field(default=None, repr=False, compare=False)
+    _structural_fingerprint_override: Fingerprint | None = field(
+        default=None, repr=False, compare=False
+    )
+    _complete_override: bool | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.root, OntologyDocument):
@@ -252,7 +309,27 @@ class OntologySnapshot:
         diagnostics = tuple(self.diagnostics)
         if not all(isinstance(item, Diagnostic) for item in diagnostics):
             raise TypeError("diagnostics must contain Diagnostic values")
-        scoped = _scope_documents(records, documents)
+        if not isinstance(self._preserve_document_scopes, bool):
+            raise TypeError("_preserve_document_scopes must be bool")
+        if self._origin_index_override is not None and not isinstance(
+            self._origin_index_override, OriginIndex
+        ):
+            raise TypeError("_origin_index_override must be OriginIndex or None")
+        if self._structural_context is not None and not isinstance(
+            self._structural_context, StructuralContext
+        ):
+            raise TypeError("_structural_context must be StructuralContext or None")
+        if self._structural_fingerprint_override is not None and not isinstance(
+            self._structural_fingerprint_override, Fingerprint
+        ):
+            raise TypeError("_structural_fingerprint_override must be Fingerprint or None")
+        if self._complete_override is not None and not isinstance(self._complete_override, bool):
+            raise TypeError("_complete_override must be bool or None")
+        scoped = (
+            _preserved_documents(records, documents)
+            if self._preserve_document_scopes
+            else _scope_documents(records, documents)
+        )
         axioms_by_key = {key: value.axioms for key, value in scoped.items()}
         annotations_by_key = {key: value.annotations for key, value in scoped.items()}
         extensions_by_key = {key: value.extensions for key, value in scoped.items()}
@@ -271,7 +348,7 @@ class OntologySnapshot:
             closure_annotations = CanonicalSet(
                 annotation for values in annotations_by_key.values() for annotation in values
             )
-        origin_index = _merge_origins(
+        origin_index = self._origin_index_override or _merge_origins(
             records,
             documents,
             scoped,
@@ -303,21 +380,46 @@ class OntologySnapshot:
                     "immutable-snapshot",
                     "document-scoped-anonymous",
                 }
+                | ({"materialized-view"} if self._structural_context is not None else set())
+                | (
+                    {"source-map"}
+                    if all(item.source_map is not None for item in documents)
+                    else set()
+                )
                 | ({"owl2-dl-validated"} if owl2_dl_report is not None else set())
             ),
             {},
             "python",
         )
-        structural = Fingerprint("sha256", 1, _structural_digest(self.import_manifest, scoped))
-        logical = Fingerprint("sha256", 1, _logical_digest(closure_axioms, closure_extensions))
+        if self._structural_fingerprint_override is not None:
+            structural = self._structural_fingerprint_override
+        elif self._structural_context is None:
+            structural = snapshot_structural_fingerprint(
+                self.import_manifest,
+                (
+                    (
+                        record.document_key,
+                        scoped[record.document_key].annotations,
+                        scoped[record.document_key].axioms,
+                        scoped[record.document_key].extensions,
+                    )
+                    for record in self.import_manifest.documents
+                ),
+            )
+        else:
+            structural = effective_structural_fingerprint(
+                self._structural_context,
+                closure_annotations,
+                closure_axioms,
+                closure_extensions,
+            )
+        logical = logical_fingerprint(closure_axioms, closure_extensions)
         signature_values = _signature(
             (*closure_annotations, *closure_axioms, *closure_extensions),
             None,
             include_builtins=True,
         )
-        signature_fingerprint = Fingerprint(
-            "sha256", 1, _signature_digest(signature_values, include_builtins=True)
-        )
+        signature_value = signature_fingerprint(signature_values, include_builtins=True)
         report = LoadReport(
             "python",
             (0, 1),
@@ -332,7 +434,7 @@ class OntologySnapshot:
             diagnostics,
             structural,
             logical,
-            signature_fingerprint,
+            signature_value,
             owl2_dl_report,
         )
         object.__setattr__(self, "documents", documents)
@@ -343,12 +445,18 @@ class OntologySnapshot:
         object.__setattr__(self, "_annotations_by_key", freeze_mapping(annotations_by_key))
         object.__setattr__(self, "_extensions_by_key", freeze_mapping(extensions_by_key))
         object.__setattr__(self, "_closure_axioms", closure_axioms)
+        object.__setattr__(self, "_closure_annotations", closure_annotations)
         object.__setattr__(self, "_closure_extensions", closure_extensions)
+        object.__setattr__(
+            self,
+            "_anonymous_scopes",
+            frozenset(scope for value in scoped.values() for scope in value.anonymous_scopes),
+        )
         object.__setattr__(self, "_origin_index", origin_index)
         object.__setattr__(self, "_capabilities", capabilities)
         object.__setattr__(self, "_structural_fingerprint", structural)
         object.__setattr__(self, "_logical_fingerprint", logical)
-        object.__setattr__(self, "_signature_fingerprint", signature_fingerprint)
+        object.__setattr__(self, "_signature_fingerprint", signature_value)
         object.__setattr__(self, "_owl2_dl_report", owl2_dl_report)
         object.__setattr__(self, "_report", report)
 
@@ -356,13 +464,29 @@ class OntologySnapshot:
     def capabilities(self) -> CoreCapabilities:
         return self._capabilities
 
+    def _check_open(self) -> None:
+        """Lifecycle hook shared with future mapped snapshots."""
+
+    def _anonymous_document_scopes(self) -> frozenset[bytes]:
+        return self._anonymous_scopes
+
+    def _anonymous_scope_lineage(self) -> tuple[tuple[bytes, bytes, bytes], ...]:
+        leaf = fingerprint_bytes(self.structural_fingerprint)
+        return tuple((scope, scope, leaf) for scope in sorted(self._anonymous_scopes))
+
     @property
     def is_complete(self) -> bool:
+        if self._complete_override is not None:
+            return self._complete_override
         return self.import_manifest.is_complete
 
     @property
     def origin_index(self) -> OriginIndex:
         return self._origin_index
+
+    @property
+    def structural_context(self) -> StructuralContext | None:
+        return self._structural_context
 
     @property
     def structural_fingerprint(self) -> Fingerprint:
@@ -426,9 +550,7 @@ class OntologySnapshot:
     ) -> CanonicalSet[Annotation]:
         if scope is AxiomScope.CLOSURE:
             _reject_document_key(scope, document_key)
-            return CanonicalSet(
-                value for annotations in self._annotations_by_key.values() for value in annotations
-            )
+            return self._closure_annotations
         key = self._scope_key(scope, document_key)
         return self._annotations_by_key[key]
 
@@ -522,6 +644,41 @@ class _ScopedDocument:
     extensions: CanonicalSet[StructuralNode]
     pairs: tuple[tuple[StructuralNode, StructuralNode], ...]
     identity_preserved: bool
+    anonymous_scopes: frozenset[bytes]
+
+
+def _preserved_documents(
+    records: tuple[DocumentRecord, ...], documents: tuple[OntologyDocument, ...]
+) -> Mapping[str, _ScopedDocument]:
+    """Retain already-effective scopes during explicit view materialization."""
+
+    return freeze_mapping(
+        {
+            record.document_key: _ScopedDocument(
+                document.ontology_annotations,
+                document.axioms,
+                document.extension_components,
+                (),
+                True,
+                _document_anonymous_scopes(document),
+            )
+            for record, document in zip(records, documents, strict=True)
+        }
+    )
+
+
+def _document_anonymous_scopes(document: OntologyDocument) -> frozenset[bytes]:
+    return frozenset(
+        node.document_scope
+        for collection in (
+            document.ontology_annotations,
+            document.axioms,
+            document.extension_components,
+        )
+        for root in collection
+        for node in _walk(root)
+        if isinstance(node, AnonymousIndividual)
+    )
 
 
 def _scope_documents(
@@ -553,6 +710,7 @@ def _scope_documents(
                     if document.origin_index is not None
                     else tuple((root, root) for root in roots),
                     True,
+                    frozenset(),
                 )
                 continue
             scope = hashlib.sha256(
@@ -579,7 +737,12 @@ def _scope_documents(
             axioms = CanonicalSet(cast(AxiomNode, moved(item)) for item in document.axioms)
             extensions = CanonicalSet(moved(item) for item in document.extension_components)
             result[record.document_key] = _ScopedDocument(
-                annotations, axioms, extensions, tuple(pairs), False
+                annotations,
+                axioms,
+                extensions,
+                tuple(pairs),
+                False,
+                frozenset((scope,)),
             )
     return freeze_mapping(result)
 
@@ -697,55 +860,111 @@ def _merge_origins(
     )
 
 
-def _structural_digest(manifest: ImportManifest, scoped: Mapping[str, _ScopedDocument]) -> bytes:
-    pieces = [b"pyowl-core:snapshot-structural:v1\x00", _frame(manifest.canonical_bytes())]
-    for record in manifest.documents:
-        document = scoped[record.document_key]
-        pieces.append(_frame(record.document_key.encode("ascii")))
-        for collection in (document.annotations, document.axioms, document.extensions):
-            members = tuple(canonical_bytes(item) for item in collection)
-            pieces.append(encode_varint(len(members)))
-            pieces.extend(_frame(item) for item in members)
-    return hashlib.sha256(b"".join(pieces)).digest()
+def materialize_view(
+    view: OntologyView,
+    *,
+    annotations: CanonicalSet[Annotation],
+    axioms: CanonicalSet[AxiomNode],
+    extensions: CanonicalSet[StructuralNode],
+    origin_index: OriginIndex,
+    structural_context: StructuralContext,
+    structural_fingerprint_override: Fingerprint | None = None,
+    limits: object,
+    elapsed_seconds: float,
+) -> OntologySnapshot:
+    """Create a self-contained concrete snapshot from effective view content."""
 
+    from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy
+    from pyowl_core.limits import ParseLimits
 
-def _logical_digest(
-    axioms: CanonicalSet[AxiomNode], extensions: CanonicalSet[StructuralNode]
-) -> bytes:
-    logical: dict[bytes, None] = {}
-    for item in axioms:
-        if isinstance(item, LOGICAL_AXIOM_TYPES):
-            logical[canonical_bytes(_without_axiom_annotations(item))] = None
-    pieces = [
-        b"pyowl-core:snapshot-logical:v1\x00",
-        b"datatype-policy:owl2-v1\x00",
-        encode_varint(len(logical)),
-    ]
-    pieces.extend(_frame(item) for item in sorted(logical))
-    pieces.append(encode_varint(len(extensions)))
-    pieces.extend(b"E" + _frame(canonical_bytes(item)) for item in extensions)
-    return hashlib.sha256(b"".join(pieces)).digest()
+    from .document import OntologyID
+    from .imports import DocumentStatus
+    from .provenance import DetectionBasis, DigestKind, DocumentProvenance
 
-
-def _without_axiom_annotations(value: AxiomNode) -> AxiomNode:
-    if not is_dataclass(value) or not hasattr(value, "annotations"):
-        return value
-    annotations = value.annotations
-    if isinstance(annotations, CanonicalSet) and not annotations:
-        return value
-    arguments = {item.name: getattr(value, item.name) for item in fields(value)}
-    arguments["annotations"] = CanonicalSet()
-    return cast(AxiomNode, type(value)(**arguments))
-
-
-def _signature_digest(values: tuple[Entity, ...], *, include_builtins: bool) -> bytes:
-    pieces = [
-        b"pyowl-core:snapshot-signature:v1\x00",
-        bytes((int(include_builtins),)),
-        encode_varint(len(values)),
-    ]
-    pieces.extend(_frame(canonical_bytes(item)) for item in values)
-    return hashlib.sha256(b"".join(pieces)).digest()
+    if not _is_ontology_view(view):
+        raise TypeError("view must implement OntologyView")
+    if not isinstance(limits, ParseLimits):
+        raise TypeError("limits must be ParseLimits")
+    if not isinstance(origin_index, OriginIndex):
+        raise TypeError("origin_index must be OriginIndex")
+    if not isinstance(structural_context, StructuralContext):
+        raise TypeError("structural_context must be StructuralContext")
+    if structural_fingerprint_override is not None and not isinstance(
+        structural_fingerprint_override, Fingerprint
+    ):
+        raise TypeError("structural_fingerprint_override must be Fingerprint or None")
+    limits.enforce("max_axioms", len(axioms))
+    limits.enforce("max_annotations", len(annotations))
+    limits.enforce("max_origin_entries", sum(len(value) for value in origin_index.entries.values()))
+    structural = structural_fingerprint_override or effective_structural_fingerprint(
+        structural_context, annotations, axioms, extensions
+    )
+    source_digest = hashlib.sha256(
+        b"pyowl-core:materialized-view-source:v1\x00" + structural.digest
+    ).digest()
+    provenance = DocumentProvenance(
+        source_digest,
+        DigestKind.EXACT_BYTES,
+        0,
+        0,
+        None,
+        None,
+        DocumentFormat.FUNCTIONAL,
+        DetectionBasis.EXPLICIT,
+        parser="pyowl_core.document.materialize",
+        backend="python",
+    )
+    document = OntologyDocument(
+        OntologyID(),
+        None,
+        (),
+        annotations,
+        axioms,
+        extensions,
+        provenance,
+        origin_index=origin_index,
+    )
+    key = (
+        "d1:"
+        + hashlib.sha256(
+            b"pyowl-core:materialized-document-key:v1\x00" + structural.digest
+        ).hexdigest()
+    )
+    record = DocumentRecord(
+        key,
+        document.ontology_id,
+        None,
+        source_digest,
+        document.document_fingerprint,
+        DocumentFormat.FUNCTIONAL,
+        DocumentStatus.ROOT,
+    )
+    manifest = ImportManifest(
+        ImportPolicy.IGNORE,
+        True,
+        hashlib.sha256(b"pyowl-core:materialized-resolver:v1\x00").digest(),
+        (record,),
+        (),
+    )
+    options = LoadOptions(
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.PYTHON,
+        limits=limits,
+        offline=True,
+    )
+    return OntologySnapshot(
+        document,
+        (document,),
+        manifest,
+        key,
+        options,
+        timings={"materialize_seconds": elapsed_seconds},
+        _preserve_document_scopes=True,
+        _origin_index_override=origin_index,
+        _structural_context=structural_context,
+        _structural_fingerprint_override=structural_fingerprint_override,
+        _complete_override=view.is_complete,
+    )
 
 
 def _signature(
@@ -780,10 +999,6 @@ def _reject_document_key(scope: AxiomScope, document_key: str | None) -> None:
         raise ValueError(f"document_key is not valid for {scope.value} scope")
 
 
-def _frame(value: bytes) -> bytes:
-    return encode_varint(len(value)) + value
-
-
 __all__ = [
     "AxiomScope",
     "CoreCapabilities",
@@ -792,4 +1007,5 @@ __all__ = [
     "OntologySnapshot",
     "OntologyView",
     "SnapshotProvider",
+    "materialize_view",
 ]

@@ -204,6 +204,10 @@ class UnresolvedImportWarning(PyOWLCoreWarning, UserWarning):
     DEFAULT_CODE = "UNRESOLVED_IMPORT"
 
 
+class OverlayPerformanceWarning(PyOWLCoreWarning, RuntimeWarning):
+    DEFAULT_CODE = "OVERLAY_PERFORMANCE"
+
+
 class FormatGuessWarning(PyOWLCoreWarning, UserWarning):
     DEFAULT_CODE = "FORMAT_GUESS"
 
@@ -241,6 +245,7 @@ __all__ = [
     "OntologySyntaxError",
     "OperationCancelledError",
     "OptionConflictError",
+    "OverlayPerformanceWarning",
     "ParseError",
     "ProfileError",
     "PyOWLCoreError",
