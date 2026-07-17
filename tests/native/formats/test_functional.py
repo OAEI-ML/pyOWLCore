@@ -80,6 +80,8 @@ def test_every_constructor_public_document_has_python_parity_and_native_provenan
         b"Ontology(DataPropertyRange(<urn:p> DataIntersectionOf(<urn:D> <urn:D>)))",
         b"Ontology(DataPropertyRange(<urn:p> DataUnionOf(<urn:D> <urn:D>)))",
         b"Ontology(DisjointClasses(<urn:A> <urn:A>))",
+        b"Ontology(DisjointClasses(<urn:A> <urn:B> <urn:A> <urn:A>))",
+        b"Ontology(DisjointClasses(<urn:A> <urn:B> <urn:A> <urn:A> <urn:B>))",
     ),
 )
 def test_duplicate_operand_canonicalization_has_native_parity(source: bytes) -> None:

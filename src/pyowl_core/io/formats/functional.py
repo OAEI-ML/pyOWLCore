@@ -297,10 +297,11 @@ class FunctionalParser:
                 extensions.append(rule)
                 self.occurrences.append((rule, self._span_from(start)))
             else:
-                axiom = self._parse_axiom()
-                axioms.append(axiom)
+                parsed_axioms = self._parse_axiom()
+                span = self._span_from(start)
+                axioms.extend(parsed_axioms)
                 self.context.limits.enforce("max_axioms", len(axioms))
-                self.occurrences.append((axiom, self._span_from(start)))
+                self.occurrences.extend((axiom, span) for axiom in parsed_axioms)
         self._close()
         self._expect("EOF")
         return ParsedOntology(
@@ -329,7 +330,7 @@ class FunctionalParser:
         self.context.limits.enforce("max_prefixes", len(self.prefixes))
         self._close()
 
-    def _parse_axiom(self) -> m.AxiomNode:
+    def _parse_axiom(self) -> tuple[m.AxiomNode, ...]:
         name = self._expect("WORD").value
         if name not in self._axiom_names():
             self._syntax(f"unknown axiom constructor {name!r}", self.tokens[self.index - 1])
@@ -346,7 +347,9 @@ class FunctionalParser:
             value = m.EquivalentClasses(m.CanonicalSet(expressions), annotations)
         elif name == "DisjointClasses":
             expressions = self._many(self._parse_class_expression)
-            value = _disjoint_classes(expressions, annotations)
+            values = _disjoint_class_axioms(expressions, annotations)
+            self._close()
+            return values
         elif name == "DisjointUnion":
             value = m.DisjointUnion(
                 self._parse_class(),
@@ -471,7 +474,7 @@ class FunctionalParser:
         else:
             raise AssertionError(name)
         self._close()
-        return value
+        return (value,)
 
     def _parse_entity(self) -> m.Entity:
         token = self._expect("WORD")
@@ -852,14 +855,28 @@ class FunctionalParser:
         return _AXIOM_NAMES
 
 
-def _disjoint_classes(
+def _disjoint_class_axioms(
     expressions: tuple[m.ClassExpression, ...],
     annotations: m.CanonicalSet[m.Annotation],
-) -> m.AxiomNode:
+) -> tuple[m.AxiomNode, ...]:
     canonical = m.CanonicalSet(expressions)
-    if len(expressions) >= 2 and len(canonical) == 1:
-        return m.SubClassOf(next(iter(canonical)), m.OWL_NOTHING, annotations)
-    return m.DisjointClasses(canonical, annotations)
+    if len(expressions) < 2:
+        return (m.DisjointClasses(canonical, annotations),)
+
+    counts: dict[bytes, int] = {}
+    for expression in expressions:
+        key = m.canonical_bytes(expression)
+        counts[key] = counts.get(key, 0) + 1
+
+    axioms: list[m.AxiomNode] = []
+    if len(canonical) >= 2:
+        axioms.append(m.DisjointClasses(canonical, annotations))
+    axioms.extend(
+        m.SubClassOf(expression, m.OWL_NOTHING, annotations)
+        for expression in canonical
+        if counts[m.canonical_bytes(expression)] >= 2
+    )
+    return tuple(axioms)
 
 
 _OBJECT_CHARACTERISTICS = frozenset(

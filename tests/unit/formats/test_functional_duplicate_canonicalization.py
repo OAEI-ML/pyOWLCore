@@ -16,6 +16,7 @@ from pyowl_core import (
     DataProperty,
     DataPropertyRange,
     Datatype,
+    DisjointClasses,
     Literal,
     LoadOptions,
     StructuralConstraintError,
@@ -30,9 +31,7 @@ OPTIONS = LoadOptions(backend=BackendPreference.PYTHON, preserve_source_map=True
 def test_duplicate_functional_boolean_operands_canonicalize_to_the_sole_operand(
     constructor: str,
 ) -> None:
-    source = (
-        f"Ontology(SubClassOf({constructor}(<urn:A> <urn:A>) <urn:B>))"
-    ).encode()
+    source = (f"Ontology(SubClassOf({constructor}(<urn:A> <urn:A>) <urn:B>))").encode()
     direct = b"Ontology(SubClassOf(<urn:A> <urn:B>))"
     document = parse_document(source, format="functional", options=OPTIONS)
     canonical = parse_document(direct, format="functional", options=OPTIONS)
@@ -68,7 +67,7 @@ def test_duplicate_functional_data_operands_canonicalize_to_the_sole_operand(
 
 def test_self_disjoint_functional_axiom_canonicalizes_with_annotations_and_spelling() -> None:
     source = (
-        b'Ontology(DisjointClasses('
+        b"Ontology(DisjointClasses("
         b'Annotation(<urn:note> "original disjoint spelling"@EN) '
         b"<urn:A> <urn:A>))"
     )
@@ -88,6 +87,53 @@ def test_self_disjoint_functional_axiom_canonicalizes_with_annotations_and_spell
     occurrence = document.source_map.occurrences_for(expected)[0]
     assert occurrence.lexical["language-tag"] == "EN"
     assert document.provenance.source_sha256 == hashlib.sha256(source).digest()
+
+
+def test_mixed_disjoint_duplicates_emit_disjointness_and_each_self_consequence() -> None:
+    source = (
+        b"Ontology(DisjointClasses("
+        b"Annotation(<urn:note> <urn:evidence>) "
+        b"<urn:A> <urn:B> <urn:A> <urn:A> <urn:B>))"
+    )
+    direct = (
+        b"Ontology("
+        b"DisjointClasses(Annotation(<urn:note> <urn:evidence>) <urn:A> <urn:B>) "
+        b"SubClassOf(Annotation(<urn:note> <urn:evidence>) <urn:A> owl:Nothing) "
+        b"SubClassOf(Annotation(<urn:note> <urn:evidence>) <urn:B> owl:Nothing))"
+    )
+    annotation = Annotation(
+        AnnotationProperty(IRI("urn:note")),
+        IRI("urn:evidence"),
+    )
+    annotations = CanonicalSet((annotation,))
+    class_a = Class(IRI("urn:A"))
+    class_b = Class(IRI("urn:B"))
+    expected = CanonicalSet(
+        (
+            DisjointClasses(CanonicalSet((class_a, class_b)), annotations),
+            SubClassOf(class_a, OWL_NOTHING, annotations),
+            SubClassOf(class_b, OWL_NOTHING, annotations),
+        )
+    )
+
+    document = parse_document(source, format="functional", options=OPTIONS)
+    canonical = parse_document(direct, format="functional", options=OPTIONS)
+
+    assert document == canonical
+    assert document.document_fingerprint == canonical.document_fingerprint
+    assert document.axioms == expected
+    assert document.provenance.source_sha256 == hashlib.sha256(source).digest()
+    assert document.source_map is not None
+    assert document.origin_index is not None
+    spans = []
+    for axiom in expected:
+        occurrence = document.source_map.occurrences_for(axiom)
+        assert len(occurrence) == 1
+        assert occurrence[0].span is not None
+        spans.append(occurrence[0].span)
+        assert document.origin_index.origins_for(axiom)
+    assert spans[0] == spans[1] == spans[2]
+    assert source[spans[0].byte_start : spans[0].byte_end].startswith(b"DisjointClasses(")
 
 
 @pytest.mark.parametrize(

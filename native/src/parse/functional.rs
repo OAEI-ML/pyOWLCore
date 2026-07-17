@@ -400,17 +400,17 @@ impl<'a, 'b> Parser<'a, 'b> {
                     span: start.span_to(self.previous()),
                 });
             } else {
-                let node = self.parse_axiom()?;
-                axioms.push(SpannedNode {
-                    node,
-                    span: start.span_to(self.previous()),
-                });
-                enforce(
-                    self.session,
-                    LimitKey::MaxAxioms,
-                    axioms.len(),
-                    "native axiom count exceeds max_axioms",
-                )?;
+                let nodes = self.parse_axiom()?;
+                let span = start.span_to(self.previous());
+                for node in nodes {
+                    axioms.push(SpannedNode { node, span });
+                    enforce(
+                        self.session,
+                        LimitKey::MaxAxioms,
+                        axioms.len(),
+                        "native axiom count exceeds max_axioms",
+                    )?;
+                }
             }
         }
         self.close()?;
@@ -451,11 +451,16 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.close()
     }
 
-    fn parse_axiom(&mut self) -> NativeResult<Node> {
+    fn parse_axiom(&mut self) -> NativeResult<Vec<Node>> {
         let name = self.expect(Kind::Word)?.value;
         let tag = axiom_tag(&name).ok_or_else(syntax)?;
         self.open()?;
         let annotations = self.parse_annotations()?;
+        if name == "DisjointClasses" {
+            let expressions = self.many(Self::parse_class_expression)?;
+            self.close()?;
+            return disjoint_class_axioms(expressions, annotations);
+        }
         let fields = match name.as_str() {
             "Declaration" => vec![Field::Node(self.parse_entity()?), Field::Set(annotations)],
             "SubClassOf" => vec![
@@ -467,29 +472,6 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.set_many(Self::parse_class_expression, 2, None)?,
                 Field::Set(annotations),
             ],
-            "DisjointClasses" => {
-                let raw = self.many(Self::parse_class_expression)?;
-                if raw.len() < 2 {
-                    return Err(syntax());
-                }
-                let mut expressions = canonical_set(raw, 1, None)?;
-                if expressions.len() == 1 {
-                    let expression = expressions.pop().ok_or_else(syntax)?;
-                    self.close()?;
-                    return Node::build(
-                        61,
-                        vec![
-                            Field::Node(expression),
-                            Field::Node(entity(
-                                "class",
-                                iri("http://www.w3.org/2002/07/owl#Nothing".into())?,
-                            )?),
-                            Field::Set(annotations),
-                        ],
-                    );
-                }
-                vec![Field::Set(expressions), Field::Set(annotations)]
-            }
             "DisjointUnion" => vec![
                 Field::Node(self.parse_class()?),
                 self.set_many(Self::parse_class_expression, 2, None)?,
@@ -612,7 +594,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             _ => return Err(syntax()),
         };
         self.close()?;
-        Node::build(tag, fields)
+        Ok(vec![Node::build(tag, fields)?])
     }
 
     fn parse_entity(&mut self) -> NativeResult<Node> {
@@ -1212,6 +1194,50 @@ fn decode_iri_escapes(value: &str) -> NativeResult<String> {
         index = end;
     }
     Ok(output)
+}
+
+fn disjoint_class_axioms(
+    mut expressions: Vec<Node>,
+    annotations: Vec<Node>,
+) -> NativeResult<Vec<Node>> {
+    if expressions.len() < 2 {
+        return Err(syntax());
+    }
+    expressions.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    let mut repeated = Vec::new();
+    for index in 1..expressions.len() {
+        if expressions[index - 1].as_bytes() == expressions[index].as_bytes()
+            && (index == 1 || expressions[index - 2].as_bytes() != expressions[index].as_bytes())
+        {
+            repeated.push(expressions[index].clone());
+        }
+    }
+    expressions.dedup_by(|left, right| left.as_bytes() == right.as_bytes());
+
+    let mut axioms = Vec::new();
+    if expressions.len() >= 2 {
+        axioms.push(Node::build(
+            63,
+            vec![Field::Set(expressions), Field::Set(annotations.clone())],
+        )?);
+    }
+    if !repeated.is_empty() {
+        let nothing = entity(
+            "class",
+            iri("http://www.w3.org/2002/07/owl#Nothing".into())?,
+        )?;
+        for expression in repeated {
+            axioms.push(Node::build(
+                61,
+                vec![
+                    Field::Node(expression),
+                    Field::Node(nothing.clone()),
+                    Field::Set(annotations.clone()),
+                ],
+            )?);
+        }
+    }
+    Ok(axioms)
 }
 
 fn axiom_tag(value: &str) -> Option<u64> {
