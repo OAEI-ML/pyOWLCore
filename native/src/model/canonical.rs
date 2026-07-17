@@ -688,7 +688,7 @@ fn validate_literal(values: &[Option<FieldValue<'_>>; 4], budget: &ScanBudget) -
     }
 }
 
-fn validate_iri(value: &str) -> NativeResult<()> {
+pub(crate) fn validate_iri(value: &str) -> NativeResult<()> {
     let bytes = value.as_bytes();
     let Some(colon) = bytes.iter().position(|byte| *byte == b':') else {
         return Err(NativeError::corrupt("IRI is not absolute"));

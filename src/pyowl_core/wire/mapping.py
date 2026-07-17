@@ -18,6 +18,7 @@ from pyowl_core.config import BackendPreference, LoadOptions
 from pyowl_core.diagnostics import Diagnostic
 from pyowl_core.document.document import Fingerprint, OntologyDocument
 from pyowl_core.document.fingerprint import StructuralContext, fingerprint_bytes
+from pyowl_core.document.identity import _OntologyIdentityMetadata
 from pyowl_core.document.imports import DocumentRecord, ImportManifest
 from pyowl_core.document.provenance import OriginIndex
 from pyowl_core.document.snapshot import (
@@ -40,6 +41,7 @@ from .codec import (
     InspectedWire,
     checked_materialize_image,
     decode_snapshot,
+    identity_metadata_from_inspected,
     image_import_options,
     validate_bytes,
 )
@@ -104,7 +106,9 @@ class _MappedState:
             "immutable-snapshot",
             "document-scoped-anonymous",
             "structural-indexes",
+            "ontology-identity-index",
             "wire-v1",
+            "wire-verified",
             "mmap-snapshot",
             "lazy-model",
         }
@@ -113,7 +117,7 @@ class _MappedState:
         self.capabilities = CoreCapabilities(
             1,
             1,
-            (1, 0),
+            (1, 1),
             frozenset(features),
             {},
             "python",
@@ -398,8 +402,18 @@ class MappedOntologySnapshot(OntologySnapshot):
 
     def _anonymous_scope_lineage(self) -> tuple[tuple[bytes, bytes, bytes], ...]:
         leaf = fingerprint_bytes(self.structural_fingerprint)
-        return tuple(
-            (scope, scope, leaf) for scope in sorted(self._anonymous_document_scopes())
+        return tuple((scope, scope, leaf) for scope in sorted(self._anonymous_document_scopes()))
+
+    def _ontology_identity_metadata(
+        self,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> _OntologyIdentityMetadata:
+        self._check_open()
+        return identity_metadata_from_inspected(
+            self._mapped_state.inspected,
+            limits=self.limits,
+            cancellation_token=cancellation_token,
         )
 
     def document(self, document_key: str) -> OntologyDocument:

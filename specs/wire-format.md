@@ -35,6 +35,12 @@ The implementation keeps golden readers for all supported v1 minors through
 the package 1.x line. Migration is decode-old/re-encode-new; in-place mutation
 of cache files is forbidden.
 
+The current supported maximum is wire minor 1. `CoreCapabilities.wire_format`
+and `WIRE_FORMAT_VERSION` report `(1, 1)` for direct, decoded, and mapped views.
+The canonical writer may still emit a minimal minor-0 image when no minor-1
+optional section is needed; this does not change the semantic capability
+version exposed to consumers.
+
 ## 3. Scalar conventions
 
 - byte order: little-endian;
@@ -136,6 +142,22 @@ Optional v1 sections may include bounded source maps, diagnostics/load reports,
 prefix suggestions, and composition role provenance. Machine-local absolute
 paths, credentials, bearer/cookie/proxy data, object IDs, timestamps that affect
 reproducibility, and native caches are forbidden.
+
+Wire minor 1 defines optional section `VIEW_PROVENANCE` (kind `0x8002`, schema
+1). It contains one row: import-manifest SHA-256, loader-diagnostics SHA-256,
+`u64` document count, then canonical document identities sorted by UTF-8 key.
+Each identity is `u64 key_length + key_utf8`, followed by ontology and version
+IRI optionals encoded as `u8 present` and, when present,
+`u64 iri_length + iri_utf8`. A version IRI requires an ontology IRI. Counts,
+UTF-8, IRI validity, strict key order, and limits are validated before the
+metadata is published.
+
+The section is emitted only when required-section metadata would lose the
+source view's loader-diagnostic digest or pre-materialization overlay/composite
+document identities. Minor-0 images derive identities and the exact canonical
+manifest digest from `DOCUMENTS`/`IMPORTS`, and use the canonical empty loader
+diagnostic digest. Decoded and mmap views therefore expose equal identity
+metadata without retaining full diagnostics or materializing model roots.
 
 ## 7. Table and reference rules
 

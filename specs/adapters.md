@@ -100,7 +100,8 @@ private pyELK values and never core views or wire sections.
 
 pyHermiT accepts `OntologyInput`/`OntologyView`, then requires:
 
-- a complete resolved import manifest (normally `RESOLVE_STRICT`);
+- `view.view(OntologyIdentityIndex)`, including a complete resolved import
+  closure and validation of every document `OntologyID` required by OWL 2 DL;
 - complete constructors/capabilities;
 - a passing `OWL2DLReport` under its declared datatype policy; and
 - canonical language/anonymous identity.
@@ -128,6 +129,13 @@ Its cache key uses `structural_fingerprint` when annotations/literals affect
 edges, otherwise the documented minimal logical/signature fingerprints, plus
 projector algorithm/plan schema and options. An overlay can patch projection
 when proven; a composite is projected without materializing.
+
+Portable artifact provenance reads `OntologyIdentityIndex.document_keys`,
+`import_manifest_digest`, and `loader_diagnostics_digest`. Those values are
+identical for direct, decoded, and mmap forms of the same view. Honest transport
+labels use capability features `wire-v1` and `wire-verified` on decoded/mapped
+snapshots, remain outside semantic artifact bytes, and never require inspecting
+concrete snapshot fields.
 
 The projector never imports mOWL, Scala, OWLAPI, JPype, or a private core native
 module. Its Rust/C acceleration is independently packaged and consumes core
@@ -218,4 +226,3 @@ The package ships a reusable test kit that every consumer/provider runs:
 
 The integration suite includes instrumentation counters so “zero reparse” is an
 assertion, not an inference from elapsed time.
-

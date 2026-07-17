@@ -2,7 +2,7 @@
 
 mod canonical;
 
-pub(crate) use canonical::{scan_canonical, Category, ScanBudget};
+pub(crate) use canonical::{scan_canonical, validate_iri, Category, ScanBudget};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CanonicalRow {

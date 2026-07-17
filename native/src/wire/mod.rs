@@ -7,8 +7,8 @@ use std::cmp::Ordering;
 
 use crate::cancel::Guard;
 use crate::error::{NativeError, NativeResult};
-use crate::limits::{Limits, MemoryBudget};
-use crate::model::{scan_canonical, Category, ScanBudget};
+use crate::limits::{LimitKey, Limits, MemoryBudget};
+use crate::model::{scan_canonical, validate_iri, Category, ScanBudget};
 
 use hash::{crc32c, Sha256};
 use reader::{u16_at, u32_at, u64_at, Reader};
@@ -23,6 +23,7 @@ const FEATURE_SWRL: u32 = 1;
 const SECTION_REQUIRED: u16 = 1;
 const SECTION_OPTIONAL: u16 = 2;
 const SWRL_KIND: u16 = 0x8001;
+const VIEW_PROVENANCE_KIND: u16 = 0x8002;
 const NONE_U64: u64 = u64::MAX;
 const HASH_CHUNK: usize = 64 * 1024;
 pub(crate) const RECEIPT_MAGIC: &[u8; 8] = b"PYNVAL1\0";
@@ -257,8 +258,13 @@ fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Val
                 "required PYOCORE section is marked optional",
             ));
         }
-        if (required_kind || kind == SWRL_KIND) && schema != 1 {
+        if (required_kind || matches!(kind, SWRL_KIND | VIEW_PROVENANCE_KIND)) && schema != 1 {
             return Err(NativeError::version("unsupported PYOCORE section schema"));
+        }
+        if kind == VIEW_PROVENANCE_KIND && minor < 1 {
+            return Err(NativeError::version(
+                "VIEW_PROVENANCE requires PYOCORE minor 1",
+            ));
         }
         if decoded_length != stored_length {
             return Err(NativeError::version("unsupported PYOCORE section encoding"));
@@ -319,9 +325,9 @@ fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Val
     }
 
     let mut tables = Vec::new();
-    memory.reserve::<Table>(15)?;
+    memory.reserve::<Table>(16)?;
     tables
-        .try_reserve_exact(15)
+        .try_reserve_exact(16)
         .map_err(|_| NativeError::limit("wire table ledger allocation failed"))?;
     for entry in &entries {
         let section = data
@@ -331,7 +337,8 @@ fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Val
         if digest != entry.digest {
             return Err(NativeError::corrupt("PYOCORE section SHA-256 mismatch"));
         }
-        if (1..=14).contains(&entry.kind) || entry.kind == SWRL_KIND {
+        if (1..=14).contains(&entry.kind) || matches!(entry.kind, SWRL_KIND | VIEW_PROVENANCE_KIND)
+        {
             tables.push(validate_table(data, *entry, guard, &mut work)?);
         }
     }
@@ -530,6 +537,7 @@ fn validate_semantics(
     let docs = validate_documents(data, tables, limits, guard, work, memory)?;
     validate_imports(data, tables, &docs, limits, guard, work)?;
     let view = validate_view(data, tables, &docs, limits)?;
+    validate_view_provenance(data, tables, limits, guard, work)?;
     validate_origins(data, tables, limits, guard, work)?;
     validate_footer(data, tables, &view)?;
     Ok(())
@@ -837,6 +845,80 @@ fn validate_view(
     }
     let _ = documents.total_source_bytes;
     Ok(View { fingerprints })
+}
+
+fn validate_view_provenance(
+    data: &[u8],
+    tables: &[Table],
+    limits: &Limits,
+    guard: &mut Guard,
+    work: &mut u64,
+) -> NativeResult<()> {
+    let Some(table) = find_table(tables, VIEW_PROVENANCE_KIND) else {
+        return Ok(());
+    };
+    if table.count != 1 {
+        return Err(NativeError::corrupt(
+            "VIEW_PROVENANCE must contain exactly one row",
+        ));
+    }
+    let mut reader = Reader::new(table.row(data, 0)?);
+    reader.take(32)?;
+    reader.take(32)?;
+    let count = reader.u64()?;
+    if count > limits.value(LimitKey::MaxIndexRows) {
+        return Err(NativeError::limit(
+            "VIEW_PROVENANCE document count exceeds max_index_rows",
+        ));
+    }
+    if count == 0 || count > reader.remaining() as u64 / 11 {
+        return Err(NativeError::corrupt(
+            "VIEW_PROVENANCE document count exceeds row bounds",
+        ));
+    }
+    let mut previous_key: Option<&[u8]> = None;
+    for _ in 0..count {
+        checkpoint(work, guard)?;
+        let key = read_identity_text(&mut reader)?;
+        if key.is_empty()
+            || std::str::from_utf8(key).is_err()
+            || previous_key.is_some_and(|previous| key <= previous)
+        {
+            return Err(NativeError::corrupt(
+                "VIEW_PROVENANCE document keys are not canonical",
+            ));
+        }
+        previous_key = Some(key);
+        let has_ontology = read_identity_iri(&mut reader, limits)?;
+        let has_version = read_identity_iri(&mut reader, limits)?;
+        if has_version && !has_ontology {
+            return Err(NativeError::corrupt(
+                "VIEW_PROVENANCE version IRI has no ontology IRI",
+            ));
+        }
+    }
+    reader.finish()
+}
+
+fn read_identity_text<'a>(reader: &mut Reader<'a>) -> NativeResult<&'a [u8]> {
+    let length = usize_from_u64(reader.u64()?)?;
+    reader.take(length)
+}
+
+fn read_identity_iri(reader: &mut Reader<'_>, limits: &Limits) -> NativeResult<bool> {
+    if !reader.boolean()? {
+        return Ok(false);
+    }
+    let value = read_identity_text(reader)?;
+    if value.len() as u64 > limits.max_iri_bytes {
+        return Err(NativeError::limit(
+            "VIEW_PROVENANCE IRI exceeds max_iri_bytes",
+        ));
+    }
+    let text = std::str::from_utf8(value)
+        .map_err(|_| NativeError::corrupt("VIEW_PROVENANCE IRI is not UTF-8"))?;
+    validate_iri(text)?;
+    Ok(true)
 }
 
 fn validate_origins(

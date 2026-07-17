@@ -5,6 +5,7 @@ import json
 import struct
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar, cast
 
@@ -13,6 +14,7 @@ import pyowl_core.model as model
 from pyowl_core import (
     BackendPreference,
     DetectionBasis,
+    Diagnostic,
     DigestKind,
     DocumentFormat,
     DocumentProvenance,
@@ -22,6 +24,8 @@ from pyowl_core import (
     OntologyDocument,
     OntologyID,
     ParseLimits,
+    SectionKind,
+    Severity,
     WireError,
     apply_delta,
     compose_views,
@@ -139,6 +143,28 @@ class NativeWireParityTests(unittest.TestCase):
         iri_table[payload + last_offset + 1] = 4  # IRI text marker -> integer marker.
         sections[2] = bytes(iri_table)
         hostile = encode_sections(sections, feature_flags=image.feature_flags, minor=image.minor)
+        with self.assertRaises(WireError):
+            native.roundtrip_wire(hostile)
+
+    def test_view_provenance_minor_one_is_validated_without_materialization(self) -> None:
+        source = replace(
+            snapshot("A"),
+            diagnostics=(Diagnostic("NATIVE_IDENTITY_TEST", Severity.INFO, "test"),),
+        )
+        encoded = encode_snapshot(source)
+        image = read_wire(encoded)
+        self.assertEqual(image.minor, 1)
+        self.assertEqual(native.roundtrip_wire(encoded), encoded)
+
+        sections = dict(image.sections)
+        provenance = bytearray(sections[int(SectionKind.VIEW_PROVENANCE)])
+        struct.pack_into("<Q", provenance, 24 + 64, 0)
+        sections[int(SectionKind.VIEW_PROVENANCE)] = bytes(provenance)
+        hostile = encode_sections(
+            sections,
+            feature_flags=image.feature_flags,
+            minor=image.minor,
+        )
         with self.assertRaises(WireError):
             native.roundtrip_wire(hostile)
 

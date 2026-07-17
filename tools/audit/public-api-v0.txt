@@ -49,6 +49,9 @@ IndexCacheReport
 InversePropertyRecord
 NamedDomainRangeResult
 NestedAnnotationOccurrence
+OntologyDocumentIdentity
+OntologyIdentityIndex
+OntologyIdentityOptions
 PropertyChainRecord
 PropertyComponent
 PropertyDomainRangeOptions

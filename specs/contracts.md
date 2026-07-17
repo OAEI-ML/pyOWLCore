@@ -235,6 +235,11 @@ class OntologySnapshot:
     # All OntologyView members above.
 ```
 
+Built-in direct, overlay, composite, decoded, and mapped views advertise
+`ontology-identity-index` and support `view(OntologyIdentityIndex)` without
+layout introspection. Successfully decoded and mmap-validated wire sources also
+advertise `wire-v1` and `wire-verified`; direct parsed/loaded snapshots do not.
+
 `iter_axioms` canonical order is guaranteed only when `order="canonical"` is
 requested by the concrete overload; default iteration is stable for a snapshot
 but callers must not treat it as semantic. Filter selection uses exact

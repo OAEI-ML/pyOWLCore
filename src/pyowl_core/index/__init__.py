@@ -70,6 +70,11 @@ from .hierarchy import (
     PropertyHierarchyNode,
     PropertyHierarchyOptions,
 )
+from .identities import (
+    OntologyDocumentIdentity,
+    OntologyIdentityIndex,
+    OntologyIdentityOptions,
+)
 from .references import (
     EntityReferenceIndex,
     EntityReferenceOptions,
@@ -119,6 +124,9 @@ __all__ = [
     "InversePropertyRecord",
     "NamedDomainRangeResult",
     "NestedAnnotationOccurrence",
+    "OntologyDocumentIdentity",
+    "OntologyIdentityIndex",
+    "OntologyIdentityOptions",
     "PropertyChainRecord",
     "PropertyComponent",
     "PropertyDomainRangeOptions",

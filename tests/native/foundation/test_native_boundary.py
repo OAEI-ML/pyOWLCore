@@ -33,7 +33,7 @@ class NativeBoundaryTests(unittest.TestCase):
         extension = self.extension
         self.assertEqual(extension.ABI_VERSION, 1)
         self.assertEqual(extension.MODEL_SCHEMA_VERSION, 1)
-        self.assertEqual(extension.WIRE_FORMAT_VERSION, (1, 0))
+        self.assertEqual(extension.WIRE_FORMAT_VERSION, (1, 1))
         self.assertEqual(extension.FEATURES, tuple(sorted(set(extension.FEATURES))))
         self.assertIn("safe-rust", extension.FEATURES)
         self.assertNotIn("parse-functional", extension.FEATURES)

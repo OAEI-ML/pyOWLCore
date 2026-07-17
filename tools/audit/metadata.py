@@ -46,7 +46,7 @@ def audit_metadata(root: Path) -> list[str]:
         "__version__": "0.1.0.dev0",
         "API_VERSION": (0, 1),
         "MODEL_SCHEMA_VERSION": 1,
-        "WIRE_FORMAT_VERSION": (1, 0),
+        "WIRE_FORMAT_VERSION": (1, 1),
         "ADAPTER_PROTOCOL_VERSION": 1,
     }
     for name, expected in expected_values.items():

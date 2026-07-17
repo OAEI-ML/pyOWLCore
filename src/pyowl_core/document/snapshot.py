@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Protocol, TypeAlias, TypeGuard, TypeVar, cast, runtime_checkable
 
 from pyowl_core._immutable import FrozenMap, freeze_mapping
+from pyowl_core.cancellation import CancellationToken
 from pyowl_core.config import LoadOptions
 from pyowl_core.diagnostics import Diagnostic
 from pyowl_core.exceptions import ProfileError, ResourceLimitError
@@ -44,6 +45,7 @@ from .fingerprint import (
     signature_fingerprint,
     snapshot_structural_fingerprint,
 )
+from .identity import _identity_metadata_from_manifest, _OntologyIdentityMetadata
 from .imports import DocumentRecord, ImportManifest
 from .provenance import OriginIndex, OriginOccurrence
 
@@ -286,6 +288,10 @@ class OntologySnapshot:
         default=None, repr=False, compare=False
     )
     _complete_override: bool | None = field(default=None, repr=False, compare=False)
+    _identity_metadata_override: _OntologyIdentityMetadata | None = field(
+        default=None, repr=False, compare=False
+    )
+    _wire_verified: bool = field(default=False, repr=False, compare=False)
     _index_cache: object = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -326,6 +332,14 @@ class OntologySnapshot:
             raise TypeError("_structural_fingerprint_override must be Fingerprint or None")
         if self._complete_override is not None and not isinstance(self._complete_override, bool):
             raise TypeError("_complete_override must be bool or None")
+        if self._identity_metadata_override is not None and not isinstance(
+            self._identity_metadata_override, _OntologyIdentityMetadata
+        ):
+            raise TypeError(
+                "_identity_metadata_override must be ontology identity metadata or None"
+            )
+        if not isinstance(self._wire_verified, bool):
+            raise TypeError("_wire_verified must be bool")
         scoped = (
             _preserved_documents(records, documents)
             if self._preserve_document_scopes
@@ -372,7 +386,7 @@ class OntologySnapshot:
         capabilities = CoreCapabilities(
             1,
             1,
-            (1, 0),
+            (1, 1),
             frozenset(
                 {
                     "owl2-structural",
@@ -381,6 +395,7 @@ class OntologySnapshot:
                     "immutable-snapshot",
                     "document-scoped-anonymous",
                     "structural-indexes",
+                    "ontology-identity-index",
                 }
                 | ({"materialized-view"} if self._structural_context is not None else set())
                 | (
@@ -389,6 +404,7 @@ class OntologySnapshot:
                     else set()
                 )
                 | ({"owl2-dl-validated"} if owl2_dl_report is not None else set())
+                | ({"wire-v1", "wire-verified"} if self._wire_verified else set())
             ),
             {},
             "python",
@@ -478,6 +494,22 @@ class OntologySnapshot:
     def _anonymous_scope_lineage(self) -> tuple[tuple[bytes, bytes, bytes], ...]:
         leaf = fingerprint_bytes(self.structural_fingerprint)
         return tuple((scope, scope, leaf) for scope in sorted(self._anonymous_scopes))
+
+    def _ontology_identity_metadata(
+        self,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> _OntologyIdentityMetadata:
+        if cancellation_token is not None:
+            cancellation_token.check()
+        retained = self._identity_metadata_override
+        if retained is not None:
+            return retained
+        return _identity_metadata_from_manifest(
+            self.import_manifest,
+            self.diagnostics,
+            is_complete=self.is_complete,
+        )
 
     @property
     def is_complete(self) -> bool:

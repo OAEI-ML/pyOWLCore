@@ -140,7 +140,44 @@ pyELK, pyHermiT, and projection without allocating a Python callback per node.
 Public behavior is identical in Python; an experimental bulk encoded iterator
 may be negotiated through the adapter capability contract.
 
-## 9. Bulk access and native acceleration
+## 9. Ontology identity and loader provenance
+
+Consumers that need document-level ontology/version IRIs request the generic
+identity view rather than inspecting snapshot, overlay, composite, or mmap
+storage:
+
+```python
+identity = ontology.view(OntologyIdentityIndex)
+identity.documents                 # tuple[OntologyDocumentIdentity, ...]
+identity.document_keys             # tuple[str, ...]
+identity.import_manifest_digest    # bytes32
+identity.loader_diagnostics_digest # bytes32
+identity.is_complete               # bool
+```
+
+Each document record contains only `document_key` and `OntologyID`. Snapshot
+records use exact import-manifest keys. An overlay retains its base records and
+digests without copying them. A composite prefixes every member key with the
+same `member:<source-token-hex>:` namespace used by origins, then sorts the
+result; bridge deltas add no document identity. Composite manifest and loader
+diagnostic digests are domain-separated SHA-256 combinations of the member
+token/digest pairs. The view never exposes resolver objects, locators, paths,
+credentials, timestamps, or mutable manifest state.
+
+For a concrete snapshot, `import_manifest_digest` is SHA-256 of exact
+`ImportManifest.canonical_bytes()` semantics. Loader diagnostics are the
+ordered `Diagnostic.to_dict()` records serialized as UTF-8 JSON with sorted
+keys and compact separators, prefixed by
+`pyowl-core:loader-diagnostics:v1\0`, then SHA-256 hashed. The empty diagnostic
+sequence therefore has one stable nonzero digest. `is_complete` is the source
+view's closure completeness, not an inference from document count.
+
+The built-in schema is `pyowl-core/ontology-identity-index` version 1 and is
+advertised by capability feature `ontology-identity-index`. Mapped builds
+decode only bounded document/import/provenance metadata and do not materialize
+ontology roots, axioms, or terms.
+
+## 10. Bulk access and native acceleration
 
 For large ontologies, public scalar iterators remain correct but consumers may
 request a stable core `EncodedView`:
@@ -161,7 +198,7 @@ Never expose a raw pointer, mutable NumPy view, borrowed PyO3 buffer that outliv
 the call, machine-width enum, or native-endian struct. Optional array libraries
 belong in consumer adapters, not core runtime dependencies.
 
-## 10. Memory accounting and eviction
+## 11. Memory accounting and eviction
 
 Every view reports estimated/actual bytes by major table. Snapshot caches hold
 strong or bounded weak/LRU references according to `IndexCachePolicy`; default
@@ -172,7 +209,7 @@ Building an index reserves accounted memory before growth. Limit failure raises
 `ResourceLimitError` and leaves other views usable. Composite/overlay indexes
 prefer posting adapters over duplicating bases; benchmark gates enforce this.
 
-## 11. Extension views
+## 12. Extension views
 
 Third parties may define `StructuralViewFactory` plugins with a globally unique
 name, schema version, typed immutable options, dependency list of core views,
@@ -184,7 +221,7 @@ Consumer-private views should remain in the consumer. A view belongs in core
 only when at least two consumers need the same syntax-only result and its full
 semantics/fallback/resource behavior are specified here.
 
-## 12. Acceptance gates
+## 13. Acceptance gates
 
 - every model constructor is covered by signature/reference walking;
 - results equal independent full scans on generated ontologies;
@@ -196,4 +233,3 @@ semantics/fallback/resource behavior are specified here.
 - Python/native deterministic and semantic parity passes;
 - index bytes and build latency are reported in biomedical benchmarks; and
 - consumer import checks forbid reasoner/projector IR in `pyowl_core.index`.
-

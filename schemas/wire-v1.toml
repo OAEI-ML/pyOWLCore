@@ -2,7 +2,7 @@ schema = 1
 name = "PYOCORE"
 magic_hex = "50594f434f524500"
 wire_major = 1
-wire_minor = 0
+wire_minor = 1
 model_schema = 1
 canonical_profile = 1
 byte_order = "little"
@@ -108,6 +108,12 @@ name = "SWRL"
 required = false
 schema = 1
 feature_flag = 1
+
+[[sections]]
+kind = 32770
+name = "VIEW_PROVENANCE"
+required = false
+schema = 1
 
 [table]
 count = "u64"

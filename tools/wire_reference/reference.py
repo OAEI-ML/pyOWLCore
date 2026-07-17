@@ -18,7 +18,7 @@ _DIRECTORY = struct.Struct("<HHIQQQQ32s")
 _HEADER_SIZE = 96
 _DIRECTORY_SIZE = 72
 _REQUIRED = frozenset(range(1, 15))
-_KNOWN_TABLES = _REQUIRED | {0x8001}
+_KNOWN_TABLES = _REQUIRED | {0x8001, 0x8002}
 
 
 @dataclass(frozen=True, slots=True)

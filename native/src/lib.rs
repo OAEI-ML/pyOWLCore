@@ -29,7 +29,7 @@ use wire::WireArena;
 
 const ABI_VERSION: u32 = 1;
 const MODEL_SCHEMA_VERSION: u32 = 1;
-const WIRE_FORMAT_VERSION: (u16, u16) = (1, 0);
+const WIRE_FORMAT_VERSION: (u16, u16) = (1, 1);
 const FEATURES: [&str; 10] = [
     "cancellation",
     "canonical-model-v1",

@@ -13,6 +13,11 @@ from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy, L
 from pyowl_core.diagnostics import Diagnostic, Severity, SourceSpan
 from pyowl_core.document.document import Fingerprint, OntologyDocument, OntologyID
 from pyowl_core.document.fingerprint import StructuralContext, StructuralContextKind
+from pyowl_core.document.identity import (
+    OntologyDocumentIdentity,
+    _identity_metadata_from_manifest,
+    _OntologyIdentityMetadata,
+)
 from pyowl_core.document.imports import (
     DocumentRecord,
     DocumentStatus,
@@ -226,6 +231,7 @@ def encode_snapshot(
         raise TypeError("limits must be ParseLimits or None")
     guard = Guard(selected_limits, cancellation_token)
     guard.check(force=True)
+    source_identity = _identity_metadata_for_view(snapshot, cancellation_token)
     concrete = _materialize_for_wire(snapshot, selected_limits)
     rows, flags = _collect_sections(concrete, selected_limits, guard)
     sections: dict[SectionKind, bytes] = {
@@ -234,7 +240,19 @@ def encode_snapshot(
     digests = {kind: hashlib.sha256(data).digest() for kind, data in sections.items()}
     footer = _footer_row(concrete, sections, digests)
     sections[SectionKind.FOOTER] = encode_table((footer,))
-    result = _assemble(sections, flags, selected_limits, guard)
+    required_identity = _identity_metadata_from_manifest(
+        concrete.import_manifest,
+        (),
+        is_complete=concrete.is_complete,
+    )
+    selected_identity = required_identity if source_identity is None else source_identity
+    minor = 0
+    if selected_identity != required_identity:
+        sections[SectionKind.VIEW_PROVENANCE] = encode_table(
+            (_view_provenance_row(selected_identity, selected_limits),)
+        )
+        minor = WIRE_MINOR
+    result = _assemble(sections, flags, selected_limits, guard, minor=minor)
     guard.check(force=True)
     return result
 
@@ -306,9 +324,7 @@ def inspect_image(
         guard,
         lazy=lazy_model_validation,
     )
-    _validate_terms(
-        image.table(SectionKind.TERMS), limits, guard, lazy=lazy_model_validation
-    )
+    _validate_terms(image.table(SectionKind.TERMS), limits, guard, lazy=lazy_model_validation)
     _validate_model_table(
         image.table(SectionKind.AXIOMS), AxiomNode, limits, guard, lazy=lazy_model_validation
     )
@@ -334,6 +350,7 @@ def inspect_image(
         raise _corrupt("VIEW document count disagrees with DOCUMENTS")
     if summary.root_document_key not in keys:
         raise _corrupt("VIEW root document is absent from DOCUMENTS")
+    _read_view_provenance(image, limits, is_complete=summary.complete)
     _validate_origins(image, keys, limits, collect=False)
     _validate_footer(image, summary)
     guard.check(force=True)
@@ -359,6 +376,11 @@ def materialize_image(
     manifest = _decode_imports(image, tuple(item.meta for item in decoded), limits, cache)
     documents = tuple(by_key[record.document_key].document for record in manifest.documents)
     summary, _view_refs = _read_view(image, set(by_key), limits, collect=True)
+    identity_metadata = _read_view_provenance(
+        image,
+        limits,
+        is_complete=summary.complete,
+    )
     origins = cast(OriginIndex, _validate_origins(image, set(by_key), limits, collect=True))
     options = LoadOptions(
         imports=manifest.policy,
@@ -381,6 +403,8 @@ def materialize_image(
                 options,
                 _origin_index_override=origins,
                 _complete_override=summary.complete,
+                _identity_metadata_override=identity_metadata,
+                _wire_verified=True,
             )
         else:
             snapshot = OntologySnapshot(
@@ -394,6 +418,8 @@ def materialize_image(
                 _structural_context=summary.structural_context,
                 _structural_fingerprint_override=summary.structural_fingerprint,
                 _complete_override=summary.complete,
+                _identity_metadata_override=identity_metadata,
+                _wire_verified=True,
             )
     except (TypeError, ValueError, ModelError, ResourceLimitError) as error:
         raise _translate_model_error(error) from error
@@ -455,6 +481,46 @@ def checked_materialize_image(
         ) from error
     except (TypeError, ValueError, KeyError, OverflowError) as error:
         raise _corrupt("wire rows do not form a valid ontology snapshot") from error
+
+
+def identity_metadata_from_inspected(
+    inspected: InspectedWire,
+    *,
+    limits: ParseLimits,
+    cancellation_token: CancellationToken | None = None,
+) -> _OntologyIdentityMetadata:
+    """Decode only bounded identity/import metadata from a validated image."""
+
+    if not isinstance(inspected, InspectedWire):
+        raise TypeError("inspected must be InspectedWire")
+    if not isinstance(limits, ParseLimits):
+        raise TypeError("limits must be ParseLimits")
+    guard = Guard(limits, cancellation_token)
+    guard.check(force=True)
+    retained = _read_view_provenance(
+        inspected.image,
+        limits,
+        is_complete=inspected.summary.complete,
+    )
+    if retained is not None:
+        return retained
+    metadata: list[_DocumentMeta] = []
+    for index, row in enumerate(inspected.image.table(SectionKind.DOCUMENTS).rows()):
+        guard.check(index)
+        metadata.append(_read_document_row(inspected.image, row, limits, collect=False).meta)
+    manifest = _decode_imports(
+        inspected.image,
+        tuple(metadata),
+        limits,
+        {},
+    )
+    result = _identity_metadata_from_manifest(
+        manifest,
+        (),
+        is_complete=inspected.summary.complete,
+    )
+    guard.check(force=True)
+    return result
 
 
 def image_import_options(image: WireImage) -> tuple[ImportPolicy, bool]:
@@ -596,9 +662,7 @@ def _structural_roots(snapshot: OntologySnapshot) -> Iterator[StructuralNode]:
         yield from snapshot.ontology_annotations(
             scope=AxiomScope.DOCUMENT, document_key=record.document_key
         )
-        yield from snapshot.iter_axioms(
-            scope=AxiomScope.DOCUMENT, document_key=record.document_key
-        )
+        yield from snapshot.iter_axioms(scope=AxiomScope.DOCUMENT, document_key=record.document_key)
         yield from snapshot.iter_extensions(
             scope=AxiomScope.DOCUMENT, document_key=record.document_key
         )
@@ -655,9 +719,7 @@ def _sequence_descriptors(node: StructuralNode) -> Iterator[bytes]:
         yield writer.finish()
 
 
-def _enforce_id_spaces(
-    rows: Mapping[SectionKind, Sequence[bytes]], swrl: set[bytes]
-) -> None:
+def _enforce_id_spaces(rows: Mapping[SectionKind, Sequence[bytes]], swrl: set[bytes]) -> None:
     for kind, values in (*rows.items(), (SectionKind.SWRL, swrl)):
         if len(values) > MAX_TABLE_ID:
             raise ResourceLimitError(
@@ -676,9 +738,7 @@ def _build_ids(
         kind: {value: index for index, value in enumerate(values, start=1)}
         for kind, values in rows.items()
     }
-    result[SectionKind.SWRL] = {
-        value: index for index, value in enumerate(sorted(swrl), start=1)
-    }
+    result[SectionKind.SWRL] = {value: index for index, value in enumerate(sorted(swrl), start=1)}
     return result
 
 
@@ -722,9 +782,7 @@ def _document_row(
     _write_references(writer, document.extension_components, SectionKind.SWRL, ids)
     _write_references(
         writer,
-        snapshot.ontology_annotations(
-            scope=AxiomScope.DOCUMENT, document_key=record.document_key
-        ),
+        snapshot.ontology_annotations(scope=AxiomScope.DOCUMENT, document_key=record.document_key),
         SectionKind.ANNOTATIONS,
         ids,
     )
@@ -792,6 +850,59 @@ def _view_row(
     return writer.finish()
 
 
+def _identity_metadata_for_view(
+    view: OntologyView,
+    cancellation_token: CancellationToken | None,
+) -> _OntologyIdentityMetadata | None:
+    if "ontology-identity-index" not in view.capabilities.features:
+        return None
+    from pyowl_core.index.identities import OntologyIdentityIndex
+
+    identity = view.view(
+        OntologyIdentityIndex,
+        cancellation_token=cancellation_token,
+    )
+    metadata = identity._metadata
+    if not isinstance(metadata, _OntologyIdentityMetadata):
+        raise TypeError("ontology identity view returned invalid metadata")
+    return metadata
+
+
+def _view_provenance_row(
+    metadata: _OntologyIdentityMetadata,
+    limits: ParseLimits,
+) -> bytes:
+    limits.enforce("max_index_rows", len(metadata.documents))
+    writer = ByteWriter()
+    writer.raw(metadata.import_manifest_digest)
+    writer.raw(metadata.loader_diagnostics_digest)
+    writer.u64(len(metadata.documents))
+    for document in metadata.documents:
+        _write_identity_text(writer, document.document_key)
+        ontology_id = document.ontology_id
+        _write_identity_iri(writer, ontology_id.ontology_iri, limits)
+        _write_identity_iri(writer, ontology_id.version_iri, limits)
+        limits.enforce("max_wire_bytes", len(writer.data))
+        limits.enforce("max_temporary_bytes", len(writer.data))
+    return writer.finish()
+
+
+def _write_identity_text(writer: ByteWriter, value: str) -> None:
+    encoded = value.encode("utf-8")
+    writer.u64(len(encoded))
+    writer.raw(encoded)
+
+
+def _write_identity_iri(writer: ByteWriter, value: IRI | None, limits: ParseLimits) -> None:
+    writer.u8(int(value is not None))
+    if value is None:
+        return
+    encoded = value.value.encode("utf-8")
+    limits.enforce("max_iri_bytes", len(encoded))
+    writer.u64(len(encoded))
+    writer.raw(encoded)
+
+
 def _origin_rows(
     origins: OriginIndex,
     ids: Mapping[SectionKind, Mapping[bytes, int]],
@@ -841,7 +952,11 @@ def _assemble(
     feature_flags: int,
     limits: ParseLimits,
     guard: Guard,
+    *,
+    minor: int,
 ) -> bytes:
+    if isinstance(minor, bool) or not isinstance(minor, int) or not 0 <= minor <= WIRE_MINOR:
+        raise ValueError("wire minor must be supported by this encoder")
     ordered = tuple(sorted(sections.items(), key=lambda item: int(item[0])))
     directory_length = len(ordered) * DIRECTORY_ENTRY_SIZE
     cursor = _align(HEADER_SIZE + directory_length)
@@ -887,7 +1002,7 @@ def _assemble(
         0,
         MAGIC,
         WIRE_MAJOR,
-        WIRE_MINOR,
+        minor,
         HEADER_SIZE,
         feature_flags,
         len(entries),
@@ -988,9 +1103,7 @@ def _validate_model_table(
             valid = isinstance(value, expected)
             actual = type(value).__name__
         if not valid:
-            raise _corrupt(
-                f"{SectionKind(table.kind).name} row has invalid {actual} category"
-            )
+            raise _corrupt(f"{SectionKind(table.kind).name} row has invalid {actual} category")
 
 
 def _validate_structural_table(
@@ -1004,9 +1117,7 @@ def _validate_structural_table(
             _decode_model(row, limits)
 
 
-def _validate_terms(
-    table: TableView, limits: ParseLimits, guard: Guard, *, lazy: bool
-) -> None:
+def _validate_terms(table: TableView, limits: ParseLimits, guard: Guard, *, lazy: bool) -> None:
     forbidden = (IRI, Entity, Literal, AnonymousIndividual, Annotation, AxiomNode)
     for index, row in enumerate(table.rows()):
         guard.check(index)
@@ -1090,9 +1201,7 @@ def _read_document_row(
     if model_schema != MODEL_SCHEMA:
         raise WireVersionError("document model schema is unsupported", code="WIRE_MODEL_SCHEMA")
     maximum = limits.max_wire_rows
-    direct_imports = reader.references(
-        maximum=maximum, target_rows=iris.count, collect=collect
-    )
+    direct_imports = reader.references(maximum=maximum, target_rows=iris.count, collect=collect)
     raw_annotations = reader.references(
         maximum=maximum, target_rows=annotations.count, collect=collect
     )
@@ -1103,9 +1212,7 @@ def _read_document_row(
     effective_annotations = reader.references(
         maximum=maximum, target_rows=annotations.count, collect=collect
     )
-    effective_axioms = reader.references(
-        maximum=maximum, target_rows=axioms.count, collect=collect
-    )
+    effective_axioms = reader.references(maximum=maximum, target_rows=axioms.count, collect=collect)
     effective_extensions = reader.references(
         maximum=maximum, target_rows=extension_count, collect=collect
     )
@@ -1158,15 +1265,11 @@ def _decode_document_row(
     ontology_id = OntologyID(
         cast(
             IRI | None,
-            _decode_optional(
-                image, SectionKind.IRIS, meta.document_ontology_iri_id, limits, cache
-            ),
+            _decode_optional(image, SectionKind.IRIS, meta.document_ontology_iri_id, limits, cache),
         ),
         cast(
             IRI | None,
-            _decode_optional(
-                image, SectionKind.IRIS, meta.document_version_iri_id, limits, cache
-            ),
+            _decode_optional(image, SectionKind.IRIS, meta.document_version_iri_id, limits, cache),
         ),
     )
     document_iri = cast(
@@ -1205,8 +1308,7 @@ def _decode_document_row(
         for value in wire.raw_axioms
     )
     extensions = CanonicalSet(
-        _decode_ref(image, SectionKind.SWRL, value, limits, cache)
-        for value in wire.raw_extensions
+        _decode_ref(image, SectionKind.SWRL, value, limits, cache) for value in wire.raw_extensions
     )
     try:
         document = OntologyDocument(
@@ -1261,9 +1363,7 @@ def _validate_imports(
         if importer not in document_keys:
             raise _corrupt("IMPORTS edge importer is absent from DOCUMENTS")
         iri_id = _required_ref(reader.u32(), iris.count, "import IRI")
-        status = cast(
-            ImportStatus, _enum_tag(reader.u8(), _IMPORT_STATUS_BY_TAG, "import status")
-        )
+        status = cast(ImportStatus, _enum_tag(reader.u8(), _IMPORT_STATUS_BY_TAG, "import status"))
         target_id = _optional_ref(reader.u32(), strings.count, "import target")
         resolver_id = _optional_ref(reader.u32(), strings.count, "resolver name")
         diagnostic_id = _optional_ref(reader.u32(), strings.count, "diagnostic code")
@@ -1432,6 +1532,82 @@ def _read_view(
         ),
         _ViewRefs(annotations, axioms, extensions),
     )
+
+
+def _read_view_provenance(
+    image: WireImage,
+    limits: ParseLimits,
+    *,
+    is_complete: bool,
+) -> _OntologyIdentityMetadata | None:
+    table = image.tables.get(int(SectionKind.VIEW_PROVENANCE))
+    if table is None:
+        return None
+    if image.header.minor < 1:
+        raise WireVersionError(
+            "VIEW_PROVENANCE requires wire minor 1",
+            code="WIRE_SECTION_VERSION",
+        )
+    if table.count != 1:
+        raise _corrupt("VIEW_PROVENANCE must contain exactly one row")
+    reader = ByteReader(table.row(0), section="VIEW_PROVENANCE")
+    import_manifest_digest = reader.raw(32)
+    loader_diagnostics_digest = reader.raw(32)
+    count = reader.u64()
+    if count > limits.max_index_rows:
+        raise WireLimitError(
+            "VIEW_PROVENANCE document count exceeds limits",
+            code="WIRE_ROW_LIMIT",
+        )
+    if count == 0 or count > reader.remaining // 11:
+        raise _corrupt("VIEW_PROVENANCE document count exceeds row bounds")
+    documents: list[OntologyDocumentIdentity] = []
+    previous: bytes | None = None
+    for _ in range(count):
+        document_key = _read_identity_text(reader, "document key")
+        encoded_key = document_key.encode("utf-8")
+        if not encoded_key or (previous is not None and encoded_key <= previous):
+            raise _corrupt("VIEW_PROVENANCE document keys are not canonical")
+        previous = encoded_key
+        ontology_iri = _read_identity_iri(reader, limits)
+        version_iri = _read_identity_iri(reader, limits)
+        try:
+            documents.append(
+                OntologyDocumentIdentity(
+                    document_key,
+                    OntologyID(ontology_iri, version_iri),
+                )
+            )
+        except (TypeError, ValueError, ModelError) as error:
+            raise _corrupt("VIEW_PROVENANCE contains invalid ontology identity") from error
+    reader.finish()
+    try:
+        return _OntologyIdentityMetadata(
+            tuple(documents),
+            import_manifest_digest,
+            loader_diagnostics_digest,
+            is_complete,
+        )
+    except (TypeError, ValueError) as error:
+        raise _corrupt("VIEW_PROVENANCE metadata is invalid") from error
+
+
+def _read_identity_text(reader: ByteReader, label: str) -> str:
+    length = reader.u64()
+    if length > reader.remaining:
+        raise _corrupt(f"VIEW_PROVENANCE {label} exceeds row bounds")
+    return _decode_utf8(reader.raw(length), "VIEW_PROVENANCE")
+
+
+def _read_identity_iri(reader: ByteReader, limits: ParseLimits) -> IRI | None:
+    if not reader.boolean():
+        return None
+    value = _read_identity_text(reader, "IRI")
+    limits.enforce("max_iri_bytes", len(value.encode("utf-8")))
+    try:
+        return IRI(value)
+    except (TypeError, ValueError, ModelError) as error:
+        raise _corrupt("VIEW_PROVENANCE contains invalid IRI") from error
 
 
 def _validate_origins(
@@ -1617,9 +1793,7 @@ class _ScanBudget:
     def enter(self, depth: int) -> None:
         self.terms += 1
         if depth > self.limits.max_nesting_depth:
-            raise WireLimitError(
-                "canonical row nesting exceeds limits", code="WIRE_MODEL_LIMIT"
-            )
+            raise WireLimitError("canonical row nesting exceeds limits", code="WIRE_MODEL_LIMIT")
         if self.terms > self.limits.max_terms:
             raise WireLimitError("canonical row term count exceeds limits", code="WIRE_MODEL_LIMIT")
 
@@ -1652,17 +1826,13 @@ def _scan_node(
         offset += 1
         if marker == 1:
             payload_start, payload_end, offset = _scan_frame(data, offset, end)
-            _child, consumed = _scan_node(
-                data, payload_start, payload_end, budget, depth + 1
-            )
+            _child, consumed = _scan_node(data, payload_start, payload_end, budget, depth + 1)
             if consumed != payload_end:
                 raise _corrupt("trailing bytes in nested canonical node")
         elif marker == 6:
             count, offset = _scan_varint(data, offset, end)
             if count > budget.limits.max_sequence_arity:
-                raise WireLimitError(
-                    "canonical set arity exceeds limits", code="WIRE_MODEL_LIMIT"
-                )
+                raise WireLimitError("canonical set arity exceeds limits", code="WIRE_MODEL_LIMIT")
             if count > end - offset:
                 raise _corrupt("canonical set count exceeds row bounds")
             previous: bytes | None = None
@@ -1672,9 +1842,7 @@ def _scan_node(
                 if previous is not None and current <= previous:
                     raise _corrupt("canonical set members are not strictly sorted")
                 previous = current
-                _child, consumed = _scan_node(
-                    data, payload_start, payload_end, budget, depth + 1
-                )
+                _child, consumed = _scan_node(data, payload_start, payload_end, budget, depth + 1)
                 if consumed != payload_end:
                     raise _corrupt("trailing bytes in canonical set member")
         elif marker == 7:
