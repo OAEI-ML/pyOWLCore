@@ -1,0 +1,154 @@
+{
+  "schema": "pyowl-core.consumer-compatibility/1",
+  "recorded_date": "2026-07-18",
+  "core": {
+    "repository": "pyOWLCore",
+    "implementation_commit": "fe4be083fec4988a20def5f8e31c11da17a8dc40",
+    "adapter_contract_commit": "75132daaf8f665b6f72dbbd7c9fcf30ef23e1eb7",
+    "package_version": "0.1.0.dev0",
+    "python": ">=3.10",
+    "api_version": [0, 1],
+    "model_schema": 1,
+    "wire_format": [1, 1],
+    "adapter_protocol": 1
+  },
+  "consumers": [
+    {
+      "id": "exact-om",
+      "repository": "Exact-OM",
+      "commit": "e943881befd7673f42b4b4b0b9230b47364c8f35",
+      "branch": "dev",
+      "package": "Exact-OM",
+      "package_version": "2.0.0",
+      "python": ">=3.10,<4.0",
+      "core_requirement": ">=0.1,<0.2",
+      "consumer_api": "OwlOntologySource.owl_snapshot/1",
+      "compiler_cache_schema": "pyowl-projector.compiler-cache/1",
+      "compatibility_id": "mowl-d993536-v1",
+      "view_kind": "snapshot",
+      "required_features": [
+        "document-boundaries",
+        "document-scoped-anonymous",
+        "import-manifest",
+        "ontology-identity-index",
+        "owl2-structural",
+        "structural-indexes"
+      ],
+      "test": {
+        "selection": "tests/shared_owl_stack_test.py",
+        "result": "5 passed, 2 expected fallback warnings",
+        "tested_commit_tree": true
+      }
+    },
+    {
+      "id": "oaei-bioml-eval",
+      "repository": "OAEI-Bio-ML-eval",
+      "commit": "1a6e2e5533cd24af6852fd7ae6029d0f7cd010fa",
+      "branch": "main",
+      "package": "oaei-bioml-eval",
+      "package_version": "0.2.0",
+      "python": ">=3.10",
+      "core_requirement": ">=0.1,<0.2",
+      "consumer_api": "coherence-provenance/1",
+      "compiler_cache_schema": "reasoner-owned",
+      "compatibility_id": "oaei-bioml-coherence/1",
+      "view_kind": "composite",
+      "required_features": [
+        "document-boundaries",
+        "document-scoped-anonymous",
+        "import-manifest",
+        "ontology-composite",
+        "ontology-identity-index",
+        "owl2-structural",
+        "zero-copy-view"
+      ],
+      "test": {
+        "selection": "tests/test_coherence.py tests/test_native_reasoners.py tests/test_java_free_runtime.py",
+        "result": "61 passed, 14 subtests passed",
+        "tested_commit_tree": true
+      }
+    },
+    {
+      "id": "pyelk",
+      "repository": "pyELK",
+      "commit": "d2ec1e1485180388c93f11e0bdaf4afbdd66583f",
+      "branch": "main",
+      "package": "pyelk-reasoner",
+      "package_version": "0.1.0.dev0",
+      "python": ">=3.10",
+      "core_requirement": ">=0.1,<0.2",
+      "consumer_api": "compiler-schema/1",
+      "compiler_cache_schema": "1",
+      "compatibility_id": "elk-0.6.0:b8ac5ce83db0704a7359d96aa382891e2f547863",
+      "view_kind": "snapshot",
+      "required_features": [
+        "document-boundaries",
+        "document-scoped-anonymous",
+        "import-manifest",
+        "owl2-structural"
+      ],
+      "test": {
+        "selection": "tests/unit/core/test_core_contract.py tests/unit/indexing/test_literals.py tests/integration/test_shared_snapshot_input.py tests/unit/inputs/test_policy_cache.py",
+        "result": "31 passed",
+        "tested_commit_tree": true
+      }
+    },
+    {
+      "id": "pyhermit",
+      "repository": "pyHermiT",
+      "commit": "77887fd42e4b38586ee860a36678ac57bf689071",
+      "branch": "main",
+      "package": "pyHermiT",
+      "package_version": "0.1.0.dev0",
+      "python": ">=3.10",
+      "core_requirement": ">=0.1,<0.2",
+      "consumer_api": "compiler-cache/1",
+      "compiler_cache_schema": "1",
+      "compatibility_id": "hermit-37ec30a-v1",
+      "view_kind": "snapshot",
+      "required_features": [
+        "document-boundaries",
+        "document-scoped-anonymous",
+        "import-manifest",
+        "ontology-identity-index",
+        "owl2-structural"
+      ],
+      "test": {
+        "selection": "tests/unit/core/test_core_contract.py tests/integration/shared_snapshot/test_inputs.py tests/unit/datatypes/test_language_tags.py tests/unit/datatypes/test_literal_identities.py",
+        "result": "85 passed",
+        "tested_commit_tree": true
+      }
+    },
+    {
+      "id": "projector",
+      "repository": "pyOwl2Vec-Star-projector",
+      "commit": "490eeb89d450723cf8933913e2ccfa53d6fe4140",
+      "branch": "main",
+      "package": "pyowl2vec-star-projector",
+      "package_version": "0.1.0rc1",
+      "python": ">=3.10",
+      "core_requirement": ">=0.1,<0.2",
+      "consumer_api": "PROJECTOR_API_VERSION=1",
+      "compiler_cache_schema": "pyowl-projector.compiler-cache/1",
+      "compatibility_id": "mowl-d993536-v1",
+      "view_kind": "snapshot",
+      "required_features": [],
+      "test": {
+        "selection": "tests/test_consumer_conformance.py",
+        "result": "12 passed",
+        "tested_commit_tree": true
+      }
+    }
+  ],
+  "static_audits": {
+    "consumer_runtime_private_core_imports": 0,
+    "consumer_runtime_java_imports": 0,
+    "consumer_runtime_pickle_handoffs": 0,
+    "core_runtime_consumer_imports": 0,
+    "notes": [
+      "pyHermiT re-exports pyowl_core.parse_document; it does not implement or import a private parser.",
+      "Projector source comments describe pinned OWLAPI hash compatibility but import no Java runtime.",
+      "Exact-OM has unrelated application serialization dependencies; its shared OWL handoff uses view identity or core wire only."
+    ]
+  }
+}
