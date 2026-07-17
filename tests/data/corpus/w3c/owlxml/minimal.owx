@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Ontology xmlns="http://www.w3.org/2002/07/owl#"
+          ontologyIRI="https://example.org/conformance/ontology">
+  <Annotation>
+    <AnnotationProperty IRI="http://www.w3.org/2000/01/rdf-schema#label"/>
+    <Literal xml:lang="EN">Conformance</Literal>
+  </Annotation>
+  <Declaration><Class IRI="https://example.org/conformance#A"/></Declaration>
+  <Declaration><Class IRI="https://example.org/conformance#B"/></Declaration>
+  <SubClassOf>
+    <Class IRI="https://example.org/conformance#A"/>
+    <Class IRI="https://example.org/conformance#B"/>
+  </SubClassOf>
+  <AnnotationAssertion>
+    <AnnotationProperty IRI="http://www.w3.org/2000/01/rdf-schema#label"/>
+    <IRI>https://example.org/conformance#A</IRI>
+    <Literal xml:lang="EN">Alpha</Literal>
+  </AnnotationAssertion>
+</Ontology>

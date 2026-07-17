@@ -1,0 +1,66 @@
+{
+  "constructor_coverage": {
+    "constructors": 76,
+    "required_evidence": [
+      "canonical",
+      "formats",
+      "generative",
+      "native",
+      "reference_index",
+      "signature_visitor",
+      "validation",
+      "wire"
+    ]
+  },
+  "corpus": {
+    "artifacts": 17,
+    "categories": [
+      "errata-identity",
+      "hostile-rdf",
+      "hostile-resource",
+      "hostile-wire",
+      "hostile-xml",
+      "imports",
+      "negative-functional",
+      "positive-functional",
+      "positive-owlxml",
+      "positive-rdfxml",
+      "positive-turtle",
+      "provenance-ledger",
+      "tool-provenance"
+    ],
+    "provenance_sha256": "d102f86cc9c2163295b74ee8b7773ce5a28fa03322c5da026e544a0820afd3af"
+  },
+  "deviations": {
+    "count": 0,
+    "registry_sha256": "79f400934c515cc502431c72a51adf5b7ba21f7a48152f77f8d5b3755ccfa43d"
+  },
+  "differential": {
+    "axioms": 4,
+    "document_fingerprint": "55291b5bd2afd97fed64e8cc75edc6c42a75cebe6b9fd57584c7c58443aee703",
+    "formats": [
+      "functional",
+      "owlxml",
+      "rdfxml",
+      "turtle"
+    ],
+    "independent_wire": true,
+    "wire_bytes": 4880
+  },
+  "errata": {
+    "covered_decisions": 2,
+    "ledger_sha256": "ee3d883c6ea5e76e184e2d9e346933eb851b321d400a87c254ecebe175ffb20d"
+  },
+  "external_oracles": {
+    "java_enabled": false,
+    "lock_sha256": "ea1778af43a43407921e8365702e09e0c4cf6a4af309817232599a22666fdefe",
+    "normal_lane_requires_external_oracle": false
+  },
+  "model_schema": 1,
+  "python": [
+    "3.10",
+    "3.12"
+  ],
+  "schema": 1,
+  "status": "no-unexplained-deviations"
+}

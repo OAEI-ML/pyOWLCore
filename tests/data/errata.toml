@@ -1,0 +1,24 @@
+schema = 1
+reviewed_at = "2026-07-17"
+owner = "pyowl-core maintainers"
+owl2_errata_source = "https://www.w3.org/2007/OWL/wiki/Errata"
+
+[[decision]]
+id = "LANGUAGE-TAG-CASE"
+references = [
+  "https://www.w3.org/TR/owl2-syntax/#Literals",
+  "https://www.rfc-editor.org/info/bcp47",
+]
+fixture_ids = ["errata-language-upper", "errata-language-lower"]
+decision = "Language tags compare using canonical ASCII lowercase while source spelling remains provenance."
+status = "covered"
+
+[[decision]]
+id = "ANONYMOUS-ALPHA-IDENTITY"
+references = [
+  "https://www.w3.org/TR/owl2-syntax/#Anonymous_Individuals",
+  "https://www.w3.org/TR/rdf11-concepts/#section-blank-nodes",
+]
+fixture_ids = ["errata-blank-left", "errata-blank-renamed"]
+decision = "Source blank labels are document-local syntax and alpha-renaming preserves document identity."
+status = "covered"

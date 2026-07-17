@@ -1,0 +1,6 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+<https://example.org/hostile> a owl:Ontology .
+<https://example.org/C> owl:equivalentClass _:expression .
+_:expression owl:oneOf _:head .
+_:head rdf:first <https://example.org/i> ; rdf:rest _:head .

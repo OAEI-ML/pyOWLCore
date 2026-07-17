@@ -1,0 +1,1723 @@
+{
+  "constructor_count": 76,
+  "evidence_catalog": {
+    "canonical": "tests/conformance/test_constructor_coverage.py::test_every_registered_fixture_has_canonical_visitor_and_reference_evidence",
+    "formats": "tests/conformance/test_constructor_coverage.py::test_every_constructor_crosses_all_required_formats",
+    "generative": "tests/conformance/test_metamorphic.py",
+    "native": "tests/conformance/test_differential.py::test_functional_python_native_and_independent_wire_cross_product",
+    "reference_index": "pyowl_core.index.common.iter_structural_occurrences/FIELD_ROLE_TABLE",
+    "signature_visitor": "pyowl_core.model.visitor.walk/signature",
+    "validation": "tests/unit/model/test_validation.py and constructor __post_init__",
+    "wire": "tests/conformance/test_constructor_coverage.py::test_every_constructor_crosses_canonical_wire_and_independent_reader"
+  },
+  "model_schema": 1,
+  "required_evidence_columns": [
+    "canonical",
+    "formats",
+    "generative",
+    "native",
+    "reference_index",
+    "signature_visitor",
+    "validation",
+    "wire"
+  ],
+  "rows": [
+    {
+      "category": "primitive",
+      "constructor": "IRI",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "value"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[IRI]",
+      "production": "IRI",
+      "schema_tag": 1,
+      "schema_tag_name": "IRI"
+    },
+    {
+      "category": "primitive",
+      "constructor": "Entity",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "kind",
+        "iri"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[Entity]",
+      "production": "Entity and typed entity productions",
+      "schema_tag": 2,
+      "schema_tag_name": "ENTITY"
+    },
+    {
+      "category": "primitive",
+      "constructor": "AnonymousIndividual",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "document_scope",
+        "local_key"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[AnonymousIndividual]",
+      "production": "AnonymousIndividual",
+      "schema_tag": 3,
+      "schema_tag_name": "ANONYMOUS_INDIVIDUAL"
+    },
+    {
+      "category": "primitive",
+      "constructor": "Literal",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "lexical_form",
+        "datatype",
+        "language"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[Literal]",
+      "production": "Literal",
+      "schema_tag": 4,
+      "schema_tag_name": "LITERAL"
+    },
+    {
+      "category": "annotation",
+      "constructor": "Annotation",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "value",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[Annotation]",
+      "production": "Annotation",
+      "schema_tag": 5,
+      "schema_tag_name": "ANNOTATION"
+    },
+    {
+      "category": "property_expression",
+      "constructor": "ObjectInverseOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectInverseOf]",
+      "production": "ObjectInverseOf",
+      "schema_tag": 10,
+      "schema_tag_name": "OBJECT_INVERSE_OF"
+    },
+    {
+      "category": "sub_object_property_expression",
+      "constructor": "ObjectPropertyChain",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "properties"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectPropertyChain]",
+      "production": "ObjectPropertyChain",
+      "schema_tag": 11,
+      "schema_tag_name": "OBJECT_PROPERTY_CHAIN"
+    },
+    {
+      "category": "facet_restriction",
+      "constructor": "FacetRestriction",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "facet",
+        "value"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[FacetRestriction]",
+      "production": "FacetRestriction",
+      "schema_tag": 20,
+      "schema_tag_name": "FACET_RESTRICTION"
+    },
+    {
+      "category": "data_range",
+      "constructor": "DataIntersectionOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "operands"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataIntersectionOf]",
+      "production": "DataIntersectionOf",
+      "schema_tag": 21,
+      "schema_tag_name": "DATA_INTERSECTION_OF"
+    },
+    {
+      "category": "data_range",
+      "constructor": "DataUnionOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "operands"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataUnionOf]",
+      "production": "DataUnionOf",
+      "schema_tag": 22,
+      "schema_tag_name": "DATA_UNION_OF"
+    },
+    {
+      "category": "data_range",
+      "constructor": "DataComplementOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "operand"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataComplementOf]",
+      "production": "DataComplementOf",
+      "schema_tag": 23,
+      "schema_tag_name": "DATA_COMPLEMENT_OF"
+    },
+    {
+      "category": "data_range",
+      "constructor": "DataOneOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "values"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataOneOf]",
+      "production": "DataOneOf",
+      "schema_tag": 24,
+      "schema_tag_name": "DATA_ONE_OF"
+    },
+    {
+      "category": "data_range",
+      "constructor": "DatatypeRestriction",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "datatype",
+        "restrictions"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DatatypeRestriction]",
+      "production": "DatatypeRestriction",
+      "schema_tag": 25,
+      "schema_tag_name": "DATATYPE_RESTRICTION"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectIntersectionOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "operands"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectIntersectionOf]",
+      "production": "ObjectIntersectionOf",
+      "schema_tag": 30,
+      "schema_tag_name": "OBJECT_INTERSECTION_OF"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectUnionOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "operands"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectUnionOf]",
+      "production": "ObjectUnionOf",
+      "schema_tag": 31,
+      "schema_tag_name": "OBJECT_UNION_OF"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectComplementOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "operand"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectComplementOf]",
+      "production": "ObjectComplementOf",
+      "schema_tag": 32,
+      "schema_tag_name": "OBJECT_COMPLEMENT_OF"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectOneOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "individuals"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectOneOf]",
+      "production": "ObjectOneOf",
+      "schema_tag": 33,
+      "schema_tag_name": "OBJECT_ONE_OF"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectSomeValuesFrom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "filler"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectSomeValuesFrom]",
+      "production": "ObjectSomeValuesFrom",
+      "schema_tag": 34,
+      "schema_tag_name": "OBJECT_SOME_VALUES_FROM"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectAllValuesFrom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "filler"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectAllValuesFrom]",
+      "production": "ObjectAllValuesFrom",
+      "schema_tag": 35,
+      "schema_tag_name": "OBJECT_ALL_VALUES_FROM"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectHasValue",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "value"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectHasValue]",
+      "production": "ObjectHasValue",
+      "schema_tag": 36,
+      "schema_tag_name": "OBJECT_HAS_VALUE"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectHasSelf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectHasSelf]",
+      "production": "ObjectHasSelf",
+      "schema_tag": 37,
+      "schema_tag_name": "OBJECT_HAS_SELF"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectMinCardinality",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectMinCardinality]",
+      "production": "ObjectMinCardinality",
+      "schema_tag": 38,
+      "schema_tag_name": "OBJECT_MIN_CARDINALITY"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectMaxCardinality",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectMaxCardinality]",
+      "production": "ObjectMaxCardinality",
+      "schema_tag": 39,
+      "schema_tag_name": "OBJECT_MAX_CARDINALITY"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "ObjectExactCardinality",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectExactCardinality]",
+      "production": "ObjectExactCardinality",
+      "schema_tag": 40,
+      "schema_tag_name": "OBJECT_EXACT_CARDINALITY"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataSomeValuesFrom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "properties",
+        "filler"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataSomeValuesFrom]",
+      "production": "DataSomeValuesFrom",
+      "schema_tag": 41,
+      "schema_tag_name": "DATA_SOME_VALUES_FROM"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataAllValuesFrom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "properties",
+        "filler"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataAllValuesFrom]",
+      "production": "DataAllValuesFrom",
+      "schema_tag": 42,
+      "schema_tag_name": "DATA_ALL_VALUES_FROM"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataHasValue",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "value"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataHasValue]",
+      "production": "DataHasValue",
+      "schema_tag": 43,
+      "schema_tag_name": "DATA_HAS_VALUE"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataMinCardinality",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataMinCardinality]",
+      "production": "DataMinCardinality",
+      "schema_tag": 44,
+      "schema_tag_name": "DATA_MIN_CARDINALITY"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataMaxCardinality",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataMaxCardinality]",
+      "production": "DataMaxCardinality",
+      "schema_tag": 45,
+      "schema_tag_name": "DATA_MAX_CARDINALITY"
+    },
+    {
+      "category": "class_expression",
+      "constructor": "DataExactCardinality",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "cardinality",
+        "property",
+        "filler"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataExactCardinality]",
+      "production": "DataExactCardinality",
+      "schema_tag": 46,
+      "schema_tag_name": "DATA_EXACT_CARDINALITY"
+    },
+    {
+      "category": "declaration_axiom",
+      "constructor": "Declaration",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "entity",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[Declaration]",
+      "production": "Declaration",
+      "schema_tag": 60,
+      "schema_tag_name": "DECLARATION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "SubClassOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "sub_class",
+        "super_class",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[SubClassOf]",
+      "production": "SubClassOf",
+      "schema_tag": 61,
+      "schema_tag_name": "SUB_CLASS_OF"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "EquivalentClasses",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "expressions",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[EquivalentClasses]",
+      "production": "EquivalentClasses",
+      "schema_tag": 62,
+      "schema_tag_name": "EQUIVALENT_CLASSES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DisjointClasses",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "expressions",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DisjointClasses]",
+      "production": "DisjointClasses",
+      "schema_tag": 63,
+      "schema_tag_name": "DISJOINT_CLASSES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DisjointUnion",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "defined_class",
+        "expressions",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DisjointUnion]",
+      "production": "DisjointUnion",
+      "schema_tag": 64,
+      "schema_tag_name": "DISJOINT_UNION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "SubObjectPropertyOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "sub_property",
+        "super_property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[SubObjectPropertyOf]",
+      "production": "SubObjectPropertyOf",
+      "schema_tag": 70,
+      "schema_tag_name": "SUB_OBJECT_PROPERTY_OF"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "EquivalentObjectProperties",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "properties",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[EquivalentObjectProperties]",
+      "production": "EquivalentObjectProperties",
+      "schema_tag": 71,
+      "schema_tag_name": "EQUIVALENT_OBJECT_PROPERTIES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DisjointObjectProperties",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "properties",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DisjointObjectProperties]",
+      "production": "DisjointObjectProperties",
+      "schema_tag": 72,
+      "schema_tag_name": "DISJOINT_OBJECT_PROPERTIES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "InverseObjectProperties",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "first",
+        "second",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[InverseObjectProperties]",
+      "production": "InverseObjectProperties",
+      "schema_tag": 73,
+      "schema_tag_name": "INVERSE_OBJECT_PROPERTIES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "ObjectPropertyDomain",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "domain",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectPropertyDomain]",
+      "production": "ObjectPropertyDomain",
+      "schema_tag": 74,
+      "schema_tag_name": "OBJECT_PROPERTY_DOMAIN"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "ObjectPropertyRange",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "range",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectPropertyRange]",
+      "production": "ObjectPropertyRange",
+      "schema_tag": 75,
+      "schema_tag_name": "OBJECT_PROPERTY_RANGE"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "FunctionalObjectProperty",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[FunctionalObjectProperty]",
+      "production": "FunctionalObjectProperty",
+      "schema_tag": 76,
+      "schema_tag_name": "FUNCTIONAL_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "InverseFunctionalObjectProperty",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[InverseFunctionalObjectProperty]",
+      "production": "InverseFunctionalObjectProperty",
+      "schema_tag": 77,
+      "schema_tag_name": "INVERSE_FUNCTIONAL_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "ReflexiveObjectProperty",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ReflexiveObjectProperty]",
+      "production": "ReflexiveObjectProperty",
+      "schema_tag": 78,
+      "schema_tag_name": "REFLEXIVE_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "IrreflexiveObjectProperty",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[IrreflexiveObjectProperty]",
+      "production": "IrreflexiveObjectProperty",
+      "schema_tag": 79,
+      "schema_tag_name": "IRREFLEXIVE_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "SymmetricObjectProperty",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[SymmetricObjectProperty]",
+      "production": "SymmetricObjectProperty",
+      "schema_tag": 80,
+      "schema_tag_name": "SYMMETRIC_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "AsymmetricObjectProperty",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[AsymmetricObjectProperty]",
+      "production": "AsymmetricObjectProperty",
+      "schema_tag": 81,
+      "schema_tag_name": "ASYMMETRIC_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "TransitiveObjectProperty",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[TransitiveObjectProperty]",
+      "production": "TransitiveObjectProperty",
+      "schema_tag": 82,
+      "schema_tag_name": "TRANSITIVE_OBJECT_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "SubDataPropertyOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "sub_property",
+        "super_property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[SubDataPropertyOf]",
+      "production": "SubDataPropertyOf",
+      "schema_tag": 90,
+      "schema_tag_name": "SUB_DATA_PROPERTY_OF"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "EquivalentDataProperties",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "properties",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[EquivalentDataProperties]",
+      "production": "EquivalentDataProperties",
+      "schema_tag": 91,
+      "schema_tag_name": "EQUIVALENT_DATA_PROPERTIES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DisjointDataProperties",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "properties",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DisjointDataProperties]",
+      "production": "DisjointDataProperties",
+      "schema_tag": 92,
+      "schema_tag_name": "DISJOINT_DATA_PROPERTIES"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DataPropertyDomain",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "domain",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataPropertyDomain]",
+      "production": "DataPropertyDomain",
+      "schema_tag": 93,
+      "schema_tag_name": "DATA_PROPERTY_DOMAIN"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DataPropertyRange",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "range",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataPropertyRange]",
+      "production": "DataPropertyRange",
+      "schema_tag": 94,
+      "schema_tag_name": "DATA_PROPERTY_RANGE"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "FunctionalDataProperty",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[FunctionalDataProperty]",
+      "production": "FunctionalDataProperty",
+      "schema_tag": 95,
+      "schema_tag_name": "FUNCTIONAL_DATA_PROPERTY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DatatypeDefinition",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "datatype",
+        "data_range",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DatatypeDefinition]",
+      "production": "DatatypeDefinition",
+      "schema_tag": 100,
+      "schema_tag_name": "DATATYPE_DEFINITION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "HasKey",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "class_expression",
+        "object_properties",
+        "data_properties",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[HasKey]",
+      "production": "HasKey",
+      "schema_tag": 101,
+      "schema_tag_name": "HAS_KEY"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "SameIndividual",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "individuals",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[SameIndividual]",
+      "production": "SameIndividual",
+      "schema_tag": 110,
+      "schema_tag_name": "SAME_INDIVIDUAL"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DifferentIndividuals",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "individuals",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DifferentIndividuals]",
+      "production": "DifferentIndividuals",
+      "schema_tag": 111,
+      "schema_tag_name": "DIFFERENT_INDIVIDUALS"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "ClassAssertion",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "class_expression",
+        "individual",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ClassAssertion]",
+      "production": "ClassAssertion",
+      "schema_tag": 112,
+      "schema_tag_name": "CLASS_ASSERTION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "ObjectPropertyAssertion",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "source",
+        "target",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectPropertyAssertion]",
+      "production": "ObjectPropertyAssertion",
+      "schema_tag": 113,
+      "schema_tag_name": "OBJECT_PROPERTY_ASSERTION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "NegativeObjectPropertyAssertion",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "source",
+        "target",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[NegativeObjectPropertyAssertion]",
+      "production": "NegativeObjectPropertyAssertion",
+      "schema_tag": 114,
+      "schema_tag_name": "NEGATIVE_OBJECT_PROPERTY_ASSERTION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "DataPropertyAssertion",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "source",
+        "value",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataPropertyAssertion]",
+      "production": "DataPropertyAssertion",
+      "schema_tag": 115,
+      "schema_tag_name": "DATA_PROPERTY_ASSERTION"
+    },
+    {
+      "category": "logical_axiom",
+      "constructor": "NegativeDataPropertyAssertion",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "source",
+        "value",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[NegativeDataPropertyAssertion]",
+      "production": "NegativeDataPropertyAssertion",
+      "schema_tag": 116,
+      "schema_tag_name": "NEGATIVE_DATA_PROPERTY_ASSERTION"
+    },
+    {
+      "category": "annotation_axiom",
+      "constructor": "AnnotationAssertion",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "subject",
+        "value",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[AnnotationAssertion]",
+      "production": "AnnotationAssertion",
+      "schema_tag": 120,
+      "schema_tag_name": "ANNOTATION_ASSERTION"
+    },
+    {
+      "category": "annotation_axiom",
+      "constructor": "SubAnnotationPropertyOf",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "sub_property",
+        "super_property",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[SubAnnotationPropertyOf]",
+      "production": "SubAnnotationPropertyOf",
+      "schema_tag": 121,
+      "schema_tag_name": "SUB_ANNOTATION_PROPERTY_OF"
+    },
+    {
+      "category": "annotation_axiom",
+      "constructor": "AnnotationPropertyDomain",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "domain",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[AnnotationPropertyDomain]",
+      "production": "AnnotationPropertyDomain",
+      "schema_tag": 122,
+      "schema_tag_name": "ANNOTATION_PROPERTY_DOMAIN"
+    },
+    {
+      "category": "annotation_axiom",
+      "constructor": "AnnotationPropertyRange",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "property",
+        "range",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[AnnotationPropertyRange]",
+      "production": "AnnotationPropertyRange",
+      "schema_tag": 123,
+      "schema_tag_name": "ANNOTATION_PROPERTY_RANGE"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "Variable",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "iri"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[Variable]",
+      "production": "SWRL Variable",
+      "schema_tag": 140,
+      "schema_tag_name": "VARIABLE"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "ClassAtom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "predicate",
+        "argument"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ClassAtom]",
+      "production": "SWRL ClassAtom",
+      "schema_tag": 141,
+      "schema_tag_name": "CLASS_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "DataRangeAtom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "predicate",
+        "argument"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataRangeAtom]",
+      "production": "SWRL DataRangeAtom",
+      "schema_tag": 142,
+      "schema_tag_name": "DATA_RANGE_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "ObjectPropertyAtom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "predicate",
+        "source",
+        "target"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[ObjectPropertyAtom]",
+      "production": "SWRL IndividualPropertyAtom",
+      "schema_tag": 143,
+      "schema_tag_name": "OBJECT_PROPERTY_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "DataPropertyAtom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "predicate",
+        "source",
+        "target"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DataPropertyAtom]",
+      "production": "SWRL DatavaluedPropertyAtom",
+      "schema_tag": 144,
+      "schema_tag_name": "DATA_PROPERTY_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "BuiltInAtom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "predicate",
+        "arguments"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[BuiltInAtom]",
+      "production": "SWRL BuiltinAtom",
+      "schema_tag": 145,
+      "schema_tag_name": "BUILT_IN_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "SameIndividualAtom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "first",
+        "second"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[SameIndividualAtom]",
+      "production": "SWRL SameIndividualAtom",
+      "schema_tag": 146,
+      "schema_tag_name": "SAME_INDIVIDUAL_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "DifferentIndividualsAtom",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "first",
+        "second"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[DifferentIndividualsAtom]",
+      "production": "SWRL DifferentIndividualsAtom",
+      "schema_tag": 147,
+      "schema_tag_name": "DIFFERENT_INDIVIDUALS_ATOM"
+    },
+    {
+      "category": "swrl_extension",
+      "constructor": "SWRLRule",
+      "evidence": [
+        "canonical",
+        "formats",
+        "generative",
+        "native",
+        "reference_index",
+        "signature_visitor",
+        "validation",
+        "wire"
+      ],
+      "fields": [
+        "body",
+        "head",
+        "annotations"
+      ],
+      "model_fixture": "tests.generated.model.fixtures.model_fixtures[SWRLRule]",
+      "production": "SWRL Imp",
+      "schema_tag": 148,
+      "schema_tag_name": "SWRL_RULE"
+    }
+  ],
+  "schema": 1
+}

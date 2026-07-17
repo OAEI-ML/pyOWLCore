@@ -1,0 +1,5 @@
+schema = 1
+
+# The registry is intentionally empty. Any future differential exception must
+# add a [[deviation]] entry with fixture, primary-standard citation, expected
+# result, comparator/version, rationale, owner, review date, and removal gate.

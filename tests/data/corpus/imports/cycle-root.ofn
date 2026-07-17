@@ -1,0 +1,4 @@
+Ontology(<https://example.org/import/root>
+  Import(<https://example.org/import/leaf>)
+  Declaration(Class(<https://example.org/import#Root>))
+)

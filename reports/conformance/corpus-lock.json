@@ -1,0 +1,160 @@
+{
+  "artifact_count": 17,
+  "artifacts": [
+    {
+      "category": "errata-identity",
+      "id": "errata-blank-left",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/errata/blank-left.ofn",
+      "sha256": "f2094e9be737900db4e0e839946bf8eea2be9edc06fddf05e9631810fe70a3a6",
+      "size": 53,
+      "upstream_revision": "W3C Recommendation 11 December 2012"
+    },
+    {
+      "category": "errata-identity",
+      "id": "errata-blank-renamed",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/errata/blank-renamed.ofn",
+      "sha256": "1aafb5c52363540dd96b64470da93fe93a5e0b8175bce5d93124a68888042b14",
+      "size": 59,
+      "upstream_revision": "W3C Recommendation 11 December 2012"
+    },
+    {
+      "category": "provenance-ledger",
+      "id": "errata-decision-ledger",
+      "license_expression": "Apache-2.0",
+      "path": "errata.toml",
+      "sha256": "ee3d883c6ea5e76e184e2d9e346933eb851b321d400a87c254ecebe175ffb20d",
+      "size": 849,
+      "upstream_revision": "Reviewed 17 July 2026"
+    },
+    {
+      "category": "errata-identity",
+      "id": "errata-language-lower",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/errata/language-lower.ofn",
+      "sha256": "61074f7c404638c12eb31a93053840c7bcdad3694a15fa6c0c0309b1d008a5a6",
+      "size": 94,
+      "upstream_revision": "W3C Recommendation 11 December 2012 plus BCP 47"
+    },
+    {
+      "category": "errata-identity",
+      "id": "errata-language-upper",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/errata/language-upper.ofn",
+      "sha256": "4168e7969fd1442b04ebf5608a672770a0095676a9eff21fc750114dce034609",
+      "size": 94,
+      "upstream_revision": "W3C Recommendation 11 December 2012 plus BCP 47"
+    },
+    {
+      "category": "tool-provenance",
+      "id": "external-oracle-lock",
+      "license_expression": "Apache-2.0",
+      "path": "external-oracles.toml",
+      "sha256": "ea1778af43a43407921e8365702e09e0c4cf6a4af309817232599a22666fdefe",
+      "size": 487,
+      "upstream_revision": "RDFLib 7.6.0 comparator metadata only"
+    },
+    {
+      "category": "hostile-resource",
+      "id": "hostile-deep-functional",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/hostile/deep-functional.ofn",
+      "sha256": "f3d190189c5b56c9903fa8ac40931884cc3c4e8f4206fb6a670d2c66dd1d0cbf",
+      "size": 230,
+      "upstream_revision": "W3C Recommendation 11 December 2012; resource negative case"
+    },
+    {
+      "category": "hostile-wire",
+      "id": "hostile-short-wire",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/hostile/short-wire.bin",
+      "sha256": "709415bcb9abd440d41fcd279552474931eede211f37930c76ad8460d382a923",
+      "size": 8,
+      "upstream_revision": "Local PYOCORE v1 negative case; no external bytes"
+    },
+    {
+      "category": "hostile-rdf",
+      "id": "hostile-turtle-cyclic-list",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/hostile/turtle-cyclic-list.ttl",
+      "sha256": "3a9e683645e5e156e28ba75906a2afc11a8d66ae2759e5136b9a3153bfed93c8",
+      "size": 308,
+      "upstream_revision": "W3C Recommendation 11 December 2012; security negative case"
+    },
+    {
+      "category": "hostile-xml",
+      "id": "hostile-xml-entity",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/hostile/xml-entity.owx",
+      "sha256": "f84555f694cb686a9570e09538b793b123a55a96cf06bde3d3eb14f7da71b940",
+      "size": 160,
+      "upstream_revision": "W3C Recommendation 11 December 2012; security negative case"
+    },
+    {
+      "category": "imports",
+      "id": "imports-cycle-leaf",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/imports/cycle-leaf.ofn",
+      "sha256": "bf190daac9b68c304ca10951151024cead9916f5bdbddf3e6756a1ae93af47ca",
+      "size": 145,
+      "upstream_revision": "W3C Recommendation 11 December 2012"
+    },
+    {
+      "category": "imports",
+      "id": "imports-cycle-root",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/imports/cycle-root.ofn",
+      "sha256": "186954a56d0993ce23299f4a2368529246845cbdca5184958287c0500e5cbddf",
+      "size": 145,
+      "upstream_revision": "W3C Recommendation 11 December 2012"
+    },
+    {
+      "category": "negative-functional",
+      "id": "w3c-functional-invalid-arity",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/w3c/functional/invalid-arity.ofn",
+      "sha256": "c4dc9bbf7118040a252216fb897caa9f08bf16426b18fb4f4487cb96b463c4b1",
+      "size": 71,
+      "upstream_revision": "W3C Recommendation 11 December 2012"
+    },
+    {
+      "category": "positive-functional",
+      "id": "w3c-functional-minimal",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/w3c/functional/minimal.ofn",
+      "sha256": "70ed0c32bdb69d3bb723d44284ab3a06fc8ce1d384a1faf08c716a2b869a899f",
+      "size": 313,
+      "upstream_revision": "W3C Recommendation 11 December 2012"
+    },
+    {
+      "category": "positive-owlxml",
+      "id": "w3c-owlxml-minimal",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/w3c/owlxml/minimal.owx",
+      "sha256": "7a9fc8f1d0a3b686331e9a7e39bd958d3e6a128a959f11b23124480c20001978",
+      "size": 830,
+      "upstream_revision": "W3C Recommendation 11 December 2012"
+    },
+    {
+      "category": "positive-rdfxml",
+      "id": "w3c-rdfxml-minimal",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/w3c/rdfxml/minimal.rdf",
+      "sha256": "f6acac52d957a0948b5cb7c41df9dba3f90ff040e06df7a43056ffc3dd9c5403",
+      "size": 628,
+      "upstream_revision": "W3C Recommendation 25 February 2014"
+    },
+    {
+      "category": "positive-turtle",
+      "id": "w3c-turtle-minimal",
+      "license_expression": "Apache-2.0",
+      "path": "corpus/w3c/turtle/minimal.ttl",
+      "sha256": "daa037e8c9efd581cdc1dc3dd6b49a96d6f65f5ea4dee78211fb4a521536eca3",
+      "size": 335,
+      "upstream_revision": "W3C Recommendation 25 February 2014"
+    }
+  ],
+  "provenance_sha256": "d102f86cc9c2163295b74ee8b7773ce5a28fa03322c5da026e544a0820afd3af",
+  "schema": 1
+}

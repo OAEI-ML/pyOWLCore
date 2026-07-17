@@ -1,0 +1,9 @@
+Prefix(:=<https://example.org/conformance#>)
+Prefix(rdfs:=<http://www.w3.org/2000/01/rdf-schema#>)
+Ontology(<https://example.org/conformance/ontology>
+  Annotation(rdfs:label "Conformance"@EN)
+  Declaration(Class(:A))
+  Declaration(Class(:B))
+  SubClassOf(:A :B)
+  AnnotationAssertion(rdfs:label :A "Alpha"@EN)
+)

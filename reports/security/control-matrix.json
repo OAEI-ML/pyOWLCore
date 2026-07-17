@@ -1,0 +1,132 @@
+{
+  "control_count": 12,
+  "controls": [
+    {
+      "area": "parsing",
+      "evidence": [
+        "tests/unit/formats/test_security_limits.py::test_xml_dtd_entity_and_xinclude_are_rejected",
+        "tests/conformance/test_corpus.py::test_negative_and_hostile_corpus_has_stable_typed_outcomes"
+      ],
+      "expectation": "fail closed with a typed sanitized error",
+      "id": "SEC-XML-001",
+      "threat": "DTD, entity expansion, and XInclude"
+    },
+    {
+      "area": "parsing",
+      "evidence": [
+        "tests/unit/formats/test_security_limits.py::test_cyclic_and_shared_rdf_collection_tails_are_rejected"
+      ],
+      "expectation": "bounded traversal and stable rejection",
+      "id": "SEC-RDF-002",
+      "threat": "cyclic/shared RDF collection tails"
+    },
+    {
+      "area": "diagnostics",
+      "evidence": [
+        "tests/security/test_resource_faults.py::test_hostile_payload_is_absent_from_limit_diagnostics"
+      ],
+      "expectation": "bounded messages omit attacker payloads",
+      "id": "SEC-DIAGNOSTIC-003",
+      "threat": "hostile literal and control-character disclosure"
+    },
+    {
+      "area": "filesystem",
+      "evidence": [
+        "tests/unit/resolver/test_directory_catalog.py::test_directory_rejects_traversal_and_symlinks",
+        "tests/security/test_ssrf_path.py::test_path_and_url_sources_fail_closed"
+      ],
+      "expectation": "reject before opening outside the selected root",
+      "id": "SEC-PATH-004",
+      "threat": "percent-encoded traversal, symlink, and URL-as-path"
+    },
+    {
+      "area": "network",
+      "evidence": [
+        "tests/security/test_ssrf_path.py::test_dns_rebinding_to_metadata_address_is_denied_before_open",
+        "tests/security/test_ssrf_path.py::test_default_offline_load_never_calls_http_opener"
+      ],
+      "expectation": "DNS target is checked and offline mode performs no opener call",
+      "id": "SEC-SSRF-005",
+      "threat": "metadata/private DNS resolution and implicit network"
+    },
+    {
+      "area": "network",
+      "evidence": [
+        "tests/security/test_ssrf_path.py::test_decompression_ratio_failure_does_not_publish_cache",
+        "tests/unit/resolver/test_http.py::test_http_digest_decompression_and_size_fail_closed"
+      ],
+      "expectation": "ratio/digest limits fail before cache publication",
+      "id": "SEC-HTTP-006",
+      "threat": "compressed response amplification and corrupt cache"
+    },
+    {
+      "area": "wire",
+      "evidence": [
+        "tests/fuzz/wire/test_property_fuzz.py::test_every_compact_wire_truncation_is_rejected",
+        "tests/fuzz/wire/test_property_fuzz.py::test_arbitrary_wire_bytes_never_escape_the_wire_error_boundary",
+        "tests/fuzz/wire/test_mutations.py::test_deterministic_single_bit_mutation_smoke_never_returns_partial_snapshot"
+      ],
+      "expectation": "no partial snapshot; errors remain in the public wire taxonomy",
+      "id": "SEC-WIRE-007",
+      "threat": "truncation, field corruption, and arbitrary byte input"
+    },
+    {
+      "area": "cache",
+      "evidence": [
+        "tests/security/test_resource_faults.py::test_zero_progress_write_leaves_no_partial_artifact",
+        "tests/integration/cache/test_wire_cache.py::test_concurrent_publish_converges_and_corruption_is_quarantined"
+      ],
+      "expectation": "atomic cleanup, quarantine, and one converged artifact",
+      "id": "SEC-CACHE-008",
+      "threat": "publication failure, corruption, and concurrent writers"
+    },
+    {
+      "area": "resources",
+      "evidence": [
+        "tests/security/test_resource_faults.py::test_public_limit_matrix_reports_exact_named_budget",
+        "tests/unit/formats/test_security_limits.py::test_source_literal_nesting_and_encoding_limits"
+      ],
+      "expectation": "named limits reject without partial success",
+      "id": "SEC-LIMIT-009",
+      "threat": "source, literal, nesting, temporary, and deadline exhaustion"
+    },
+    {
+      "area": "fuzzing",
+      "evidence": [
+        "tests/fuzz/parser/test_property_fuzz.py::test_mutated_parser_seeds_stay_inside_public_error_boundary",
+        "tests/fuzz/model/test_properties.py::test_recursive_model_values_canonical_round_trip",
+        "tests/fuzz/native/fuzz_targets/functional.rs",
+        "tests/fuzz/native/fuzz_targets/wire.rs"
+      ],
+      "expectation": "retained Python corpus and native parser/wire libFuzzer targets",
+      "id": "SEC-FUZZ-010",
+      "threat": "parser/model/native panic or unchecked malformed values"
+    },
+    {
+      "area": "native",
+      "evidence": [
+        "tests/native/foundation/test_native_boundary.py",
+        "tests/conformance/test_differential.py::test_functional_python_native_and_independent_wire_cross_product"
+      ],
+      "expectation": "panic containment and forced-native parity",
+      "id": "SEC-NATIVE-011",
+      "threat": "panic, malformed FFI framing, and Python/native differential"
+    },
+    {
+      "area": "supply-chain",
+      "evidence": [
+        "tests/foundation/test_audits.py",
+        "tests/conformance/test_corpus.py::test_provenance_hashes_and_generated_locks_are_current"
+      ],
+      "expectation": "repository and corpus audits remain fail closed",
+      "id": "SEC-SUPPLY-012",
+      "threat": "Java/runtime artifact or untracked corpus introduction"
+    }
+  ],
+  "fuzz_corpus_sha256": "d102f86cc9c2163295b74ee8b7773ce5a28fa03322c5da026e544a0820afd3af",
+  "native_fuzz_targets": [
+    "functional",
+    "wire"
+  ],
+  "schema": 1
+}
