@@ -168,6 +168,7 @@ def parse_document(
     format: DocumentFormat | str | None = None,
     document_iri: IRI | str | None = None,
     options: LoadOptions | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> OntologyDocument:
     """Parse exactly one document and never resolve an import."""
 
@@ -176,6 +177,7 @@ def parse_document(
         format=format,
         document_iri=document_iri,
         options=options,
+        cancellation_token=cancellation_token,
     )
 
 

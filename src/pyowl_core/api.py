@@ -53,16 +53,22 @@ def parse_document(
 def load_snapshot(
     source: DocumentInput,
     *,
+    document_iri: IRI | str | None = None,
     options: LoadOptions | None = None,
     resolver: ImportResolver | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> OntologySnapshot:
-    """Create a concrete immutable closure without reparsing accepted documents."""
+    """Create a concrete immutable closure from one root source or document.
+
+    ``document_iri`` supplies the base/identity of an unparsed root source. It
+    is required for streams and cannot rebase an accepted ``OntologyDocument``.
+    """
 
     if _is_ontology_view(source) or isinstance(source, SnapshotProvider):
         raise TypeError("load_snapshot accepts a document source or OntologyDocument")
     return _load_snapshot(
         source,
+        document_iri=document_iri,
         options=options,
         resolver=resolver,
         cancellation_token=cancellation_token,
@@ -72,16 +78,20 @@ def load_snapshot(
 def coerce_snapshot(
     source: OntologyInput,
     *,
+    document_iri: IRI | str | None = None,
     options: LoadOptions | None = None,
     resolver: ImportResolver | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> OntologyView:
     """Return an existing compatible view by identity; parse only document input."""
 
+    _validate_document_iri(document_iri)
     if _is_ontology_view(source):
+        _reject_bound_document_iri(document_iri)
         _validate_view(source, options, resolver)
         return source
     if isinstance(source, SnapshotProvider):
+        _reject_bound_document_iri(document_iri)
         supplied = source.owl_snapshot()
         if not _is_ontology_view(supplied):
             raise AdapterCompatibilityError(
@@ -92,10 +102,24 @@ def coerce_snapshot(
         return supplied
     return load_snapshot(
         cast(DocumentInput, source),
+        document_iri=document_iri,
         options=options,
         resolver=resolver,
         cancellation_token=cancellation_token,
     )
+
+
+def _validate_document_iri(document_iri: IRI | str | None) -> None:
+    if document_iri is not None and not isinstance(document_iri, (IRI, str)):
+        raise TypeError("document_iri must be IRI, str, or None")
+
+
+def _reject_bound_document_iri(document_iri: IRI | str | None) -> None:
+    if document_iri is not None:
+        raise OptionConflictError(
+            "document_iri applies only to an unparsed root source",
+            code="DOCUMENT_IRI_SOURCE_CONFLICT",
+        )
 
 
 def _validate_view(

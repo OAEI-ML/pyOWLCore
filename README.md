@@ -41,7 +41,9 @@ edges = pyowl2vec_star.project(snapshot)
 ```
 
 Standalone consumers also accept paths/bytes and call
-`pyowl_core.coerce_snapshot(...)`; in-process integrations expose
+`pyowl_core.coerce_snapshot(...)`. Caller-owned streams additionally pass an
+explicit `document_iri` (and `LoadOptions.format` for text streams); they are
+read once and remain open. In-process integrations expose
 `SnapshotProvider.owl_snapshot()`. Cross-process handoff uses the versioned
 wire format, never pickle.
 

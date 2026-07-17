@@ -24,6 +24,7 @@ from pyowl_core.exceptions import (
     ImportResolutionError,
     IntegrityError,
     OperationCancelledError,
+    OptionConflictError,
     ParseError,
     ResourceLimitError,
     UnresolvedImportError,
@@ -344,6 +345,7 @@ class SnapshotLoader:
         self,
         source: DocumentInput,
         *,
+        document_iri: IRI | str | None = None,
         options: LoadOptions | None = None,
         resolver: ImportResolver | None = None,
         cancellation_token: CancellationToken | None = None,
@@ -357,6 +359,13 @@ class SnapshotLoader:
             raise TypeError("resolver must implement ImportResolver or be None")
         if cancellation_token is not None and not isinstance(cancellation_token, CancellationToken):
             raise TypeError("cancellation_token must be CancellationToken or None")
+        if document_iri is not None and not isinstance(document_iri, (IRI, str)):
+            raise TypeError("document_iri must be IRI, str, or None")
+        if isinstance(source, OntologyDocument) and document_iri is not None:
+            raise OptionConflictError(
+                "document_iri applies only to an unparsed root source",
+                code="DOCUMENT_IRI_SOURCE_CONFLICT",
+            )
         if isinstance(source, OntologyDocument) and selected.backend is BackendPreference.NATIVE:
             raise BackendUnavailableError(
                 "native snapshot construction is not available in this build",
@@ -370,7 +379,12 @@ class SnapshotLoader:
         else:
             from pyowl_core.backends.python import parse_document
 
-            root = parse_document(source, options=selected)
+            root = parse_document(
+                source,
+                document_iri=document_iri,
+                options=selected,
+                cancellation_token=cancellation_token,
+            )
             root_cache_hit = False
         root_node = _node(root, DocumentStatus.ROOT)
         nodes: dict[str, _Node] = {root_node.key: root_node}
@@ -582,14 +596,16 @@ class SnapshotLoader:
 def load_snapshot(
     source: DocumentInput,
     *,
+    document_iri: IRI | str | None = None,
     options: LoadOptions | None = None,
     resolver: ImportResolver | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> OntologySnapshot:
-    """Build one immutable closure; accepted OntologyDocument values are not reparsed."""
+    """Build one closure; ``document_iri`` binds only an unparsed root source."""
 
     return SnapshotLoader().load(
         source,
+        document_iri=document_iri,
         options=options,
         resolver=resolver,
         cancellation_token=cancellation_token,

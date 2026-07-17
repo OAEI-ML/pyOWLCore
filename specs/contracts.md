@@ -108,6 +108,7 @@ def parse_document(
 def load_snapshot(
     source: DocumentInput,
     *,
+    document_iri: IRI | str | None = None,
     options: LoadOptions | None = None,
     resolver: ImportResolver | None = None,
 ) -> OntologySnapshot:
@@ -120,6 +121,7 @@ class SnapshotProvider(Protocol):
 def coerce_snapshot(
     source: OntologyInput,
     *,
+    document_iri: IRI | str | None = None,
     options: LoadOptions | None = None,
     resolver: ImportResolver | None = None,
 ) -> OntologyView:
@@ -142,6 +144,16 @@ Rules:
 - `coerce_snapshot(x) is x` for a compatible snapshot/overlay.
 - For a provider, the exact returned identity is retained after validation.
 - `load_snapshot(document)` does not reparse it.
+- `document_iri` is root-acquisition metadata, not a reusable load policy. It
+  is required for `BinaryIO`/`TextIO`, optional for paths and bytes-like
+  sources, and is passed only to the root parser. A path with no explicit value
+  retains its absolute `file:` document IRI; bytes with no explicit value
+  retain no document IRI. Each imported document obtains its document IRI from
+  its `ResolvedDocument`.
+- Passing `document_iri` with an already parsed `OntologyDocument`, an existing
+  `OntologyView`, or a `SnapshotProvider` raises `OptionConflictError` with
+  code `DOCUMENT_IRI_SOURCE_CONFLICT`; the core never rebases or reparses an
+  existing object. Invalid argument types raise before stream acquisition.
 - `load_snapshot` accepts acquisition/document input only and always returns a
   concrete snapshot; callers with an existing view/provider use
   `coerce_snapshot`, avoiding hidden overlay/composite materialization.

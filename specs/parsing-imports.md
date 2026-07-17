@@ -26,6 +26,28 @@ Readers do not require seekability. Bounded detection buffers are replayed into
 the parser. Path parsing opens once and avoids check-then-open races; security
 rules are in `security.md`.
 
+The closure facades preserve the same root-source contract. Standalone
+consumers pass a stream base explicitly:
+
+```python
+snapshot = coerce_snapshot(
+    stream,
+    document_iri="urn:consumer:root",
+    options=LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,  # mandatory for TextIO
+        imports=ImportPolicy.IGNORE,
+    ),
+)
+```
+
+`document_iri` is a keyword of `load_snapshot`/`coerce_snapshot`, rather than a
+field of `LoadOptions`, because it identifies only the acquired root. Resolver
+results bind imported documents independently. It is acquisition-only:
+documents, views, and providers are already bound and reject the keyword rather
+than being copied, reparsed, or rebased. A caller-owned stream is consumed in
+one forward pass, is never rewound or retried, and remains open on success or
+failure.
+
 ## 2. Required formats
 
 ### 2.1 RDF/XML and Turtle
