@@ -1,4 +1,14 @@
-# Reviewed WP05 public surface. One name per line; order is non-semantic.
+# Reviewed through WP06 public surface. One name per line; order is non-semantic.
+CacheEntry
+CacheGCReport
+DurabilityPolicy
+MappedOntologySnapshot
+SectionKind
+WireCache
+decode_snapshot
+encode_snapshot
+open_snapshot
+write_snapshot
 AnnotationAssertionIndex
 AnnotationAssertionOptions
 AnnotationAssertionPosting

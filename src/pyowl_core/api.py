@@ -23,6 +23,7 @@ from pyowl_core.exceptions import AdapterCompatibilityError, OptionConflictError
 from pyowl_core.io.resolver import ImportResolver
 from pyowl_core.io.source import DocumentSource
 from pyowl_core.model import IRI
+from pyowl_core.wire import decode_snapshot, encode_snapshot, open_snapshot, write_snapshot
 
 OntologyInput: TypeAlias = DocumentInput | OntologyView | SnapshotProvider
 
@@ -219,6 +220,10 @@ __all__ = [
     "apply_delta",
     "coerce_snapshot",
     "compose_views",
+    "decode_snapshot",
+    "encode_snapshot",
     "load_snapshot",
+    "open_snapshot",
     "parse_document",
+    "write_snapshot",
 ]

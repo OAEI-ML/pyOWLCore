@@ -1,0 +1,125 @@
+schema = 1
+name = "PYOCORE"
+magic_hex = "50594f434f524500"
+wire_major = 1
+wire_minor = 0
+model_schema = 1
+canonical_profile = 1
+byte_order = "little"
+alignment = 8
+header_bytes = 96
+directory_entry_bytes = 72
+id_width = 32
+
+[section_flags]
+required = 1
+optional = 2
+
+[file_flags]
+swrl = 1
+
+[[sections]]
+kind = 1
+name = "STRINGS"
+required = true
+schema = 1
+
+[[sections]]
+kind = 2
+name = "IRIS"
+required = true
+schema = 1
+
+[[sections]]
+kind = 3
+name = "ENTITIES"
+required = true
+schema = 1
+
+[[sections]]
+kind = 4
+name = "LITERALS"
+required = true
+schema = 1
+
+[[sections]]
+kind = 5
+name = "ANONYMOUS"
+required = true
+schema = 1
+
+[[sections]]
+kind = 6
+name = "SEQUENCES"
+required = true
+schema = 1
+
+[[sections]]
+kind = 7
+name = "ANNOTATIONS"
+required = true
+schema = 1
+
+[[sections]]
+kind = 8
+name = "TERMS"
+required = true
+schema = 1
+
+[[sections]]
+kind = 9
+name = "AXIOMS"
+required = true
+schema = 1
+
+[[sections]]
+kind = 10
+name = "DOCUMENTS"
+required = true
+schema = 1
+
+[[sections]]
+kind = 11
+name = "IMPORTS"
+required = true
+schema = 1
+
+[[sections]]
+kind = 12
+name = "VIEW"
+required = true
+schema = 1
+
+[[sections]]
+kind = 13
+name = "ORIGINS"
+required = true
+schema = 1
+
+[[sections]]
+kind = 14
+name = "FOOTER"
+required = true
+schema = 1
+
+[[sections]]
+kind = 32769
+name = "SWRL"
+required = false
+schema = 1
+feature_flag = 1
+
+[table]
+count = "u64"
+offset = "u64"
+offset_origin = "payload"
+offset_count = "row_count + 1"
+rows = "strictly increasing unique bytes unless section schema states otherwise"
+
+[header]
+layout = "<8sHHIIIIIQQQ32sII"
+digest_zero_range = [56, 92]
+crc32c_zero_ranges = [[56, 88], [88, 92]]
+
+[directory]
+layout = "<HHIQQQQ32s"
