@@ -102,6 +102,7 @@ class OntologyOverlay:
     _report_cache: LoadReport | None = field(repr=False, compare=False)
     _origin_cache: OriginIndex | None = field(repr=False, compare=False)
     _cache_lock: threading.Lock = field(repr=False, compare=False)
+    _index_cache: object = field(repr=False, compare=False)
 
     def __init__(self, base: OntologyView, delta: OntologyDelta) -> None:
         self._initialize(base, delta)
@@ -263,6 +264,9 @@ class OntologyOverlay:
         object.__setattr__(self, "_report_cache", None)
         object.__setattr__(self, "_origin_cache", None)
         object.__setattr__(self, "_cache_lock", threading.Lock())
+        from pyowl_core.index.cache import create_index_cache
+
+        object.__setattr__(self, "_index_cache", create_index_cache(limits))
 
     @classmethod
     def _compacted(cls, value: OntologyOverlay) -> OntologyOverlay:
@@ -550,11 +554,13 @@ class OntologyOverlay:
     def view(self, view_type: type[V], /, **options: object) -> V:
         if not isinstance(view_type, type):
             raise TypeError("view_type must be a type")
-        if options:
-            raise TypeError("OntologyOverlay identity view accepts no options")
         if view_type is OntologyOverlay or isinstance(self, view_type):
+            if options:
+                raise TypeError("OntologyOverlay identity view accepts no options")
             return cast(V, self)
-        raise LookupError(f"view type {view_type.__name__} is not available")
+        from pyowl_core.index.cache import request_index_view
+
+        return request_index_view(self, view_type, options)
 
     def compact(self) -> OntologyOverlay:
         """Collapse the edit chain without iterating or copying the anchor."""

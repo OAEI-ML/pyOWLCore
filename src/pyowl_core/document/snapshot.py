@@ -286,6 +286,7 @@ class OntologySnapshot:
         default=None, repr=False, compare=False
     )
     _complete_override: bool | None = field(default=None, repr=False, compare=False)
+    _index_cache: object = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.root, OntologyDocument):
@@ -379,6 +380,7 @@ class OntologySnapshot:
                     "import-manifest",
                     "immutable-snapshot",
                     "document-scoped-anonymous",
+                    "structural-indexes",
                 }
                 | ({"materialized-view"} if self._structural_context is not None else set())
                 | (
@@ -459,6 +461,9 @@ class OntologySnapshot:
         object.__setattr__(self, "_signature_fingerprint", signature_value)
         object.__setattr__(self, "_owl2_dl_report", owl2_dl_report)
         object.__setattr__(self, "_report", report)
+        from pyowl_core.index.cache import create_index_cache
+
+        object.__setattr__(self, "_index_cache", create_index_cache(self.load_options.limits))
 
     @property
     def capabilities(self) -> CoreCapabilities:
@@ -587,11 +592,13 @@ class OntologySnapshot:
     def view(self, view_type: type[V], /, **options: object) -> V:
         if not isinstance(view_type, type):
             raise TypeError("view_type must be a type")
-        if options:
-            raise TypeError("OntologySnapshot identity view accepts no options")
         if view_type is OntologySnapshot or isinstance(self, view_type):
+            if options:
+                raise TypeError("OntologySnapshot identity view accepts no options")
             return cast(V, self)
-        raise LookupError(f"view type {view_type.__name__} is not available in this build stage")
+        from pyowl_core.index.cache import request_index_view
+
+        return request_index_view(self, view_type, options)
 
     def _axioms(self, scope: AxiomScope, document_key: str | None) -> CanonicalSet[AxiomNode]:
         if not isinstance(scope, AxiomScope):

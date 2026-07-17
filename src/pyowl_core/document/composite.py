@@ -113,6 +113,7 @@ class OntologyComposite:
     _axiom_count_cache: int | None = field(repr=False, compare=False)
     _member_roles_cache: Mapping[str, str | None] | None = field(repr=False, compare=False)
     _cache_lock: threading.Lock = field(repr=False, compare=False)
+    _index_cache: object = field(repr=False, compare=False)
 
     def __init__(
         self,
@@ -212,6 +213,9 @@ class OntologyComposite:
         object.__setattr__(self, "_axiom_count_cache", None)
         object.__setattr__(self, "_member_roles_cache", None)
         object.__setattr__(self, "_cache_lock", threading.Lock())
+        from pyowl_core.index.cache import create_index_cache
+
+        object.__setattr__(self, "_index_cache", create_index_cache(limits))
         self._reject_ambiguous_anonymous_bridge(selected_delta)
         (
             effective,
@@ -546,11 +550,13 @@ class OntologyComposite:
     def view(self, view_type: type[V], /, **options: object) -> V:
         if not isinstance(view_type, type):
             raise TypeError("view_type must be a type")
-        if options:
-            raise TypeError("OntologyComposite identity view accepts no options")
         if view_type is OntologyComposite or isinstance(self, view_type):
+            if options:
+                raise TypeError("OntologyComposite identity view accepts no options")
             return cast(V, self)
-        raise LookupError(f"view type {view_type.__name__} is not available")
+        from pyowl_core.index.cache import request_index_view
+
+        return request_index_view(self, view_type, options)
 
     def materialize(self) -> OntologySnapshot:
         self._ensure_members_live()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from . import index as index
 from . import model as model
 from .api import (
     DocumentInput,
@@ -101,6 +102,7 @@ from .exceptions import (
     WireLimitError,
     WireVersionError,
 )
+from .index import *  # noqa: F403
 from .io.formats import FormatDetection, detect_format
 from .io.formats.rendering import (
     DocumentTarget,
@@ -272,6 +274,7 @@ __all__ = [
     "__version__",
     "apply_delta",
     "model",
+    "index",
     "detect_format",
     "clear_import_caches",
     "coerce_snapshot",
@@ -287,5 +290,6 @@ __all__ = [
     "snapshot_structural_fingerprint",
     "write_document",
     "resolver_configuration_fingerprint",
+    *index.__all__,
     *model.__all__,
 ]
