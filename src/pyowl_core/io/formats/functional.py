@@ -341,12 +341,12 @@ class FunctionalParser:
             value = m.SubClassOf(
                 self._parse_class_expression(), self._parse_class_expression(), annotations
             )
-        elif name in {"EquivalentClasses", "DisjointClasses"}:
+        elif name == "EquivalentClasses":
             expressions = self._many(self._parse_class_expression)
-            value = cast(
-                m.AxiomNode,
-                getattr(m, name)(m.CanonicalSet(expressions), annotations),
-            )
+            value = m.EquivalentClasses(m.CanonicalSet(expressions), annotations)
+        elif name == "DisjointClasses":
+            expressions = self._many(self._parse_class_expression)
+            value = _disjoint_classes(expressions, annotations)
         elif name == "DisjointUnion":
             value = m.DisjointUnion(
                 self._parse_class(),
@@ -515,10 +515,15 @@ class FunctionalParser:
         self._take()
         self._open()
         if name in {"ObjectIntersectionOf", "ObjectUnionOf"}:
-            value: m.ClassExpression = cast(
-                m.ClassExpression,
-                getattr(m, name)(m.CanonicalSet(self._many(self._parse_class_expression))),
-            )
+            operands = self._many(self._parse_class_expression)
+            canonical_operands = m.CanonicalSet(operands)
+            if len(operands) >= 2 and len(canonical_operands) == 1:
+                value: m.ClassExpression = next(iter(canonical_operands))
+            else:
+                value = cast(
+                    m.ClassExpression,
+                    getattr(m, name)(canonical_operands),
+                )
         elif name == "ObjectComplementOf":
             value = m.ObjectComplementOf(self._parse_class_expression())
         elif name == "ObjectOneOf":
@@ -582,10 +587,15 @@ class FunctionalParser:
         self._take()
         self._open()
         if name in {"DataIntersectionOf", "DataUnionOf"}:
-            value: m.DataRange = cast(
-                m.DataRange,
-                getattr(m, name)(m.CanonicalSet(self._many(self._parse_data_range))),
-            )
+            operands = self._many(self._parse_data_range)
+            canonical_operands = m.CanonicalSet(operands)
+            if len(operands) >= 2 and len(canonical_operands) == 1:
+                value: m.DataRange = next(iter(canonical_operands))
+            else:
+                value = cast(
+                    m.DataRange,
+                    getattr(m, name)(canonical_operands),
+                )
         elif name == "DataComplementOf":
             value = m.DataComplementOf(self._parse_data_range())
         elif name == "DataOneOf":
@@ -840,6 +850,16 @@ class FunctionalParser:
     @staticmethod
     def _axiom_names() -> frozenset[str]:
         return _AXIOM_NAMES
+
+
+def _disjoint_classes(
+    expressions: tuple[m.ClassExpression, ...],
+    annotations: m.CanonicalSet[m.Annotation],
+) -> m.AxiomNode:
+    canonical = m.CanonicalSet(expressions)
+    if len(expressions) >= 2 and len(canonical) == 1:
+        return m.SubClassOf(next(iter(canonical)), m.OWL_NOTHING, annotations)
+    return m.DisjointClasses(canonical, annotations)
 
 
 _OBJECT_CHARACTERISTICS = frozenset(

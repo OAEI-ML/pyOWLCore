@@ -463,10 +463,33 @@ impl<'a, 'b> Parser<'a, 'b> {
                 Field::Node(self.parse_class_expression()?),
                 Field::Set(annotations),
             ],
-            "EquivalentClasses" | "DisjointClasses" => vec![
+            "EquivalentClasses" => vec![
                 self.set_many(Self::parse_class_expression, 2, None)?,
                 Field::Set(annotations),
             ],
+            "DisjointClasses" => {
+                let raw = self.many(Self::parse_class_expression)?;
+                if raw.len() < 2 {
+                    return Err(syntax());
+                }
+                let mut expressions = canonical_set(raw, 1, None)?;
+                if expressions.len() == 1 {
+                    let expression = expressions.pop().ok_or_else(syntax)?;
+                    self.close()?;
+                    return Node::build(
+                        61,
+                        vec![
+                            Field::Node(expression),
+                            Field::Node(entity(
+                                "class",
+                                iri("http://www.w3.org/2002/07/owl#Nothing".into())?,
+                            )?),
+                            Field::Set(annotations),
+                        ],
+                    );
+                }
+                vec![Field::Set(expressions), Field::Set(annotations)]
+            }
             "DisjointUnion" => vec![
                 Field::Node(self.parse_class()?),
                 self.set_many(Self::parse_class_expression, 2, None)?,
@@ -650,14 +673,12 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.take()?;
         self.open()?;
         let (tag, fields) = match name.as_str() {
-            "ObjectIntersectionOf" => (
-                30,
-                vec![self.set_many(Self::parse_class_expression, 2, Some(30))?],
-            ),
-            "ObjectUnionOf" => (
-                31,
-                vec![self.set_many(Self::parse_class_expression, 2, Some(31))?],
-            ),
+            "ObjectIntersectionOf" => {
+                return self.parse_idempotent_expression(Self::parse_class_expression, 30);
+            }
+            "ObjectUnionOf" => {
+                return self.parse_idempotent_expression(Self::parse_class_expression, 31);
+            }
             "ObjectComplementOf" => (32, vec![Field::Node(self.parse_class_expression()?)]),
             "ObjectOneOf" => (33, vec![self.set_many(Self::parse_individual, 1, None)?]),
             "ObjectSomeValuesFrom" | "ObjectAllValuesFrom" => (
@@ -772,14 +793,12 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.take()?;
         self.open()?;
         let (tag, fields) = match name.as_str() {
-            "DataIntersectionOf" => (
-                21,
-                vec![self.set_many(Self::parse_data_range, 2, Some(21))?],
-            ),
-            "DataUnionOf" => (
-                22,
-                vec![self.set_many(Self::parse_data_range, 2, Some(22))?],
-            ),
+            "DataIntersectionOf" => {
+                return self.parse_idempotent_expression(Self::parse_data_range, 21);
+            }
+            "DataUnionOf" => {
+                return self.parse_idempotent_expression(Self::parse_data_range, 22);
+            }
             "DataComplementOf" => (23, vec![Field::Node(self.parse_data_range()?)]),
             "DataOneOf" => (24, vec![self.set_many(Self::parse_literal, 1, None)?]),
             "DatatypeRestriction" => (
@@ -1053,6 +1072,23 @@ impl<'a, 'b> Parser<'a, 'b> {
             minimum,
             flatten_tag,
         )?))
+    }
+
+    fn parse_idempotent_expression(
+        &mut self,
+        parser: fn(&mut Self) -> NativeResult<Node>,
+        tag: u64,
+    ) -> NativeResult<Node> {
+        let raw = self.many(parser)?;
+        if raw.len() < 2 {
+            return Err(syntax());
+        }
+        let mut operands = canonical_set(raw, 1, Some(tag))?;
+        self.close()?;
+        if operands.len() == 1 {
+            return operands.pop().ok_or_else(syntax);
+        }
+        Node::build(tag, vec![Field::Set(operands)])
     }
 
     fn open(&mut self) -> NativeResult<()> {

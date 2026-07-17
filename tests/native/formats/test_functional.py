@@ -72,6 +72,34 @@ def test_every_constructor_public_document_has_python_parity_and_native_provenan
     assert selected.provenance.parser == "pyowl_core.backends.native"
 
 
+@pytest.mark.parametrize(
+    "source",
+    (
+        b"Ontology(SubClassOf(ObjectIntersectionOf(<urn:A> <urn:A>) <urn:B>))",
+        b"Ontology(SubClassOf(ObjectUnionOf(<urn:A> <urn:A>) <urn:B>))",
+        b"Ontology(DataPropertyRange(<urn:p> DataIntersectionOf(<urn:D> <urn:D>)))",
+        b"Ontology(DataPropertyRange(<urn:p> DataUnionOf(<urn:D> <urn:D>)))",
+        b"Ontology(DisjointClasses(<urn:A> <urn:A>))",
+    ),
+)
+def test_duplicate_operand_canonicalization_has_native_parity(source: bytes) -> None:
+    python = parse_document(
+        source,
+        format=DocumentFormat.FUNCTIONAL,
+        options=LoadOptions(backend=BackendPreference.PYTHON, preserve_source_map=True),
+    )
+    selected = parse_document(
+        source,
+        format=DocumentFormat.FUNCTIONAL,
+        options=LoadOptions(backend=BackendPreference.NATIVE, preserve_source_map=True),
+    )
+
+    assert selected == python
+    assert selected.document_fingerprint == python.document_fingerprint
+    assert selected.source_map == python.source_map
+    assert selected.origin_index == python.origin_index
+
+
 def test_anonymous_bom_unicode_and_swrl_match_reference_parser() -> None:
     rule = model_fixtures()[SWRLRule]
     source = (
