@@ -1,0 +1,9 @@
+include LICENSE
+include NOTICE
+include README.md
+include CONTRIBUTING.md
+include SECURITY.md
+recursive-include reports *.md
+recursive-include specs *.md *.toml
+recursive-include src *.py py.typed
+recursive-include tools *.py *.md

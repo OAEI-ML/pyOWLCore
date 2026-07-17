@@ -1,0 +1,134 @@
+"""Public foundation contracts for the shared Java-free OWL 2 kernel.
+
+Ontology model and parsing exports arrive in later work packages. This module
+is deliberately curated: consumers must not depend on private backend modules.
+"""
+
+from __future__ import annotations
+
+from .cancellation import CancellationSource, CancellationToken
+from .config import BackendPreference, DocumentFormat, ImportPolicy, LoadOptions
+from .diagnostics import Diagnostic, DiagnosticScalar, Severity, SourceSpan
+from .exceptions import (
+    AccessDeniedError,
+    AdapterCompatibilityError,
+    AdapterError,
+    BackendError,
+    BackendProtocolError,
+    BackendUnavailableError,
+    ClosedSnapshotError,
+    DeltaBaseMismatchError,
+    DeltaError,
+    DeprecatedAPIWarning,
+    DocumentIdentityConflictError,
+    FormatDetectionError,
+    FormatGuessWarning,
+    ImportCycleError,
+    ImportResolutionError,
+    IntegrityError,
+    InvalidIRIError,
+    InvalidLiteralError,
+    LossyRenderWarning,
+    ModelError,
+    NativeBackendUnavailableWarning,
+    OntologySyntaxError,
+    OperationCancelledError,
+    OptionConflictError,
+    ParseError,
+    ProfileError,
+    PyOWLCoreError,
+    PyOWLCoreWarning,
+    ReentrancyError,
+    ResourceLimitError,
+    SnapshotInUseError,
+    SnapshotLifecycleError,
+    StructuralConstraintError,
+    UnresolvedImportError,
+    UnresolvedImportWarning,
+    UnsupportedSyntaxError,
+    WireCorruptionError,
+    WireError,
+    WireLimitError,
+    WireVersionError,
+)
+from .limits import ParseLimits
+from .progress import (
+    ProgressBuffer,
+    ProgressCallback,
+    ProgressEvent,
+    ProgressReporter,
+    ProgressScalar,
+    report_progress,
+)
+
+__version__ = "0.1.0.dev0"
+
+API_VERSION = (0, 1)
+MODEL_SCHEMA_VERSION = 1
+WIRE_FORMAT_VERSION = (1, 0)
+ADAPTER_PROTOCOL_VERSION = 1
+
+__all__ = [
+    "ADAPTER_PROTOCOL_VERSION",
+    "API_VERSION",
+    "MODEL_SCHEMA_VERSION",
+    "WIRE_FORMAT_VERSION",
+    "AccessDeniedError",
+    "AdapterCompatibilityError",
+    "AdapterError",
+    "BackendError",
+    "BackendPreference",
+    "BackendProtocolError",
+    "BackendUnavailableError",
+    "CancellationSource",
+    "CancellationToken",
+    "ClosedSnapshotError",
+    "DeltaBaseMismatchError",
+    "DeltaError",
+    "DeprecatedAPIWarning",
+    "Diagnostic",
+    "DiagnosticScalar",
+    "DocumentFormat",
+    "DocumentIdentityConflictError",
+    "FormatDetectionError",
+    "FormatGuessWarning",
+    "ImportCycleError",
+    "ImportPolicy",
+    "ImportResolutionError",
+    "IntegrityError",
+    "InvalidIRIError",
+    "InvalidLiteralError",
+    "LoadOptions",
+    "LossyRenderWarning",
+    "ModelError",
+    "NativeBackendUnavailableWarning",
+    "OntologySyntaxError",
+    "OperationCancelledError",
+    "OptionConflictError",
+    "ParseError",
+    "ParseLimits",
+    "ProfileError",
+    "ProgressBuffer",
+    "ProgressCallback",
+    "ProgressEvent",
+    "ProgressReporter",
+    "ProgressScalar",
+    "PyOWLCoreError",
+    "PyOWLCoreWarning",
+    "ReentrancyError",
+    "ResourceLimitError",
+    "Severity",
+    "SnapshotInUseError",
+    "SnapshotLifecycleError",
+    "SourceSpan",
+    "StructuralConstraintError",
+    "UnresolvedImportError",
+    "UnresolvedImportWarning",
+    "UnsupportedSyntaxError",
+    "WireCorruptionError",
+    "WireError",
+    "WireLimitError",
+    "WireVersionError",
+    "__version__",
+    "report_progress",
+]

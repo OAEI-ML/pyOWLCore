@@ -1,0 +1,11 @@
+# Copy one [[deviation]] table per reviewed standards/comparator disagreement.
+[[deviation]]
+id = "DEV-0000"
+fixture = "tests/data/path-to-fixture"
+references = ["W3C section or erratum URL"]
+expected_core_result = "precise structural result or stable diagnostic code"
+comparators = ["implementation==pinned-version"]
+rationale = "why the core result follows the normative source"
+owner = "unassigned"
+review_date = "YYYY-MM-DD"
+removal_condition = "condition that closes this deviation"

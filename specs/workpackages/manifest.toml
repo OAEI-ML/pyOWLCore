@@ -1,0 +1,105 @@
+schema = 1
+project = "pyowl-core"
+python = ">=3.10"
+model_schema = 1
+wire_major = 1
+adapter_protocol = 1
+
+[[package]]
+id = "WP00"
+brief = "WP00-foundation-governance.md"
+wave = 0
+depends = []
+owns = ["pyproject.toml", "setup.py", "MANIFEST.in", "src/pyowl_core/__init__.py", "src/pyowl_core/exceptions.py", "src/pyowl_core/diagnostics.py", "src/pyowl_core/limits.py", "src/pyowl_core/config.py", "tools/schema/", "tools/audit/", "tests/foundation/", ".github/"]
+
+[[package]]
+id = "WP01"
+brief = "WP01-structural-model.md"
+wave = 1
+depends = ["WP00"]
+owns = ["src/pyowl_core/model/", "schemas/model-v1.toml", "tests/unit/model/", "tests/generated/model/"]
+
+[[package]]
+id = "WP02"
+brief = "WP02-python-formats-documents.md"
+wave = 2
+depends = ["WP01"]
+owns = ["src/pyowl_core/io/formats/", "src/pyowl_core/io/source.py", "src/pyowl_core/backends/python/", "src/pyowl_core/document/document.py", "src/pyowl_core/document/provenance.py", "tests/unit/formats/", "tests/roundtrip/"]
+
+[[package]]
+id = "WP03"
+brief = "WP03-imports-snapshots.md"
+wave = 3
+depends = ["WP02"]
+owns = ["src/pyowl_core/io/resolver/", "src/pyowl_core/document/snapshot.py", "src/pyowl_core/document/imports.py", "src/pyowl_core/api.py", "tests/unit/resolver/", "tests/integration/imports/"]
+
+[[package]]
+id = "WP04"
+brief = "WP04-overlays-composition-fingerprints.md"
+wave = 4
+depends = ["WP03"]
+owns = ["src/pyowl_core/document/delta.py", "src/pyowl_core/document/overlay.py", "src/pyowl_core/document/composite.py", "src/pyowl_core/document/fingerprint.py", "tests/unit/overlays/", "tests/unit/composition/", "tests/unit/fingerprints/"]
+
+[[package]]
+id = "WP05"
+brief = "WP05-indexes-views.md"
+wave = 5
+depends = ["WP04"]
+owns = ["src/pyowl_core/index/", "tests/unit/indexes/", "tests/integration/view_cache/"]
+
+[[package]]
+id = "WP06"
+brief = "WP06-wire-cache.md"
+wave = 6
+depends = ["WP04", "WP05"]
+owns = ["src/pyowl_core/wire/", "schemas/wire-v1.toml", "tools/wire_reference/", "tests/unit/wire/", "tests/fuzz/wire/", "tests/integration/cache/"]
+
+[[package]]
+id = "WP07"
+brief = "WP07-native-foundation.md"
+wave = 7
+depends = ["WP01", "WP06"]
+owns = ["native/Cargo.toml", "native/Cargo.lock", "native/src/lib.rs", "native/src/error.rs", "native/src/limits.rs", "native/src/cancel.rs", "native/src/model/", "native/src/wire/", "src/pyowl_core/_native.pyi", "src/pyowl_core/backends/dispatch.py", "src/pyowl_core/backends/native.py", "tests/native/foundation/", "tests/native/wire/"]
+
+[[package]]
+id = "WP08"
+brief = "WP08-native-parsers-indexes.md"
+wave = 8
+depends = ["WP02", "WP05", "WP07"]
+owns = ["native/src/source.rs", "native/src/parse/", "native/src/map_rdf.rs", "native/src/canonical.rs", "native/src/index/", "native/src/session.rs", "tests/native/formats/", "tests/native/indexes/", "tests/differential/backends/"]
+
+[[package]]
+id = "WP09"
+brief = "WP09-conformance-security.md"
+wave = 9
+depends = ["WP02", "WP03", "WP04", "WP06", "WP08"]
+owns = ["tests/conformance/", "tests/security/", "tests/fuzz/", "tests/data/", "tools/corpus/", "tools/security/", "reports/conformance/", "reports/security/"]
+
+[[package]]
+id = "WP10"
+brief = "WP10-performance.md"
+wave = 9
+depends = ["WP05", "WP06", "WP08"]
+owns = ["benchmarks/", "tools/benchmark/", "reports/performance/"]
+
+[[package]]
+id = "WP11"
+brief = "WP11-consumer-integration.md"
+wave = 10
+depends = ["WP05", "WP06", "WP08", "WP09"]
+owns = ["src/pyowl_core/adapters/", "tests/consumer_contract/", "tests/integration/consumers/", "reports/integration/"]
+
+[[package]]
+id = "WP12"
+brief = "WP12-packaging-release.md"
+wave = 11
+depends = ["WP09", "WP10", "WP11"]
+owns = ["pyproject.toml", "setup.py", "MANIFEST.in", "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES/", ".github/workflows/wheels.yml", ".github/workflows/release.yml", "tests/packaging/", "tools/packaging/", "reports/release/"]
+
+[[package]]
+id = "WP13"
+brief = "WP13-docs-api-stabilization.md"
+wave = 12
+depends = ["WP11", "WP12"]
+owns = ["README.md", "CHANGELOG.md", "MIGRATION.md", "docs/", "src/pyowl_core/__init__.py", "tests/docs/", "tests/release/"]
+

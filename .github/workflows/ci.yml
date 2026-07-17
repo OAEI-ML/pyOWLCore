@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+        hashseed: ["1", "987654"]
+    env:
+      PYTHONHASHSEED: ${{ matrix.hashseed }}
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python tools/check.py --full
+
+  pure-package:
+    runs-on: ubuntu-latest
+    container: python:3.10-slim
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove compiler and Java are absent
+        run: |
+          ! command -v java
+          ! command -v javac
+          ! command -v rustc
+          ! command -v cc
+      - run: python -m pip install build "setuptools>=65" wheel
+      - run: PIP_NO_INDEX=1 python -m build --no-isolation
+      - run: python -m tools.audit.java dist
+      - run: python -m venv /tmp/pyowl-core-smoke
+      - run: PIP_NO_INDEX=1 /tmp/pyowl-core-smoke/bin/pip install --no-deps dist/*.whl
+      - run: /tmp/pyowl-core-smoke/bin/python -I -c "import pyowl_core; assert pyowl_core.__version__ == '0.1.0.dev0'"
