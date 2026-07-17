@@ -31,7 +31,7 @@ def collect_environment(root: Path) -> dict[str, Any]:
     commit = _command(("git", "rev-parse", "HEAD"), cwd=root, required=True)
     status = _command(("git", "status", "--porcelain"), cwd=root, required=True)
     probe = native.probe()
-    native_artifact = _native_artifact()
+    native_artifact = _native_artifact(root)
     uname = platform.uname()
     environment: dict[str, Any] = {
         "captured_utc": datetime.now(timezone.utc).isoformat(),
@@ -53,7 +53,7 @@ def collect_environment(root: Path) -> dict[str, Any]:
         "python": {
             "version": platform.python_version(),
             "implementation": platform.python_implementation(),
-            "executable": sys.executable,
+            "executable": _path_label(Path(sys.executable), root),
             "compiler": platform.python_compiler(),
             "pyowl_core": __version__,
         },
@@ -147,7 +147,7 @@ def _command(command: tuple[str, ...], *, cwd: Path, required: bool) -> str | No
     return result.stdout.strip()
 
 
-def _native_artifact() -> dict[str, str | int] | None:
+def _native_artifact(root: Path) -> dict[str, str | int] | None:
     spec = importlib.util.find_spec("pyowl_core._native")
     if spec is None or spec.origin is None:
         return None
@@ -155,12 +155,19 @@ def _native_artifact() -> dict[str, str | int] | None:
     try:
         payload = path.read_bytes()
     except OSError:
-        return {"path": str(path), "state": "unreadable"}
+        return {"path": _path_label(path, root), "state": "unreadable"}
     return {
-        "path": str(path.resolve()),
+        "path": _path_label(path.resolve(), root),
         "bytes": len(payload),
         "sha256": hashlib.sha256(payload).hexdigest(),
     }
+
+
+def _path_label(path: Path, root: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except (OSError, ValueError):
+        return path.name
 
 
 def _cpu_model() -> str | None:

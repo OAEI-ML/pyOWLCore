@@ -8,8 +8,9 @@ import pytest
 from pyowl_core import BackendPreference
 from pyowl_core.backends import native
 from tools.benchmark.harness import run_harness
-from tools.benchmark.manifest import load_manifest
+from tools.benchmark.manifest import ROOT, load_manifest
 from tools.benchmark.profile import capture_profile
+from tools.benchmark.report import canonical_json_bytes, collect_environment
 from tools.benchmark.synthetic import equivalent_source
 
 
@@ -93,3 +94,13 @@ def test_harness_does_not_prepare_or_fetch_missing_external_corpus(tmp_path: Pat
             warmups=0,
             repetitions=1,
         )
+
+
+def test_environment_metadata_uses_reproducible_non_absolute_path_labels() -> None:
+    environment = collect_environment(ROOT)
+    payload = canonical_json_bytes(environment).decode()
+    native_artifact = cast(dict[str, Any] | None, environment["native"]["artifact"])
+
+    assert not Path(environment["python"]["executable"]).is_absolute()
+    assert native_artifact is None or not Path(native_artifact["path"]).is_absolute()
+    assert str(ROOT) not in payload

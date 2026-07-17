@@ -1,0 +1,65 @@
+{
+  "schema": "pyowl-core/biomedical-observations/v1",
+  "date": "2026-07-17",
+  "purpose": "pre-harness corpus qualification observations; not regression distributions",
+  "runtime": "CPython 3.12.3, default safety/resource behavior, resident source bytes, Python backend",
+  "observations": [
+    {
+      "id": "hpo-base-2026-06-23",
+      "revision": "v2026-06-23/hp-base.owl",
+      "source_bytes": 49479533,
+      "source_sha256": "8aab8c4d7f11189def5d4e64c17190dfc90a495fe9f49a451ea2caefc174e153",
+      "wall_seconds": 242.7487,
+      "rss_peak_bytes": 1088692224,
+      "triples": 588921,
+      "axioms": 195809,
+      "entities": 22660,
+      "imports": 0,
+      "document_fingerprint": "16223362dd4708e14237c249c742a6edbe8d33bca3f1b79273c875f5aa9a6d57",
+      "samples": 1,
+      "gate_eligible": false,
+      "note": "one-off qualification only; HPO terms require user review and the bytes are not committed"
+    },
+    {
+      "id": "oaei-bioml-doid-2024",
+      "revision": "zenodo-13119437/ncit-doid.zip:doid.owl",
+      "source_bytes": 6687536,
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "wall_seconds": 16.1739,
+      "rss_peak_bytes": 194686976,
+      "triples": 55699,
+      "axioms": 55687,
+      "entities": 8516,
+      "document_fingerprint": "dba81ae191733905b32bdf92e0c40de44ab81a246086db1d28e6db97f4bea1e7",
+      "samples": 1,
+      "gate_eligible": false
+    },
+    {
+      "id": "oaei-bioml-omim-2024",
+      "revision": "zenodo-13119437/omim-ordo.zip:omim.owl",
+      "source_bytes": 11237181,
+      "source_sha256": "3a42c43d34c9b6f2d85278bb03471a99a64f6dccd5e299cd9b0fa882c0b9bcc9",
+      "wall_seconds": 26.0544,
+      "triples": 131182,
+      "axioms": 131181,
+      "entities": 9663,
+      "document_fingerprint": "684efb89e6130d11a916cb628feba30451aab822d0e7b02d6dda4143f7b626d2",
+      "samples": 1,
+      "gate_eligible": false
+    }
+  ],
+  "strict_mapping_failures": [
+    {
+      "id": "oaei-bioml-ncit-2024",
+      "source_bytes": 57163710,
+      "source_sha256": "379a37f47c0c8e7c30397769358cca955140d16b2797a1cc75da4b1fc2b354eb",
+      "error": "blank node ambiguously used as individual and list"
+    },
+    {
+      "id": "oaei-bioml-ordo-2024",
+      "source_bytes": 52811113,
+      "source_sha256": "89ae759f2c9c2f2f7c6ea4f8a680bf751660480b09b9b4748b405c8a10dabf2f",
+      "error": "owl:Axiom reification main triple absent"
+    }
+  ]
+}

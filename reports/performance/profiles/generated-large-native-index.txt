@@ -1,0 +1,68 @@
+pyowl-core measured profile v1
+phase: index
+corpus: generated-large-functional
+corpus_sha256: 5852a3bfc6c5d76147ef7ee4b29328cd87c9efcca0ef48ec7d7d86e23c1e8c43
+manifest_sha256: 1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928
+backend: native
+iterations: 1
+output_fingerprint: 2717f90d5ec145dff797aebd076f042c81f56b190cfcda81389973bdee0af1ac
+git_commit: 3c71a615d60a0339cdd62a1ce47f81175799b69c
+python: {'version': '3.12.3', 'implementation': 'CPython', 'executable': '.venv/bin/python', 'compiler': 'Clang 15.0.0 (clang-1500.3.9.4)', 'pyowl_core': '0.1.0.dev0'}
+profiler: cProfile; validation excluded from profile
+
+         2100250 function calls (2060254 primitive calls) in 2.345 seconds
+
+   Ordered by: cumulative time
+   List reduced from 149 to 50 due to restriction <50>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    2.349    2.349 profile.py:121(build_index)
+        1    0.000    0.000    2.349    2.349 snapshot.py:624(view)
+        1    0.000    0.000    2.349    2.349 cache.py:469(request_index_view)
+        1    0.000    0.000    2.349    2.349 cache.py:321(get_or_build)
+        1    0.013    0.013    2.349    2.349 axiom_types.py:116(_build)
+        1    0.068    0.068    2.084    2.084 native.py:279(partition_axioms)
+     9999    0.041    0.000    1.810    0.000 canonical.py:103(canonical_bytes)
+39995/9999    0.506    0.000    1.641    0.000 canonical.py:109(_encode_node)
+   109986    0.260    0.000    0.376    0.000 canonical.py:85(encode_varint)
+    29996    0.123    0.000    0.373    0.000 canonical.py:154(_encode_scalar_component)
+    59992    0.083    0.000    0.301    0.000 canonical.py:99(_framed)
+   649979    0.253    0.000    0.300    0.000 {built-in method builtins.isinstance}
+     9999    0.051    0.000    0.248    0.000 cache.py:183(add)
+    20000    0.057    0.000    0.135    0.000 limits.py:103(enforce)
+     9999    0.048    0.000    0.125    0.000 canonical.py:43(from_limits)
+     9999    0.040    0.000    0.113    0.000 cache.py:415(_reserve)
+    39995    0.063    0.000    0.104    0.000 registry.py:247(constructor_spec)
+    29997    0.043    0.000    0.073    0.000 canonical.py:78(_limit)
+        1    0.026    0.026    0.067    0.067 native.py:916(_decode_axiom_partition)
+140004/130005    0.057    0.000    0.064    0.000 {built-in method builtins.len}
+    89989    0.056    0.000    0.056    0.000 {method 'extend' of 'bytearray' objects}
+   120007    0.054    0.000    0.054    0.000 {built-in method builtins.getattr}
+   109986    0.052    0.000    0.052    0.000 {method 'append' of 'bytearray' objects}
+    20000    0.037    0.000    0.052    0.000 limits.py:90(allowed)
+    29999    0.021    0.000    0.047    0.000 <frozen abc>:117(__instancecheck__)
+    29996    0.026    0.000    0.038    0.000 enum.py:202(__get__)
+    10003    0.012    0.000    0.029    0.000 native.py:710(u64)
+    29996    0.027    0.000    0.027    0.000 {method 'encode' of 'str' objects}
+    29999    0.026    0.000    0.026    0.000 {built-in method _abc._abc_instancecheck}
+    49994    0.026    0.000    0.026    0.000 {method 'add' of 'set' objects}
+    39997    0.024    0.000    0.024    0.000 {built-in method builtins.issubclass}
+     9999    0.017    0.000    0.022    0.000 cache.py:447(_discard_dead_weak)
+    39995    0.021    0.000    0.021    0.000 {method 'remove' of 'set' objects}
+    39995    0.020    0.000    0.020    0.000 canonical.py:51(enter)
+     9999    0.010    0.000    0.019    0.000 cache.py:272(maximum_bytes)
+    39995    0.017    0.000    0.017    0.000 {built-in method builtins.id}
+    10003    0.008    0.000    0.017    0.000 threading.py:299(__enter__)
+    10003    0.011    0.000    0.015    0.000 threading.py:302(__exit__)
+     9999    0.014    0.000    0.014    0.000 {built-in method _struct.pack}
+    20000    0.013    0.000    0.013    0.000 {built-in method math.isfinite}
+    10004    0.010    0.000    0.013    0.000 native.py:696(take)
+    29996    0.012    0.000    0.012    0.000 enum.py:1292(value)
+        2    0.003    0.002    0.012    0.006 {built-in method builtins.all}
+        1    0.000    0.000    0.011    0.011 native.py:655(_call_index)
+        1    0.000    0.000    0.011    0.011 native.py:312(<lambda>)
+        1    0.011    0.011    0.011    0.011 {built-in method pyowl_core._native.build_index}
+    10000    0.007    0.000    0.011    0.000 base.py:84(__iter__)
+     9999    0.007    0.000    0.010    0.000 base.py:87(__len__)
+    19998    0.010    0.000    0.010    0.000 {method 'append' of 'list' objects}
+    10034    0.009    0.000    0.009    0.000 {built-in method builtins.min}

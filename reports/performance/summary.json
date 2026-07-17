@@ -1,0 +1,136 @@
+{
+  "schema": "pyowl-core/performance-summary/v1",
+  "date": "2026-07-17",
+  "status": "shared-host gates pass; approved reference-machine calibration pending",
+  "corpus_manifest": {
+    "path": "benchmarks/corpora.toml",
+    "sha256": "1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928",
+    "entries": 12
+  },
+  "environment": {
+    "comparison_key": "7ba2114be78f56a5535444f1b5f2f084e28095142432a0b3a70bc42f0a9dbb24",
+    "platform": "Darwin 25.5.0 x86_64",
+    "logical_cpus": 12,
+    "physical_memory_bytes": 34359738368,
+    "python": "CPython 3.12.3",
+    "rustc": "1.97.1",
+    "cargo": "1.97.1",
+    "power_mode": "not measured",
+    "reference_approved": false
+  },
+  "evidence": {
+    "tiny_baseline": {
+      "path": "benchmarks/baselines/shared-darwin25-x86_64-py312.json",
+      "sha256": "3edea8b0cadbc570dce4281986d9b74f3b46136fdf042e859ed1419519e5f8b8",
+      "git_commit": "21f34b8aa611d4b86a56a33de9b99404baa50480",
+      "warmups": 1,
+      "repetitions": 20,
+      "backends": ["python", "auto", "native"],
+      "assertions_passed": 27,
+      "assertions_failed": 0
+    },
+    "large_synthetic": {
+      "path": "reports/performance/raw/shared-darwin25-generated-large-py312.json",
+      "sha256": "0147eeb17f80fdf797a222aa1bf0020abfd6b922ea5e5f31e07cea2b077d8aea",
+      "git_commit": "b7e5b31188d7aa17fdf3435a4e2e22ac6529ccb9",
+      "source_sha256": "5852a3bfc6c5d76147ef7ee4b29328cd87c9efcca0ef48ec7d7d86e23c1e8c43",
+      "source_bytes": 944938,
+      "axioms": 9999,
+      "warmups": 1,
+      "repetitions": 5,
+      "assertions_passed": 27,
+      "assertions_failed": 0
+    },
+    "uberon": {
+      "path": "reports/performance/raw/shared-darwin25-uberon-2026-06-23-py312.json",
+      "sha256": "d613398a3b51a770150fb1ee1e761ba8a9579f813dafd00e73ab650136dae315",
+      "git_commit": "6b8c83afc7ca510230b85e45bb54086d88753cf3",
+      "revision": "v2026-06-23/common-anatomy.owl",
+      "source_sha256": "c2f71e454f678f6d9a6bf0ed0a2084c70e302bc0fce3a8e2c9f19ef679ee8d1c",
+      "source_bytes": 1017782,
+      "triples": 12103,
+      "axioms": 5205,
+      "warmups": 1,
+      "repetitions": 5,
+      "assertions_failed": 0,
+      "release_repetition_requirement_met": false
+    }
+  },
+  "calibrated_gates": {
+    "regression_comparator": {
+      "status": "pass",
+      "median_ratio_limit": 1.1,
+      "rss_ratio_limit": 1.1,
+      "query_mmap_p95_ratio_limit": 1.15,
+      "self_comparison": "reports/performance/regression-self.json",
+      "candidate_regression": "not yet applicable to the initial baseline"
+    },
+    "auto_small": {
+      "status": "pass",
+      "parse_wall_ratio_auto_over_python": 0.8651051132785086,
+      "load_wall_ratio_auto_over_python": 1.0690325914334573,
+      "limit": 1.1
+    },
+    "native_benefit": {
+      "status": "pass-by-documented-alternative-benefit",
+      "large_parse_throughput_native_over_python": 1.1159144774950671,
+      "large_load_throughput_native_over_python": 1.650482237165864,
+      "large_index_speedup_native_over_python": 2.014563481599242,
+      "parser_two_x_claim": false,
+      "justification": "native axiom-type partition removes the duplicate Python canonical-key pass, releases the GIL, and exceeds 2x at the 4096-row AUTO cutover"
+    },
+    "mmap": {
+      "status": "pass",
+      "wall_ratio_limit": 0.25,
+      "allocation_ratio_limit": 0.1,
+      "large_python_wall_ratio": 0.03739264061849718,
+      "large_native_wall_ratio": 0.06782463241428392,
+      "large_python_allocation_ratio_to_full_decode": 0.006963293233720701,
+      "uberon_wall_ratio": 0.061442613397847935,
+      "uberon_allocation_ratio_to_full_decode": 0.005774628089854665
+    },
+    "handoff": {
+      "status": "pass",
+      "shared_host_p95_limit_ns": 1000000,
+      "large_python_p95_ns": 486493.6,
+      "uberon_python_p95_ns": 297572.2,
+      "peak_traced_bytes": 13694,
+      "identity_preserved": true,
+      "parser_resolver_wire_and_construction_counters": 0
+    },
+    "incremental_views": {
+      "status": "pass",
+      "limit_bytes": 16777216,
+      "large_overlay_peak_bytes": 5217,
+      "large_composite_peak_bytes": 7504,
+      "base_arena_identity_preserved": true
+    },
+    "imports": {
+      "status": "pass",
+      "diamond_documents": 4,
+      "parser_calls": 4,
+      "shared_source_parse_count": 1
+    },
+    "determinism_and_safety": {
+      "status": "pass",
+      "backend_output_parity": true,
+      "wire_roundtrip_byte_parity": true,
+      "adversarial_depth_bounded": true,
+      "pre_cancellation_prompt": true,
+      "safety_defaults_enabled": true,
+      "network_in_timed_phases": false,
+      "java_used": false
+    }
+  },
+  "optimization_decision": {
+    "product_change_in_wp10": false,
+    "measured_hot_paths": [
+      "canonical model encoding and structural digests",
+      "document freeze, source matching, and fingerprints",
+      "wire validation/materialization",
+      "Python axiom-index canonical-key sorting"
+    ],
+    "retained_optimization": "existing safe-Rust axiom partition and conservative AUTO cutovers",
+    "rejected_speculation": "global canonical-byte caching would increase every node's retained memory and requires independent workload evidence before changing the model; safety validation was not bypassed"
+  }
+}

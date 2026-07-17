@@ -1,0 +1,68 @@
+pyowl-core measured profile v1
+phase: wire-decode
+corpus: generated-large-functional
+corpus_sha256: 5852a3bfc6c5d76147ef7ee4b29328cd87c9efcca0ef48ec7d7d86e23c1e8c43
+manifest_sha256: 1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928
+backend: python
+iterations: 1
+output_fingerprint: f4d51208e015fad297b2e86d592fe5b14d563a4a35558cab4c9419065f27de25
+git_commit: 3c71a615d60a0339cdd62a1ce47f81175799b69c
+python: {'version': '3.12.3', 'implementation': 'CPython', 'executable': '.venv/bin/python', 'compiler': 'Clang 15.0.0 (clang-1500.3.9.4)', 'pyowl_core': '0.1.0.dev0'}
+profiler: cProfile; validation excluded from profile
+
+         34164050 function calls (33679105 primitive calls) in 37.039 seconds
+
+   Ordered by: cumulative time
+   List reduced from 258 to 50 due to restriction <50>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000   37.407   37.407 profile.py:153(<lambda>)
+        1    0.000    0.000   37.407   37.407 codec.py:262(decode_snapshot)
+        1    0.002    0.002   28.181   28.181 codec.py:464(checked_materialize_image)
+        1    0.000    0.000   28.180   28.180 codec.py:362(materialize_image)
+   154988    0.681    0.000   22.242    0.000 canonical.py:103(canonical_bytes)
+459948/154988    5.849    0.000   19.640    0.000 canonical.py:109(_encode_node)
+        1    0.003    0.003   16.136   16.136 snapshot.py:297(__post_init__)
+    30000    0.066    0.000   12.407    0.000 codec.py:1784(_decode_model)
+    30000    0.159    0.000   12.341    0.000 canonical.py:181(decode_canonical)
+        1    0.043    0.043   10.054   10.054 snapshot.py:1009(_signature)
+        1    0.000    0.000    9.225    9.225 codec.py:433(validate_bytes)
+    64991    0.464    0.000    9.203    0.000 base.py:15(_canonical_bytes)
+        1    0.007    0.007    9.073    9.073 codec.py:290(inspect_image)
+        6    0.114    0.019    8.191    1.365 codec.py:1094(_validate_model_table)
+94992/30000    0.819    0.000    7.858    0.000 canonical.py:219(_decode_node)
+        2    0.000    0.000    7.690    3.845 codec.py:374(<genexpr>)
+        1    0.000    0.000    7.690    7.690 codec.py:1264(_decode_document_row)
+39999/20001    0.165    0.000    6.175    0.000 base.py:55(__init__)
+     9999    0.074    0.000    5.504    0.001 {method 'update' of 'set' objects}
+  1509848    3.682    0.000    5.268    0.000 canonical.py:85(encode_varint)
+   384956    1.708    0.000    5.184    0.000 canonical.py:154(_encode_scalar_component)
+    94992    0.344    0.000    4.924    0.000 canonical.py:300(_construct)
+    10000    0.027    0.000    4.647    0.000 codec.py:1313(<genexpr>)
+    10001    0.051    0.000    4.618    0.000 codec.py:1932(_decode_ref)
+  7874414    3.312    0.000    4.038    0.000 {built-in method builtins.isinstance}
+     9999    0.175    0.000    3.730    0.000 visitor.py:95(signature)
+   689916    0.985    0.000    3.627    0.000 canonical.py:99(_framed)
+    39998    1.061    0.000    3.549    0.000 primitives.py:78(__post_init__)
+        1    0.001    0.001    3.465    3.465 codec.py:1705(_compare_decoded_view)
+        6    0.029    0.005    3.465    0.577 codec.py:1766(_assert_postings)
+    20004    0.036    0.000    3.393    0.000 codec.py:1772(<genexpr>)
+    19998    0.179    0.000    3.188    0.000 base.py:41(__hash__)
+     9998    0.043    0.000    3.103    0.000 base.py:29(__eq__)
+    60011    0.596    0.000    2.697    0.000 {built-in method builtins.any}
+   184988    1.025    0.000    2.179    0.000 canonical.py:43(from_limits)
+    99988    0.818    0.000    2.117    0.000 visitor.py:75(walk)
+    14998    0.020    0.000    2.038    0.000 base.py:46(canonical_bytes)
+        1    0.007    0.007    2.022    2.022 fingerprint.py:187(signature_fingerprint)
+    39998    0.104    0.000    1.916    0.000 base.py:171(require_text)
+        1    0.000    0.000    1.790    1.790 fingerprint.py:117(snapshot_structural_fingerprint)
+        3    0.026    0.009    1.790    0.597 fingerprint.py:228(_update_collection)
+        2    0.366    0.183    1.607    0.804 codec.py:1620(_validate_origins)
+        1    0.000    0.000    1.533    1.533 document.py:162(document_fingerprint)
+        1    0.000    0.000    1.533    1.533 fingerprint.py:91(document_fingerprint)
+        1    0.000    0.000    1.530    1.530 fingerprint.py:97(document_fingerprint_bytes)
+        4    0.008    0.002    1.529    0.382 fingerprint.py:223(_collection_parts)
+    50017    0.110    0.000    1.487    0.000 {built-in method builtins.sorted}
+    10003    0.012    0.000    1.473    0.000 fingerprint.py:224(<genexpr>)
+        1    0.022    0.022    1.441    1.441 fingerprint.py:164(logical_fingerprint)
+   539938    0.883    0.000    1.436    0.000 registry.py:247(constructor_spec)

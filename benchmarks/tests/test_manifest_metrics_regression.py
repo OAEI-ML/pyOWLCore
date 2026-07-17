@@ -185,6 +185,10 @@ def test_metrics_and_regression_thresholds_are_deterministic_and_fail_closed() -
         changed_manifest = _report(100.0, 100.0, 100.0)
         changed_manifest["corpus_manifest_sha256"] = "other"
         compare_reports(baseline, changed_manifest)
+    with pytest.raises(RegressionDataError, match="machine/runtime comparison key changed"):
+        changed_machine = _report(100.0, 100.0, 100.0)
+        changed_machine["environment"]["comparison_key"] = "other-machine"
+        compare_reports(baseline, changed_machine)
 
 
 def _report(wall_median: float, rss_median: float, wall_p95: float) -> dict[str, Any]:

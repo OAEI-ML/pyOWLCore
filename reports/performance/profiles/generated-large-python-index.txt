@@ -1,0 +1,68 @@
+pyowl-core measured profile v1
+phase: index
+corpus: generated-large-functional
+corpus_sha256: 5852a3bfc6c5d76147ef7ee4b29328cd87c9efcca0ef48ec7d7d86e23c1e8c43
+manifest_sha256: 1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928
+backend: python
+iterations: 1
+output_fingerprint: 2717f90d5ec145dff797aebd076f042c81f56b190cfcda81389973bdee0af1ac
+git_commit: 3c71a615d60a0339cdd62a1ce47f81175799b69c
+python: {'version': '3.12.3', 'implementation': 'CPython', 'executable': '.venv/bin/python', 'compiler': 'Clang 15.0.0 (clang-1500.3.9.4)', 'pyowl_core': '0.1.0.dev0'}
+profiler: cProfile; validation excluded from profile
+
+         3469856 function calls (3389865 primitive calls) in 5.087 seconds
+
+   Ordered by: cumulative time
+   List reduced from 105 to 50 due to restriction <50>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    5.097    5.097 profile.py:121(build_index)
+        1    0.000    0.000    5.097    5.097 snapshot.py:624(view)
+        1    0.000    0.000    5.097    5.097 cache.py:469(request_index_view)
+        1    0.001    0.001    5.097    5.097 cache.py:321(get_or_build)
+        1    0.105    0.105    5.096    5.096 axiom_types.py:116(_build)
+    19998    0.114    0.000    4.504    0.000 canonical.py:103(canonical_bytes)
+79990/19998    1.264    0.000    4.131    0.000 canonical.py:109(_encode_node)
+        7    0.013    0.002    2.067    0.295 {built-in method builtins.sorted}
+    59992    0.304    0.000    0.936    0.000 canonical.py:154(_encode_scalar_component)
+   219972    0.646    0.000    0.933    0.000 canonical.py:85(encode_varint)
+   119984    0.210    0.000    0.759    0.000 canonical.py:99(_framed)
+  1139898    0.572    0.000    0.689    0.000 {built-in method builtins.isinstance}
+     9999    0.080    0.000    0.446    0.000 cache.py:183(add)
+    79990    0.157    0.000    0.261    0.000 registry.py:247(constructor_spec)
+    19998    0.120    0.000    0.250    0.000 canonical.py:43(from_limits)
+     9999    0.080    0.000    0.225    0.000 cache.py:415(_reserve)
+   219972    0.135    0.000    0.135    0.000 {method 'append' of 'bytearray' objects}
+   139982    0.132    0.000    0.132    0.000 {method 'extend' of 'bytearray' objects}
+189978/169980    0.100    0.000    0.120    0.000 {built-in method builtins.len}
+    59994    0.071    0.000    0.119    0.000 canonical.py:78(_limit)
+    59995    0.048    0.000    0.117    0.000 <frozen abc>:117(__instancecheck__)
+    59992    0.075    0.000    0.105    0.000 enum.py:202(__get__)
+     9999    0.044    0.000    0.099    0.000 limits.py:103(enforce)
+   149994    0.094    0.000    0.094    0.000 {built-in method builtins.getattr}
+    59995    0.069    0.000    0.069    0.000 {built-in method _abc._abc_instancecheck}
+    59992    0.065    0.000    0.065    0.000 {method 'encode' of 'str' objects}
+    79990    0.065    0.000    0.065    0.000 {built-in method builtins.issubclass}
+    79990    0.054    0.000    0.054    0.000 {method 'remove' of 'set' objects}
+    79990    0.049    0.000    0.049    0.000 {method 'add' of 'set' objects}
+    79990    0.046    0.000    0.046    0.000 canonical.py:51(enter)
+     9999    0.036    0.000    0.045    0.000 cache.py:447(_discard_dead_weak)
+    79990    0.043    0.000    0.043    0.000 {built-in method builtins.id}
+    10002    0.014    0.000    0.037    0.000 threading.py:299(__enter__)
+     9999    0.020    0.000    0.035    0.000 cache.py:272(maximum_bytes)
+     9999    0.023    0.000    0.034    0.000 limits.py:90(allowed)
+    59992    0.030    0.000    0.030    0.000 enum.py:1292(value)
+    10002    0.018    0.000    0.029    0.000 threading.py:302(__exit__)
+    19998    0.021    0.000    0.028    0.000 base.py:87(__len__)
+    19999    0.014    0.000    0.024    0.000 base.py:84(__iter__)
+    10002    0.023    0.000    0.023    0.000 {method '__enter__' of '_thread.RLock' objects}
+    19998    0.021    0.000    0.021    0.000 canonical.py:68(collection)
+    19998    0.018    0.000    0.018    0.000 {method 'sort' of 'list' objects}
+     9999    0.015    0.000    0.015    0.000 {built-in method builtins.min}
+     9999    0.014    0.000    0.014    0.000 {built-in method math.isfinite}
+    10002    0.010    0.000    0.010    0.000 {method '__exit__' of '_thread.RLock' objects}
+    19999    0.010    0.000    0.010    0.000 {built-in method builtins.iter}
+     9999    0.010    0.000    0.010    0.000 {method 'setdefault' of 'dict' objects}
+     9999    0.008    0.000    0.008    0.000 {method 'items' of 'collections.OrderedDict' objects}
+    10014    0.008    0.000    0.008    0.000 {method 'get' of 'dict' objects}
+     9999    0.007    0.000    0.007    0.000 {method 'append' of 'list' objects}

@@ -1,0 +1,68 @@
+pyowl-core measured profile v1
+phase: parse
+corpus: generated-large-functional
+corpus_sha256: 5852a3bfc6c5d76147ef7ee4b29328cd87c9efcca0ef48ec7d7d86e23c1e8c43
+manifest_sha256: 1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928
+backend: python
+iterations: 1
+output_fingerprint: 0500eb88edb023ac2d330da7e6def0a46ac1e60cb658ae3f09e3e4556de335b0
+git_commit: 3c71a615d60a0339cdd62a1ce47f81175799b69c
+python: {'version': '3.12.3', 'implementation': 'CPython', 'executable': '.venv/bin/python', 'compiler': 'Clang 15.0.0 (clang-1500.3.9.4)', 'pyowl_core': '0.1.0.dev0'}
+profiler: cProfile; validation excluded from profile
+
+         12809162 function calls (12609187 primitive calls) in 11.415 seconds
+
+   Ordered by: cumulative time
+   List reduced from 167 to 50 due to restriction <50>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000   11.796   11.796 profile.py:113(<lambda>)
+        1    0.000    0.000   11.796   11.796 api.py:31(parse_document)
+        1    0.002    0.002   11.796   11.796 parser.py:206(parse_document)
+        1    0.027    0.027   11.793   11.793 parser.py:41(parse)
+        1    0.011    0.011    5.412    5.412 parser.py:282(_parse_payload)
+        1    0.000    0.000    5.401    5.401 functional.py:53(parse_functional)
+    29998    0.115    0.000    4.980    0.000 canonical.py:103(canonical_bytes)
+119986/29998    1.397    0.000    4.572    0.000 canonical.py:109(_encode_node)
+        1    0.100    0.100    3.277    3.277 functional.py:262(parse)
+     9999    0.077    0.000    2.791    0.000 functional.py:333(_parse_axiom)
+        1    0.010    0.010    2.446    2.446 document.py:198(freeze_document_anonymous)
+        1    0.001    0.001    2.122    2.122 functional.py:245(__init__)
+        1    0.543    0.543    2.122    2.122 functional.py:79(tokenize)
+     9999    0.044    0.000    1.959    0.000 parser.py:362(match)
+     9999    0.044    0.000    1.887    0.000 canonical.py:172(structural_digest)
+    20001    0.092    0.000    1.840    0.000 base.py:55(__init__)
+        1    0.000    0.000    1.691    1.691 document.py:162(document_fingerprint)
+        1    0.000    0.000    1.691    1.691 fingerprint.py:91(document_fingerprint)
+        1    0.000    0.000    1.687    1.687 fingerprint.py:97(document_fingerprint_bytes)
+     9999    0.048    0.000    1.687    0.000 base.py:15(_canonical_bytes)
+        4    0.008    0.002    1.685    0.421 fingerprint.py:223(_collection_parts)
+    10003    0.014    0.000    1.630    0.000 fingerprint.py:224(<genexpr>)
+    14999    0.095    0.000    1.581    0.000 functional.py:677(_parse_iri)
+     9998    0.016    0.000    1.267    0.000 functional.py:514(_parse_class_expression)
+    14999    0.375    0.000    1.242    0.000 primitives.py:78(__post_init__)
+     9998    0.027    0.000    1.240    0.000 functional.py:643(_parse_class)
+  2809787    0.954    0.000    1.199    0.000 {built-in method builtins.isinstance}
+   349963    0.757    0.000    1.090    0.000 canonical.py:85(encode_varint)
+    89989    0.339    0.000    1.026    0.000 canonical.py:154(_encode_scalar_component)
+   179996    0.222    0.000    1.005    0.000 common.py:44(check)
+   219995    0.376    0.000    0.883    0.000 limits.py:103(enforce)
+   179977    0.227    0.000    0.827    0.000 canonical.py:99(_framed)
+    94997    0.509    0.000    0.795    0.000 functional.py:191(_advance)
+     5000    0.031    0.000    0.744    0.000 functional.py:479(_parse_entity)
+79990/9999    0.237    0.000    0.718    0.000 document.py:302(_anonymous_values)
+    14999    0.030    0.000    0.674    0.000 base.py:171(require_text)
+    14999    0.185    0.000    0.640    0.000 {built-in method builtins.any}
+   734943    0.315    0.000    0.455    0.000 base.py:176(<genexpr>)
+    60000    0.053    0.000    0.414    0.000 functional.py:805(_take)
+1479909/1439913    0.384    0.000    0.408    0.000 {built-in method builtins.len}
+    45001    0.048    0.000    0.367    0.000 functional.py:811(_expect)
+   219995    0.209    0.000    0.321    0.000 limits.py:90(allowed)
+   119986    0.172    0.000    0.284    0.000 registry.py:247(constructor_spec)
+    29998    0.131    0.000    0.284    0.000 canonical.py:43(from_limits)
+    15000    0.020    0.000    0.283    0.000 functional.py:778(_open)
+  1439888    0.272    0.000    0.272    0.000 {built-in method builtins.ord}
+   159983    0.132    0.000    0.245    0.000 <frozen abc>:117(__instancecheck__)
+   539959    0.207    0.000    0.207    0.000 {built-in method builtins.getattr}
+    39995    0.127    0.000    0.191    0.000 dataclasses.py:1271(fields)
+     9999    0.039    0.000    0.186    0.000 functional.py:823(_span_from)

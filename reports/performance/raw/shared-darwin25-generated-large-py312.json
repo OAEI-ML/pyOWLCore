@@ -259,7 +259,7 @@
   "corpus_manifest_sha256": "1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928",
   "environment": {
     "captured_utc": "2026-07-17T22:22:22.895707+00:00",
-    "comparison_key": "87b2bca4b94755ca7bf44ae4886d52750862ea32036f32ce60ec26f7ac78f44c",
+    "comparison_key": "7ba2114be78f56a5535444f1b5f2f084e28095142432a0b3a70bc42f0a9dbb24",
     "cpu": {
       "logical_count": 12,
       "model": null
@@ -272,7 +272,7 @@
     "native": {
       "artifact": {
         "bytes": 799368,
-        "path": "/Users/pedrocotovio/Documents/Repos/OM/pyOWLCore/native/target/release/lib_native.dylib",
+        "path": "native/target/release/lib_native.dylib",
         "sha256": "0c22b593cefcc7cff1b5bbb41983a2b28e5bfff2089382bfeaecfb37d53a2afa"
       },
       "available": true,
@@ -302,7 +302,7 @@
     "power_mode": "not measured; reference operator must record externally",
     "python": {
       "compiler": "Clang 15.0.0 (clang-1500.3.9.4)",
-      "executable": "/Users/pedrocotovio/Documents/Repos/OM/pyOWLCore/.venv/bin/python",
+      "executable": ".venv/bin/python",
       "implementation": "CPython",
       "pyowl_core": "0.1.0.dev0",
       "version": "3.12.3"

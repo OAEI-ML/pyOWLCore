@@ -1,0 +1,1038 @@
+{
+  "baseline_commit": "21f34b8aa611d4b86a56a33de9b99404baa50480",
+  "candidate_commit": "21f34b8aa611d4b86a56a33de9b99404baa50480",
+  "findings": [
+    {
+      "baseline": 1610559.5,
+      "candidate": 1610559.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-adversarial-deep/python/depth-limit"
+    },
+    {
+      "baseline": 38285312.0,
+      "candidate": 38285312.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-adversarial-deep/python/depth-limit"
+    },
+    {
+      "baseline": 211580.0,
+      "candidate": 211580.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-adversarial-deep/python/pre-cancel"
+    },
+    {
+      "baseline": 38289408.0,
+      "candidate": 38289408.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-adversarial-deep/python/pre-cancel"
+    },
+    {
+      "baseline": 8167757.0,
+      "candidate": 8167757.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-import-diamond/auto/load-closure"
+    },
+    {
+      "baseline": 38436864.0,
+      "candidate": 38436864.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-import-diamond/auto/load-closure"
+    },
+    {
+      "baseline": 8872254.0,
+      "candidate": 8872254.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-import-diamond/native/load-closure"
+    },
+    {
+      "baseline": 38490112.0,
+      "candidate": 38490112.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-import-diamond/native/load-closure"
+    },
+    {
+      "baseline": 8970333.5,
+      "candidate": 8970333.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-import-diamond/python/load-closure"
+    },
+    {
+      "baseline": 38375424.0,
+      "candidate": 38375424.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-import-diamond/python/load-closure"
+    },
+    {
+      "baseline": 453312.0,
+      "candidate": 453312.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/composite-create-2"
+    },
+    {
+      "baseline": 37642240.0,
+      "candidate": 37642240.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/composite-create-2"
+    },
+    {
+      "baseline": 5277630.0,
+      "candidate": 5277630.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/composite-warm-query"
+    },
+    {
+      "baseline": 37650432.0,
+      "candidate": 37650432.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/composite-warm-query"
+    },
+    {
+      "baseline": 6034810.35,
+      "candidate": 6034810.35,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/composite-warm-query"
+    },
+    {
+      "baseline": 201635.5,
+      "candidate": 201635.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/consumer-handoff"
+    },
+    {
+      "baseline": 37662720.0,
+      "candidate": 37662720.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/consumer-handoff"
+    },
+    {
+      "baseline": 1150003.5,
+      "candidate": 1150003.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/index-build"
+    },
+    {
+      "baseline": 37466112.0,
+      "candidate": 37466112.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/index-build"
+    },
+    {
+      "baseline": 1512714.0,
+      "candidate": 1512714.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/index-warm-query"
+    },
+    {
+      "baseline": 37478400.0,
+      "candidate": 37478400.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/index-warm-query"
+    },
+    {
+      "baseline": 2344707.8,
+      "candidate": 2344707.8,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/index-warm-query"
+    },
+    {
+      "baseline": 12026366.5,
+      "candidate": 12026366.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/load-freeze"
+    },
+    {
+      "baseline": 37459968.0,
+      "candidate": 37459968.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/load-freeze"
+    },
+    {
+      "baseline": 12114970.0,
+      "candidate": 12114970.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/mmap-first-query"
+    },
+    {
+      "baseline": 37634048.0,
+      "candidate": 37634048.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/mmap-first-query"
+    },
+    {
+      "baseline": 38816131.70000001,
+      "candidate": 38816131.70000001,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/mmap-first-query"
+    },
+    {
+      "baseline": 1854761.0,
+      "candidate": 1854761.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/mmap-open"
+    },
+    {
+      "baseline": 37576704.0,
+      "candidate": 37576704.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/mmap-open"
+    },
+    {
+      "baseline": 21287895.8,
+      "candidate": 21287895.8,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/mmap-open"
+    },
+    {
+      "baseline": 817767.5,
+      "candidate": 817767.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/overlay-create-1"
+    },
+    {
+      "baseline": 37634048.0,
+      "candidate": 37634048.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/overlay-create-1"
+    },
+    {
+      "baseline": 2675820.5,
+      "candidate": 2675820.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/overlay-warm-query"
+    },
+    {
+      "baseline": 37638144.0,
+      "candidate": 37638144.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/overlay-warm-query"
+    },
+    {
+      "baseline": 3240597.0,
+      "candidate": 3240597.0,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/overlay-warm-query"
+    },
+    {
+      "baseline": 3845980.5,
+      "candidate": 3845980.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/parse-document"
+    },
+    {
+      "baseline": 37425152.0,
+      "candidate": 37425152.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/parse-document"
+    },
+    {
+      "baseline": 14396358.0,
+      "candidate": 14396358.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/wire-decode"
+    },
+    {
+      "baseline": 37560320.0,
+      "candidate": 37560320.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/wire-decode"
+    },
+    {
+      "baseline": 6741023.0,
+      "candidate": 6741023.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/wire-encode"
+    },
+    {
+      "baseline": 37527552.0,
+      "candidate": 37527552.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/auto/wire-encode"
+    },
+    {
+      "baseline": 440027.5,
+      "candidate": 440027.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/composite-create-2"
+    },
+    {
+      "baseline": 38211584.0,
+      "candidate": 38211584.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/composite-create-2"
+    },
+    {
+      "baseline": 3462305.0,
+      "candidate": 3462305.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/composite-warm-query"
+    },
+    {
+      "baseline": 38219776.0,
+      "candidate": 38219776.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/composite-warm-query"
+    },
+    {
+      "baseline": 4396991.850000001,
+      "candidate": 4396991.850000001,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/composite-warm-query"
+    },
+    {
+      "baseline": 223053.0,
+      "candidate": 223053.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/consumer-handoff"
+    },
+    {
+      "baseline": 38236160.0,
+      "candidate": 38236160.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/consumer-handoff"
+    },
+    {
+      "baseline": 1029986.5,
+      "candidate": 1029986.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/index-build"
+    },
+    {
+      "baseline": 37974016.0,
+      "candidate": 37974016.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/index-build"
+    },
+    {
+      "baseline": 1988423.5,
+      "candidate": 1988423.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/index-warm-query"
+    },
+    {
+      "baseline": 37978112.0,
+      "candidate": 37978112.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/index-warm-query"
+    },
+    {
+      "baseline": 2739325.25,
+      "candidate": 2739325.25,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/index-warm-query"
+    },
+    {
+      "baseline": 12030051.5,
+      "candidate": 12030051.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/load-freeze"
+    },
+    {
+      "baseline": 37955584.0,
+      "candidate": 37955584.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/load-freeze"
+    },
+    {
+      "baseline": 13664809.5,
+      "candidate": 13664809.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/mmap-first-query"
+    },
+    {
+      "baseline": 38203392.0,
+      "candidate": 38203392.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/mmap-first-query"
+    },
+    {
+      "baseline": 34016295.15000001,
+      "candidate": 34016295.15000001,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/mmap-first-query"
+    },
+    {
+      "baseline": 2012807.5,
+      "candidate": 2012807.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/mmap-open"
+    },
+    {
+      "baseline": 38096896.0,
+      "candidate": 38096896.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/mmap-open"
+    },
+    {
+      "baseline": 21347453.55,
+      "candidate": 21347453.55,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/mmap-open"
+    },
+    {
+      "baseline": 761884.0,
+      "candidate": 761884.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/overlay-create-1"
+    },
+    {
+      "baseline": 38207488.0,
+      "candidate": 38207488.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/overlay-create-1"
+    },
+    {
+      "baseline": 2761881.5,
+      "candidate": 2761881.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/overlay-warm-query"
+    },
+    {
+      "baseline": 38207488.0,
+      "candidate": 38207488.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/overlay-warm-query"
+    },
+    {
+      "baseline": 3313183.0500000003,
+      "candidate": 3313183.0500000003,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/overlay-warm-query"
+    },
+    {
+      "baseline": 5427730.0,
+      "candidate": 5427730.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/parse-document"
+    },
+    {
+      "baseline": 37920768.0,
+      "candidate": 37920768.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/parse-document"
+    },
+    {
+      "baseline": 15745540.5,
+      "candidate": 15745540.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/wire-decode"
+    },
+    {
+      "baseline": 38068224.0,
+      "candidate": 38068224.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/wire-decode"
+    },
+    {
+      "baseline": 8213166.0,
+      "candidate": 8213166.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/wire-encode"
+    },
+    {
+      "baseline": 38027264.0,
+      "candidate": 38027264.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/native/wire-encode"
+    },
+    {
+      "baseline": 447577.0,
+      "candidate": 447577.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/composite-create-2"
+    },
+    {
+      "baseline": 37310464.0,
+      "candidate": 37310464.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/composite-create-2"
+    },
+    {
+      "baseline": 3732946.0,
+      "candidate": 3732946.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/composite-warm-query"
+    },
+    {
+      "baseline": 37316608.0,
+      "candidate": 37316608.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/composite-warm-query"
+    },
+    {
+      "baseline": 5104502.850000001,
+      "candidate": 5104502.850000001,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/composite-warm-query"
+    },
+    {
+      "baseline": 206590.5,
+      "candidate": 206590.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/consumer-handoff"
+    },
+    {
+      "baseline": 37330944.0,
+      "candidate": 37330944.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/consumer-handoff"
+    },
+    {
+      "baseline": 1113897.0,
+      "candidate": 1113897.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/index-build"
+    },
+    {
+      "baseline": 37019648.0,
+      "candidate": 37019648.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/index-build"
+    },
+    {
+      "baseline": 1533363.5,
+      "candidate": 1533363.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/index-warm-query"
+    },
+    {
+      "baseline": 37036032.0,
+      "candidate": 37036032.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/index-warm-query"
+    },
+    {
+      "baseline": 2478008.7,
+      "candidate": 2478008.7,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/index-warm-query"
+    },
+    {
+      "baseline": 11249766.0,
+      "candidate": 11249766.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/load-freeze"
+    },
+    {
+      "baseline": 36995072.0,
+      "candidate": 36995072.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/load-freeze"
+    },
+    {
+      "baseline": 32624590.5,
+      "candidate": 32624590.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/mmap-first-query"
+    },
+    {
+      "baseline": 37294080.0,
+      "candidate": 37294080.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/mmap-first-query"
+    },
+    {
+      "baseline": 36601818.3,
+      "candidate": 36601818.3,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/mmap-first-query"
+    },
+    {
+      "baseline": 21858558.0,
+      "candidate": 21858558.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/mmap-open"
+    },
+    {
+      "baseline": 37208064.0,
+      "candidate": 37208064.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/mmap-open"
+    },
+    {
+      "baseline": 38399644.25,
+      "candidate": 38399644.25,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/mmap-open"
+    },
+    {
+      "baseline": 1143608.5,
+      "candidate": 1143608.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/overlay-create-1"
+    },
+    {
+      "baseline": 37294080.0,
+      "candidate": 37294080.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/overlay-create-1"
+    },
+    {
+      "baseline": 3451606.5,
+      "candidate": 3451606.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/overlay-warm-query"
+    },
+    {
+      "baseline": 37294080.0,
+      "candidate": 37294080.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/overlay-warm-query"
+    },
+    {
+      "baseline": 10248700.500000006,
+      "candidate": 10248700.500000006,
+      "detail": "within threshold",
+      "limit": 1.15,
+      "metric": "wall_ns.p95",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/overlay-warm-query"
+    },
+    {
+      "baseline": 4445680.0,
+      "candidate": 4445680.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/parse-document"
+    },
+    {
+      "baseline": 36888576.0,
+      "candidate": 36888576.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/parse-document"
+    },
+    {
+      "baseline": 12113147.5,
+      "candidate": 12113147.5,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/wire-decode"
+    },
+    {
+      "baseline": 37177344.0,
+      "candidate": 37177344.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/wire-decode"
+    },
+    {
+      "baseline": 5278797.0,
+      "candidate": 5278797.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "wall_ns.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/wire-encode"
+    },
+    {
+      "baseline": 37109760.0,
+      "candidate": 37109760.0,
+      "detail": "within threshold",
+      "limit": 1.1,
+      "metric": "rss_peak_bytes.median",
+      "passed": true,
+      "ratio": 1.0,
+      "scenario": "generated-tiny-functional/python/wire-encode"
+    }
+  ],
+  "passed": true,
+  "schema": "pyowl-core/performance-comparison/v1"
+}
