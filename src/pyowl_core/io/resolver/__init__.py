@@ -1,17 +1,8 @@
-"""Source, format, and explicit import-resolution services."""
+"""Explicit built-in import resolvers."""
 
-from .resolver import (
-    CatalogResolver,
-    CompositeResolver,
-    DirectoryNamingStrategy,
-    DirectoryResolver,
-    HttpAcquisitionCache,
-    HttpCacheEntry,
-    HttpResolver,
+from .base import (
     ImportRequest,
     ImportResolver,
-    MappingResolver,
-    MappingTarget,
     ResolutionAttempt,
     ResolutionKind,
     ResolutionMode,
@@ -20,14 +11,17 @@ from .resolver import (
     ResolverOutcome,
     resolver_configuration_fingerprint,
 )
-from .source import DocumentSource, SourcePayload
+from .catalog import CatalogResolver
+from .composite import CompositeResolver
+from .directory import DirectoryNamingStrategy, DirectoryResolver
+from .http import HttpAcquisitionCache, HttpCacheEntry, HttpResolver
+from .mapping import MappingResolver, MappingTarget
 
 __all__ = [
     "CatalogResolver",
     "CompositeResolver",
     "DirectoryNamingStrategy",
     "DirectoryResolver",
-    "DocumentSource",
     "HttpAcquisitionCache",
     "HttpCacheEntry",
     "HttpResolver",
@@ -41,6 +35,5 @@ __all__ = [
     "ResolvedDocument",
     "ResolvedSource",
     "ResolverOutcome",
-    "SourcePayload",
     "resolver_configuration_fingerprint",
 ]

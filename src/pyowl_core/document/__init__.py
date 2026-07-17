@@ -1,6 +1,19 @@
 """Immutable document contracts."""
 
 from .document import Fingerprint, OntologyDocument, OntologyID
+from .imports import (
+    AcquiredImport,
+    AcquisitionCache,
+    DocumentInput,
+    DocumentRecord,
+    DocumentStatus,
+    ImportEdge,
+    ImportManifest,
+    ImportStatus,
+    ParsedDocumentCache,
+    SnapshotLoader,
+    clear_import_caches,
+)
 from .provenance import (
     DetectionBasis,
     DigestKind,
@@ -12,18 +25,45 @@ from .provenance import (
     SourceMap,
     SourceOccurrence,
 )
+from .snapshot import (
+    AxiomScope,
+    CoreCapabilities,
+    LoadReport,
+    OntologyInput,
+    OntologySnapshot,
+    OntologyView,
+    SnapshotProvider,
+)
 
 __all__ = [
+    "AcquiredImport",
+    "AcquisitionCache",
+    "AxiomScope",
+    "CoreCapabilities",
     "DetectionBasis",
     "DigestKind",
+    "DocumentInput",
     "DocumentProvenance",
+    "DocumentRecord",
+    "DocumentStatus",
     "Fingerprint",
+    "ImportEdge",
+    "ImportManifest",
+    "ImportStatus",
+    "LoadReport",
     "OntologyDocument",
     "OntologyID",
+    "OntologyInput",
+    "OntologySnapshot",
+    "OntologyView",
     "OriginIndex",
     "OriginOccurrence",
+    "ParsedDocumentCache",
     "RDFMappingReport",
     "RDFTripleEvidence",
+    "SnapshotLoader",
+    "SnapshotProvider",
     "SourceMap",
     "SourceOccurrence",
+    "clear_import_caches",
 ]
