@@ -35,13 +35,13 @@ def check_schema(path: Path) -> tuple[str, ...]:
             continue
         key, encoded = (item.strip() for item in line.split("=", 1))
         if encoded in ("true", "false"):
-            value = encoded == "true"
+            parsed_value = encoded == "true"
         else:
             try:
-                value = ast.literal_eval(encoded)
+                parsed_value = ast.literal_eval(encoded)
             except (SyntaxError, ValueError):
                 continue
-        (root if current is None else current)[key] = value
+        (root if current is None else current)[key] = parsed_value
     errors: list[str] = []
     expected_root = {
         "wire_major": WIRE_MAJOR,
