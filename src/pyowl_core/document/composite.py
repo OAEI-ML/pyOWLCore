@@ -23,6 +23,7 @@ from pyowl_core.model import (
     EntityKind,
     Literal,
     StructuralNode,
+    canonical_bytes,
     encode_varint,
     structural_digest,
     walk,
@@ -482,9 +483,10 @@ class OntologyComposite:
         self._ensure_members_live()
         _validate_scope(scope, document_key)
         member_iterators = tuple(
-            (
-                self._scope_value(index, value)
-                for value in source.iter_extensions(namespace, scope=scope)
+            self._member_values(
+                index,
+                source,
+                source.iter_extensions(namespace, scope=scope),
             )
             for index, source in enumerate(self._sources)
         )
@@ -582,8 +584,36 @@ class OntologyComposite:
         axiom_type: type[A] | None,
         scope: AxiomScope,
     ) -> Iterator[AxiomNode]:
-        for value in source.iter_axioms(axiom_type, scope=scope):
-            yield cast(AxiomNode, self._scope_value(index, value))
+        yield from cast(
+            Iterator[AxiomNode],
+            self._member_values(
+                index,
+                source,
+                source.iter_axioms(axiom_type, scope=scope),
+            ),
+        )
+
+    def _member_values(
+        self,
+        index: int,
+        source: OntologyView,
+        values: Iterable[StructuralNode],
+    ) -> Iterator[StructuralNode]:
+        mapped = (self._scope_value(index, value) for value in values)
+        replacements = self._scope_replacements()
+        if replacements is not None:
+            reordered = bool(replacements[index])
+        else:
+            colliding = self._colliding_scopes()
+            scopes = _known_anonymous_scopes(source)
+            reordered = bool(colliding and (scopes is None or colliding & scopes))
+        if reordered:
+            # Replacing a document scope can change canonical byte order.  A
+            # nested member still has to present a sorted stream to the heap
+            # merge or equivalent nested/flat plans produce different bytes.
+            yield from sorted(mapped, key=canonical_bytes)
+            return
+        yield from mapped
 
     def _base_contains(self, axiom: AxiomNode, *, scope: AxiomScope = AxiomScope.CLOSURE) -> bool:
         if not any(isinstance(item, AnonymousIndividual) for item in walk(axiom)):
@@ -619,7 +649,7 @@ class OntologyComposite:
 
     def _base_extensions(self) -> Iterator[StructuralNode]:
         iterators = tuple(
-            (self._scope_value(index, value) for value in source.iter_extensions())
+            self._member_values(index, source, source.iter_extensions())
             for index, source in enumerate(self._sources)
         )
         yield from canonical_merge(tuple(iter(item) for item in iterators))

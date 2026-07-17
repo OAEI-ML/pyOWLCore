@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from pyowl_core import (
@@ -11,9 +13,13 @@ from pyowl_core import (
     DeltaError,
     ImportPolicy,
     LoadOptions,
+    MappedOntologySnapshot,
     OntologyDelta,
     compose_views,
+    decode_snapshot,
+    encode_snapshot,
     load_snapshot,
+    open_snapshot,
     walk,
 )
 
@@ -66,6 +72,12 @@ def test_anonymous_scopes_survive_explicit_materialization_exactly() -> None:
 def test_already_distinct_member_anonymous_scopes_are_preserved() -> None:
     first = _anonymous_snapshot("left")
     second = _anonymous_snapshot("right")
+    originals = tuple(
+        sorted(
+            (*first.iter_axioms(), *second.iter_axioms()),
+            key=lambda value: value.canonical_bytes(),
+        )
+    )
     expected = {
         item.document_scope
         for source in (first, second)
@@ -74,13 +86,20 @@ def test_already_distinct_member_anonymous_scopes_are_preserved() -> None:
         if isinstance(item, AnonymousIndividual)
     }
 
+    composite = compose_views(first, second)
+    axioms = tuple(composite.iter_axioms())
     actual = {
         item.document_scope
-        for axiom in compose_views(first, second).iter_axioms()
+        for axiom in axioms
         for item in walk(axiom)
         if isinstance(item, AnonymousIndividual)
     }
     assert actual == expected
+    assert axioms == originals
+    assert all(
+        actual_axiom is original
+        for actual_axiom, original in zip(axioms, originals, strict=True)
+    )
 
 
 def test_nested_anonymous_composition_matches_flat_composition() -> None:
@@ -96,7 +115,7 @@ def test_nested_anonymous_composition_matches_flat_composition() -> None:
     assert nested.signature_fingerprint == flat.signature_fingerprint
 
 
-def test_nested_anonymous_composition_retains_an_inner_bridge() -> None:
+def test_nested_anonymous_composition_retains_an_inner_bridge(tmp_path: Path) -> None:
     first = _anonymous_snapshot()
     second = _anonymous_snapshot()
     third = _anonymous_snapshot()
@@ -116,6 +135,32 @@ def test_nested_anonymous_composition_retains_an_inner_bridge() -> None:
     assert nested.structural_fingerprint == flat.structural_fingerprint
     assert nested.logical_fingerprint == flat.logical_fingerprint
     assert nested.signature_fingerprint == flat.signature_fingerprint
+
+    nested_wire = encode_snapshot(nested)
+    flat_wire = encode_snapshot(flat)
+    decoded_nested = decode_snapshot(nested_wire)
+    decoded_flat = decode_snapshot(flat_wire)
+    assert tuple(decoded_nested.iter_axioms()) == tuple(decoded_flat.iter_axioms())
+    assert decoded_nested.structural_fingerprint == decoded_flat.structural_fingerprint
+    assert encode_snapshot(decoded_nested) == nested_wire
+    assert encode_snapshot(decoded_flat) == flat_wire
+
+    nested_path = tmp_path / "nested-anonymous.pyocore"
+    flat_path = tmp_path / "flat-anonymous.pyocore"
+    nested_path.write_bytes(nested_wire)
+    flat_path.write_bytes(flat_wire)
+    mapped_nested = open_snapshot(nested_path)
+    mapped_flat = open_snapshot(flat_path)
+    assert isinstance(mapped_nested, MappedOntologySnapshot)
+    assert isinstance(mapped_flat, MappedOntologySnapshot)
+    try:
+        assert tuple(mapped_nested.iter_axioms()) == tuple(mapped_flat.iter_axioms())
+        assert mapped_nested.structural_fingerprint == mapped_flat.structural_fingerprint
+        assert encode_snapshot(mapped_nested) == nested_wire
+        assert encode_snapshot(mapped_flat) == flat_wire
+    finally:
+        mapped_nested.close()
+        mapped_flat.close()
 
 
 def test_ambiguous_anonymous_bridge_requires_a_composed_identity() -> None:
