@@ -439,8 +439,8 @@ class RDFMapper:
                 members = self._list(cast(RDFTerm, head))
                 annotations = self._annotations_on_node(node, {RDF + "type", predicate})
                 if kind == OWL + "AllDisjointClasses":
-                    collection_value: m.AxiomNode = m.DisjointClasses(
-                        m.CanonicalSet(self._class_expression(item) for item in members),
+                    collection_value: m.AxiomNode = _disjoint_classes(
+                        tuple(self._class_expression(item) for item in members),
                         annotations,
                     )
                 elif kind == OWL + "AllDifferent":
@@ -548,8 +548,8 @@ class RDFMapper:
         if p == RDFS + "subClassOf" and not isinstance(o, RDFLiteral):
             value = m.SubClassOf(self._class_expression(s), self._class_expression(o), annotations)
         elif p == OWL + "disjointWith" and not isinstance(o, RDFLiteral):
-            value = m.DisjointClasses(
-                m.CanonicalSet((self._class_expression(s), self._class_expression(o))),
+            value = _disjoint_classes(
+                (self._class_expression(s), self._class_expression(o)),
                 annotations,
             )
         elif p == OWL + "disjointUnionOf":
@@ -738,6 +738,8 @@ class RDFMapper:
                     if predicate == OWL + "oneOf":
                         return m.ObjectOneOf(m.CanonicalSet(map(self._individual_resource, items)))
                     expressions = m.CanonicalSet(map(self._class_expression, items))
+                    if len(items) >= 2 and len(expressions) == 1:
+                        return next(iter(expressions))
                     return (
                         m.ObjectIntersectionOf(expressions)
                         if predicate == OWL + "intersectionOf"
@@ -898,6 +900,8 @@ class RDFMapper:
                             m.CanonicalSet(self._literal(cast(RDFLiteral, item)) for item in items)
                         )
                     ranges = m.CanonicalSet(map(self._data_range, items))
+                    if len(items) >= 2 and len(ranges) == 1:
+                        return next(iter(ranges))
                     return (
                         m.DataIntersectionOf(ranges)
                         if predicate == OWL + "intersectionOf"
@@ -1555,6 +1559,16 @@ class RDFEncoder:
     def _fresh(self, stem: str) -> RDFBlank:
         self.blank_counter += 1
         return RDFBlank(f"{stem}-{self.blank_counter}")
+
+
+def _disjoint_classes(
+    expressions: Sequence[m.ClassExpression],
+    annotations: m.CanonicalSet[m.Annotation],
+) -> m.AxiomNode:
+    canonical = m.CanonicalSet(expressions)
+    if len(expressions) >= 2 and len(canonical) == 1:
+        return m.SubClassOf(next(iter(canonical)), m.OWL_NOTHING, annotations)
+    return m.DisjointClasses(canonical, annotations)
 
 
 def _is_restriction(value: object) -> bool:
