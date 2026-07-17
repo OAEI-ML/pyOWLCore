@@ -134,7 +134,9 @@ class OntologyComposite:
                 code="COMPOSITION_SELF_REFERENCE",
             )
         _reject_overlapping_composites(sources)
-        selected_roles = (None,) * len(sources) if roles is None else tuple(roles)
+        selected_roles: tuple[str | None, ...] = (
+            (None,) * len(sources) if roles is None else tuple(roles)
+        )
         if len(selected_roles) != len(sources):
             raise ValueError("role count must match member count")
         top = tuple(
