@@ -9,6 +9,7 @@ from typing import TypeVar, cast, get_args
 
 from pyowl_core._immutable import FrozenMap, freeze_mapping
 from pyowl_core.cancellation import CancellationToken
+from pyowl_core.config import BackendPreference, LoadOptions
 from pyowl_core.document.composite import OntologyComposite
 from pyowl_core.document.overlay import OntologyOverlay
 from pyowl_core.document.provenance import OriginOccurrence
@@ -41,6 +42,7 @@ from .common import (
 )
 
 A = TypeVar("A", bound=AxiomNode)
+_NATIVE_AUTO_MIN_ROWS = 4_096
 
 
 class AxiomCategory(str, Enum):
@@ -215,17 +217,51 @@ class AxiomTypeIndex:
                     shared_bytes=shared,
                 ),
             )
-        postings: dict[type[AxiomNode], list[AxiomNode]] = {}
-        for value in ontology.iter_axioms(
-            scope=options.scope,
-            document_key=options.document_key,
-        ):
-            axiom = value
-            postings.setdefault(type(axiom), []).append(axiom)
-            budget.add("constructor_postings", bytes_=64 + len(canonical_bytes(axiom)))
-        frozen = freeze_mapping(
-            {key: tuple(sorted(values, key=canonical_bytes)) for key, values in postings.items()}
+        load_options = getattr(ontology, "load_options", None)
+        use_native = False
+        if isinstance(load_options, LoadOptions):
+            preference = load_options.backend
+            if preference is BackendPreference.NATIVE or (
+                preference is BackendPreference.AUTO
+                and options.scope is AxiomScope.CLOSURE
+                and options.document_key is None
+                and ontology.report.effective_axiom_count >= _NATIVE_AUTO_MIN_ROWS
+            ):
+                from pyowl_core.backends.dispatch import select_backend
+
+                use_native = (
+                    select_backend(
+                        preference,
+                        capability="index-axiom-types-v1",
+                        operation="axiom-type index build",
+                    ).backend
+                    == "native"
+                )
+        values = tuple(
+            ontology.iter_axioms(
+                scope=options.scope,
+                document_key=options.document_key,
+            )
         )
+        if use_native:
+            from pyowl_core.backends.native import partition_axioms
+
+            native = partition_axioms(
+                values,
+                limits=cast(LoadOptions, load_options).limits,
+                cancellation_token=cancellation_token,
+            )
+            for size in native.canonical_sizes:
+                budget.add("constructor_postings", bytes_=64 + size)
+            frozen = freeze_mapping(native.postings)
+        else:
+            postings: dict[type[AxiomNode], list[AxiomNode]] = {}
+            for axiom in values:
+                postings.setdefault(type(axiom), []).append(axiom)
+                budget.add("constructor_postings", bytes_=64 + len(canonical_bytes(axiom)))
+            frozen = freeze_mapping(
+                {key: tuple(sorted(items, key=canonical_bytes)) for key, items in postings.items()}
+            )
         return cls(
             ontology,
             options,

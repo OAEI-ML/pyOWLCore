@@ -18,7 +18,10 @@ from pyowl_core.cancellation import CancellationToken
 from pyowl_core.exceptions import (
     BackendProtocolError,
     BackendUnavailableError,
+    OntologySyntaxError,
     OperationCancelledError,
+    ResourceLimitError,
+    UnsupportedSyntaxError,
     WireCorruptionError,
     WireLimitError,
     WireVersionError,
@@ -27,6 +30,8 @@ from pyowl_core.limits import ParseLimits
 
 if TYPE_CHECKING:
     from pyowl_core.document.snapshot import OntologySnapshot, OntologyView
+    from pyowl_core.io.formats.common import ParsedOntology
+    from pyowl_core.model.axioms import AxiomNode
 
 _ABI_VERSION = 1
 _MODEL_SCHEMA_VERSION = 1
@@ -35,6 +40,15 @@ _CONFIG = struct.Struct("<8sHHI37Q")
 _RECEIPT = struct.Struct("<8sIIHHIQ32sIQ")
 _CONFIG_MAGIC = b"PYNCONF\0"
 _RECEIPT_MAGIC = b"PYNVAL1\0"
+_PARSE_REQUEST = struct.Struct("<8sHHQ")
+_PARSE_RESULT_HEADER = struct.Struct("<8sHHQ")
+_PARSE_REQUEST_MAGIC = b"PYNFSS1\0"
+_PARSE_RESULT_MAGIC = b"PYNFSSR1"
+_INDEX_SOURCE_HEADER = struct.Struct("<8sHHQ")
+_INDEX_RESULT_HEADER = struct.Struct("<8sHHQ")
+_INDEX_SOURCE_MAGIC = b"PYNIDXS1"
+_INDEX_REQUEST_MAGIC = b"PYNIDXQ1"
+_INDEX_RESULT_MAGIC = b"PYNIDXR1"
 _CODE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _EXTENSION_NAME = "pyowl_core._native"
 _FOUNDATION_FEATURES = frozenset(
@@ -82,6 +96,14 @@ class _Extension(Protocol):
         self, data: object, config: object, cancel: _NativeCancellation | None = None
     ) -> bytes: ...
 
+    def parse_document(
+        self, data: object, config: object, cancel: _NativeCancellation | None = None
+    ) -> bytes: ...
+
+    def build_index(
+        self, data: object, request: object, cancel: _NativeCancellation | None = None
+    ) -> bytes: ...
+
 
 class _Subinterpreters(Protocol):
     def get_current(self) -> int: ...
@@ -105,6 +127,12 @@ class NativeValidation:
     file_digest: bytes
     section_count: int
     total_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class NativeAxiomPartition:
+    postings: dict[type[AxiomNode], tuple[AxiomNode, ...]]
+    canonical_sizes: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +240,81 @@ def roundtrip_wire(
             code="NATIVE_RESULT_TYPE",
         )
     return result
+
+
+def parse_functional(
+    data: bytes,
+    *,
+    limits: ParseLimits | None = None,
+    allow_swrl: bool = False,
+    cancellation_token: CancellationToken | None = None,
+) -> ParsedOntology:
+    """Parse one complete Functional-Style document through the native capability."""
+
+    extension = require("parse-functional-v1")
+    selected = _coerce_limits(limits)
+    if not isinstance(data, bytes):
+        raise TypeError("native Functional Syntax source must be bytes")
+    if not isinstance(allow_swrl, bool):
+        raise TypeError("allow_swrl must be bool")
+    selected.enforce("max_source_bytes", len(data))
+    request = (
+        _PARSE_REQUEST.pack(
+            _PARSE_REQUEST_MAGIC,
+            1,
+            int(allow_swrl),
+            len(data),
+        )
+        + data
+    )
+    config = _encode_config(selected, cancellation_token, verify=False)
+    with _relay(extension, selected, cancellation_token) as cancel:
+        result = _call_parse(
+            extension,
+            lambda: extension.parse_document(request, config, cancel),
+        )
+    return _decode_parsed_functional(result, selected)
+
+
+def partition_axioms(
+    axioms: tuple[AxiomNode, ...],
+    *,
+    limits: ParseLimits | None = None,
+    cancellation_token: CancellationToken | None = None,
+) -> NativeAxiomPartition:
+    """Build exact-constructor postings through one coarse native operation."""
+
+    extension = require("index-axiom-types-v1")
+    selected = _coerce_limits(limits)
+    if not isinstance(axioms, tuple):
+        raise TypeError("axioms must be a tuple")
+    from pyowl_core.model import canonical_bytes
+    from pyowl_core.model.axioms import AxiomNode
+
+    if not all(isinstance(value, AxiomNode) for value in axioms):
+        raise TypeError("axioms must contain AxiomNode values")
+    selected.enforce("max_index_rows", len(axioms))
+    source = bytearray(_INDEX_SOURCE_HEADER.pack(_INDEX_SOURCE_MAGIC, 1, 0, len(axioms)))
+    canonical_sizes: list[int] = []
+    for ordinal, axiom in enumerate(axioms, 1):
+        if cancellation_token is not None and (ordinal % selected.cancellation_check_interval == 0):
+            cancellation_token.check()
+        encoded = canonical_bytes(axiom, limits=selected)
+        canonical_sizes.append(len(encoded))
+        source.extend(struct.pack("<Q", len(encoded)))
+        source.extend(encoded)
+        selected.enforce("max_index_bytes", len(source))
+    config = _encode_config(selected, cancellation_token, verify=False)
+    request = _INDEX_REQUEST_MAGIC + config
+    with _relay(extension, selected, cancellation_token) as cancel:
+        result = _call_index(
+            extension,
+            lambda: extension.build_index(source, request, cancel),
+        )
+    return NativeAxiomPartition(
+        _decode_axiom_partition(result, axioms, selected),
+        tuple(canonical_sizes),
+    )
 
 
 def encode_snapshot(
@@ -517,6 +620,374 @@ def _call(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
         raise BackendProtocolError(message, code=code) from error
 
 
+def _call_parse(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
+    try:
+        result = operation()
+    except (MemoryError, KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as error:
+        code = _private_error_code(extension, error)
+        if code is None:
+            raise BackendProtocolError(
+                "native parser raised an unrecognized exception",
+                code="NATIVE_EXCEPTION",
+            ) from error
+        message = _private_error_message(error)
+        if code == "NATIVE_CANCELLED":
+            raise OperationCancelledError(message, code=code) from error
+        if code in {"NATIVE_DEADLINE", "NATIVE_WIRE_LIMIT"}:
+            raise ResourceLimitError(message, code=code) from error
+        if code in {"NATIVE_FORMAT_ENCODING", "NATIVE_FORMAT_SYNTAX"}:
+            raise OntologySyntaxError(message, code=code) from error
+        if code == "NATIVE_EXTENSION_DISABLED":
+            raise UnsupportedSyntaxError(message, code=code) from error
+        if code == "NATIVE_CAPABILITY_UNAVAILABLE":
+            raise BackendUnavailableError(message, code=code) from error
+        raise BackendProtocolError(message, code=code) from error
+    if not isinstance(result, bytes):
+        raise BackendProtocolError(
+            "native parser returned a non-bytes result",
+            code="NATIVE_RESULT_TYPE",
+        )
+    return result
+
+
+def _call_index(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
+    try:
+        result = operation()
+    except (MemoryError, KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as error:
+        code = _private_error_code(extension, error)
+        if code is None:
+            raise BackendProtocolError(
+                "native index raised an unrecognized exception",
+                code="NATIVE_EXCEPTION",
+            ) from error
+        message = _private_error_message(error)
+        if code == "NATIVE_CANCELLED":
+            raise OperationCancelledError(message, code=code) from error
+        if code in {"NATIVE_DEADLINE", "NATIVE_WIRE_LIMIT"}:
+            raise ResourceLimitError(message, code=code) from error
+        if code == "NATIVE_CAPABILITY_UNAVAILABLE":
+            raise BackendUnavailableError(message, code=code) from error
+        raise BackendProtocolError(message, code=code) from error
+    if not isinstance(result, bytes):
+        raise BackendProtocolError(
+            "native index returned a non-bytes result",
+            code="NATIVE_RESULT_TYPE",
+        )
+    return result
+
+
+class _ResultReader:
+    __slots__ = ("_data", "_framing_code", "_offset")
+
+    def __init__(self, data: bytes, *, framing_code: str = "NATIVE_PARSE_FRAMING") -> None:
+        if not isinstance(data, bytes):
+            raise BackendProtocolError(
+                "native parser result is not bytes",
+                code="NATIVE_RESULT_TYPE",
+            )
+        self._data = data
+        self._framing_code = framing_code
+        self._offset = 0
+
+    def take(self, size: int) -> bytes:
+        end = self._offset + size
+        if size < 0 or end < self._offset or end > len(self._data):
+            raise BackendProtocolError(
+                "native parser result is truncated",
+                code=self._framing_code,
+            )
+        result = self._data[self._offset : end]
+        self._offset = end
+        return result
+
+    def u8(self) -> int:
+        return self.take(1)[0]
+
+    def u64(self) -> int:
+        return int.from_bytes(self.take(8), "little")
+
+    def varint(self) -> int:
+        value = 0
+        shift = 0
+        start = self._offset
+        while self._offset < len(self._data):
+            byte = self.u8()
+            value |= (byte & 0x7F) << shift
+            if not byte & 0x80:
+                encoded = bytearray()
+                remaining = value
+                while True:
+                    selected = remaining & 0x7F
+                    remaining >>= 7
+                    encoded.append(selected | (0x80 if remaining else 0))
+                    if not remaining:
+                        break
+                if self._data[start : self._offset] != bytes(encoded):
+                    raise BackendProtocolError(
+                        "native parser result has a nonminimal integer",
+                        code=self._framing_code,
+                    )
+                return value
+            shift += 7
+            if shift > 63:
+                raise BackendProtocolError(
+                    "native parser result integer is too large",
+                    code=self._framing_code,
+                )
+        raise BackendProtocolError(
+            "native parser result is truncated",
+            code=self._framing_code,
+        )
+
+    def frame(self) -> bytes:
+        return self.take(self.varint())
+
+    def text(self) -> str:
+        try:
+            return self.frame().decode("utf-8")
+        except UnicodeError as error:
+            raise BackendProtocolError(
+                "native parser returned invalid UTF-8",
+                code=self._framing_code,
+            ) from error
+
+    def finish(self) -> None:
+        if self._offset != len(self._data):
+            raise BackendProtocolError(
+                "native parser result contains trailing bytes",
+                code=self._framing_code,
+            )
+
+    def require_count(self, count: int, minimum_bytes: int) -> None:
+        if count > (len(self._data) - self._offset) // minimum_bytes:
+            raise BackendProtocolError(
+                "native result count exceeds remaining framing",
+                code=self._framing_code,
+            )
+
+
+def _decode_parsed_functional(data: bytes, limits: ParseLimits) -> ParsedOntology:
+    from pyowl_core.diagnostics import SourceSpan
+    from pyowl_core.document import OntologyID
+    from pyowl_core.io.formats.common import ParsedOntology
+    from pyowl_core.model import IRI, Annotation, StructuralNode, decode_canonical
+    from pyowl_core.model.axioms import AxiomNode
+
+    reader = _ResultReader(data)
+    magic, schema, format_tag, decoded_codepoints = _PARSE_RESULT_HEADER.unpack(
+        reader.take(_PARSE_RESULT_HEADER.size)
+    )
+    if magic != _PARSE_RESULT_MAGIC or schema != 1 or format_tag != 4:
+        raise BackendProtocolError(
+            "native parser result has incompatible metadata",
+            code="NATIVE_PARSE_VERSION",
+        )
+
+    def node() -> StructuralNode:
+        payload = reader.frame()
+        try:
+            return decode_canonical(payload, limits=limits)
+        except ResourceLimitError:
+            raise
+        except Exception as error:
+            raise BackendProtocolError(
+                "native parser returned invalid canonical model data",
+                code="NATIVE_PARSE_MODEL",
+            ) from error
+
+    def optional_iri() -> IRI | None:
+        marker = reader.u8()
+        if marker == 0:
+            return None
+        if marker != 1:
+            raise BackendProtocolError(
+                "native parser returned an invalid optional value",
+                code="NATIVE_PARSE_FRAMING",
+            )
+        value = node()
+        if not isinstance(value, IRI):
+            raise BackendProtocolError(
+                "native parser returned a non-IRI ontology identifier",
+                code="NATIVE_PARSE_MODEL",
+            )
+        return value
+
+    ontology_iri = optional_iri()
+    version_iri = optional_iri()
+    if version_iri is not None and ontology_iri is None:
+        raise BackendProtocolError(
+            "native parser returned a version IRI without an ontology IRI",
+            code="NATIVE_PARSE_MODEL",
+        )
+    import_count = reader.u64()
+    reader.require_count(import_count, 1)
+    imports: list[IRI] = []
+    for _ in range(import_count):
+        value = node()
+        if not isinstance(value, IRI):
+            raise BackendProtocolError(
+                "native parser returned a non-IRI import",
+                code="NATIVE_PARSE_MODEL",
+            )
+        imports.append(value)
+
+    def spanned(
+        expected: type[StructuralNode] | tuple[type[StructuralNode], ...],
+        maximum_name: str | None,
+    ) -> list[tuple[StructuralNode, SourceSpan]]:
+        count = reader.u64()
+        reader.require_count(count, 33)
+        if maximum_name is not None:
+            limits.enforce(maximum_name, count)
+        values: list[tuple[StructuralNode, SourceSpan]] = []
+        for _ in range(count):
+            byte_start = reader.u64()
+            byte_end = reader.u64()
+            line = reader.u64()
+            column = reader.u64()
+            if byte_end < byte_start or line < 1 or column < 1:
+                raise BackendProtocolError(
+                    "native parser returned an invalid source span",
+                    code="NATIVE_PARSE_FRAMING",
+                )
+            value = node()
+            if not isinstance(value, expected):
+                raise BackendProtocolError(
+                    "native parser returned a value in the wrong result partition",
+                    code="NATIVE_PARSE_MODEL",
+                )
+            values.append(
+                (
+                    value,
+                    SourceSpan(
+                        byte_start=byte_start,
+                        byte_end=byte_end,
+                        line_start=line,
+                        column_start=column,
+                    ),
+                )
+            )
+        return values
+
+    from pyowl_core.extensions.swrl import SWRLRule
+
+    annotations = spanned(Annotation, None)
+    axioms = spanned(AxiomNode, "max_axioms")
+    extensions = spanned(SWRLRule, None)
+    prefix_count = reader.u64()
+    reader.require_count(prefix_count, 2)
+    prefixes: list[tuple[str, str]] = []
+    previous_prefix: tuple[str, str] | None = None
+    for _ in range(prefix_count):
+        prefix = reader.text()
+        iri_value = reader.text()
+        selected_prefix = (prefix, iri_value)
+        if previous_prefix is not None and selected_prefix <= previous_prefix:
+            raise BackendProtocolError(
+                "native parser prefixes are not canonical",
+                code="NATIVE_PARSE_FRAMING",
+            )
+        previous_prefix = selected_prefix
+        prefixes.append(selected_prefix)
+    reader.finish()
+    occurrences = sorted(
+        (*annotations, *axioms, *extensions),
+        key=lambda item: (
+            -1 if item[1].byte_start is None else item[1].byte_start,
+            -1 if item[1].byte_end is None else item[1].byte_end,
+        ),
+    )
+    return ParsedOntology(
+        OntologyID(ontology_iri, version_iri),
+        tuple(imports),
+        tuple(cast(Annotation, value) for value, _span in annotations),
+        tuple(cast(AxiomNode, value) for value, _span in axioms),
+        tuple(value for value, _span in extensions),
+        tuple(prefixes),
+        tuple(occurrences),
+        decoded_codepoint_length=decoded_codepoints,
+    )
+
+
+def _decode_axiom_partition(
+    data: bytes,
+    axioms: tuple[AxiomNode, ...],
+    limits: ParseLimits,
+) -> dict[type[AxiomNode], tuple[AxiomNode, ...]]:
+    from pyowl_core.model.axioms import AxiomNode
+    from pyowl_core.model.registry import SPEC_BY_TAG
+
+    reader = _ResultReader(data, framing_code="NATIVE_INDEX_FRAMING")
+    magic, schema, reserved, group_count = _INDEX_RESULT_HEADER.unpack(
+        reader.take(_INDEX_RESULT_HEADER.size)
+    )
+    if magic != _INDEX_RESULT_MAGIC or schema != 1 or reserved != 0:
+        raise BackendProtocolError(
+            "native index result has incompatible metadata",
+            code="NATIVE_INDEX_VERSION",
+        )
+    limits.enforce("max_index_rows", len(axioms))
+    if group_count > len(axioms):
+        raise BackendProtocolError(
+            "native index result has too many groups",
+            code="NATIVE_INDEX_FRAMING",
+        )
+    postings: dict[type[AxiomNode], tuple[AxiomNode, ...]] = {}
+    seen: set[int] = set()
+    previous_tag = -1
+    for _ in range(group_count):
+        tag = reader.u64()
+        count = reader.u64()
+        if tag <= previous_tag or count < 1:
+            raise BackendProtocolError(
+                "native index groups are not canonical",
+                code="NATIVE_INDEX_FRAMING",
+            )
+        previous_tag = tag
+        if count > len(axioms) - len(seen):
+            raise BackendProtocolError(
+                "native index posting exceeds remaining rows",
+                code="NATIVE_INDEX_FRAMING",
+            )
+        reader.require_count(count, 8)
+        spec = SPEC_BY_TAG.get(tag)
+        if spec is None or not issubclass(spec.constructor, AxiomNode):
+            raise BackendProtocolError(
+                "native index result contains a non-axiom tag",
+                code="NATIVE_INDEX_MODEL",
+            )
+        selected: list[AxiomNode] = []
+        previous_ordinal = -1
+        for _ in range(count):
+            ordinal = reader.u64()
+            if ordinal <= previous_ordinal or ordinal >= len(axioms) or ordinal in seen:
+                raise BackendProtocolError(
+                    "native index result contains an invalid row ordinal",
+                    code="NATIVE_INDEX_FRAMING",
+                )
+            value = axioms[ordinal]
+            if type(value) is not spec.constructor:
+                raise BackendProtocolError(
+                    "native index tag disagrees with the Python model",
+                    code="NATIVE_INDEX_MODEL",
+                )
+            previous_ordinal = ordinal
+            seen.add(ordinal)
+            selected.append(value)
+        postings[spec.constructor] = tuple(selected)
+    reader.finish()
+    if len(seen) != len(axioms):
+        raise BackendProtocolError(
+            "native index result omitted rows",
+            code="NATIVE_INDEX_FRAMING",
+        )
+    return postings
+
+
 def _private_error_code(extension: _Extension, error: Exception) -> str | None:
     if not isinstance(error, extension._NativeError) or len(error.args) != 2:
         return None
@@ -569,10 +1040,13 @@ def _reset_probe_cache_for_tests() -> None:
 
 
 __all__ = [
+    "NativeAxiomPartition",
     "NativeProbe",
     "NativeValidation",
     "decode_snapshot",
     "encode_snapshot",
+    "parse_functional",
+    "partition_axioms",
     "probe",
     "require",
     "roundtrip_wire",

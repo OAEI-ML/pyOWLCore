@@ -6,12 +6,17 @@ import os
 import threading
 import warnings
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
+from pyowl_core.cancellation import CancellationToken
 from pyowl_core.config import BackendPreference
 from pyowl_core.exceptions import BackendUnavailableError, NativeBackendUnavailableWarning
+from pyowl_core.limits import ParseLimits
 
 from . import native
+
+if TYPE_CHECKING:
+    from pyowl_core.io.formats.common import ParsedOntology
 
 BackendName = Literal["python", "native"]
 
@@ -72,6 +77,23 @@ def select_backend(
     return BackendSelection("python", capability)
 
 
+def parse_functional_native(
+    data: bytes,
+    *,
+    limits: ParseLimits,
+    allow_swrl: bool,
+    cancellation_token: CancellationToken | None,
+) -> ParsedOntology:
+    """Execute the selected native parser without a reverse backend dependency."""
+
+    return native.parse_functional(
+        data,
+        limits=limits,
+        allow_swrl=allow_swrl,
+        cancellation_token=cancellation_token,
+    )
+
+
 def _warn_once(reason: str, operation: str) -> None:
     global _warning_pid
     with _warning_lock:
@@ -98,4 +120,9 @@ def _reset_warnings_for_tests() -> None:
         _warned_reasons.clear()
 
 
-__all__ = ["BackendName", "BackendSelection", "select_backend"]
+__all__ = [
+    "BackendName",
+    "BackendSelection",
+    "parse_functional_native",
+    "select_backend",
+]

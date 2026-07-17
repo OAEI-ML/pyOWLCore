@@ -4,9 +4,14 @@
 #![deny(clippy::all)]
 
 mod cancel;
+mod canonical;
 mod error;
+mod index;
 mod limits;
 mod model;
+mod parse;
+mod session;
+mod source;
 mod wire;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -25,13 +30,15 @@ use wire::WireArena;
 const ABI_VERSION: u32 = 1;
 const MODEL_SCHEMA_VERSION: u32 = 1;
 const WIRE_FORMAT_VERSION: (u16, u16) = (1, 0);
-const FEATURES: [&str; 8] = [
+const FEATURES: [&str; 10] = [
     "cancellation",
     "canonical-model-v1",
     "deadlines",
     "gil-release",
+    "index-axiom-types-v1",
     "owned-buffers",
     "panic-containment",
+    "parse-functional-v1",
     "safe-rust",
     "wire-v1",
 ];
@@ -97,6 +104,104 @@ fn owned_buffer(
     }
     if let Some(selected) = limits {
         contain(|| selected.check_source_size(nbytes)).map_err(python_error)?;
+    }
+    let owned = view.call_method0("tobytes")?;
+    let bytes = owned.cast::<PyBytes>()?.as_bytes();
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| python_error(NativeError::limit("native owned-buffer allocation failed")))?;
+    result.extend_from_slice(bytes);
+    Ok(result)
+}
+
+fn owned_source_request(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    limits: &Limits,
+) -> PyResult<Vec<u8>> {
+    let builtins = py.import("builtins")?;
+    let view = builtins
+        .getattr("memoryview")?
+        .call1((value,))
+        .map_err(|error| {
+            if error.is_instance_of::<PyTypeError>(py) {
+                PyTypeError::new_err("native parser request must expose a byte buffer")
+            } else {
+                error
+            }
+        })?;
+    let nbytes: usize = view.getattr("nbytes")?.extract()?;
+    let maximum = usize::try_from(limits.max_source_bytes)
+        .unwrap_or(usize::MAX)
+        .saturating_add(source::HEADER_BYTES);
+    if nbytes > maximum
+        || limits
+            .max_memory_bytes
+            .is_some_and(|value| u64::try_from(nbytes).map_or(true, |size| size > value))
+    {
+        return Err(python_error(NativeError::limit(
+            "native parser request exceeds configured resource limits",
+        )));
+    }
+    let owned = view.call_method0("tobytes")?;
+    let bytes = owned.cast::<PyBytes>()?.as_bytes();
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| python_error(NativeError::limit("native owned-buffer allocation failed")))?;
+    result.extend_from_slice(bytes);
+    Ok(result)
+}
+
+fn owned_index_request(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    let builtins = py.import("builtins")?;
+    let view = builtins
+        .getattr("memoryview")?
+        .call1((value,))
+        .map_err(|error| {
+            if error.is_instance_of::<PyTypeError>(py) {
+                PyTypeError::new_err("native index request must expose a byte buffer")
+            } else {
+                error
+            }
+        })?;
+    let nbytes: usize = view.getattr("nbytes")?.extract()?;
+    if nbytes != 8 + limits::CONFIG_BYTES {
+        return Err(python_error(NativeError::protocol(
+            "invalid native index request framing",
+        )));
+    }
+    let owned = view.call_method0("tobytes")?;
+    Ok(owned.cast::<PyBytes>()?.as_bytes().to_vec())
+}
+
+fn owned_index_source(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    limits: &Limits,
+) -> PyResult<Vec<u8>> {
+    let builtins = py.import("builtins")?;
+    let view = builtins
+        .getattr("memoryview")?
+        .call1((value,))
+        .map_err(|error| {
+            if error.is_instance_of::<PyTypeError>(py) {
+                PyTypeError::new_err("native index source must expose a byte buffer")
+            } else {
+                error
+            }
+        })?;
+    let nbytes: usize = view.getattr("nbytes")?.extract()?;
+    if u64::try_from(nbytes).map_or(true, |size| {
+        size > limits.value(limits::LimitKey::MaxIndexBytes)
+            || limits
+                .max_memory_bytes
+                .is_some_and(|maximum| size > maximum)
+    }) {
+        return Err(python_error(NativeError::limit(
+            "native index source exceeds configured resource limits",
+        )));
     }
     let owned = view.call_method0("tobytes")?;
     let bytes = owned.cast::<PyBytes>()?.as_bytes();
@@ -275,15 +380,33 @@ fn _panic_probe() -> PyResult<()> {
 }
 
 #[pyfunction]
-fn parse_document(
-    _source: &Bound<'_, PyAny>,
-    _config: &[u8],
-    _cancel: &Bound<'_, PyAny>,
-) -> PyResult<Vec<u8>> {
-    Err(python_error(NativeError::new(
-        "NATIVE_CAPABILITY_UNAVAILABLE",
-        "native document parsing is not implemented by WP07",
-    )))
+#[pyo3(signature = (source, config, cancel=None))]
+fn parse_document<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, Cancellation>>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let limits = limits_from_python(config)?;
+    let owned = owned_source_request(py, source, &limits)?;
+    let input_size = owned.len();
+    let cancellation = cancellation_or_default(cancel);
+    let output = run_detached(py, move |interrupt| {
+        let mut guard = Guard::with_interrupt(
+            cancellation,
+            limits.deadline,
+            limits.cancellation_stride,
+            interrupt,
+        );
+        let request = source::SourceRequest::decode(&owned, &limits)?;
+        let mut session = session::Session::new(&mut guard, &limits, input_size)?;
+        parse::parse(request, &mut session)
+    })?;
+    contain(|| limits.check_output_size(input_size, output.len())).map_err(python_error)?;
+    PyBytes::new_with(py, output.len(), |buffer| {
+        buffer.copy_from_slice(&output);
+        Ok(())
+    })
 }
 
 #[pyfunction]
@@ -299,15 +422,32 @@ fn build_snapshot(
 }
 
 #[pyfunction]
-fn build_index(
-    _snapshot_wire: &Bound<'_, PyAny>,
-    _request: &[u8],
-    _cancel: &Bound<'_, PyAny>,
-) -> PyResult<Vec<u8>> {
-    Err(python_error(NativeError::new(
-        "NATIVE_CAPABILITY_UNAVAILABLE",
-        "native index construction is not implemented by WP07",
-    )))
+#[pyo3(signature = (snapshot_wire, request, cancel=None))]
+fn build_index<'py>(
+    py: Python<'py>,
+    snapshot_wire: &Bound<'py, PyAny>,
+    request: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, Cancellation>>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let owned_request = owned_index_request(py, request)?;
+    let limits = contain(|| index::decode_limits(&owned_request)).map_err(python_error)?;
+    let owned_source = owned_index_source(py, snapshot_wire, &limits)?;
+    let input_size = owned_source.len();
+    let cancellation = cancellation_or_default(cancel);
+    let output = run_detached(py, move |interrupt| {
+        let mut guard = Guard::with_interrupt(
+            cancellation,
+            limits.deadline,
+            limits.cancellation_stride,
+            interrupt,
+        );
+        let mut session = session::Session::new(&mut guard, &limits, input_size)?;
+        index::build(&owned_source, &mut session)
+    })?;
+    PyBytes::new_with(py, output.len(), |buffer| {
+        buffer.copy_from_slice(&output);
+        Ok(())
+    })
 }
 
 #[pymodule]
@@ -345,6 +485,7 @@ mod tests {
     fn feature_ledger_is_sorted_and_foundational() {
         assert!(FEATURES.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(FEATURES.contains(&"wire-v1"));
-        assert!(!FEATURES.iter().any(|item| item.contains("parse")));
+        assert!(FEATURES.contains(&"parse-functional-v1"));
+        assert!(FEATURES.contains(&"index-axiom-types-v1"));
     }
 }

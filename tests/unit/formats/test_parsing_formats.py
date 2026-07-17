@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 import pyowl_core.model as m
@@ -14,6 +16,7 @@ from pyowl_core import (
     parse_document,
     render_document,
 )
+from pyowl_core.backends.native import NativeProbe
 
 PYTHON_OPTIONS = LoadOptions(backend=BackendPreference.PYTHON)
 ONTOLOGY = "https://example.org/w3c-derived"
@@ -125,7 +128,13 @@ def test_partial_rdf_mapping_is_expert_only_and_reported() -> None:
 
 
 def test_backend_and_format_option_conflicts_are_explicit() -> None:
-    with pytest.raises(BackendUnavailableError):
+    with (
+        patch(
+            "pyowl_core.backends.native.probe",
+            return_value=NativeProbe(False, "test backend unavailable", None, ()),
+        ),
+        pytest.raises(BackendUnavailableError),
+    ):
         parse_document(
             FUNCTIONAL,
             format="functional",

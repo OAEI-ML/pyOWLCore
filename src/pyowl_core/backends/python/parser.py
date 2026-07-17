@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 
 from pyowl_core.cancellation import CancellationToken
@@ -15,8 +14,6 @@ from pyowl_core.document.provenance import (
     SourceMapBuilder,
 )
 from pyowl_core.exceptions import (
-    BackendUnavailableError,
-    NativeBackendUnavailableWarning,
     OntologySyntaxError,
     OptionConflictError,
     PyOWLCoreError,
@@ -30,7 +27,7 @@ from pyowl_core.io.formats.turtle import parse_turtle
 from pyowl_core.io.source import DocumentSource, acquire_source
 from pyowl_core.model import IRI, StructuralNode, structural_digest
 
-_auto_warned = False
+_NATIVE_AUTO_MIN_SOURCE_BYTES = 256 * 1024
 
 
 class PythonParser:
@@ -64,13 +61,6 @@ class PythonParser:
                 code="FORMAT_OPTION_CONFLICT",
             )
         forced = explicit or selected_options.format
-        if selected_options.backend is BackendPreference.NATIVE:
-            raise BackendUnavailableError(
-                "native parsing is not available in this build",
-                code="NATIVE_BACKEND_UNAVAILABLE",
-            )
-        if selected_options.backend is BackendPreference.AUTO:
-            _warn_auto_once()
         iri = _coerce_iri(document_iri)
         payload = acquire_source(
             source,
@@ -88,6 +78,19 @@ class PythonParser:
             media_type=media_type,
             extension=payload.extension,
         )
+        selected_backend = "python"
+        if selected_options.backend is not BackendPreference.PYTHON and not (
+            selected_options.backend is BackendPreference.AUTO
+            and detection.format is DocumentFormat.FUNCTIONAL
+            and len(payload.data) < _NATIVE_AUTO_MIN_SOURCE_BYTES
+        ):
+            from pyowl_core.backends.dispatch import select_backend
+
+            selected_backend = select_backend(
+                selected_options.backend,
+                capability=f"parse-{detection.format.value}-v1",
+                operation=f"{detection.format.value} document parse",
+            ).backend
         parsed = _parse_payload(
             payload.data,
             detection.format,
@@ -96,6 +99,7 @@ class PythonParser:
             cancellation_token=cancellation_token,
             allow_partial_rdf_mapping=allow_partial_rdf_mapping,
             allow_swrl=allow_swrl,
+            backend=selected_backend,
         )
         imports, annotations, axioms, extensions = freeze_document_anonymous(
             parsed.ontology_id,
@@ -120,6 +124,12 @@ class PythonParser:
             detection.format,
             detection.basis,
             media_type,
+            parser=(
+                "pyowl_core.backends.native"
+                if selected_backend == "native"
+                else "pyowl_core.backends.python"
+            ),
+            backend=selected_backend,
         )
         candidates: tuple[StructuralNode, ...] = (*annotations, *axioms, *extensions)
         matcher = _FrozenMatcher(candidates)
@@ -190,6 +200,7 @@ def _parse_payload(
     cancellation_token: CancellationToken | None,
     allow_partial_rdf_mapping: bool,
     allow_swrl: bool,
+    backend: str,
 ) -> ParsedOntology:
     from pyowl_core.limits import ParseLimits
 
@@ -197,6 +208,15 @@ def _parse_payload(
         raise TypeError("limits must be ParseLimits")
     try:
         if format is DocumentFormat.FUNCTIONAL:
+            if backend == "native":
+                from pyowl_core.backends.dispatch import parse_functional_native
+
+                return parse_functional_native(
+                    data,
+                    limits=limits,
+                    cancellation_token=cancellation_token,
+                    allow_swrl=allow_swrl,
+                )
             return parse_functional(
                 data,
                 limits=limits,
@@ -230,7 +250,7 @@ def _parse_payload(
             f"invalid {format.value} ontology structure",
             code="ONTOLOGY_STRUCTURE_INVALID",
         ) from error
-    raise AssertionError(format)
+    raise AssertionError((format, backend))
 
 
 def _coerce_iri(value: IRI | str | None) -> IRI | None:
@@ -274,18 +294,6 @@ class _FrozenMatcher:
             cached_digest = structural_digest(candidate)
             self._digest_cache[identifier] = cached_digest
         return candidate, cached_digest
-
-
-def _warn_auto_once() -> None:
-    global _auto_warned
-    if _auto_warned:
-        return
-    _auto_warned = True
-    warnings.warn(
-        "native backend unavailable; selected the complete Python backend",
-        NativeBackendUnavailableWarning,
-        stacklevel=3,
-    )
 
 
 __all__ = ["PythonParser", "parse_document"]
