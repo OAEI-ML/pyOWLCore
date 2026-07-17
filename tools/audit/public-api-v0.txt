@@ -1,4 +1,4 @@
-# Reviewed WP01 public surface. One name per line; order is non-semantic.
+# Reviewed WP02 public surface. One name per line; order is non-semantic.
 ADAPTER_PROTOCOL_VERSION
 ANNOTATION_AXIOM_TYPES
 API_VERSION
@@ -63,6 +63,8 @@ DeltaError
 DeprecatedAPIWarning
 Diagnostic
 DiagnosticScalar
+DetectionBasis
+DigestKind
 DifferentIndividuals
 DisjointClasses
 DisjointDataProperties
@@ -70,6 +72,9 @@ DisjointObjectProperties
 DisjointUnion
 DocumentBuilder
 DocumentFormat
+DocumentProvenance
+DocumentSource
+DocumentTarget
 DocumentIdentityConflictError
 Entity
 EntityKind
@@ -78,6 +83,8 @@ EquivalentDataProperties
 EquivalentObjectProperties
 FacetRestriction
 FactoryStats
+Fingerprint
+FormatDetection
 FormatDetectionError
 FormatGuessWarning
 FunctionalDataProperty
@@ -102,6 +109,7 @@ LexicalToken
 Literal
 LoadOptions
 LogicalAxiom
+LossyPolicy
 LossyRenderWarning
 MODEL_CONSTRUCTORS
 MODEL_SCHEMA_VERSION
@@ -137,9 +145,13 @@ ObjectPropertyExpression
 ObjectPropertyRange
 ObjectSomeValuesFrom
 ObjectUnionOf
+OntologyDocument
+OntologyID
 OntologySyntaxError
 OperationCancelledError
 OptionConflictError
+OriginIndex
+OriginOccurrence
 ParseError
 ParseLimits
 Profile
@@ -152,13 +164,17 @@ ProgressReporter
 ProgressScalar
 PyOWLCoreError
 PyOWLCoreWarning
+PythonParser
 RDFS_LITERAL
 RDFS_LITERAL_IRI
 RDF_LANG_STRING_IRI
 RDF_PLAIN_LITERAL
 RDF_PLAIN_LITERAL_IRI
+RDFMappingReport
+RDFTripleEvidence
 ReentrancyError
 ReflexiveObjectProperty
+RenderOptions
 RescopeRecord
 ResourceLimitError
 RoleAnalysis
@@ -168,6 +184,8 @@ Severity
 SnapshotInUseError
 SnapshotLifecycleError
 SourceSpan
+SourceMap
+SourceOccurrence
 StructuralConstraintError
 StructuralNode
 StructuralReport
@@ -199,12 +217,15 @@ canonical_bytes
 canonical_document_scope
 constructor_spec
 decode_canonical
+detect_format
 encode_varint
 inverse_property
 iter_children
 model
+parse_document
 re_scope_anonymous
 report_progress
+render_document
 signature
 structural_digest
 structural_hexdigest
@@ -214,3 +235,4 @@ validate_profile
 validate_structural
 visit_node
 walk
+write_document

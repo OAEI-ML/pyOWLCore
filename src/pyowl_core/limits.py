@@ -90,7 +90,10 @@ class ParseLimits:
     def allowed(self, name: str) -> int | float | None:
         """Return a named budget, rejecting typos rather than hiding them."""
 
-        if name not in {item.name for item in fields(self)}:
+        # ``__dataclass_fields__`` is the immutable class-level ledger. Using
+        # it avoids rebuilding the complete field-name set at every hot-loop
+        # parser counter check while retaining typo rejection.
+        if name not in self.__dataclass_fields__:
             raise KeyError(f"unknown resource limit: {name}")
         value = getattr(self, name)
         if value is None or isinstance(value, (int, float)):

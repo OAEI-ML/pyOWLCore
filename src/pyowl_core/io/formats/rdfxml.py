@@ -1,0 +1,502 @@
+"""Secure RDF/XML graph parser and deterministic OWL RDF/XML writer."""
+
+from __future__ import annotations
+
+import re
+import xml.etree.ElementTree as ET
+from collections import defaultdict
+from collections.abc import Sequence
+from typing import NoReturn, cast
+from urllib.parse import urljoin
+
+from pyowl_core.cancellation import CancellationToken
+from pyowl_core.document import OntologyDocument
+from pyowl_core.exceptions import OntologySyntaxError
+from pyowl_core.limits import ParseLimits
+from pyowl_core.model import IRI
+
+from .common import ParseContext, ParsedOntology
+from .rdf import (
+    OWL,
+    RDF,
+    RDFIRI,
+    RDFS,
+    XSD,
+    RDFBlank,
+    RDFEncoder,
+    RDFGraph,
+    RDFLiteral,
+    RDFMapper,
+    RDFResource,
+    RDFTerm,
+    Triple,
+)
+
+XML_NS = "http://www.w3.org/XML/1998/namespace"
+_FORBIDDEN_XML = re.compile(rb"(?is)<!\s*(?:DOCTYPE|ENTITY)")
+_FORBIDDEN_XML_TEXT = re.compile(r"(?is)<!\s*(?:DOCTYPE|ENTITY)")
+_XML_ENCODING = re.compile(rb"(?i)^\s*<\?xml[^>]*\bencoding\s*=\s*['\"]([^'\"]+)")
+_NCNAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+
+
+def parse_rdfxml(
+    data: bytes,
+    *,
+    limits: ParseLimits,
+    document_iri: IRI | None,
+    cancellation_token: CancellationToken | None = None,
+    allow_partial_rdf_mapping: bool = False,
+) -> ParsedOntology:
+    if _has_forbidden_xml(data):
+        raise OntologySyntaxError(
+            "DTD and entity declarations are forbidden",
+            code="XML_FORBIDDEN_CONSTRUCT",
+        )
+    context = ParseContext(limits, cancellation_token)
+    pull: ET.XMLPullParser[ET.Element[str]] = ET.XMLPullParser(events=("start", "end"))
+    depth = 0
+    root: ET.Element | None = None
+    try:
+        for offset in range(0, len(data), 64 * 1024):
+            context.check()
+            pull.feed(data[offset : offset + 64 * 1024])
+            for raw_event in pull.read_events():
+                event, element = cast(tuple[str, ET.Element], raw_event)
+                if event == "start":
+                    depth += 1
+                    context.depth(depth)
+                    root = element if root is None else root
+                    if _namespace(element.tag) == "http://www.w3.org/2001/XInclude":
+                        raise OntologySyntaxError(
+                            "XInclude is forbidden", code="XML_FORBIDDEN_CONSTRUCT"
+                        )
+                else:
+                    depth -= 1
+        pull.close()
+    except ET.ParseError as error:
+        raise OntologySyntaxError("malformed RDF/XML document", code="RDFXML_SYNTAX") from error
+    if root is None:
+        raise OntologySyntaxError("empty RDF/XML document", code="RDFXML_ROOT")
+    graph = RDFXMLGraphParser(root, limits, document_iri, cancellation_token).parse()
+    mapped = RDFMapper(
+        graph,
+        limits=limits,
+        document_iri=document_iri,
+        cancellation_token=cancellation_token,
+    ).map(allow_partial=allow_partial_rdf_mapping)
+    return ParsedOntology(
+        mapped.ontology_id,
+        mapped.imports,
+        mapped.annotations,
+        mapped.axioms,
+        mapped.extensions,
+        occurrences=mapped.occurrences,
+        rdf_mapping_report=mapped.rdf_mapping_report,
+        decoded_codepoint_length=_decoded_xml_length(data),
+    )
+
+
+class RDFXMLGraphParser:
+    __slots__ = ("base", "blank_counter", "context", "node_ids", "root", "triples")
+
+    def __init__(
+        self,
+        root: ET.Element,
+        limits: ParseLimits,
+        document_iri: IRI | None,
+        cancellation_token: CancellationToken | None,
+    ) -> None:
+        self.root = root
+        self.context = ParseContext(limits, cancellation_token)
+        self.base = None if document_iri is None else document_iri.value
+        self.blank_counter = 0
+        self.node_ids: dict[str, RDFBlank] = {}
+        self.triples: set[Triple] = set()
+
+    def parse(self) -> RDFGraph:
+        base = self._base(self.root, self.base)
+        language = self.root.get(f"{{{XML_NS}}}lang")
+        if self.root.tag == _tag(RDF, "RDF"):
+            for child in self.root:
+                self._node(child, base, language)
+        else:
+            self._node(self.root, base, language)
+        return RDFGraph(self.triples)
+
+    def _node(
+        self,
+        element: ET.Element,
+        parent_base: str | None,
+        parent_language: str | None,
+    ) -> RDFResource:
+        self.context.check()
+        base = self._base(element, parent_base)
+        language = element.get(f"{{{XML_NS}}}lang", parent_language)
+        identities = [
+            ("about", element.get(_tag(RDF, "about"))),
+            ("ID", element.get(_tag(RDF, "ID"))),
+            ("nodeID", element.get(_tag(RDF, "nodeID"))),
+        ]
+        present = [(name, value) for name, value in identities if value is not None]
+        if len(present) > 1:
+            self._syntax("RDF node element has multiple identity attributes")
+        if not present:
+            subject: RDFResource = self._fresh("node")
+        elif present[0][0] == "nodeID":
+            subject = self._node_id(present[0][1] or "")
+        elif present[0][0] == "ID":
+            subject = RDFIRI(self._resolve("#" + (present[0][1] or ""), base))
+        else:
+            subject = RDFIRI(self._resolve(present[0][1] or "", base))
+        if element.tag != _tag(RDF, "Description"):
+            namespace = _namespace(element.tag)
+            if not namespace:
+                self._syntax("typed RDF node element requires a namespace")
+            self._add(subject, RDF + "type", RDFIRI(_expanded(element.tag)))
+        self._node_property_attributes(element, subject, base, language)
+        li_index = 0
+        for child in element:
+            predicate = _expanded(child.tag)
+            if predicate == RDF + "li":
+                li_index += 1
+                predicate = RDF + "_" + str(li_index)
+            self._property(child, subject, predicate, base, language)
+        return subject
+
+    def _node_property_attributes(
+        self,
+        element: ET.Element,
+        subject: RDFResource,
+        base: str | None,
+        language: str | None,
+    ) -> None:
+        ignored = {
+            _tag(RDF, "about"),
+            _tag(RDF, "ID"),
+            _tag(RDF, "nodeID"),
+            f"{{{XML_NS}}}base",
+            f"{{{XML_NS}}}lang",
+        }
+        for name, value in element.attrib.items():
+            if name in ignored:
+                continue
+            predicate = _expanded(name)
+            if predicate == RDF + "type":
+                self._add(subject, predicate, RDFIRI(self._resolve(value, base)))
+            else:
+                self._add(
+                    subject,
+                    predicate,
+                    RDFLiteral(value, language=language)
+                    if language
+                    else RDFLiteral(value, XSD + "string"),
+                )
+
+    def _property(
+        self,
+        element: ET.Element,
+        subject: RDFResource,
+        predicate: str,
+        parent_base: str | None,
+        parent_language: str | None,
+    ) -> None:
+        self.context.check()
+        base = self._base(element, parent_base)
+        language = element.get(f"{{{XML_NS}}}lang", parent_language)
+        resource = element.get(_tag(RDF, "resource"))
+        node_id = element.get(_tag(RDF, "nodeID"))
+        parse_type = element.get(_tag(RDF, "parseType"))
+        datatype = element.get(_tag(RDF, "datatype"))
+        modes = sum(item is not None for item in (resource, node_id, parse_type))
+        if modes > 1:
+            self._syntax("RDF property element has conflicting object attributes")
+        triple: Triple
+        if parse_type is not None:
+            if datatype is not None:
+                self._syntax("rdf:parseType and rdf:datatype cannot be combined")
+            if parse_type == "Resource":
+                resource_object = self._fresh("resource")
+                triple = self._add(subject, predicate, resource_object)
+                li_index = 0
+                for child in element:
+                    child_predicate = _expanded(child.tag)
+                    if child_predicate == RDF + "li":
+                        li_index += 1
+                        child_predicate = RDF + "_" + str(li_index)
+                    self._property(child, resource_object, child_predicate, base, language)
+            elif parse_type == "Collection":
+                members = [self._node(child, base, language) for child in element]
+                triple = self._add(subject, predicate, self._collection(members))
+            elif parse_type == "Literal":
+                lexical = (element.text or "") + "".join(
+                    ET.tostring(child, encoding="unicode") for child in element
+                )
+                triple = self._add(subject, predicate, RDFLiteral(lexical, RDF + "XMLLiteral"))
+            else:
+                self._syntax("unsupported rdf:parseType value")
+        elif resource is not None or node_id is not None:
+            if len(element):
+                self._syntax("resource-valued RDF property cannot contain child nodes")
+            attributed_object: RDFResource = (
+                RDFIRI(self._resolve(resource or "", base))
+                if resource is not None
+                else self._node_id(node_id or "")
+            )
+            triple = self._add(subject, predicate, attributed_object)
+            self._property_attributes(element, attributed_object, base, language)
+        elif len(element):
+            if len(element) != 1:
+                self._syntax("RDF property element must contain exactly one node element")
+            child_object = self._node(element[0], base, language)
+            triple = self._add(subject, predicate, child_object)
+        else:
+            property_attributes = self._non_syntax_attributes(element)
+            if property_attributes and not (element.text or "").strip() and datatype is None:
+                empty_object = self._fresh("empty")
+                triple = self._add(subject, predicate, empty_object)
+                self._property_attributes(element, empty_object, base, language)
+            else:
+                lexical = element.text or ""
+                self.context.limits.enforce("max_literal_bytes", len(lexical.encode("utf-8")))
+                if datatype is not None:
+                    literal = RDFLiteral(lexical, self._resolve(datatype, base))
+                elif language is not None:
+                    literal = RDFLiteral(lexical, language=language)
+                else:
+                    literal = RDFLiteral(lexical, XSD + "string")
+                triple = self._add(subject, predicate, literal)
+        statement_id = element.get(_tag(RDF, "ID"))
+        if statement_id is not None:
+            reified = RDFIRI(self._resolve("#" + statement_id, base))
+            self._add(reified, RDF + "type", RDFIRI(RDF + "Statement"))
+            self._add(reified, RDF + "subject", triple.subject)
+            self._add(reified, RDF + "predicate", triple.predicate)
+            self._add(reified, RDF + "object", triple.object)
+
+    def _property_attributes(
+        self,
+        element: ET.Element,
+        subject: RDFResource,
+        base: str | None,
+        language: str | None,
+    ) -> None:
+        for name, value in self._non_syntax_attributes(element).items():
+            predicate = _expanded(name)
+            if predicate == RDF + "type":
+                self._add(subject, predicate, RDFIRI(self._resolve(value, base)))
+            else:
+                literal = (
+                    RDFLiteral(value, language=language)
+                    if language
+                    else RDFLiteral(value, XSD + "string")
+                )
+                self._add(subject, predicate, literal)
+
+    @staticmethod
+    def _non_syntax_attributes(element: ET.Element) -> dict[str, str]:
+        syntax = {
+            _tag(RDF, "resource"),
+            _tag(RDF, "nodeID"),
+            _tag(RDF, "parseType"),
+            _tag(RDF, "datatype"),
+            _tag(RDF, "ID"),
+            f"{{{XML_NS}}}base",
+            f"{{{XML_NS}}}lang",
+        }
+        return {key: value for key, value in element.attrib.items() if key not in syntax}
+
+    def _collection(self, values: Sequence[RDFTerm]) -> RDFResource:
+        if not values:
+            return RDFIRI(RDF + "nil")
+        self.context.limits.enforce("max_rdf_list_length", len(values))
+        nodes = [self._fresh("list") for _ in values]
+        for index, (node, value) in enumerate(zip(nodes, values, strict=True)):
+            self._add(node, RDF + "first", value)
+            self._add(
+                node,
+                RDF + "rest",
+                nodes[index + 1] if index + 1 < len(nodes) else RDFIRI(RDF + "nil"),
+            )
+        return nodes[0]
+
+    def _base(self, element: ET.Element, parent: str | None) -> str | None:
+        local = element.get(f"{{{XML_NS}}}base")
+        if local is None:
+            return parent
+        if parent is None and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", local):
+            self._syntax("relative xml:base requires a document IRI")
+        return local if parent is None else urljoin(parent, local)
+
+    def _resolve(self, value: str, base: str | None) -> str:
+        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", value):
+            result = value
+        elif base is not None:
+            result = urljoin(base, value)
+        else:
+            self._syntax("relative RDF/XML IRI requires a base")
+        self.context.limits.enforce("max_iri_bytes", len(result.encode("utf-8")))
+        return result
+
+    def _node_id(self, value: str) -> RDFBlank:
+        if not value:
+            self._syntax("rdf:nodeID must be nonempty")
+        return self.node_ids.setdefault(value, RDFBlank(value))
+
+    def _fresh(self, stem: str) -> RDFBlank:
+        self.blank_counter += 1
+        return RDFBlank(f"{stem}-{self.blank_counter}")
+
+    def _add(self, subject: RDFResource, predicate: str, object: RDFTerm) -> Triple:
+        triple = Triple(subject, RDFIRI(predicate), object)
+        self.triples.add(triple)
+        self.context.limits.enforce("max_triples", len(self.triples))
+        return triple
+
+    @staticmethod
+    def _syntax(message: str) -> NoReturn:
+        raise OntologySyntaxError(message, code="RDFXML_SYNTAX")
+
+
+def render_rdfxml(document: OntologyDocument) -> bytes:
+    graph = RDFEncoder().encode(document)
+    ET.register_namespace("rdf", RDF)
+    ET.register_namespace("owl", OWL)
+    ET.register_namespace("rdfs", RDFS)
+    ET.register_namespace("xsd", XSD)
+    namespaces = _predicate_namespaces(graph)
+    for index, namespace in enumerate(
+        item for item in sorted(namespaces) if item not in {RDF, OWL, RDFS, XSD}
+    ):
+        ET.register_namespace(f"p{index}", namespace)
+    root = ET.Element(_tag(RDF, "RDF"))
+    grouped: dict[RDFResource, list[Triple]] = defaultdict(list)
+    for triple in graph.triples:
+        grouped[triple.subject].append(triple)
+    for subject in sorted(grouped, key=_resource_sort_key):
+        attributes = (
+            {_tag(RDF, "about"): subject.value}
+            if isinstance(subject, RDFIRI)
+            else {_tag(RDF, "nodeID"): _safe_node_id(subject.label)}
+        )
+        description = ET.SubElement(root, _tag(RDF, "Description"), attributes)
+        for triple in sorted(grouped[subject], key=Triple.key):
+            namespace, local = _split_predicate(triple.predicate.value)
+            property_element = ET.SubElement(description, _tag(namespace, local))
+            object_value = triple.object
+            if isinstance(object_value, RDFIRI):
+                property_element.set(_tag(RDF, "resource"), object_value.value)
+            elif isinstance(object_value, RDFBlank):
+                property_element.set(_tag(RDF, "nodeID"), _safe_node_id(object_value.label))
+            else:
+                property_element.text = object_value.lexical
+                if object_value.language is not None:
+                    property_element.set(f"{{{XML_NS}}}lang", object_value.language)
+                elif object_value.datatype is not None:
+                    property_element.set(_tag(RDF, "datatype"), object_value.datatype)
+    ET.indent(root, space="  ")
+    return cast(
+        bytes,
+        ET.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+            short_empty_elements=True,
+        ),
+    )
+
+
+def _predicate_namespaces(graph: RDFGraph) -> set[str]:
+    return {_split_predicate(item.predicate.value)[0] for item in graph.triples}
+
+
+def _split_predicate(value: str) -> tuple[str, str]:
+    # Choose the longest valid QName local part. Iterating from the beginning
+    # avoids pathological one-character locals such as splitting ``rdf:type``
+    # into a namespace ending in ``typ`` and the local name ``e``.
+    for index in range(1, len(value)):
+        local = value[index:]
+        if _NCNAME.fullmatch(local):
+            return value[:index], local
+    raise OntologySyntaxError(
+        "predicate IRI cannot be represented as an RDF/XML QName",
+        code="RDFXML_PREDICATE_QNAME",
+    )
+
+
+def _safe_node_id(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", value)
+    return cleaned if cleaned and (cleaned[0].isalpha() or cleaned[0] == "_") else "b" + cleaned
+
+
+def _resource_sort_key(value: RDFResource) -> tuple[str, str]:
+    return ("I", value.value) if isinstance(value, RDFIRI) else ("B", value.label)
+
+
+def _tag(namespace: str, local: str) -> str:
+    return f"{{{namespace}}}{local}"
+
+
+def _namespace(tag: str) -> str:
+    return tag[1:].split("}", 1)[0] if tag.startswith("{") else ""
+
+
+def _expanded(tag: str) -> str:
+    if not tag.startswith("{") or "}" not in tag:
+        raise OntologySyntaxError(
+            "RDF/XML element and property attributes require namespaces",
+            code="RDFXML_NAMESPACE",
+        )
+    namespace, local = tag[1:].split("}", 1)
+    return namespace + local
+
+
+def _decoded_xml_length(data: bytes) -> int:
+    wide_encoding = _wide_xml_encoding(data)
+    if wide_encoding is not None:
+        encoding = wide_encoding
+        match = None
+    elif data.startswith(b"\xef\xbb\xbf"):
+        encoding = "utf-8-sig"
+        match = None
+    else:
+        match = _XML_ENCODING.match(data[:512])
+        encoding = "utf-8"
+    try:
+        if match is not None:
+            encoding = match.group(1).decode("ascii", "strict")
+        return len(data.decode(encoding))
+    except (LookupError, UnicodeDecodeError) as error:
+        raise OntologySyntaxError(
+            "invalid or unsupported XML encoding", code="XML_ENCODING"
+        ) from error
+
+
+def _has_forbidden_xml(data: bytes) -> bool:
+    if _FORBIDDEN_XML.search(data):
+        return True
+    encoding = _wide_xml_encoding(data)
+    if encoding is None:
+        return False
+    try:
+        return _FORBIDDEN_XML_TEXT.search(data.decode(encoding)) is not None
+    except UnicodeDecodeError:
+        return False
+
+
+def _wide_xml_encoding(data: bytes) -> str | None:
+    if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        return "utf-32"
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "utf-16"
+    if data.startswith(b"\x00\x00\x00<"):
+        return "utf-32-be"
+    if data.startswith(b"<\x00\x00\x00"):
+        return "utf-32-le"
+    if data.startswith(b"\x00<"):
+        return "utf-16-be"
+    if data.startswith(b"<\x00"):
+        return "utf-16-le"
+    return None
+
+
+__all__ = ["RDFXMLGraphParser", "parse_rdfxml", "render_rdfxml"]

@@ -3,9 +3,24 @@
 from __future__ import annotations
 
 from . import model as model
+from .backends.python import PythonParser, parse_document
 from .cancellation import CancellationSource, CancellationToken
 from .config import BackendPreference, DocumentFormat, ImportPolicy, LoadOptions
 from .diagnostics import Diagnostic, DiagnosticScalar, Severity, SourceSpan
+from .document import (
+    DetectionBasis,
+    DigestKind,
+    DocumentProvenance,
+    Fingerprint,
+    OntologyDocument,
+    OntologyID,
+    OriginIndex,
+    OriginOccurrence,
+    RDFMappingReport,
+    RDFTripleEvidence,
+    SourceMap,
+    SourceOccurrence,
+)
 from .exceptions import (
     AccessDeniedError,
     AdapterCompatibilityError,
@@ -48,6 +63,15 @@ from .exceptions import (
     WireLimitError,
     WireVersionError,
 )
+from .io.formats import FormatDetection, detect_format
+from .io.formats.rendering import (
+    DocumentTarget,
+    LossyPolicy,
+    RenderOptions,
+    render_document,
+    write_document,
+)
+from .io.source import DocumentSource
 from .limits import ParseLimits
 from .model import *  # noqa: F403
 from .progress import (
@@ -86,9 +110,15 @@ __all__ = [
     "DeprecatedAPIWarning",
     "Diagnostic",
     "DiagnosticScalar",
+    "DetectionBasis",
+    "DigestKind",
+    "DocumentProvenance",
     "DocumentFormat",
+    "DocumentSource",
+    "DocumentTarget",
     "DocumentIdentityConflictError",
     "FormatDetectionError",
+    "FormatDetection",
     "FormatGuessWarning",
     "ImportCycleError",
     "ImportPolicy",
@@ -97,14 +127,18 @@ __all__ = [
     "InvalidIRIError",
     "InvalidLiteralError",
     "LoadOptions",
+    "LossyPolicy",
     "LossyRenderWarning",
     "ModelError",
     "NativeBackendUnavailableWarning",
+    "OntologyDocument",
+    "OntologyID",
     "OntologySyntaxError",
     "OperationCancelledError",
     "OptionConflictError",
     "ParseError",
     "ParseLimits",
+    "PythonParser",
     "ProfileError",
     "ProgressBuffer",
     "ProgressCallback",
@@ -115,10 +149,15 @@ __all__ = [
     "PyOWLCoreWarning",
     "ReentrancyError",
     "ResourceLimitError",
+    "RenderOptions",
+    "RDFMappingReport",
+    "RDFTripleEvidence",
     "Severity",
     "SnapshotInUseError",
     "SnapshotLifecycleError",
     "SourceSpan",
+    "SourceMap",
+    "SourceOccurrence",
     "StructuralConstraintError",
     "UnresolvedImportError",
     "UnresolvedImportWarning",
@@ -127,8 +166,15 @@ __all__ = [
     "WireError",
     "WireLimitError",
     "WireVersionError",
+    "Fingerprint",
+    "OriginIndex",
+    "OriginOccurrence",
     "__version__",
     "model",
+    "detect_format",
+    "parse_document",
+    "render_document",
     "report_progress",
+    "write_document",
     *model.__all__,
 ]
