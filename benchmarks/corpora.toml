@@ -1,0 +1,272 @@
+schema = 1
+project = "pyowl-core"
+
+# Generated rows are reproduced byte-for-byte by tools.benchmark.synthetic.
+# External rows are never fetched by tests or timed benchmark phases; preparation
+# is an explicit, hash-verifying operation.
+
+[[corpus]]
+id = "generated-tiny-functional"
+tier = "tiny"
+families = ["constructors", "synthetic"]
+source = "generated"
+format = "functional"
+revision = "generator-v1/classes-8"
+sha256 = "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a"
+bytes = 1450
+triples = 16
+axioms = 15
+entities = 8
+imports = 0
+count_basis = "generator-exact"
+license = "CC0-1.0"
+license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+acquired = "2026-07-17"
+redistribution = "generated"
+generator = "equivalent-chain"
+generator_size = 8
+
+[[corpus]]
+id = "generated-medium-owlxml"
+tier = "medium"
+families = ["constructors", "synthetic"]
+source = "generated"
+format = "owlxml"
+revision = "generator-v1/classes-256"
+sha256 = "e491c7de10b775346f9c269da3cade603f271abd1381c0f778a3474dfe05b4f0"
+bytes = 63234
+triples = 512
+axioms = 511
+entities = 256
+imports = 0
+count_basis = "generator-exact"
+license = "CC0-1.0"
+license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+acquired = "2026-07-17"
+redistribution = "generated"
+generator = "equivalent-chain"
+generator_size = 256
+
+[[corpus]]
+id = "generated-medium-turtle"
+tier = "medium"
+families = ["constructors", "synthetic"]
+source = "generated"
+format = "turtle"
+revision = "generator-v1/classes-256"
+sha256 = "a06d18eeefff7b5e6e9fe15fc0c63a4d6409b81dd18d51e05285739280f24457"
+bytes = 34399
+triples = 512
+axioms = 511
+entities = 256
+imports = 0
+count_basis = "generator-exact"
+license = "CC0-1.0"
+license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+acquired = "2026-07-17"
+redistribution = "generated"
+generator = "equivalent-chain"
+generator_size = 256
+
+[[corpus]]
+id = "generated-medium-rdfxml"
+tier = "medium"
+families = ["constructors", "synthetic"]
+source = "generated"
+format = "rdfxml"
+revision = "generator-v1/classes-256"
+sha256 = "13b7037bce0a54517d70d3934ce996707b6fe422aaa9d54dcd7bb8c35004672c"
+bytes = 45510
+triples = 512
+axioms = 511
+entities = 256
+imports = 0
+count_basis = "generator-exact"
+license = "CC0-1.0"
+license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+acquired = "2026-07-17"
+redistribution = "generated"
+generator = "equivalent-chain"
+generator_size = 256
+
+[[corpus]]
+id = "generated-annotation-list"
+tier = "small"
+families = ["annotation-list-heavy", "synthetic"]
+source = "generated"
+format = "turtle"
+revision = "generator-v1/list-128"
+sha256 = "59634b34136207e61c4aa8d3e82e48450637ddb6084766be44b60f76c83e5c49"
+bytes = 8359
+triples = 517
+axioms = 258
+entities = 131
+imports = 0
+count_basis = "generator-and-parser-exact"
+license = "CC0-1.0"
+license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+acquired = "2026-07-17"
+redistribution = "generated"
+generator = "annotation-list"
+generator_size = 128
+
+[[corpus]]
+id = "generated-import-diamond"
+tier = "small"
+families = ["imports", "synthetic"]
+source = "generated"
+format = "functional"
+revision = "generator-v1/import-diamond"
+sha256 = "85337fcb0c7388298c4c922d4426b32ee928de9729341ff61cd15350de9a788e"
+bytes = 276
+triples = 4
+axioms = 1
+entities = 1
+imports = 2
+count_basis = "generator-exact-root; three exact generated members"
+license = "CC0-1.0"
+license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+acquired = "2026-07-17"
+redistribution = "generated"
+generator = "import-diamond-root"
+generator_size = 4
+notes = "Shared member SHA-256 edfe6aa7ee7e6cc1eeb126d95bdefb476d6cf16e10997e115ab6eb0d824df7ee."
+
+[[corpus]]
+id = "generated-large-functional"
+tier = "synthetic"
+families = ["constructors", "synthetic"]
+source = "generated"
+format = "functional"
+revision = "generator-v1/classes-5000"
+sha256 = "5852a3bfc6c5d76147ef7ee4b29328cd87c9efcca0ef48ec7d7d86e23c1e8c43"
+bytes = 944938
+triples = 10000
+axioms = 9999
+entities = 5000
+imports = 0
+count_basis = "generator-exact"
+license = "CC0-1.0"
+license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+acquired = "2026-07-17"
+redistribution = "generated"
+generator = "equivalent-chain"
+generator_size = 5000
+
+[[corpus]]
+id = "generated-adversarial-deep"
+tier = "adversarial"
+families = ["adversarial", "synthetic"]
+source = "generated"
+format = "functional"
+revision = "generator-v1/depth-64"
+sha256 = "cc4226206d7aa25a7763a9b9c23cb692f09a7a624aea496e71db01920a51ae49"
+bytes = 1398
+triples = 130
+axioms = 1
+entities = 2
+imports = 0
+count_basis = "generator-exact structural/RDF expansion"
+license = "CC0-1.0"
+license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+acquired = "2026-07-17"
+redistribution = "generated"
+generator = "adversarial-deep"
+generator_size = 64
+
+[[corpus]]
+id = "uberon-common-anatomy-2026-06-23"
+tier = "small"
+families = ["biomedical", "annotation-list-heavy"]
+source = "url"
+format = "rdfxml"
+revision = "v2026-06-23/common-anatomy.owl"
+url = "https://github.com/obophenotype/uberon/releases/download/v2026-06-23/common-anatomy.owl"
+sha256 = "c2f71e454f678f6d9a6bf0ed0a2084c70e302bc0fce3a8e2c9f19ef679ee8d1c"
+bytes = 1017782
+triples = 12103
+axioms = 5205
+entities = 440
+imports = 0
+count_basis = "pyowl-core-python-v0.1 exact full RDF mapping"
+license = "CC-BY-3.0"
+license_url = "https://raw.githubusercontent.com/obophenotype/uberon/v2026-06-23/LICENSE"
+acquired = "2026-07-17"
+redistribution = "allowed"
+
+[[corpus]]
+id = "hpo-base-2026-06-23"
+tier = "large"
+families = ["biomedical", "annotation-list-heavy"]
+source = "url"
+format = "rdfxml"
+revision = "v2026-06-23/hp-base.owl"
+url = "https://github.com/obophenotype/human-phenotype-ontology/releases/download/v2026-06-23/hp-base.owl"
+sha256 = "8aab8c4d7f11189def5d4e64c17190dfc90a495fe9f49a451ea2caefc174e153"
+bytes = 49479533
+triples = 588921
+axioms = 195809
+entities = 22660
+imports = 0
+count_basis = "pyowl-core-python-v0.1 exact full RDF mapping"
+license = "HPO terms"
+license_url = "https://hpo.jax.org/app/license"
+acquired = "2026-07-17"
+redistribution = "manifest-only"
+notes = "Bytes are never committed; users must review the current HPO terms before preparation."
+
+[[corpus]]
+id = "oaei-bioml-omim-2024"
+tier = "composite"
+families = ["biomedical", "oaei-composite"]
+source = "archive-member"
+format = "rdfxml"
+revision = "zenodo-13119437/omim-ordo.zip"
+url = "https://zenodo.org/api/records/13119437/files/omim-ordo.zip/content"
+artifact_sha256 = "bddfa4d80a6a3b5cb694ed5e56b3d98a406b8a64a726e15745e9e4d002fe4b5f"
+artifact_bytes = 4466036
+archive_member = "omim-ordo/omim.owl"
+sha256 = "3a42c43d34c9b6f2d85278bb03471a99a64f6dccd5e299cd9b0fa882c0b9bcc9"
+bytes = 11237181
+triples = 131182
+axioms = 131181
+entities = 9663
+imports = 0
+count_basis = "pyowl-core-python-v0.1 exact full RDF mapping"
+mapping_member = "omim-ordo/refs_equiv/full.tsv"
+mapping_sha256 = "c61a254a887585d581bdea5a2464a9043552bdebdd5016d2f3f7bc32c193873d"
+mapping_bytes = 280720
+mapping_rows = 3722
+license = "CC-BY-4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0/"
+acquired = "2026-07-17"
+redistribution = "manifest-only"
+notes = "The paired ORDO member is pinned by the same record but currently fails strict RDF mapping; see reports/performance/limitations.md."
+
+[[corpus]]
+id = "oaei-bioml-doid-2024"
+tier = "medium"
+families = ["biomedical", "oaei-composite"]
+source = "archive-member"
+format = "rdfxml"
+revision = "zenodo-13119437/ncit-doid.zip"
+url = "https://zenodo.org/api/records/13119437/files/ncit-doid.zip/content"
+artifact_sha256 = "701602faf7fd0427a029ef718ada000d15aaa13b5e810ff3797538307d7aa0a6"
+artifact_bytes = 5928256
+archive_member = "ncit-doid/doid.owl"
+sha256 = "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc"
+bytes = 6687536
+triples = 55699
+axioms = 55687
+entities = 8516
+imports = 0
+count_basis = "pyowl-core-python-v0.1 exact full RDF mapping"
+mapping_member = "ncit-doid/refs_equiv/full.tsv"
+mapping_sha256 = "970d79ce4faa619201c0c3383bf5a5572e285193c00d78a4603c01c78ac7fb6d"
+mapping_bytes = 483307
+mapping_rows = 4687
+license = "CC-BY-4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0/"
+acquired = "2026-07-17"
+redistribution = "manifest-only"
+notes = "The paired NCIt member is pinned by the same record but currently fails strict RDF mapping; see reports/performance/limitations.md."
