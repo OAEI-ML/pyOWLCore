@@ -8,6 +8,9 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+import pytest
+
+from tools.packaging import artifact_inspector
 from tools.packaging.artifact_inspector import inspect_artifact
 
 _METADATA = b"""Metadata-Version: 2.4
@@ -142,3 +145,24 @@ def test_release_mode_requires_real_project_urls(tmp_path: Path) -> None:
     assert not result.ok
     assert result.release_blockers == ()
     assert "metadata: approved repository/docs/issues URLs are not configured" in result.errors
+
+
+def test_release_cli_does_not_reject_separately_evidenced_platform_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = tmp_path / "native.whl"
+    artifact.write_bytes(b"fixture")
+    result = artifact_inspector.InspectionResult(
+        path=str(artifact),
+        kind="wheel",
+        variant="native",
+        member_count=1,
+        uncompressed_bytes=1,
+        metadata={},
+        errors=(),
+        release_blockers=(),
+        deferred_platform_checks=("target-platform audit required",),
+    )
+    monkeypatch.setattr(artifact_inspector, "inspect_artifact", lambda *args, **kwargs: result)
+    assert artifact_inspector.main([str(artifact), "--release"]) == 0

@@ -12,12 +12,31 @@ The release owner selects a signed `v<version>` tag and records the exact
 only a publishing job receives `id-token: write`, and it receives no long-lived
 index token.
 
-The wheel workflow builds once from the selected commit and aggregates one
-sdist, one `py3-none-any` pure wheel, and every approved native wheel. The
-aggregate also contains SHA-256 checksums, pure/native SBOMs, archive inspection
-results, platform dynamic-library audits, resolver results, advisory output,
-and an incomplete release-decision report. Never rebuild between TestPyPI and
-PyPI.
+The wheel workflow builds the candidate once from the selected commit and
+independently rebuilds the sdist, pure wheel, and native wheels solely to prove
+byte reproducibility; a rebuild is never substituted into the candidate. It
+aggregates one sdist, one `py3-none-any` pure wheel, and every approved native
+wheel. The aggregate also contains SHA-256 checksums, pure/native SBOMs,
+archive inspection results, checksum-bound platform audits, the 29-target
+resolver matrix, RustSec output, and an incomplete release-decision report.
+Never rebuild between TestPyPI and PyPI.
+
+`SOURCE_DATE_EPOCH` normalizes wheel, tar, gzip, file-mode, ownership, and
+macOS install-name metadata. Native compilation remaps checkout, Cargo registry,
+Git checkout, and target-directory paths to stable virtual prefixes before the
+binary-path audit. Reproducibility means identical bytes from the same pinned
+source and toolchain; it does not authorize substituting a rebuild.
+
+`reports/release/<version>/gates.json` is the reviewed input ledger. Keep a gate
+`blocked` until its cited evidence exists; the report tool rejects unknown or
+empty entries. The Wheels run replaces only the advisory and hosted
+platform-audit entries after those checks pass. The Release run verifies and
+records the signed-source entry. The protected TestPyPI job replaces the
+rehearsal and signature entries only after reinstalling the uploaded candidate,
+matching all 27 index files, cryptographically verifying their PEP 740
+attestations, regenerating the final report, and signing/verifying that report
+and distribution set with GitHub/Sigstore provenance. PyPI promotion consumes
+only that `--require-ready`, signed candidate.
 
 ## Candidate sequence
 
@@ -26,16 +45,20 @@ PyPI.
 2. Freeze the API/model/wire/adapter versions, changelog, migration guidance,
    consumer ranges, dependency lock, and third-party inventory.
 3. Run `wheels.yml` at the signed commit. Review every failed, blocked, and
-   deferred field; absence of evidence is not a pass.
-4. Download the aggregate by workflow run ID. Verify its run commit equals the
-   signed tag, recompute every checksum, and generate the final report with
-   `python -m tools.packaging.release_report ... --require-ready`.
+   deferred field; only source-tag verification, distribution/report signatures,
+   and TestPyPI rehearsal may remain staged for the Release workflow. Absence of
+   evidence is not a pass.
+4. Start `release.yml` with the exact Wheels run ID and signed tag. It verifies
+   run identity, tag signature, source commit, every checksum, artifact shape,
+   metadata, and all pre-publication gates without rebuilding.
 5. Approve the `testpypi` environment. Upload the already-built files through
-   Trusted Publishing, then install from TestPyPI into clean compiler-free and
-   forced-native environments and rerun the consumer smoke matrix.
-6. Approve the `pypi` environment only after the rehearsal evidence is attached
-   to the same report. Upload the identical files; the official PyPA publishing
-   action emits PEP 740 publish attestations by default.
+   Trusted Publishing, install the native candidate from TestPyPI, run the
+   examples/self-test, verify all file hashes and PEP 740 identities, regenerate
+   the release-ready report, and cryptographically sign/verify that exact report
+   plus the immutable distribution set.
+6. Approve the `pypi` environment only after the same-run rehearsal succeeds.
+   Upload the identical files; the official PyPA publishing action emits PEP
+   740 publish attestations by default.
 7. Re-fetch index metadata, files, and provenance. Match all digests to the
    aggregate, install through the public resolver, verify the Trusted Publisher
    identity, then publish documentation and release notes.

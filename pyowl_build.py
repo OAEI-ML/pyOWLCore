@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import gzip
 import os
+import shlex
 import shutil
 import struct
 import subprocess
 import sys
+import tarfile
 from collections.abc import Mapping, Sequence
 from enum import Enum
 from pathlib import Path
@@ -107,6 +110,34 @@ def build_native_extension(
     if target:
         command.extend(("--target", target))
     selected["PYO3_PYTHON"] = sys.executable
+    encoded_flags = selected.get("CARGO_ENCODED_RUSTFLAGS", "")
+    if encoded_flags:
+        rust_flags = encoded_flags.split("\x1f")
+    else:
+        try:
+            rust_flags = shlex.split(selected.pop("RUSTFLAGS", ""))
+        except ValueError as error:
+            _native_failure(mode, f"RUSTFLAGS could not be parsed: {error}")
+            return None
+    cargo_home = Path(selected.get("CARGO_HOME", Path.home() / ".cargo")).expanduser()
+    target_dir = Path(selected.get("CARGO_TARGET_DIR", root / "native" / "target"))
+    if not target_dir.is_absolute():
+        target_dir = root / target_dir
+    rust_flags.extend(
+        (
+            f"--remap-path-prefix={target_dir.resolve()}=/rust/target",
+            f"--remap-path-prefix={root.resolve()}=/rust/pyowl-core",
+            f"--remap-path-prefix={cargo_home.resolve() / 'registry' / 'src'}="
+            "/rust/cargo-registry",
+            f"--remap-path-prefix={cargo_home.resolve() / 'git' / 'checkouts'}="
+            "/rust/cargo-git",
+        )
+    )
+    if sys.platform == "darwin":
+        # Apple's linker otherwise emits a fresh LC_UUID for byte-identical inputs.
+        rust_flags.extend(("-C", "link-arg=-Wl,-no_uuid"))
+    selected["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(rust_flags)
+    selected.pop("RUSTFLAGS", None)
     try:
         subprocess.run(command, cwd=root, env=selected, check=True)
     except (OSError, subprocess.CalledProcessError) as error:
@@ -149,6 +180,60 @@ def normalize_native_extension(
             f"pyowl-core could not normalize the macOS native extension: {error}"
         ) from error
     _zero_macho_dylib_timestamp(path)
+
+
+def build_reproducible_sdist(
+    base_name: str | os.PathLike[str],
+    base_dir: str | os.PathLike[str],
+    *,
+    epoch: int,
+    root_dir: str | os.PathLike[str] | None = None,
+) -> str:
+    """Create a deterministic ``.tar.gz`` source archive."""
+
+    if epoch < 0:
+        raise RuntimeError("SOURCE_DATE_EPOCH must be a non-negative integer")
+    root = Path.cwd() if root_dir is None else Path(root_dir)
+    source = Path(base_dir)
+    if not source.is_absolute():
+        source = root / source
+    if not source.is_dir():
+        raise RuntimeError(f"sdist release tree does not exist: {source}")
+    output = Path(f"{base_name}.tar.gz")
+    if not output.is_absolute():
+        output = Path.cwd() / output
+    output.parent.mkdir(parents=True, exist_ok=True)
+    archive_root = Path(base_dir).name
+    entries = (source, *sorted(source.rglob("*"), key=lambda path: path.relative_to(source).parts))
+
+    def normalized(info: tarfile.TarInfo) -> tarfile.TarInfo:
+        info.uid = 0
+        info.gid = 0
+        info.uname = ""
+        info.gname = ""
+        info.mtime = epoch
+        info.pax_headers = {}
+        if info.isdir():
+            info.mode = 0o755
+        elif info.isfile():
+            info.mode = 0o755 if info.mode & 0o111 else 0o644
+        return info
+
+    with (
+        output.open("wb") as raw,
+        gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=epoch) as compressed,
+        tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive,
+    ):
+        for entry in entries:
+            relative = entry.relative_to(source)
+            arcname = Path(archive_root) / relative
+            archive.add(
+                entry,
+                arcname=arcname.as_posix(),
+                recursive=False,
+                filter=normalized,
+            )
+    return str(output)
 
 
 def _zero_macho_dylib_timestamp(path: Path) -> None:
@@ -199,6 +284,7 @@ def _native_failure(mode: NativeBuildMode, reason: str) -> None:
 __all__ = [
     "NativeBuildMode",
     "build_native_extension",
+    "build_reproducible_sdist",
     "is_native_build_command",
     "native_artifact_path",
     "normalize_native_extension",

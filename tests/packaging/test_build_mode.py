@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import gzip
+import os
 import struct
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -81,6 +84,46 @@ def test_auto_falls_back_but_required_mode_fails_without_cargo(
         )
 
 
+def test_native_build_remaps_source_registry_and_target_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cargo = tmp_path / "cargo"
+    cargo.write_text("", encoding="utf-8")
+    monkeypatch.setattr(pyowl_build.shutil, "which", lambda *args, **kwargs: str(cargo))
+    captured: dict[str, str] = {}
+
+    def run(command: list[str], *, cwd: Path, env: dict[str, str], check: bool) -> None:
+        assert command[0] == str(cargo)
+        assert cwd == tmp_path
+        assert check
+        captured.update(env)
+
+    monkeypatch.setattr(pyowl_build.subprocess, "run", run)
+    environment = {
+        "PATH": str(tmp_path),
+        "CARGO_HOME": str(tmp_path / "cargo home"),
+        "CARGO_TARGET_DIR": str(tmp_path / "target"),
+        "RUSTFLAGS": "-C opt-level=2",
+    }
+    artifact = pyowl_build.native_artifact_path(tmp_path, environment)
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"native")
+    result = pyowl_build.build_native_extension(
+        tmp_path,
+        pyowl_build.NativeBuildMode.REQUIRED,
+        environment=environment,
+    )
+
+    assert result == artifact
+    assert "RUSTFLAGS" not in captured
+    flags = captured["CARGO_ENCODED_RUSTFLAGS"].split("\x1f")
+    assert flags[:2] == ["-C", "opt-level=2"]
+    assert f"--remap-path-prefix={tmp_path.resolve()}=/rust/pyowl-core" in flags
+    assert any(flag.endswith("=/rust/cargo-registry") for flag in flags)
+    assert any(flag.endswith("=/rust/target") for flag in flags)
+
+
 def test_native_artifact_path_honours_target_configuration(tmp_path: Path) -> None:
     environment = {
         "CARGO_TARGET_DIR": "cargo-output",
@@ -97,6 +140,37 @@ def test_native_artifact_path_honours_target_configuration(tmp_path: Path) -> No
         / "release"
         / "lib_native.so"
     )
+
+
+def test_macos_native_build_disables_nondeterministic_linker_uuid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cargo = tmp_path / "cargo"
+    cargo.write_text("", encoding="utf-8")
+    monkeypatch.setattr(pyowl_build.shutil, "which", lambda *args, **kwargs: str(cargo))
+    monkeypatch.setattr(pyowl_build.sys, "platform", "darwin")
+    captured: dict[str, str] = {}
+
+    def run(command: list[str], *, cwd: Path, env: dict[str, str], check: bool) -> None:
+        assert command[0] == str(cargo)
+        assert cwd == tmp_path
+        assert check
+        captured.update(env)
+
+    monkeypatch.setattr(pyowl_build.subprocess, "run", run)
+    environment = {"PATH": str(tmp_path), "CARGO_TARGET_DIR": str(tmp_path / "target")}
+    artifact = pyowl_build.native_artifact_path(tmp_path, environment, platform="darwin")
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"native")
+
+    assert pyowl_build.build_native_extension(
+        tmp_path,
+        pyowl_build.NativeBuildMode.REQUIRED,
+        environment=environment,
+    ) == artifact
+    flags = captured["CARGO_ENCODED_RUSTFLAGS"].split("\x1f")
+    assert flags[-2:] == ["-C", "link-arg=-Wl,-no_uuid"]
 
 
 def test_macos_extension_install_name_is_reproducible(
@@ -167,3 +241,54 @@ def test_non_macos_extension_needs_no_install_name_tool(
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()),
     )
     pyowl_build.normalize_native_extension(tmp_path / "_native.so", platform="linux")
+
+
+def test_source_archive_normalizes_gzip_tar_metadata_and_order(tmp_path: Path) -> None:
+    source = tmp_path / "pyowl_core-0.1.0.dev0"
+    nested = source / "package"
+    nested.mkdir(parents=True)
+    regular = nested / "module.py"
+    executable = source / "build-tool"
+    regular.write_text("VALUE = 1\n", encoding="utf-8")
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    epoch = 1_735_689_600
+
+    first = Path(
+        pyowl_build.build_reproducible_sdist(
+            tmp_path / "first",
+            source.name,
+            epoch=epoch,
+            root_dir=tmp_path,
+        )
+    )
+    os.utime(source, (epoch + 100, epoch + 100))
+    os.utime(regular, (epoch + 200, epoch + 200))
+    second = Path(
+        pyowl_build.build_reproducible_sdist(
+            tmp_path / "second",
+            source.name,
+            epoch=epoch,
+            root_dir=tmp_path,
+        )
+    )
+
+    assert first.read_bytes() == second.read_bytes()
+    assert int.from_bytes(first.read_bytes()[4:8], "little") == epoch
+    with (
+        gzip.open(first, "rb") as compressed,
+        tarfile.open(fileobj=compressed, mode="r:") as archive,
+    ):
+        members = archive.getmembers()
+    assert [member.name for member in members] == sorted(
+        (member.name for member in members),
+        key=lambda name: (name.count("/"), name),
+    )
+    assert all(member.mtime == epoch for member in members)
+    assert all(
+        (member.uid, member.gid, member.uname, member.gname) == (0, 0, "", "")
+        for member in members
+    )
+    modes = {member.name: member.mode for member in members}
+    assert modes[f"{source.name}/package/module.py"] == 0o644
+    assert modes[f"{source.name}/build-tool"] == 0o755

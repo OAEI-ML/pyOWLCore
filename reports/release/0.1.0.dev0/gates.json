@@ -1,0 +1,53 @@
+{
+  "gates": {
+    "advisory_scan": {
+      "evidence": "no release advisory database scan is retained",
+      "status": "blocked"
+    },
+    "consumer_matrix": {
+      "evidence": "WP11 evidence covers earlier exact consumer commits",
+      "status": "blocked"
+    },
+    "legal_review": {
+      "evidence": "no accountable legal approval is recorded",
+      "status": "blocked"
+    },
+    "name_control": {
+      "evidence": "PyPI and TestPyPI name control is not established",
+      "status": "blocked"
+    },
+    "platform_artifact_audit": {
+      "evidence": "the hosted multi-platform artifact workflow has not run",
+      "status": "blocked"
+    },
+    "project_urls": {
+      "evidence": "approved repository documentation and issue URLs are omitted",
+      "status": "blocked"
+    },
+    "reference_performance": {
+      "evidence": "no approved reference-machine candidate exists",
+      "status": "blocked"
+    },
+    "release_owner_approval": {
+      "evidence": "no release-owner approval is recorded",
+      "status": "blocked"
+    },
+    "signatures": {
+      "evidence": "no release signatures or index attestations exist",
+      "status": "blocked"
+    },
+    "source_tag_verified": {
+      "evidence": "no signed release tag is selected",
+      "status": "blocked"
+    },
+    "testpypi_rehearsal": {
+      "evidence": "no TestPyPI publication is authorized",
+      "status": "blocked"
+    },
+    "trusted_publishing": {
+      "evidence": "publisher identities are not configured",
+      "status": "blocked"
+    }
+  },
+  "schema": 1
+}

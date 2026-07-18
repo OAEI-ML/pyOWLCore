@@ -453,7 +453,10 @@ def main(argv: list[str] | None = None) -> int:
             require_project_urls=args.release,
         )
         reports.append(result.to_dict())
-        if not result.ok or (args.release and not result.release_ready):
+        # ``--release`` promotes missing project URLs to structural errors.
+        # Target-platform binary checks remain separately evidenced by the
+        # checksum-bound platform gate and cannot be repeated on this host.
+        if not result.ok:
             status = 1
     rendered = json.dumps(reports, indent=2, sort_keys=True) + "\n"
     if args.output is None:

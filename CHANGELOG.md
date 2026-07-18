@@ -20,6 +20,16 @@ adapter protocol versions.
   metadata discovery, and zero-reparse conformance fixtures.
 - Python 3.10 and 3.12 semantic, security, conformance, consumer, and
   performance evidence.
+- Explicit universal-pure and required-native PEP 517 build modes, artifact and
+  import inspectors, locked dependency/license inventory, deterministic
+  pure/native SBOMs, and a checksum-bound fail-closed release report.
+- Immutable-candidate CPython 3.10–3.14 native wheel definitions for five
+  platform/arch lanes, pure CPython/PyPy resolver lanes, deterministic sdist
+  and wheel rebuild checks, source-path remapping, and guarded Trusted
+  Publishing promotion that consumes an explicit successful build run.
+- Curated API, architecture, consumer handoff, compatibility, migration,
+  security, troubleshooting, performance, release, yank, and rollback guidance
+  with executable Java-free examples.
 
 ### Changed
 
@@ -28,6 +38,9 @@ adapter protocol versions.
 - `OntologySnapshot`, `OntologyOverlay`, and `OntologyComposite` are sibling
   implementations of `OntologyView`; an overlay or composite is not coerced
   into a materialized snapshot.
+- Packaging metadata uses the PEP 639 Apache-2.0 expression and includes NOTICE
+  plus exact third-party license texts/inventory. This is engineering metadata,
+  not a claim of completed legal approval.
 
 ### Security
 
@@ -42,4 +55,3 @@ adapter protocol versions.
   PyPI-name, TestPyPI, signing, and reference-machine gates are complete.
 - Existing consumer constraints currently target `pyowl-core>=0.1,<0.2`; a
   future 1.0 package version requires coordinated consumer range updates.
-

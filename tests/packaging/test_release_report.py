@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -115,3 +116,30 @@ def test_gate_parser_requires_known_name_status_and_evidence() -> None:
         release_report.parse_gate("unknown=passed:evidence")
     with pytest.raises(Exception, match="evidence"):
         release_report.parse_gate("legal_review=passed:")
+
+
+def test_gate_file_is_strict_and_round_trips(tmp_path: Path) -> None:
+    path = tmp_path / "gates.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "gates": {
+                    "legal_review": {
+                        "status": "blocked",
+                        "evidence": "approval has not been recorded",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert release_report.load_gate_file(path) == {
+        "legal_review": ReleaseGate(
+            status="blocked", evidence="approval has not been recorded"
+        )
+    }
+
+    path.write_text('{"schema": 1, "gates": {"invented": {}}}', encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown release gate"):
+        release_report.load_gate_file(path)

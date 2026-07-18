@@ -12,6 +12,10 @@ publication occurred.
       (`reports/performance/`).
 - [x] Curated public API snapshot audit (`tools/audit/public-api-v0.txt`).
 - [x] Migration, compatibility, security, troubleshooting, and executable examples.
+- [x] Explicit pure/native build modes, archive/import audits, locked dependency
+      inventory, deterministic SBOMs, and fail-closed release report generator.
+- [x] Immutable-candidate hosted wheel/release workflow definitions with guarded
+      TestPyPI/PyPI promotion; successful execution remains required below.
 
 ## Required before a public release
 
@@ -36,4 +40,3 @@ publication occurred.
 
 Any unchecked item is a release blocker. No local test can fabricate index
 ownership, legal approval, signatures, or external publishing evidence.
-

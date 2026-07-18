@@ -56,6 +56,33 @@ def parse_gate(value: str) -> tuple[str, ReleaseGate]:
     return name, ReleaseGate(status=status, evidence=evidence.strip())  # type: ignore[arg-type]
 
 
+def load_gate_file(path: Path) -> dict[str, ReleaseGate]:
+    """Load an auditable JSON gate manifest without accepting unknown fields."""
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid release gate JSON: {error}") from error
+    if not isinstance(payload, dict) or set(payload) != {"schema", "gates"}:
+        raise ValueError("release gate file must contain exactly schema and gates")
+    if payload["schema"] != 1 or not isinstance(payload["gates"], dict):
+        raise ValueError("release gate file must use schema 1 and an object of gates")
+    rendered: dict[str, ReleaseGate] = {}
+    for name, value in payload["gates"].items():
+        if name not in REQUIRED_RELEASE_GATES:
+            raise ValueError(f"unknown release gate {name!r}")
+        if not isinstance(value, dict) or set(value) != {"status", "evidence"}:
+            raise ValueError(f"release gate {name!r} must contain status and evidence")
+        status = value["status"]
+        evidence = value["evidence"]
+        if status not in {"passed", "blocked", "failed"}:
+            raise ValueError(f"invalid status for release gate {name!r}")
+        if not isinstance(evidence, str) or not evidence.strip():
+            raise ValueError(f"release gate {name!r} has no evidence")
+        rendered[name] = ReleaseGate(status=status, evidence=evidence.strip())
+    return rendered
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -166,11 +193,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("artifact_dir", type=Path)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--expected-version", default="0.1.0.dev0")
+    parser.add_argument("--gate-file", type=Path)
     parser.add_argument("--gate", action="append", default=[], type=parse_gate)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--require-ready", action="store_true")
     args = parser.parse_args(argv)
-    gates: dict[str, ReleaseGate] = {}
+    try:
+        gates = {} if args.gate_file is None else load_gate_file(args.gate_file)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     for name, gate in args.gate:
         if name in gates:
             parser.error(f"duplicate release gate {name!r}")

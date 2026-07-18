@@ -6,10 +6,11 @@ pyELK, pyHermiT, pyOwl2Vec-Star-projector, and OAEI evaluation code. Consumers
 build their own reasoning or projection IR; they do not reparse paths or own a
 second OWL object model.
 
-The implementation is complete through the consumer-integration work package.
-It is not yet a published 1.0 release: packaging, external publication, legal,
-reference-machine performance, and consumer version-range gates remain listed
-in [the release checklist](docs/release-checklist.md).
+The repository-owned implementation is complete through the documentation/API
+stabilization candidate. It is not yet a published 1.0 release: hosted artifact
+verification, external publication, legal, security, reference-platform
+performance, and coordinated consumer gates remain in
+[the release checklist](docs/release-checklist.md).
 
 ## Quick start
 

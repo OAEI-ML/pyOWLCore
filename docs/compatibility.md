@@ -26,6 +26,25 @@ The machine-readable authority is
 Do not infer compatibility with later untested commits or widen these ranges
 from model/wire numbers alone.
 
+## Interpreter support and evidence
+
+`Requires-Python: >=3.10` is the installation contract; the classifiers name
+the CPython versions targeted by the current candidate. Evidence is narrower
+than metadata until the hosted WP12 matrix succeeds for the selected revision:
+
+| Interpreter | Candidate policy | Evidence at this handoff |
+|---|---|---|
+| CPython 3.10 | pure and approved native wheels | complete local pure suite; local macOS x86_64 native wheel/examples; hosted platform matrix pending |
+| CPython 3.11 | pure and approved native wheels | workflow lane defined; selected-revision hosted result pending |
+| CPython 3.12 | pure and approved native wheels | complete local pure/source-tree suite; hosted native matrix pending |
+| CPython 3.13 | pure and approved native wheels | workflow lane defined; selected-revision hosted result pending |
+| CPython 3.14 | pure and approved native wheels | workflow lane defined; selected-revision hosted result pending |
+| PyPy 3.10 | pure wheel only | resolver/test lane defined; selected-revision hosted result pending |
+
+“Supported” therefore does not mean that an unexecuted native wheel already
+exists. Unsupported implementations/platforms must resolve to the universal
+pure wheel, and native support is advertised only after its target lane passes.
+
 ## 1.0 handoff rule
 
 The current consumers exclude package version 1.0. A 1.0 release therefore
@@ -33,4 +52,3 @@ requires coordinated consumer dependency updates and a repeated exact-commit
 matrix. Until that evidence exists, the 1.0 API snapshot is a candidate and the
 release checklist remains blocked; documentation does not silently relabel the
 tested 0.1 line as consumer-compatible 1.0.
-
