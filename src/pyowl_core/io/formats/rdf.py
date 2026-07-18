@@ -978,6 +978,7 @@ class RDFMapper:
             if owner != root:
                 self._mapping_error("shared RDF collection tail")
             self._claim(current, "list")
+            self._consume_marker(current, RDF + "List")
             first = self.graph.one(current, RDF + "first", required=True)
             rest = self.graph.one(current, RDF + "rest", required=True)
             first_term = cast(RDFTerm, first)
@@ -1715,7 +1716,7 @@ _STRUCTURAL_PREDICATES = {
 
 
 def _is_structural_type(value: str) -> bool:
-    return value.startswith(OWL) or value == RDFS + "Datatype"
+    return value.startswith(OWL) or value in {RDF + "List", RDFS + "Datatype"}
 
 
 def _resource_key(value: RDFResource) -> tuple[str, str]:
