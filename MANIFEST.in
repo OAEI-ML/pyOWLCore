@@ -1,10 +1,30 @@
 include LICENSE
 include NOTICE
 include README.md
+include CHANGELOG.md
+include MIGRATION.md
 include CONTRIBUTING.md
 include SECURITY.md
-recursive-include reports *.md
+include MANIFEST.in
+include pyproject.toml
+include pyowl_build.py
+include setup.py
+include native/Cargo.toml
+include native/Cargo.lock
+recursive-include native/src *.rs
+recursive-include native/tests *.rs
+recursive-include docs *.md *.py
+recursive-include benchmarks *.md *.py *.toml *.json
+recursive-include reports *.md *.json *.toml *.txt
 recursive-include schemas *.toml
 recursive-include specs *.md *.toml
-recursive-include src *.py py.typed
+recursive-include src *.py *.pyi py.typed
+recursive-include tests *.py *.toml *.json *.ofn *.owx *.rdf *.ttl *.bin
+include tests/fuzz/native/Cargo.lock
+recursive-include tests/fuzz/native/fuzz_targets *.rs
 recursive-include tools *.py *.md
+recursive-include THIRD_PARTY_LICENSES *
+prune tests/fuzz/native/target
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude .DS_Store
