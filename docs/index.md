@@ -11,6 +11,7 @@ files under `specs/`; examples never override those contracts.
 - [Troubleshooting](troubleshooting.md)
 - [Performance](performance.md)
 - [Compatibility](compatibility.md)
+- [Specification traceability](spec-traceability.md)
 - [Release checklist](release-checklist.md)
 
 Executable examples:
