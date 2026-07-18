@@ -13,5 +13,9 @@ files under `specs/`; examples never override those contracts.
 - [Compatibility](compatibility.md)
 - [Release checklist](release-checklist.md)
 
-The executable example is [`examples/parse_once.py`](examples/parse_once.py).
+Executable examples:
 
+- [`examples/parse_once.py`](examples/parse_once.py) demonstrates one in-process
+  view shared across consumer boundaries and wire transport between processes.
+- [`examples/secure_local_import.py`](examples/secure_local_import.py)
+  demonstrates strict local mapping with network access disabled.

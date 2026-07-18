@@ -11,6 +11,7 @@ from urllib.parse import unquote
 import pyowl_core
 
 ROOT = Path(__file__).resolve().parents[2]
+EXAMPLES = tuple(sorted((ROOT / "docs" / "examples").glob("*.py")))
 DOCUMENTS = (
     ROOT / "README.md",
     ROOT / "CHANGELOG.md",
@@ -92,19 +93,29 @@ def test_parse_once_example_executes_and_preserves_view_identity() -> None:
     assert next(member.view for member in composite.members) is source
 
 
+def test_secure_local_import_example_executes_without_network() -> None:
+    example = ROOT / "docs" / "examples" / "secure_local_import.py"
+    namespace = runpy.run_path(str(example))
+    demonstrate = cast(Callable[[], pyowl_core.OntologySnapshot], namespace["demonstrate"])
+    snapshot = demonstrate()
+    assert snapshot.is_complete
+    assert len(snapshot.documents) == 2
+    assert all(edge.resolver_name == "mapping" for edge in snapshot.import_manifest.edges)
+
+
 def test_examples_import_no_java_or_consumer_runtime() -> None:
-    example = ROOT / "docs" / "examples" / "parse_once.py"
-    tree = ast.parse(example.read_text(encoding="utf-8"), filename=str(example))
-    imports = {
-        alias.name.split(".", 1)[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    }
-    imports.update(
-        node.module.split(".", 1)[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-    )
-    assert imports.isdisjoint(FORBIDDEN_IMPORTS)
-    assert imports <= {"__future__", "dataclasses", "pyowl_core"}
+    for example in EXAMPLES:
+        tree = ast.parse(example.read_text(encoding="utf-8"), filename=str(example))
+        imports = {
+            alias.name.split(".", 1)[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        imports.update(
+            node.module.split(".", 1)[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        )
+        assert imports.isdisjoint(FORBIDDEN_IMPORTS)
+        assert imports <= {"__future__", "dataclasses", "pyowl_core"}

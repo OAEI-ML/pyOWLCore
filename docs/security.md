@@ -11,6 +11,11 @@ automatic permission to fetch the same URL.
 Caller-owned streams are read once and remain open. Text streams require an
 explicit format and document IRI. A plain string is a filesystem path.
 
+[`examples/secure_local_import.py`](examples/secure_local_import.py) is a
+complete runnable example using `ImportPolicy.RESOLVE_LOCAL`, an exact
+`MappingResolver`, and `offline=True`. It resolves a declared import without
+DNS, sockets, a Java runtime, or an implicit plugin.
+
 ## Resource limits
 
 Use `ParseLimits` and cancellation for untrusted inputs. Limits cover source
@@ -38,4 +43,3 @@ credentials unless the application explicitly authorizes them.
 
 The release Java scan covers source, artifacts, nested archives, lockfiles,
 SBOMs, build scripts, and download strings—not only `.jar` filenames.
-
