@@ -16,6 +16,7 @@ from pyowl_build import (  # noqa: E402
     NativeBuildMode,
     build_native_extension,
     is_native_build_command,
+    normalize_native_extension,
     parse_native_build_mode,
 )
 
@@ -37,6 +38,7 @@ class RustBuildExt(build_ext):
         destination = Path(self.get_ext_fullpath(extension.name))
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(PREBUILT_NATIVE, destination)
+        normalize_native_extension(destination)
 
 
 extension_modules = (

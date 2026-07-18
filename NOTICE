@@ -5,3 +5,7 @@ This product is specified against W3C OWL 2 Recommendations. W3C documents and
 test-suite materials remain subject to their respective terms and are not
 relicensed by this repository.
 
+The optional native extension incorporates Rust crates recorded exactly in
+THIRD_PARTY_LICENSES/inventory.toml. Apache-2.0 is selected where a crate offers
+MIT OR Apache-2.0; target-lexicon's LLVM exception and unicode-ident's Unicode
+License v3 terms are reproduced under THIRD_PARTY_LICENSES/.

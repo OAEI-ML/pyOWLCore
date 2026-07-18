@@ -1,0 +1,204 @@
+"""Generate a checksum-bound release decision report from inspected artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+from .artifact_inspector import InspectionResult, inspect_artifact
+
+GateStatus = Literal["passed", "blocked", "failed"]
+REQUIRED_RELEASE_GATES = (
+    "advisory_scan",
+    "consumer_matrix",
+    "legal_review",
+    "name_control",
+    "platform_artifact_audit",
+    "project_urls",
+    "reference_performance",
+    "release_owner_approval",
+    "signatures",
+    "source_tag_verified",
+    "testpypi_rehearsal",
+    "trusted_publishing",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseGate:
+    """One externally evidenced release decision."""
+
+    status: GateStatus
+    evidence: str
+
+
+def parse_gate(value: str) -> tuple[str, ReleaseGate]:
+    """Parse ``NAME=STATUS:EVIDENCE`` without accepting empty evidence."""
+
+    try:
+        name, decision = value.split("=", 1)
+        status, evidence = decision.split(":", 1)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "gate must use NAME=passed|blocked|failed:EVIDENCE"
+        ) from error
+    if name not in REQUIRED_RELEASE_GATES:
+        raise argparse.ArgumentTypeError(f"unknown release gate {name!r}")
+    if status not in {"passed", "blocked", "failed"}:
+        raise argparse.ArgumentTypeError(f"invalid gate status {status!r}")
+    if not evidence.strip():
+        raise argparse.ArgumentTypeError("gate evidence must not be empty")
+    return name, ReleaseGate(status=status, evidence=evidence.strip())  # type: ignore[arg-type]
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024**2), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact_paths(directory: Path) -> tuple[Path, ...]:
+    paths = [
+        path
+        for path in directory.iterdir()
+        if path.is_file() and (path.suffix == ".whl" or path.name.endswith(".tar.gz"))
+    ]
+    return tuple(sorted(paths, key=lambda path: path.name))
+
+
+def build_release_report(
+    artifact_dir: Path,
+    *,
+    source_revision: str,
+    gates: dict[str, ReleaseGate],
+    expected_version: str = "0.1.0.dev0",
+) -> dict[str, object]:
+    """Inspect and bind an artifact set to explicit internal/external gates."""
+
+    if re.fullmatch(r"[0-9a-f]{40}", source_revision) is None:
+        raise ValueError("source revision must be a full lowercase 40-character Git SHA")
+    paths = _artifact_paths(artifact_dir)
+    if not paths:
+        raise ValueError("artifact directory contains no wheel or sdist")
+
+    artifacts: list[dict[str, object]] = []
+    results: list[InspectionResult] = []
+    for path in paths:
+        result = inspect_artifact(path, expected_version=expected_version)
+        results.append(result)
+        artifacts.append(
+            {
+                "filename": path.name,
+                "sha256": _sha256(path),
+                "bytes": path.stat().st_size,
+                "kind": result.kind,
+                "variant": result.variant,
+                "inspection_ok": result.ok,
+                "errors": list(result.errors),
+                "release_blockers": list(result.release_blockers),
+                "deferred_platform_checks": list(result.deferred_platform_checks),
+            }
+        )
+
+    set_errors: list[str] = []
+    pure_count = sum(result.variant == "pure" for result in results)
+    sdist_count = sum(result.variant == "sdist" for result in results)
+    native_count = sum(result.variant == "native" for result in results)
+    if pure_count != 1:
+        set_errors.append(f"artifact set must contain exactly one pure wheel; found {pure_count}")
+    if sdist_count != 1:
+        set_errors.append(f"artifact set must contain exactly one sdist; found {sdist_count}")
+    if native_count == 0:
+        set_errors.append("artifact set contains no native wheels")
+
+    blockers = list(set_errors)
+    for result in results:
+        blockers.extend(f"{Path(result.path).name}: {error}" for error in result.errors)
+        blockers.extend(
+            f"{Path(result.path).name}: {blocker}" for blocker in result.release_blockers
+        )
+    platform_gate = gates.get("platform_artifact_audit")
+    if platform_gate is None or platform_gate.status != "passed":
+        for result in results:
+            blockers.extend(
+                f"{Path(result.path).name}: {check}"
+                for check in result.deferred_platform_checks
+            )
+
+    rendered_gates: dict[str, dict[str, str]] = {}
+    for name in REQUIRED_RELEASE_GATES:
+        gate = gates.get(name)
+        if gate is None:
+            blockers.append(f"release gate has no evidence: {name}")
+            rendered_gates[name] = {"status": "blocked", "evidence": "not supplied"}
+        else:
+            rendered_gates[name] = {"status": gate.status, "evidence": gate.evidence}
+            if gate.status != "passed":
+                blockers.append(f"release gate {name} is {gate.status}: {gate.evidence}")
+
+    unique_blockers = sorted(set(blockers))
+    return {
+        "schema": 1,
+        "distribution": "pyowl-core",
+        "version": expected_version,
+        "source_revision": source_revision,
+        "artifacts": artifacts,
+        "artifact_counts": {
+            "pure_wheels": pure_count,
+            "native_wheels": native_count,
+            "sdists": sdist_count,
+        },
+        "gates": rendered_gates,
+        "release_ready": not unique_blockers,
+        "blockers": unique_blockers,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("artifact_dir", type=Path)
+    parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--expected-version", default="0.1.0.dev0")
+    parser.add_argument("--gate", action="append", default=[], type=parse_gate)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--require-ready", action="store_true")
+    args = parser.parse_args(argv)
+    gates: dict[str, ReleaseGate] = {}
+    for name, gate in args.gate:
+        if name in gates:
+            parser.error(f"duplicate release gate {name!r}")
+        gates[name] = gate
+    try:
+        report = build_release_report(
+            args.artifact_dir.resolve(),
+            source_revision=args.source_revision,
+            gates=gates,
+            expected_version=args.expected_version,
+        )
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(f"release report generated: {args.output}")
+    artifact_rows = report["artifacts"]
+    assert isinstance(artifact_rows, list)
+    inspection_failed = any(
+        not bool(artifact["inspection_ok"])
+        for artifact in artifact_rows
+        if isinstance(artifact, dict)
+    )
+    return int(inspection_failed or (args.require_ready and not bool(report["release_ready"])))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,33 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [],
+  "dependencies": [
+    {
+      "dependsOn": [],
+      "ref": "pkg:pypi/pyowl-core@0.1.0.dev0?variant=pure"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "pkg:pypi/pyowl-core@0.1.0.dev0?variant=pure",
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "name": "pyowl-core",
+      "properties": [
+        {
+          "name": "pyowl-core:artifact-variant",
+          "value": "pure"
+        }
+      ],
+      "purl": "pkg:pypi/pyowl-core@0.1.0.dev0",
+      "type": "library",
+      "version": "0.1.0.dev0"
+    }
+  },
+  "serialNumber": "urn:uuid:f7020f4a-5eae-5fbc-ba17-c10aa738887f",
+  "specVersion": "1.5",
+  "version": 1
+}

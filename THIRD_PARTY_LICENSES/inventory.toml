@@ -1,0 +1,104 @@
+schema = 1
+lockfile = "native/Cargo.lock"
+selection = "Apache-2.0 is selected where the resolved crate offers MIT OR Apache-2.0"
+legal_approval = false
+
+[[component]]
+name = "heck"
+version = "0.5.0"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-build"
+
+[[component]]
+name = "libc"
+version = "0.2.186"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-runtime"
+
+[[component]]
+name = "once_cell"
+version = "1.21.4"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-runtime"
+
+[[component]]
+name = "portable-atomic"
+version = "1.14.0"
+license = "Apache-2.0 OR MIT"
+selected_license = "Apache-2.0"
+scope = "native-runtime"
+
+[[component]]
+name = "proc-macro2"
+version = "1.0.106"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-build"
+
+[[component]]
+name = "pyo3"
+version = "0.29.0"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-runtime"
+
+[[component]]
+name = "pyo3-build-config"
+version = "0.29.0"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-build"
+
+[[component]]
+name = "pyo3-ffi"
+version = "0.29.0"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-runtime"
+
+[[component]]
+name = "pyo3-macros"
+version = "0.29.0"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-build"
+
+[[component]]
+name = "pyo3-macros-backend"
+version = "0.29.0"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-build"
+
+[[component]]
+name = "quote"
+version = "1.0.46"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-build"
+
+[[component]]
+name = "syn"
+version = "2.0.119"
+license = "MIT OR Apache-2.0"
+selected_license = "Apache-2.0"
+scope = "native-build"
+
+[[component]]
+name = "target-lexicon"
+version = "0.13.5"
+license = "Apache-2.0 WITH LLVM-exception"
+selected_license = "Apache-2.0 WITH LLVM-exception"
+scope = "native-build"
+additional_license_file = "THIRD_PARTY_LICENSES/LLVM-exception.txt"
+
+[[component]]
+name = "unicode-ident"
+version = "1.0.24"
+license = "(MIT OR Apache-2.0) AND Unicode-3.0"
+selected_license = "Apache-2.0 AND Unicode-3.0"
+scope = "native-build"
+additional_license_file = "THIRD_PARTY_LICENSES/Unicode-3.0.txt"

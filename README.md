@@ -75,6 +75,7 @@ install from a reviewed checkout rather than assuming a PyPI release exists.
 - [Version and consumer compatibility](docs/compatibility.md)
 - [Migration guide](MIGRATION.md)
 - [Release checklist](docs/release-checklist.md)
+- [Release, yank, and security rollback](docs/releasing.md)
 
 Normative requirements begin at [the master specification](specs/SPEC.md).
 

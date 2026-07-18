@@ -31,7 +31,10 @@ def audit_metadata(root: Path) -> list[str]:
         r'(?m)^name\s*=\s*"pyowl-core"\s*$': "distribution name",
         r'(?m)^version\s*=\s*"0\.1\.0\.dev0"\s*$': "version",
         r'(?m)^requires-python\s*=\s*">=3\.10"\s*$': "Python requirement",
-        r'(?m)^license\s*=\s*\{\s*file\s*=\s*"LICENSE"\s*\}\s*$': "license",
+        r'(?m)^license\s*=\s*"Apache-2\.0"\s*$': "SPDX license",
+        r'(?m)^license-files\s*=\s*\["LICENSE", "NOTICE", "THIRD_PARTY_LICENSES/\*"\]\s*$': (
+            "license files"
+        ),
         r"(?ms)^dependencies\s*=\s*\[\s*\]": "empty runtime dependencies",
     }
     for pattern, label in expectations.items():

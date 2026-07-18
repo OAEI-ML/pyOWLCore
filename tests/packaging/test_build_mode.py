@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 import pytest
@@ -96,3 +97,73 @@ def test_native_artifact_path_honours_target_configuration(tmp_path: Path) -> No
         / "release"
         / "lib_native.so"
     )
+
+
+def test_macos_extension_install_name_is_reproducible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extension = tmp_path / "_native.cpython-310-darwin.so"
+    identifier = b"@rpath/_native.so\0"
+    command_size = 24 + len(identifier)
+    command_size += -command_size % 8
+    header = struct.pack(
+        "<IiiIIIII",
+        0xFEEDFACF,
+        0,
+        0,
+        6,
+        1,
+        command_size,
+        0,
+        0,
+    )
+    command = struct.pack("<IIIIII", 0xD, command_size, 24, 123456789, 0, 0)
+    extension.write_bytes(header + command + identifier.ljust(command_size - 24, b"\0"))
+    calls: list[tuple[list[str], dict[str, str]]] = []
+    monkeypatch.setattr(
+        pyowl_build.shutil,
+        "which",
+        lambda command, **kwargs: "/usr/bin/install_name_tool",
+    )
+
+    def capture(
+        command: list[str],
+        *,
+        env: dict[str, str],
+        check: bool,
+    ) -> None:
+        assert check
+        calls.append((command, env))
+
+    monkeypatch.setattr(pyowl_build.subprocess, "run", capture)
+    environment = {"PATH": "/usr/bin"}
+    pyowl_build.normalize_native_extension(
+        extension,
+        environment,
+        platform="darwin",
+    )
+    assert calls == [
+        (
+            [
+                "/usr/bin/install_name_tool",
+                "-id",
+                "@rpath/_native.cpython-310-darwin.so",
+                str(extension),
+            ],
+            environment,
+        )
+    ]
+    assert struct.unpack_from("<I", extension.read_bytes(), 32 + 12) == (0,)
+
+
+def test_non_macos_extension_needs_no_install_name_tool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pyowl_build.shutil,
+        "which",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()),
+    )
+    pyowl_build.normalize_native_extension(tmp_path / "_native.so", platform="linux")

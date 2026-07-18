@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import struct
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -119,6 +120,74 @@ def build_native_extension(
     return artifact
 
 
+def normalize_native_extension(
+    path: Path,
+    environment: Mapping[str, str] | None = None,
+    *,
+    platform: str | None = None,
+) -> None:
+    """Remove a build-directory install name from a copied macOS extension."""
+
+    system = sys.platform if platform is None else platform
+    if system != "darwin":
+        return
+    selected = os.environ if environment is None else environment
+    tool = shutil.which("install_name_tool", path=selected.get("PATH"))
+    if tool is None:
+        raise RuntimeError(
+            "pyowl-core cannot normalize the macOS native extension: "
+            "install_name_tool is unavailable"
+        )
+    try:
+        subprocess.run(
+            [tool, "-id", f"@rpath/{path.name}", str(path)],
+            env=dict(selected),
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(
+            f"pyowl-core could not normalize the macOS native extension: {error}"
+        ) from error
+    _zero_macho_dylib_timestamp(path)
+
+
+def _zero_macho_dylib_timestamp(path: Path) -> None:
+    """Normalize install_name_tool's wall-clock LC_ID_DYLIB timestamp."""
+
+    payload = bytearray(path.read_bytes())
+    if len(payload) < 32:
+        raise RuntimeError("pyowl-core produced a truncated macOS native extension")
+    magic = bytes(payload[:4])
+    formats = {
+        b"\xce\xfa\xed\xfe": ("<", 28),
+        b"\xcf\xfa\xed\xfe": ("<", 32),
+        b"\xfe\xed\xfa\xce": (">", 28),
+        b"\xfe\xed\xfa\xcf": (">", 32),
+    }
+    selected = formats.get(magic)
+    if selected is None:
+        raise RuntimeError("pyowl-core produced an unsupported macOS Mach-O format")
+    endian, header_size = selected
+    (command_count,) = struct.unpack_from(f"{endian}I", payload, 16)
+    offset = header_size
+    found = False
+    for _ in range(command_count):
+        if offset + 8 > len(payload):
+            raise RuntimeError("pyowl-core produced malformed macOS load commands")
+        command, command_size = struct.unpack_from(f"{endian}II", payload, offset)
+        if command_size < 8 or offset + command_size > len(payload):
+            raise RuntimeError("pyowl-core produced malformed macOS load commands")
+        if command == 0xD:  # LC_ID_DYLIB
+            if command_size < 24:
+                raise RuntimeError("pyowl-core produced a malformed LC_ID_DYLIB command")
+            struct.pack_into(f"{endian}I", payload, offset + 12, 0)
+            found = True
+        offset += command_size
+    if not found:
+        raise RuntimeError("pyowl-core macOS extension has no LC_ID_DYLIB command")
+    path.write_bytes(payload)
+
+
 def _native_failure(mode: NativeBuildMode, reason: str) -> None:
     message = f"pyowl-core native extension unavailable: {reason}"
     if mode is NativeBuildMode.REQUIRED:
@@ -132,5 +201,6 @@ __all__ = [
     "build_native_extension",
     "is_native_build_command",
     "native_artifact_path",
+    "normalize_native_extension",
     "parse_native_build_mode",
 ]

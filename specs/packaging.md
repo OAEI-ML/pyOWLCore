@@ -169,7 +169,7 @@ agent should squat or publish the provisional name autonomously.
 8. Verify index metadata/signatures/install, then publish docs/release notes.
 
 Yanking/revocation procedures cover corrupted wheels, semantic divergence,
-security issues, name/metadata errors and license omissions. A native-wheel
-failure never requires yanking the valid pure artifact if resolver metadata can
-be corrected safely, but version immutability is respected.
-
+security issues, name/metadata errors and license omissions. PyPI currently
+yanks whole releases rather than individual files, so a defective native wheel
+normally requires yanking that version even when its pure wheel is valid; the
+files are never overwritten, and a correction uses a new immutable version.

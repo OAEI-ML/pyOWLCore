@@ -13,6 +13,7 @@ files under `specs/`; examples never override those contracts.
 - [Compatibility](compatibility.md)
 - [Specification traceability](spec-traceability.md)
 - [Release checklist](release-checklist.md)
+- [Release, yank, and security rollback](releasing.md)
 
 Executable examples:
 

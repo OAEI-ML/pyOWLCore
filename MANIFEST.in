@@ -12,10 +12,10 @@ include setup.py
 include native/Cargo.toml
 include native/Cargo.lock
 recursive-include native/src *.rs
-recursive-include native/tests *.rs
 recursive-include docs *.md *.py
 recursive-include benchmarks *.md *.py *.toml *.json
-recursive-include reports *.md *.json *.toml *.txt
+recursive-include reports *.md *.json *.txt
+prune reports/release
 recursive-include schemas *.toml
 recursive-include specs *.md *.toml
 recursive-include src *.py *.pyi py.typed
