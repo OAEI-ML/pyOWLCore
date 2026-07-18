@@ -1,77 +1,93 @@
 # pyowl-core
 
-`pyowl-core` is the specification and implementation scaffold for a shared,
-Java-free OWL 2 structural kernel for Python. It is intended to parse an
-ontology once and let Exact-OM, pyELK, pyHermiT, pyOwl2Vec-Star-projector, and
-OAEI-Bio-ML-eval reuse the same immutable snapshot without converting through
-OWLAPI objects, RDF triples, or files.
+`pyowl-core` is a Java-free OWL 2 structural kernel for Python 3.10 and newer.
+It parses an ontology once and exposes the same immutable view to Exact-OM,
+pyELK, pyHermiT, pyOwl2Vec-Star-projector, and OAEI evaluation code. Consumers
+build their own reasoning or projection IR; they do not reparse paths or own a
+second OWL object model.
 
-This repository is currently **spec-first**. It defines the contracts an
-implementation must satisfy; it does not yet claim parser or OWL 2 conformance.
+The implementation is complete through the consumer-integration work package.
+It is not yet a published 1.0 release: packaging, external publication, legal,
+reference-machine performance, and consumer version-range gates remain listed
+in [the release checklist](docs/release-checklist.md).
 
-## Product boundary
-
-`pyowl_core` owns:
-
-- the complete OWL 2 structural object model;
-- parsing, rendering, document identity, import resolution, and provenance;
-- immutable ontology documents, resolved snapshots, and change overlays;
-- reusable signatures, axiom indexes, structural views, and fingerprints;
-- a stable, validated wire/cache representation; and
-- equivalent optimized Rust and compiler-free Python backends.
-
-It deliberately does **not** own reasoning. pyELK compiles a snapshot to its EL
-index/saturation IR; pyHermiT compiles it to normalization, DL clauses, and
-tableau state; projectors compile it to graph edges. Those products must never
-be inserted into the shared structural model.
-
-## Target API
+## Quick start
 
 ```python
-from pyowl_core import ImportPolicy, LoadOptions, load_snapshot
-
-snapshot = load_snapshot(
-    "mondo.owl",
-    options=LoadOptions(imports=ImportPolicy.RESOLVE_STRICT),
+from pyowl_core import (
+    BackendPreference,
+    DocumentFormat,
+    ImportPolicy,
+    LoadOptions,
+    load_snapshot,
 )
 
-# Passing this exact object to another package performs no parsing or copying.
-reasoner = pyelk.Reasoner(snapshot)
-edges = pyowl2vec_star.project(snapshot)
+source = b"Ontology(<urn:example> Declaration(Class(<urn:example#A>)))"
+snapshot = load_snapshot(
+    source,
+    document_iri="urn:example:document",
+    options=LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.PYTHON,
+    ),
+)
+
+assert snapshot.is_complete
+assert len(tuple(snapshot.iter_axioms())) == 1
 ```
 
-Standalone consumers also accept paths/bytes and call
-`pyowl_core.coerce_snapshot(...)`. Caller-owned streams additionally pass an
-explicit `document_iri` (and `LoadOptions.format` for text streams); they are
-read once and remain open. In-process integrations expose
-`SnapshotProvider.owl_snapshot()`. Cross-process handoff uses the versioned
-wire format, never pickle.
+Passing `snapshot` to another package is an identity-preserving handoff:
+`coerce_snapshot(snapshot) is snapshot`. A provider implements
+`owl_snapshot()` and returns the same `OntologyView`. Cross-process handoff uses
+`encode_snapshot`, `decode_snapshot`, or `open_snapshot`; pickle and ontology
+path round-trips are not part of the contract.
 
-## Specifications
+## What the package owns
 
-Start with [`specs/SPEC.md`](specs/SPEC.md) and the work-package dependency
-graph in [`specs/workpackages/manifest.toml`](specs/workpackages/manifest.toml).
+- The complete immutable OWL 2 structural model and canonical identity.
+- RDF/XML, Turtle, OWL/XML, and Functional Syntax acquisition and rendering.
+- Explicit import resolution, provenance, limits, and secure offline defaults.
+- Documents, resolved snapshots, persistent overlays, and zero-copy composites.
+- Lazy structural indexes, fingerprints, and validated wire/cache transport.
+- Equivalent complete Python behavior and optional private Rust acceleration.
 
-## Compatibility target
+It deliberately does not classify, realize, check consistency, project graph
+edges, repair an ontology, or expose consumer-private IDs. See
+[architecture and view lifecycles](docs/views-and-architecture.md).
 
-- Distribution: `pyowl-core`
+## Installation status
+
+The intended distribution name is `pyowl-core`; control of that provisional
+name must be confirmed before publication. The pure build requires no compiler
+and no Java runtime. Native wheels are optional optimizations and must never
+remove features from the pure fallback. Until release artifacts are published,
+install from a reviewed checkout rather than assuming a PyPI release exists.
+
+## Documentation
+
+- [API guide](docs/api.md)
+- [Documents, snapshots, views, overlays, and composites](docs/views-and-architecture.md)
+- [Parse-once consumer handoff](docs/consumer-handoff.md)
+- [Security, imports, and caches](docs/security.md)
+- [Native fallback troubleshooting](docs/troubleshooting.md)
+- [Measured performance evidence](docs/performance.md)
+- [Version and consumer compatibility](docs/compatibility.md)
+- [Migration guide](MIGRATION.md)
+- [Release checklist](docs/release-checklist.md)
+
+Normative requirements begin at [the master specification](specs/SPEC.md).
+
+## Compatibility boundary
+
+- Distribution: `pyowl-core` (provisional until the name-control gate passes)
 - Import: `pyowl_core`
-- Python: 3.10 and newer
-- Runtime/build: no Java, JVM, JPype, OWLAPI, ROBOT, or Java archives
-- Project source license: Apache License 2.0 (approved third-party artifact
-  notices and terms still apply)
+- Python: `>=3.10`
+- Current package line: `0.1.x` development candidate
+- API: `(0, 1)`; model schema: `1`; wire: `(1, 1)`; adapter protocol: `1`
+- Runtime/build: no JDK, JRE, JVM, OWLAPI, JPype, ROBOT, Maven, Gradle, or Java archive
+- Project source license: Apache License 2.0; artifact notices remain subject to
+  completed third-party review
 
-## Standards baseline
-
-The normative model follows the
-[OWL 2 Structural Specification](https://www.w3.org/TR/owl2-syntax/), with
-syntax conversion governed by the
-[OWL 2 Mapping to RDF Graphs](https://www.w3.org/TR/owl2-mapping-to-rdf/).
-Profiles and conformance are tested against the corresponding W3C
-Recommendations. See [`specs/references.md`](specs/references.md).
-
-## Status
-
-No release should be published until all release gates in
-[`specs/verification.md`](specs/verification.md) pass, including reservation or
-confirmed ownership of the provisional PyPI project name `pyowl-core`.
+The exact tested consumer commits and ranges are recorded in
+[`reports/integration/consumer-compatibility.json`](reports/integration/consumer-compatibility.json).
