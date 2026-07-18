@@ -20,6 +20,7 @@ DOCUMENTS = (
 )
 PYTHON_FENCE = re.compile(r"```python[^\n]*\n(.*?)```", re.DOTALL)
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
+CONSUMER_HANDOFF = ROOT / "docs" / "consumer-handoff.md"
 FORBIDDEN_IMPORTS = frozenset(
     {
         "deeponto",
@@ -61,6 +62,24 @@ def test_every_python_fence_compiles() -> None:
             compile(snippet, f"{document}#python-{position}", "exec")
             compiled += 1
     assert compiled >= 2
+
+
+def test_consumer_handoff_uses_current_consumer_apis() -> None:
+    text = CONSUMER_HANDOFF.read_text(encoding="utf-8")
+    snippets = tuple(_python_snippets(CONSUMER_HANDOFF))
+
+    assert len(snippets) == 3
+    assert "pyelk.Reasoner(shared_view)" in snippets[0]
+    assert "elk.is_consistent().require_complete()" in snippets[0]
+    assert "pyhermit.Reasoner(shared_view)" in snippets[0]
+    assert "hermit.is_consistent()" in snippets[0]
+    assert "pyowl2vec_star_projector.Projector()" in snippets[1]
+    assert "projector.project(shared_view)" in snippets[1]
+    assert "reasoner.is_consistent().require_complete()" in snippets[2]
+    assert "reasoner.is_consistent()" in snippets[2]
+
+    assert ".check_consistency()" not in text
+    assert "pyowl2vec_star_projector.project(" not in text
 
 
 def test_readme_quickstart_executes_with_the_public_python_api() -> None:

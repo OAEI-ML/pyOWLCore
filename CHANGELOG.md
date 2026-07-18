@@ -41,6 +41,8 @@ adapter protocol versions.
 - Packaging metadata uses the PEP 639 Apache-2.0 expression and includes NOTICE
   plus exact third-party license texts/inventory. This is engineering metadata,
   not a claim of completed legal approval.
+- Consumer handoff examples now track the current pyELK, pyHermiT, and
+  OWL2Vec* projector APIs, including pyELK's explicit completeness result.
 
 ### Security
 
