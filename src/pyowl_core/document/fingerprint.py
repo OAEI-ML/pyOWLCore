@@ -191,13 +191,13 @@ def signature_fingerprint(
 
     if not isinstance(include_builtins, bool):
         raise TypeError("include_builtins must be bool")
-    members = tuple(sorted(set(values), key=canonical_bytes))
+    members = sorted({canonical_bytes(item) for item in values})
     pieces = [
         b"pyowl-core:snapshot-signature:v1\x00",
         bytes((int(include_builtins),)),
         encode_varint(len(members)),
     ]
-    pieces.extend(_frame(canonical_bytes(item)) for item in members)
+    pieces.extend(_frame(item) for item in members)
     return Fingerprint("sha256", 1, hashlib.sha256(b"".join(pieces)).digest())
 
 

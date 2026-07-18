@@ -32,8 +32,8 @@ from pyowl_core.model import (
     structural_digest,
     walk,
 )
-from pyowl_core.model import signature as node_signature
 from pyowl_core.model.axioms import AxiomNode
+from pyowl_core.model.visitor import _collect_signature
 
 from .delta import DeltaPolicy, OntologyDelta, combine_deltas
 from .document import Fingerprint
@@ -844,14 +844,12 @@ def collect_signature(
     *,
     include_builtins: bool,
 ) -> tuple[Entity, ...]:
-    gathered: set[Entity] = set()
-    for root in roots:
-        gathered.update(node_signature(root))
+    gathered = _collect_signature(roots)
     if not include_builtins:
-        gathered = {item for item in gathered if not _is_builtin(item)}
+        gathered = tuple(item for item in gathered if not _is_builtin(item))
     if kind is not None:
-        gathered = {item for item in gathered if item.kind is kind}
-    return tuple(sorted(gathered, key=canonical_bytes))
+        gathered = tuple(item for item in gathered if item.kind is kind)
+    return gathered
 
 
 def _is_builtin(entity: Entity) -> bool:

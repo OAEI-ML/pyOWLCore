@@ -26,10 +26,8 @@ from pyowl_core.model import (
     constructor_spec,
     encode_varint,
 )
-from pyowl_core.model import (
-    signature as node_signature,
-)
 from pyowl_core.model.axioms import AxiomNode
+from pyowl_core.model.visitor import _collect_signature
 
 from .provenance import DocumentProvenance, OriginIndex, RDFMappingReport, SourceMap
 
@@ -150,14 +148,14 @@ class OntologyDocument:
     ) -> tuple[Entity, ...]:
         if kind is not None and not isinstance(kind, EntityKind):
             raise TypeError("kind must be EntityKind or None")
-        gathered: set[Entity] = set()
-        for value in (*self.ontology_annotations, *self.axioms, *self.extension_components):
-            gathered.update(node_signature(value))
+        gathered = _collect_signature(
+            (*self.ontology_annotations, *self.axioms, *self.extension_components)
+        )
         if not include_builtins:
-            gathered = {item for item in gathered if not _is_builtin(item)}
+            gathered = tuple(item for item in gathered if not _is_builtin(item))
         if kind is not None:
-            gathered = {item for item in gathered if item.kind is kind}
-        return tuple(sorted(gathered, key=canonical_bytes))
+            gathered = tuple(item for item in gathered if item.kind is kind)
+        return gathered
 
     @property
     def document_fingerprint(self) -> Fingerprint:

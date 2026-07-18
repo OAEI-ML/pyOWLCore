@@ -24,17 +24,14 @@ from pyowl_core.model import (
     EntityKind,
     Literal,
     StructuralNode,
-    canonical_bytes,
     encode_varint,
     re_scope_anonymous,
     structural_digest,
     validate_owl2_dl,
 )
-from pyowl_core.model import (
-    signature as node_signature,
-)
 from pyowl_core.model.axioms import AxiomNode
 from pyowl_core.model.validation import OWL2DLReport
+from pyowl_core.model.visitor import _collect_signature
 
 from .document import Fingerprint, OntologyDocument
 from .fingerprint import (
@@ -1012,14 +1009,12 @@ def _signature(
     *,
     include_builtins: bool,
 ) -> tuple[Entity, ...]:
-    gathered: set[Entity] = set()
-    for root in roots:
-        gathered.update(node_signature(root))
+    gathered = _collect_signature(roots)
     if not include_builtins:
-        gathered = {item for item in gathered if not _is_builtin(item)}
+        gathered = tuple(item for item in gathered if not _is_builtin(item))
     if kind is not None:
-        gathered = {item for item in gathered if item.kind is kind}
-    return tuple(sorted(gathered, key=canonical_bytes))
+        gathered = tuple(item for item in gathered if item.kind is kind)
+    return gathered
 
 
 def _is_builtin(entity: Entity) -> bool:

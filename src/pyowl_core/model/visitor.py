@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Generic, TypeVar, cast
 
 from pyowl_core.exceptions import StructuralConstraintError
 
 from .base import CanonicalSet, StructuralNode
-from .primitives import Entity
+from .primitives import Entity, EntityKind
 from .registry import MODEL_CONSTRUCTORS, constructor_spec
 
 R = TypeVar("R")
@@ -92,12 +92,20 @@ def walk(value: StructuralNode) -> Iterator[StructuralNode]:
         stack.extend((child, False) for child in reversed(children))
 
 
+def _collect_signature(values: Iterable[StructuralNode]) -> tuple[Entity, ...]:
+    """Collect a canonical signature without structurally hashing every occurrence."""
+
+    entities: dict[tuple[EntityKind, str], Entity] = {}
+    for value in values:
+        for node in walk(value):
+            if isinstance(node, Entity):
+                entities[(node.kind, node.iri.value)] = node
+    encoded = {node.canonical_bytes(): node for node in entities.values()}
+    return tuple(encoded[key] for key in sorted(encoded))
+
+
 def signature(value: StructuralNode) -> tuple[Entity, ...]:
-    entities: dict[bytes, Entity] = {}
-    for node in walk(value):
-        if isinstance(node, Entity):
-            entities[node.canonical_bytes()] = node
-    return tuple(entities[key] for key in sorted(entities))
+    return _collect_signature((value,))
 
 
 VISITOR_METHODS = tuple(
