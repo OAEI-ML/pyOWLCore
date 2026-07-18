@@ -19,3 +19,8 @@ Executable examples:
   view shared across consumer boundaries and wire transport between processes.
 - [`examples/secure_local_import.py`](examples/secure_local_import.py)
   demonstrates strict local mapping with network access disabled.
+
+Both default to the complete Python implementation. Installed-artifact native
+lanes run the same files with `PYOWL_CORE_DOCS_BACKEND=native`; forced native
+fails rather than silently falling back when its wheel is unavailable or
+incompatible.

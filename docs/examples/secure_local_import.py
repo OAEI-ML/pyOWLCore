@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from pyowl_core import (
     BackendPreference,
     DocumentFormat,
@@ -25,7 +27,9 @@ Ontology(<urn:example:child>
 """
 
 
-def demonstrate() -> OntologySnapshot:
+def demonstrate(
+    backend: BackendPreference = BackendPreference.PYTHON,
+) -> OntologySnapshot:
     """Resolve one allowlisted in-memory import with network access disabled."""
 
     snapshot = load_snapshot(
@@ -34,7 +38,7 @@ def demonstrate() -> OntologySnapshot:
         options=LoadOptions(
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.RESOLVE_LOCAL,
-            backend=BackendPreference.PYTHON,
+            backend=backend,
             offline=True,
         ),
         resolver=MappingResolver({"urn:example:child": CHILD}),
@@ -46,4 +50,4 @@ def demonstrate() -> OntologySnapshot:
 
 
 if __name__ == "__main__":
-    demonstrate()
+    demonstrate(BackendPreference(os.environ.get("PYOWL_CORE_DOCS_BACKEND", "python")))

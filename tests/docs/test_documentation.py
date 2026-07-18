@@ -118,4 +118,4 @@ def test_examples_import_no_java_or_consumer_runtime() -> None:
             if isinstance(node, ast.ImportFrom) and node.module is not None
         )
         assert imports.isdisjoint(FORBIDDEN_IMPORTS)
-        assert imports <= {"__future__", "dataclasses", "pyowl_core"}
+        assert imports <= {"__future__", "dataclasses", "os", "pyowl_core"}

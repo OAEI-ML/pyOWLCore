@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from pyowl_core import (
@@ -15,7 +16,6 @@ from pyowl_core import (
     LoadOptions,
     OntologyDelta,
     OntologyView,
-    SnapshotProvider,
     apply_delta,
     coerce_snapshot,
     compose_views,
@@ -24,16 +24,10 @@ from pyowl_core import (
     load_snapshot,
 )
 
-_OPTIONS = LoadOptions(
-    format=DocumentFormat.FUNCTIONAL,
-    imports=ImportPolicy.IGNORE,
-    backend=BackendPreference.PYTHON,
-)
-
 
 @dataclass(frozen=True, slots=True)
-class ExactProvider(SnapshotProvider):
-    """Minimal application provider: no work occurs in ``owl_snapshot``."""
+class ExactProvider:
+    """Structural provider: no subclassing or work in ``owl_snapshot``."""
 
     view: OntologyView
 
@@ -48,21 +42,31 @@ class ConsumerSession:
     view: OntologyView
 
 
-def _load(ontology_iri: str, class_iri: str) -> OntologyView:
+def _load(
+    ontology_iri: str,
+    class_iri: str,
+    backend: BackendPreference,
+) -> OntologyView:
     source = (
         f"Ontology(<{ontology_iri}> Declaration(Class(<{class_iri}>)))".encode()
     )
     return load_snapshot(
         source,
         document_iri=f"{ontology_iri}:document",
-        options=_OPTIONS,
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+        ),
     )
 
 
-def demonstrate() -> tuple[OntologyView, OntologyView, OntologyView]:
+def demonstrate(
+    backend: BackendPreference = BackendPreference.PYTHON,
+) -> tuple[OntologyView, OntologyView, OntologyView]:
     """Return the original, overlay, and source/target composite views."""
 
-    source = _load("urn:example:source", "urn:example:SourceClass")
+    source = _load("urn:example:source", "urn:example:SourceClass", backend)
     provider = ExactProvider(source)
     assert coerce_snapshot(source) is source
     assert coerce_snapshot(provider) is source
@@ -76,7 +80,7 @@ def demonstrate() -> tuple[OntologyView, OntologyView, OntologyView]:
     overlay = apply_delta(source, OntologyDelta(add_axioms=CanonicalSet((added,))))
     assert overlay.base is source
 
-    target = _load("urn:example:target", "urn:example:TargetClass")
+    target = _load("urn:example:target", "urn:example:TargetClass", backend)
     composite = compose_views(source, target, roles=("source", "target"))
     assert tuple(member.view for member in composite.members) == (source, target)
 
@@ -88,5 +92,4 @@ def demonstrate() -> tuple[OntologyView, OntologyView, OntologyView]:
 
 
 if __name__ == "__main__":
-    demonstrate()
-
+    demonstrate(BackendPreference(os.environ.get("PYOWL_CORE_DOCS_BACKEND", "python")))
