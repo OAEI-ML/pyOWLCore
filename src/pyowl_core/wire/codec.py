@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import struct
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import BinaryIO, cast
 
 from pyowl_core.cancellation import CancellationToken
@@ -153,6 +153,10 @@ class ViewSummary:
 class InspectedWire:
     image: WireImage
     summary: ViewSummary
+    materialized_model_cache: dict[tuple[SectionKind, int], StructuralNode] | None = field(
+        repr=False,
+        compare=False,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,13 +301,25 @@ def inspect_image(
     """Validate semantic rows while retaining only bounded metadata."""
 
     guard = Guard(limits, cancellation_token)
+    # Eager decoding already constructs every model row to validate constructor
+    # invariants.  Retain the top-level rows that materialization references so
+    # the same canonical payload is not decoded a second time.  Mapped/lazy
+    # snapshots deliberately keep no Python model objects at open time.
+    materialized_model_cache: dict[tuple[SectionKind, int], StructuralNode] | None = (
+        None if lazy_model_validation else {}
+    )
     _validate_feature_sections(image)
     strings = image.table(SectionKind.STRINGS)
     for index, row in enumerate(strings.rows()):
         guard.check(index)
         _decode_utf8(row, "STRINGS")
     _validate_model_table(
-        image.table(SectionKind.IRIS), IRI, limits, guard, lazy=lazy_model_validation
+        image.table(SectionKind.IRIS),
+        IRI,
+        limits,
+        guard,
+        lazy=lazy_model_validation,
+        cache=materialized_model_cache,
     )
     _validate_model_table(
         image.table(SectionKind.ENTITIES), Entity, limits, guard, lazy=lazy_model_validation
@@ -325,14 +341,26 @@ def inspect_image(
         limits,
         guard,
         lazy=lazy_model_validation,
+        cache=materialized_model_cache,
     )
     _validate_terms(image.table(SectionKind.TERMS), limits, guard, lazy=lazy_model_validation)
     _validate_model_table(
-        image.table(SectionKind.AXIOMS), AxiomNode, limits, guard, lazy=lazy_model_validation
+        image.table(SectionKind.AXIOMS),
+        AxiomNode,
+        limits,
+        guard,
+        lazy=lazy_model_validation,
+        cache=materialized_model_cache,
     )
     swrl = image.tables.get(int(SectionKind.SWRL))
     if swrl is not None:
-        _validate_structural_table(swrl, limits, guard, lazy=lazy_model_validation)
+        _validate_structural_table(
+            swrl,
+            limits,
+            guard,
+            lazy=lazy_model_validation,
+            cache=materialized_model_cache,
+        )
     documents = image.table(SectionKind.DOCUMENTS)
     document_wires = tuple(
         _read_document_row(image, row, limits, collect=False) for row in documents.rows()
@@ -356,7 +384,7 @@ def inspect_image(
     _validate_origins(image, keys, limits, collect=False)
     _validate_footer(image, summary)
     guard.check(force=True)
-    return InspectedWire(image, summary)
+    return InspectedWire(image, summary, materialized_model_cache)
 
 
 def materialize_image(
@@ -369,7 +397,7 @@ def materialize_image(
 
     image = inspected.image
     guard = Guard(limits, cancellation_token)
-    cache: dict[tuple[SectionKind, int], StructuralNode] = {}
+    cache = {} if inspected.materialized_model_cache is None else inspected.materialized_model_cache
     document_table = image.table(SectionKind.DOCUMENTS)
     decoded = tuple(
         _decode_document_row(image, row, limits, cache) for row in document_table.rows()
@@ -1098,6 +1126,7 @@ def _validate_model_table(
     guard: Guard,
     *,
     lazy: bool,
+    cache: dict[tuple[SectionKind, int], StructuralNode] | None = None,
 ) -> None:
     for index, row in enumerate(table.rows()):
         guard.check(index)
@@ -1109,19 +1138,28 @@ def _validate_model_table(
             value = _decode_model(row, limits)
             valid = isinstance(value, expected)
             actual = type(value).__name__
+            if cache is not None:
+                cache[(SectionKind(table.kind), index + 1)] = value
         if not valid:
             raise _corrupt(f"{SectionKind(table.kind).name} row has invalid {actual} category")
 
 
 def _validate_structural_table(
-    table: TableView, limits: ParseLimits, guard: Guard, *, lazy: bool
+    table: TableView,
+    limits: ParseLimits,
+    guard: Guard,
+    *,
+    lazy: bool,
+    cache: dict[tuple[SectionKind, int], StructuralNode] | None = None,
 ) -> None:
     for index, row in enumerate(table.rows()):
         guard.check(index)
         if lazy:
             _scan_canonical(row, limits)
         else:
-            _decode_model(row, limits)
+            value = _decode_model(row, limits)
+            if cache is not None:
+                cache[(SectionKind(table.kind), index + 1)] = value
 
 
 def _validate_terms(table: TableView, limits: ParseLimits, guard: Guard, *, lazy: bool) -> None:

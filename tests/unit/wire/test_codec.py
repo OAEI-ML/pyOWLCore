@@ -11,8 +11,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 import pyowl_core.extensions.swrl as swrl
 import pyowl_core.model as m
+import pyowl_core.wire.codec as wire_codec
 from pyowl_core import (
     BackendPreference,
     DetectionBasis,
@@ -25,6 +28,7 @@ from pyowl_core import (
     OntologyDelta,
     OntologyDocument,
     OntologyID,
+    ParseLimits,
     apply_delta,
     compose_views,
     decode_snapshot,
@@ -75,6 +79,25 @@ def test_bytes_buffer_stream_and_effective_views_round_trip_canonically() -> Non
             assert decoded.structural_fingerprint == value.structural_fingerprint
             assert decode_snapshot(encode_snapshot(decoded)) == decoded
             assert encode_snapshot(decoded) == encoded
+
+
+def test_eager_decode_reuses_rows_materialized_during_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    encoded = encode_snapshot(snapshot("A", "B"))
+    observed: list[bytes] = []
+    original = wire_codec._decode_model
+
+    def counting_decode(row: memoryview, limits: ParseLimits) -> m.StructuralNode:
+        observed.append(bytes(row))
+        return original(row, limits)
+
+    monkeypatch.setattr(wire_codec, "_decode_model", counting_decode)
+    decoded = decode_snapshot(encoded)
+
+    assert tuple(decoded.iter_axioms())
+    assert observed
+    assert len(observed) == len(set(observed))
 
 
 def test_every_registered_constructor_and_swrl_extension_round_trip() -> None:

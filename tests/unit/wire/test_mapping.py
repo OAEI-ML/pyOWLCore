@@ -52,6 +52,7 @@ def test_mmap_open_is_metadata_only_then_publishes_one_lazy_snapshot(tmp_path: P
     opened = _open_mapped(path)
     assert isinstance(opened, OntologySnapshot)
     assert opened._mapped_state.decoded is None
+    assert opened._mapped_state.inspected.materialized_model_cache is None
     assert opened.structural_fingerprint == source.structural_fingerprint
     assert opened.report.effective_axiom_count == 2
     assert opened._mapped_state.decoded is None

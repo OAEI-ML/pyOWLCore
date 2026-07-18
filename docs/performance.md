@@ -25,9 +25,15 @@ allocation; in-process handoff retained exact identity with zero parser,
 resolver, wire, or construction calls.
 
 OAEI NCIt/DOID and ORDO/OMIM members are hash-pinned, but strict full-pair core
-mapping was not established in the recorded WP10 run. Those observations are
-not presented as equivalent passing biomedical evidence. See
+mapping was not established in the recorded WP10 run. A later diagnostic on the
+pinned NCIt–DOID pair did establish an exact composite and a 159,392,315-byte
+wire image. Reusing fully validated eager-decoder rows reduced that image's full
+decode from 272.795 seconds to 185.165 seconds (32.12%) and peak RSS from
+1,003.79 MB to 996.49 MB. The downstream pyELK result remained exactly 2,227
+unsatisfiable classes with the frozen Java ELK digest
+`8dd56db2f864e757fb9fe04ca9b4cb6798e161597ff715f81175129db8bc27ab`.
+This is a one-run local diagnostic, not a reference-machine regression baseline
+or a claim about every Bio-ML pair. See
 [`reports/performance/limitations.md`](../reports/performance/limitations.md)
 and [`summary.json`](../reports/performance/summary.json) for exact options,
 hashes, counters, and unresolved gates.
-

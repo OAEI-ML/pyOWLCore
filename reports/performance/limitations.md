@@ -20,13 +20,16 @@ but the following external/evidence limits remain explicit.
    distribution and is not used for a regression decision. Its terms require
    user review; its 49,479,533 bytes are manifest-only and not republished.
 
-4. The exact OAEI Bio-ML 2024 pairs cannot currently form a strict pyOWLCore
-   composite. DOID and OMIM map completely and are pinned with their mapping
-   files. NCIt fails because one blank node is used ambiguously as an
-   individual and RDF list; ORDO fails because an `owl:Axiom` reification lacks
-   its main triple. No partial mapping, dropped annotation, or cross-pair proxy
-   is presented as equivalent OAEI evidence. The errors and member hashes are
-   retained in `biomedical-observations.json`.
+4. The recorded WP10 corpus run could not form every exact OAEI Bio-ML 2024
+   pair: NCIt then failed on an ambiguously typed blank node, and ORDO failed on
+   an `owl:Axiom` reification without its main triple. Subsequent parser/core
+   work established a complete pinned NCIt–DOID composite on 2026-07-18 and an
+   exact Java-ELK-equivalent pyELK result. That one-run cached-wire diagnostic
+   is documented in `docs/performance.md`; it does not retroactively become a
+   five-sample WP10/reference-machine baseline. ORDO–OMIM remains unresolved,
+   and no partial mapping or dropped annotation is presented as equivalent
+   evidence. The original observations and member hashes remain in
+   `biomedical-observations.json`.
 
 5. Exact-OM and py-horned-owl were not installed or otherwise runnable in this
    isolated repository environment. No comparative speedup against them is

@@ -35,6 +35,9 @@ adapter protocol versions.
 
 - Wire v1 minor version is `(1, 1)`; the model schema remains `1` and adapter
   protocol remains `1`.
+- Eager wire decoding now reuses fully validated top-level model rows during
+  materialization instead of decoding the same canonical axiom payload twice;
+  lazy mmap opening remains metadata-only.
 - `OntologySnapshot`, `OntologyOverlay`, and `OntologyComposite` are sibling
   implementations of `OntologyView`; an overlay or composite is not coerced
   into a materialized snapshot.
