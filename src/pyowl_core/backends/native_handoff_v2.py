@@ -4217,6 +4217,7 @@ class NativeFacadeContainsRequestV2:
     max_row_bytes: int
     _validation_limits: InitVar[ParseLimits | None] = None
     _validated_axiom: AxiomNode = field(init=False, repr=False, compare=False)
+    _validated_canonical: bytes = field(init=False, repr=False, compare=False)
 
     def __post_init__(self, _validation_limits: ParseLimits | None) -> None:
         if self.collection is not NativeFacadeCollectionV2.AXIOMS:
@@ -4242,11 +4243,17 @@ class NativeFacadeContainsRequestV2:
         if canonical_bytes(value, limits=_validation_limits) != self.canonical:
             raise ValueError("contains canonical bytes are not in canonical form")
         object.__setattr__(self, "_validated_axiom", value)
+        object.__setattr__(self, "_validated_canonical", self.canonical)
 
     def _validated_axiom_v2(self) -> AxiomNode:
         """Return the validation-decoded axiom for exactly-once contains handling."""
 
         return self._validated_axiom
+
+    def _validated_canonical_v2(self) -> bytes:
+        """Return the exact bytes bound to the validation-decoded axiom."""
+
+        return self._validated_canonical
 
 
 def _unchecked_contains_request_v2(

@@ -247,12 +247,14 @@ def test_corrupted_exact_requests_are_reconstructed_before_any_owner_call() -> N
             canonical=canonical_bytes(Declaration(Class(IRI("urn:malicious:A")))),
             max_row_bytes=_FIXTURE_ROW_BOUND,
         )
+        validated_canonical = contains_request._validated_canonical_v2()
 
         class EvilBytes(bytes):
             def __len__(self) -> int:
                 raise AssertionError("hostile canonical bytes were inspected")
 
         object.__setattr__(contains_request, "canonical", EvilBytes(contains_request.canonical))
+        assert contains_request._validated_canonical_v2() is validated_canonical
         with pytest.raises(TypeError, match="exact bytes"):
             handle._facade_contains_v2(contains_request)
         assert owner.attestation_calls == owner.contains_calls == 0

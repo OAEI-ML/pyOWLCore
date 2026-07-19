@@ -296,6 +296,7 @@ def test_validation_decodes_are_retained_page_locally_for_exactly_once_consumpti
         max_row_bytes=value.max_facade_row_bytes,
     )
     assert canonical_bytes(contains._validated_axiom_v2()) == contains.canonical
+    assert contains._validated_canonical_v2() is contains.canonical
     assert "_validated_rows" not in {row[1] for row in NATIVE_FACADE_PAGE_FIELDS_V2}
 
 
