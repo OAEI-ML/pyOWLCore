@@ -133,6 +133,10 @@ _DESCRIPTOR_TREE: Final = {
         {"name": "source", "type": "EncodedStructuralViewV1-or-local"},
         {"name": "posting_mode", "type": "u8-schema-tag"},
         {"name": "root_ids", "type": "readonly-little-endian-u32"},
+        {
+            "name": "anonymous_scope_map",
+            "type": "readonly-sorted-unique-bytes32-source-target-pairs",
+        },
         {"name": "member_token", "type": "bytes32-or-none"},
     ],
     "segment_posting_modes": [
@@ -161,6 +165,11 @@ _DESCRIPTOR_TREE: Final = {
             "sorted unique source-local root IDs; ALL requires empty postings; "
             "INCLUDE and EXCLUDE require nonempty postings"
         ),
+        "anonymous_scopes": (
+            "sorted unique 64-byte source-current/effective-target rows; identity rows "
+            "forbidden; empty for local segments; referenced mappings apply after recursive "
+            "source resolution before canonical sort and structural deduplication"
+        ),
         "references": "acyclic validated views with exact retained owners and fingerprints",
     },
     "schema_name": ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
@@ -176,7 +185,7 @@ ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1: Final = hashlib.sha256(
     ENCODED_STRUCTURAL_DESCRIPTOR_V1
 ).digest()
 _FROZEN_DESCRIPTOR_SHA256_V1: Final = bytes.fromhex(
-    "29bf111466b3946d4765c29c0d4742ab3ec7b355fdaa5be1ca18d15ebc3b452a"
+    "9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5"
 )
 if ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1 != _FROZEN_DESCRIPTOR_SHA256_V1:
     raise RuntimeError(
@@ -215,6 +224,7 @@ class EncodedStructuralSegmentPublicationV1(Protocol):
     source: EncodedStructuralViewV1 | None
     posting_mode: int
     root_ids: memoryview
+    anonymous_scope_map: memoryview
     member_token: bytes | None
 
 
@@ -259,6 +269,7 @@ class EncodedStructuralSegmentV1:
     source: EncodedStructuralViewV1 | None
     posting_mode: int
     root_ids: memoryview
+    anonymous_scope_map: memoryview
     member_token: bytes | None
     _retained_source: object
 
@@ -585,6 +596,7 @@ def produce_encoded_structural_view_v1(
         None,
         _POSTINGS_ALL,
         memoryview(b""),
+        memoryview(b""),
         None,
         owner,
     )
@@ -831,6 +843,7 @@ def _freeze_segments(
             source = publication.source
             posting_mode = publication.posting_mode
             raw_root_ids = publication.root_ids
+            raw_scope_map = publication.anonymous_scope_map
             member_token = publication.member_token
         except Exception as error:
             raise BackendProtocolError(
@@ -878,23 +891,44 @@ def _freeze_segments(
                 "encoded structural segment postings must be readonly contiguous u32 bytes",
                 "ENCODED_VIEW_SEGMENTS",
             )
-        posting_bytes += len(raw_root_ids)
-        posting_rows += len(raw_root_ids) // 4
+        if type(raw_scope_map) is not memoryview:
+            _fail(
+                "encoded structural anonymous scope maps must be a memoryview",
+                "ENCODED_VIEW_SEGMENTS",
+            )
+        if (
+            not raw_scope_map.readonly
+            or raw_scope_map.ndim != 1
+            or raw_scope_map.itemsize != 1
+            or raw_scope_map.format != "B"
+            or not raw_scope_map.c_contiguous
+            or raw_scope_map.shape != (len(raw_scope_map),)
+            or raw_scope_map.strides != (1,)
+            or len(raw_scope_map) % 64
+        ):
+            _fail(
+                "encoded structural anonymous scope maps must be readonly 64-byte rows",
+                "ENCODED_VIEW_SEGMENTS",
+            )
+        posting_bytes += len(raw_root_ids) + len(raw_scope_map)
+        posting_rows += len(raw_root_ids) // 4 + len(raw_scope_map) // 64
         limits.enforce("max_index_rows", posting_rows)
         limits.enforce("max_index_bytes", local_buffer_bytes + posting_bytes)
         limits.enforce("max_canonical_work", local_buffer_bytes + posting_bytes)
         if trusted_zero_copy is _TRUSTED_ZERO_COPY:
-            if type(raw_root_ids.obj) is not bytes:
+            if type(raw_root_ids.obj) is not bytes or type(raw_scope_map.obj) is not bytes:
                 _fail(
-                    "module-owned zero-copy postings require immutable bytes exporters",
+                    "module-owned zero-copy segment rows require immutable bytes exporters",
                     "ENCODED_VIEW_SEGMENTS",
                 )
             root_ids = raw_root_ids[:]
+            anonymous_scope_map = raw_scope_map[:]
         else:
             limits.enforce("max_temporary_bytes", local_buffer_bytes + posting_bytes)
             if limits.max_memory_bytes is not None:
                 limits.enforce("max_memory_bytes", local_buffer_bytes + posting_bytes)
             root_ids = memoryview(bytes(raw_root_ids))
+            anonymous_scope_map = memoryview(bytes(raw_scope_map))
 
         frozen_source: EncodedStructuralViewV1 | None = None
         if source is None:
@@ -951,6 +985,19 @@ def _freeze_segments(
             _fail("ALL segment mode requires empty postings", "ENCODED_VIEW_SEGMENTS")
         if posting_mode in {_POSTINGS_INCLUDE, _POSTINGS_EXCLUDE} and not len(postings):
             _fail("INCLUDE and EXCLUDE segment modes require postings", "ENCODED_VIEW_SEGMENTS")
+        previous_scope: bytes | None = None
+        for offset in range(0, len(anonymous_scope_map), 64):
+            current_scope = bytes(anonymous_scope_map[offset : offset + 32])
+            target_scope = bytes(anonymous_scope_map[offset + 32 : offset + 64])
+            if (
+                (previous_scope is not None and current_scope <= previous_scope)
+                or current_scope == target_scope
+            ):
+                _fail(
+                    "anonymous scope map sources must be sorted unique with no identity rows",
+                    "ENCODED_VIEW_SEGMENTS",
+                )
+            previous_scope = current_scope
         if role == _SEGMENT_COMPOSITE_MEMBER:
             if type(member_token) is not bytes or len(member_token) != 32:
                 _fail(
@@ -966,6 +1013,7 @@ def _freeze_segments(
                 frozen_source,
                 posting_mode,
                 root_ids,
+                anonymous_scope_map,
                 member_token,
                 raw_segment,
             )
@@ -995,6 +1043,7 @@ def _validate_segment_family(
             or segment.source is not None
             or segment.posting_mode != _POSTINGS_ALL
             or len(segment.root_ids)
+            or len(segment.anonymous_scope_map)
             or segment.member_token is not None
         ):
             _fail("direct segment metadata is not canonical", "ENCODED_VIEW_SEGMENTS")
@@ -1023,6 +1072,7 @@ def _validate_segment_family(
                 delta.owner is not top_owner
                 or delta.source is not None
                 or delta.posting_mode != _POSTINGS_ALL
+                or len(delta.anonymous_scope_map)
                 or delta.member_token is not None
                 or not local_root_count
             ):
@@ -1055,6 +1105,7 @@ def _validate_segment_family(
             bridge.owner is not top_owner
             or bridge.source is not None
             or bridge.posting_mode != _POSTINGS_ALL
+            or len(bridge.anonymous_scope_map)
             or bridge.member_token is not None
             or not local_root_count
         ):
@@ -1415,6 +1466,8 @@ def _fingerprint(
             hasher.update(b"\x01" + segment.member_token)
         hasher.update(len(segment.root_ids).to_bytes(8, "little"))
         hasher.update(segment.root_ids)
+        hasher.update(len(segment.anonymous_scope_map).to_bytes(8, "little"))
+        hasher.update(segment.anonymous_scope_map)
     return Fingerprint("sha256", 1, hasher.digest())
 
 

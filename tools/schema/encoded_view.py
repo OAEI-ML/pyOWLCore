@@ -210,6 +210,20 @@ def render_version_decision() -> str:
             "capability_advertised = false",
             'promotion_owner = "WP17"',
             "",
+            "[amendment]",
+            'id = "WP17-V1-anonymous-scope-map"',
+            'phase = "pre-advertisement"',
+            'decision = "retain schema version 1"',
+            (
+                'reason = "segmented composites require explicit current-to-effective '
+                'anonymous scope mappings for canonical parity"'
+            ),
+            (
+                'field = "anonymous_scope_map: sorted unique readonly 64-byte '
+                'source-current/effective-target rows"'
+            ),
+            'fingerprint = "covers exact anonymous_scope_map bytes"',
+            "",
             "[decisions]",
             'encoded_schema = "freeze candidate v1"',
             'api_version = "unchanged"',

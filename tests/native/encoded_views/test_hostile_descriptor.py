@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
+from pyowl_core import BackendPreference, ImportPolicy, LoadOptions, load_snapshot
+from pyowl_core.backends import native_views
 from pyowl_core.backends.native_views import (
     EncodedStructuralViewV1,
     produce_encoded_structural_view_v1,
@@ -43,6 +46,7 @@ def _segment(view: EncodedStructuralViewV1, **changes: object) -> SimpleNamespac
         "source": direct.source,
         "posting_mode": direct.posting_mode,
         "root_ids": direct.root_ids,
+        "anonymous_scope_map": direct.anonymous_scope_map,
         "member_token": direct.member_token,
     }
     values.update(changes)
@@ -246,6 +250,97 @@ def test_segment_validator_rejects_bad_postings_and_all_mode_payloads() -> None:
     with pytest.raises(BackendProtocolError) as raised:
         _validate(_publication(produced, segments=(empty_include,)), produced)
     assert raised.value.code == "ENCODED_VIEW_SEGMENTS"
+
+
+def test_segment_validator_rejects_hostile_anonymous_scope_maps() -> None:
+    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    referenced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    first = b"a" * 32
+    second = b"b" * 32
+    third = b"c" * 32
+    cases = (
+        memoryview(b"x" * 63),
+        memoryview(bytearray(first + second)).toreadonly(),
+        memoryview(first + first),
+        memoryview(first + second + first + third),
+        memoryview(second + third + first + third),
+    )
+    for scope_map in cases:
+        base = _segment(
+            produced,
+            role=2,
+            source=referenced,
+            owner=referenced.owner,
+            anonymous_scope_map=scope_map,
+        )
+        with pytest.raises(BackendProtocolError) as raised:
+            _validate(_publication(produced, segments=(base,)), produced)
+        assert raised.value.code == "ENCODED_VIEW_SEGMENTS"
+
+    local = _segment(produced, anonymous_scope_map=memoryview(first + second))
+    with pytest.raises(BackendProtocolError) as raised:
+        _validate(_publication(produced, segments=(local,)), produced)
+    assert raised.value.code == "ENCODED_VIEW_SEGMENTS"
+
+
+def test_segment_fingerprint_covers_exact_anonymous_scope_map_bytes() -> None:
+    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    referenced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    direct = produced.segments[0]
+    first = replace(
+        direct,
+        role=2,
+        owner=referenced.owner,
+        source=referenced,
+        anonymous_scope_map=memoryview(b"a" * 32 + b"b" * 32),
+    )
+    second = replace(
+        first,
+        anonymous_scope_map=memoryview(b"a" * 32 + b"c" * 32),
+    )
+    fingerprint = cast(
+        Callable[[object, object], Fingerprint],
+        cast(Any, native_views)._fingerprint,
+    )
+
+    assert fingerprint(produced.buffers, (first,)) != fingerprint(
+        produced.buffers, (second,)
+    )
+
+
+def test_referenced_anonymous_scope_map_freezes_and_fingerprints_exact_bytes() -> None:
+    empty_owner = load_snapshot(
+        b"Ontology(<urn:encoded-empty>)",
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            imports=ImportPolicy.IGNORE,
+        ),
+    )
+    top = produce_encoded_structural_view_v1(empty_owner)
+    referenced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    scope_map = memoryview(b"a" * 32 + b"b" * 32)
+    base = _segment(
+        top,
+        role=2,
+        source=referenced,
+        owner=referenced.owner,
+        anonymous_scope_map=scope_map,
+    )
+    fingerprint = cast(
+        Callable[[object, object], Fingerprint],
+        cast(Any, native_views)._fingerprint,
+    )
+    candidate = _publication(
+        top,
+        segments=(base,),
+        structural_fingerprint=fingerprint(top.buffers, (base,)),
+    )
+
+    frozen = _validate(candidate, top)
+
+    assert bytes(frozen.segments[0].anonymous_scope_map) == bytes(scope_map)
+    assert frozen.segments[0].anonymous_scope_map is not scope_map
+    assert type(frozen.segments[0].anonymous_scope_map.obj) is bytes
 
 
 def test_segment_validator_rejects_unselected_local_roots() -> None:

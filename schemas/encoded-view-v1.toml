@@ -3,7 +3,7 @@ schema = 1
 name = "pyowl-core/structural-columns"
 status = "frozen-unadvertised"
 descriptor_format = "canonical-json-sorted-keys-compact-ascii"
-descriptor_sha256 = "29bf111466b3946d4765c29c0d4742ab3ec7b355fdaa5be1ca18d15ebc3b452a"
+descriptor_sha256 = "9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5"
 model_schema = 1
 byte_order = "little"
 id_width = 32
@@ -52,6 +52,7 @@ postings = "sorted unique source-local u32 root IDs"
 acyclic = true
 source_fingerprint_verified = true
 duplicate_member_tokens_fail_closed = true
+anonymous_scopes_rule = "sorted unique 64-byte source-current/effective-target rows; identity rows forbidden; empty for local segments; referenced mappings apply after recursive source resolution before canonical sort and structural deduplication"
 composite_rule = "members sorted by unique member token; optional nonempty local bridge selecting all local roots last; local buffers empty without a bridge"
 direct_rule = "one local segment selecting all roots"
 overlay_rule = "one referenced base then optional nonempty local delta selecting all local roots; local buffers empty without a delta"
@@ -176,6 +177,10 @@ type = "u8-schema-tag"
 [[segment_fields]]
 name = "root_ids"
 type = "readonly-little-endian-u32"
+
+[[segment_fields]]
+name = "anonymous_scope_map"
+type = "readonly-sorted-unique-bytes32-source-target-pairs"
 
 [[segment_fields]]
 name = "member_token"

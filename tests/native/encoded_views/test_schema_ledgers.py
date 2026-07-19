@@ -44,6 +44,20 @@ def test_generated_schema_and_version_decision_are_current() -> None:
 
     assert decision["status"] == "frozen-unadvertised"
     assert decision["capability_advertised"] is False
+    assert decision["amendment"] == {
+        "id": "WP17-V1-anonymous-scope-map",
+        "phase": "pre-advertisement",
+        "decision": "retain schema version 1",
+        "reason": (
+            "segmented composites require explicit current-to-effective anonymous scope "
+            "mappings for canonical parity"
+        ),
+        "field": (
+            "anonymous_scope_map: sorted unique readonly 64-byte "
+            "source-current/effective-target rows"
+        ),
+        "fingerprint": "covers exact anonymous_scope_map bytes",
+    }
     assert tuple(decision["api_version"]) == pyowl_core.API_VERSION
     assert decision["adapter_protocol"] == pyowl_core.ADAPTER_PROTOCOL_VERSION
     assert decision["model_schema"] == pyowl_core.MODEL_SCHEMA_VERSION

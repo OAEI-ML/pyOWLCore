@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from typing import cast
 
 import pyowl_core.model as m
-from pyowl_core import OntologyDocument, OntologySnapshot
+from pyowl_core import OntologyDocument, OntologySnapshot, OntologyView
 from pyowl_core.extensions.swrl import SWRLRule
 from tests.conformance._support import every_constructor_document, python_snapshot
 from tests.generated.model.fixtures import model_fixtures
@@ -78,7 +78,7 @@ def complete_constructor_snapshot() -> OntologySnapshot:
     return python_snapshot(document)
 
 
-def scalar_root_bytes(snapshot: OntologySnapshot) -> tuple[tuple[int, bytes], ...]:
+def scalar_root_bytes(snapshot: OntologyView) -> tuple[tuple[int, bytes], ...]:
     roots = [
         *((1, m.canonical_bytes(value)) for value in snapshot.ontology_annotations()),
         *((2, m.canonical_bytes(value)) for value in snapshot.iter_axioms()),

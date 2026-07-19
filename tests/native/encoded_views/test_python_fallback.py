@@ -37,7 +37,7 @@ def test_python_fallback_covers_every_constructor_and_independent_decoder() -> N
     assert encoded.model_schema == 1
     assert encoded.descriptor
     assert ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1.hex() == (
-        "29bf111466b3946d4765c29c0d4742ab3ec7b355fdaa5be1ca18d15ebc3b452a"
+        "9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5"
     )
     assert len(encoded.segments) == 1
     direct = encoded.segments[0]
@@ -46,6 +46,7 @@ def test_python_fallback_covers_every_constructor_and_independent_decoder() -> N
     assert direct.source is None
     assert direct.posting_mode == 0
     assert bytes(direct.root_ids) == b""
+    assert bytes(direct.anonymous_scope_map) == b""
     assert direct.member_token is None
     assert decode_root_canonical_bytes(encoded.buffers) == scalar_root_bytes(snapshot)
 
