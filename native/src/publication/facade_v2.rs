@@ -8,7 +8,6 @@
 use std::alloc::Layout;
 use std::borrow::Borrow;
 use std::collections::HashMap;
-#[cfg(any(test, feature = "test-hooks"))]
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -17,9 +16,14 @@ use pyo3::exceptions::{PyMemoryError, PyRuntimeError, PyTypeError, PyValueError}
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyBytes, PyDict, PyInt, PyModule, PyTuple, PyType};
 
+use crate::cancel::Cancellation;
 use crate::error::{NativeError, NativeResult};
 
 use super::records::Digest;
+use super::{
+    TypedFacadeCollectionV2, TypedFacadeCoordinateV2, TypedFacadePageRequestV2, TypedFacadeScopeV2,
+    TypedFacadeSignatureKindV2, TypedFacadeStorageV2,
+};
 
 pub(super) const PUBLICATION_VERSION_V2: u32 = 2;
 pub(super) const PUBLICATION_LEDGER_SHA256_V2: Digest = [
@@ -390,6 +394,38 @@ struct CoordinateV2 {
     include_builtins: bool,
 }
 
+impl CoordinateV2 {
+    fn typed(self) -> Option<TypedFacadeCoordinateV2> {
+        let collection = match self.collection {
+            CollectionV2::OntologyAnnotations => TypedFacadeCollectionV2::OntologyAnnotations,
+            CollectionV2::Axioms => TypedFacadeCollectionV2::Axioms,
+            CollectionV2::Extensions => TypedFacadeCollectionV2::Extensions,
+            CollectionV2::Signature => TypedFacadeCollectionV2::Signature,
+            _ => return None,
+        };
+        let scope = match self.scope {
+            ScopeV2::Document => TypedFacadeScopeV2::Document,
+            ScopeV2::Closure => TypedFacadeScopeV2::Closure,
+        };
+        let signature_kind = match self.signature_kind {
+            SignatureKindV2::All => TypedFacadeSignatureKindV2::All,
+            SignatureKindV2::Class => TypedFacadeSignatureKindV2::Class,
+            SignatureKindV2::Datatype => TypedFacadeSignatureKindV2::Datatype,
+            SignatureKindV2::ObjectProperty => TypedFacadeSignatureKindV2::ObjectProperty,
+            SignatureKindV2::DataProperty => TypedFacadeSignatureKindV2::DataProperty,
+            SignatureKindV2::AnnotationProperty => TypedFacadeSignatureKindV2::AnnotationProperty,
+            SignatureKindV2::NamedIndividual => TypedFacadeSignatureKindV2::NamedIndividual,
+        };
+        Some(TypedFacadeCoordinateV2 {
+            collection,
+            scope,
+            document_ordinal: self.document_ordinal,
+            signature_kind,
+            include_builtins: self.include_builtins,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 struct FacadeTableV2 {
     coordinate: CoordinateV2,
@@ -714,6 +750,7 @@ pub(super) struct PublicationStorageV2 {
     attestation: NativeSnapshotAttestationV2,
     effective_tables: Vec<FacadeTableV2>,
     raw_document_tables: Option<Vec<FacadeTableV2>>,
+    typed_structural: Option<Arc<TypedFacadeStorageV2>>,
     counters: CounterStateV2,
 }
 
@@ -757,6 +794,47 @@ impl PublicationStorageV2 {
             return Err(PyValueError::new_err(
                 "V2 digest filters are supported only for source-map and origin rows",
             ));
+        }
+        if let (Some(storage), Some(coordinate)) = (
+            self.typed_structural.as_deref(),
+            selected.coordinate.typed(),
+        ) {
+            let page = storage
+                .page(
+                    TypedFacadePageRequestV2::new(
+                        coordinate,
+                        raw_document_owner,
+                        selected.start,
+                        selected.max_rows,
+                        selected.max_bytes,
+                    ),
+                    Cancellation::with_duration(None),
+                    None,
+                )
+                .map_err(native_error_to_python)?;
+            let emitted_count = u64::try_from(page.rows.len())
+                .map_err(|_| PyValueError::new_err("V2 page row count exceeds u64"))?;
+            let terminal = page.next_cursor.is_none();
+            let py_rows = PyTuple::new(
+                py,
+                page.rows.iter().map(|row| PyBytes::new(py, row.as_slice())),
+            )?;
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("total_count", page.total_count)?;
+            kwargs.set_item("next_cursor", page.next_cursor)?;
+            kwargs.set_item("terminal", terminal)?;
+            kwargs.set_item("rows", py_rows)?;
+            let result = handoff
+                .getattr("_unchecked_owner_page_v2")?
+                .call((request,), Some(&kwargs))?;
+            self.counters
+                .page(
+                    selected.coordinate.collection,
+                    emitted_count,
+                    page.page_bytes,
+                )
+                .map_err(native_error_to_python)?;
+            return Ok(result.unbind());
         }
         let rows = self.rows(selected.coordinate, raw_document_owner);
         let (lower, upper) = digest_range(rows, selected.digest_filter.as_ref());
@@ -828,6 +906,24 @@ impl PublicationStorageV2 {
         if selected.coordinate.collection != CollectionV2::Axioms {
             return Err(PyValueError::new_err("V2 contains is axioms-only"));
         }
+        if let (Some(storage), Some(coordinate)) = (
+            self.typed_structural.as_deref(),
+            selected.coordinate.typed(),
+        ) {
+            let found = storage
+                .contains_axiom(
+                    coordinate,
+                    raw_document_owner,
+                    &selected.canonical,
+                    Cancellation::with_duration(None),
+                    None,
+                )
+                .map_err(native_error_to_python)?;
+            self.counters
+                .contains(found)
+                .map_err(native_error_to_python)?;
+            return Ok(found);
+        }
         let rows = self.rows(selected.coordinate, raw_document_owner);
         let found = rows
             .binary_search_by(|row| row.as_slice().cmp(selected.canonical.as_slice()))
@@ -849,6 +945,55 @@ impl PublicationStorageV2 {
             .getattr("NativeFacadeCountersV2")?
             .call((), Some(&kwargs))?
             .unbind())
+    }
+
+    /// Attach the production typed structural owner without retaining a
+    /// second canonical row store. Auxiliary V2 collections are added by the
+    /// publication assembler in a later, disjoint step.
+    #[allow(dead_code)]
+    pub(super) fn from_typed_structural(
+        attestation: NativeSnapshotAttestationV2,
+        typed_structural: TypedFacadeStorageV2,
+    ) -> NativeResult<Arc<Self>> {
+        if attestation.version != PUBLICATION_VERSION_V2
+            || attestation.ledger_sha256 != PUBLICATION_LEDGER_SHA256_V2
+            || attestation.facade_access_schema_sha256 != FACADE_ACCESS_SCHEMA_SHA256_V2
+            || attestation.auxiliary_codec_schema_sha256 != AUXILIARY_CODEC_SCHEMA_SHA256_V2
+            || attestation.model_schema != 1
+        {
+            return Err(NativeError::protocol(
+                "typed V2 publication attestation schema differs",
+            ));
+        }
+        if attestation.document_count != typed_structural.document_count()
+            || attestation.max_facade_row_bytes != typed_structural.maximum_row_bytes()
+        {
+            return Err(NativeError::protocol(
+                "typed V2 structural owner diverges from its attestation",
+            ));
+        }
+        if attestation.capability_bits != 7
+            || attestation.source_map_entry_count != 0
+            || attestation.origin_entry_count != 0
+            || attestation.rdf_mapping_report_count != 0
+            || attestation.owl2_dl_report_summary.is_some()
+            || attestation.owl2_dl_validated
+            || attestation.owl2_dl_conforms.is_some()
+            || attestation.owl2_dl_report_sha256.is_some()
+        {
+            return Err(NativeError::protocol(
+                "typed V2 structural-only owner attests auxiliary collections",
+            ));
+        }
+        let typed_structural = Arc::new(typed_structural);
+        let initial = typed_initial_counters(&typed_structural, &attestation)?;
+        Ok(Arc::new(Self {
+            attestation,
+            effective_tables: Vec::new(),
+            raw_document_tables: None,
+            typed_structural: Some(typed_structural),
+            counters: CounterStateV2::new(initial),
+        }))
     }
 
     #[cfg(test)]
@@ -875,6 +1020,7 @@ impl PublicationStorageV2 {
                 source_identity: 1,
             }],
             raw_document_tables: None,
+            typed_structural: None,
             counters: CounterStateV2::new([0; COUNTER_NAMES.len()]),
         })
     }
@@ -1057,6 +1203,83 @@ impl PublicationStorageV2 {
             .finish(attestation_value)
             .map_err(native_error_to_python)
     }
+}
+
+fn typed_initial_counters(
+    storage: &TypedFacadeStorageV2,
+    attestation: &NativeSnapshotAttestationV2,
+) -> NativeResult<[u64; COUNTER_NAMES.len()]> {
+    let typed = storage.counters()?;
+    let component = typed.component;
+    let typed_arc_overhead = arc_sized_allocation_bytes::<TypedFacadeStorageV2>()?
+        .checked_sub(size_of::<TypedFacadeStorageV2>())
+        .ok_or_else(|| NativeError::protocol("typed V2 Arc layout accounting underflow"))?;
+    let publication_bytes = arc_sized_allocation_bytes::<PublicationStorageV2>()?;
+    let dynamic_attestation_bytes = attestation
+        .backend
+        .len()
+        .checked_add(attestation.root_document_key.len())
+        .ok_or_else(|| NativeError::limit("typed V2 attestation size overflow"))?;
+    let additional_metadata = typed_arc_overhead
+        .checked_add(publication_bytes)
+        .and_then(|value| value.checked_add(dynamic_attestation_bytes))
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or_else(|| NativeError::limit("typed V2 owner metadata size overflow"))?;
+    let retained_metadata = typed
+        .retained_metadata_bytes
+        .checked_add(additional_metadata)
+        .ok_or_else(|| NativeError::limit("typed V2 metadata counter overflow"))?;
+    let retained_owner = typed
+        .retained_owner_bytes
+        .checked_add(additional_metadata)
+        .ok_or_else(|| NativeError::limit("typed V2 owner counter overflow"))?;
+    if storage
+        .max_memory_bytes()
+        .is_some_and(|maximum| retained_owner > maximum)
+    {
+        return Err(NativeError::limit(
+            "typed V2 publication envelope exceeds max_memory_bytes",
+        ));
+    }
+
+    let mut initial = [0_u64; COUNTER_NAMES.len()];
+    initial[0] = component.node_requests;
+    initial[1] = component.node_hits;
+    initial[2] = component.string_requests;
+    initial[3] = component.string_hits;
+    initial[4] = component.bytes_requests;
+    initial[5] = component.bytes_hits;
+    initial[6] = component.integer_requests;
+    initial[7] = component.integer_hits;
+    initial[8] = component.sequence_requests;
+    initial[9] = component.sequence_hits;
+    initial[10] = typed.canonical_input_rows;
+    initial[11] = typed.canonical_input_bytes;
+    initial[12] = component.unique_nodes;
+    initial[13] = component.unique_strings;
+    initial[14] = component.unique_bytes;
+    initial[15] = component.unique_integers;
+    initial[16] = component.unique_sequences;
+    initial[RETAINED_DOCUMENT_TABLES] = typed.retained_document_tables;
+    initial[RETAINED_ROW_FIRST] =
+        storage.retained_rows(TypedFacadeCollectionV2::OntologyAnnotations)?;
+    initial[RETAINED_ROW_FIRST + 1] = storage.retained_rows(TypedFacadeCollectionV2::Axioms)?;
+    initial[RETAINED_ROW_FIRST + 2] = storage.retained_rows(TypedFacadeCollectionV2::Extensions)?;
+    initial[RETAINED_COMPONENT_BYTES] = typed.retained_component_bytes;
+    initial[RETAINED_ROOT_BYTES] = typed.retained_root_bytes;
+    initial[RETAINED_INDEX_BYTES] = typed.retained_index_bytes;
+    initial[RETAINED_METADATA_BYTES] = retained_metadata;
+    initial[RETAINED_OWNER_BYTES] = retained_owner;
+    initial[PEAK_BUILDER_BYTES] = typed.peak_builder_live_bytes.max(retained_owner);
+    initial[PEAK_FREEZE_BYTES] = typed.peak_freeze_live_bytes.max(retained_owner);
+    initial[47] = typed.publication_structural_rows_copied;
+    initial[48] = typed.publication_structural_bytes_copied;
+    initial[PUBLICATION_METADATA_RECORDS] = 2_u64
+        .checked_add(attestation.document_count)
+        .and_then(|value| value.checked_add(attestation.import_edge_count))
+        .ok_or_else(|| NativeError::limit("typed V2 publication record count overflow"))?;
+    validate_retained_total(&initial)?;
+    Ok(initial)
 }
 
 #[derive(Debug)]
@@ -1753,6 +1976,7 @@ impl StorageBuilderV2 {
             attestation,
             effective_tables,
             raw_document_tables,
+            typed_structural: None,
             counters: CounterStateV2::new(initial),
         }))
     }
@@ -2425,6 +2649,68 @@ mod tests {
     use std::thread;
 
     use super::*;
+    use crate::limits::Limits;
+    use crate::model::NativeComponentBuilder;
+    use crate::publication::TypedFacadeTableV2;
+
+    fn typed_frame(value: &[u8]) -> Vec<u8> {
+        let mut result = typed_varint(value.len());
+        result.extend_from_slice(value);
+        result
+    }
+
+    fn typed_varint(mut value: usize) -> Vec<u8> {
+        let mut result = Vec::new();
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            result.push(if value == 0 { byte } else { byte | 0x80 });
+            if value == 0 {
+                return result;
+            }
+        }
+    }
+
+    fn typed_declaration(value: &str) -> Vec<u8> {
+        let mut iri = vec![1, 2];
+        iri.extend(typed_frame(value.as_bytes()));
+        let mut entity = vec![2, 5];
+        entity.extend(typed_frame(b"class"));
+        entity.push(1);
+        entity.extend(typed_frame(&iri));
+        let mut declaration = vec![60, 1];
+        declaration.extend(typed_frame(&entity));
+        declaration.extend([6, 0]);
+        declaration
+    }
+
+    fn typed_structural_owner() -> (TypedFacadeStorageV2, Vec<u8>) {
+        let canonical = typed_declaration("urn:typed:facade");
+        let limits = Limits::default();
+        let mut builder = NativeComponentBuilder::new(&limits).expect("component builder");
+        let pending = builder
+            .intern_canonical(&canonical)
+            .expect("canonical declaration");
+        let frozen = builder.freeze().expect("component freeze");
+        let root = frozen.resolve(pending).expect("declaration root");
+        let arena = frozen.into_arena();
+        let document = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+        let closure = TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms);
+        let storage = TypedFacadeStorageV2::freeze(
+            arena,
+            vec![
+                TypedFacadeTableV2::new(document, vec![root]),
+                TypedFacadeTableV2::new(closure, vec![root]),
+            ],
+            vec![TypedFacadeTableV2::new(document, vec![root])],
+            1,
+            limits,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect("typed structural owner");
+        (storage, canonical)
+    }
 
     fn coordinate(
         collection: CollectionV2,
@@ -2438,6 +2724,104 @@ mod tests {
             signature_kind: SignatureKindV2::All,
             include_builtins: true,
         }
+    }
+
+    #[test]
+    fn typed_coordinate_mapping_is_structural_only_and_preserves_selectors() {
+        let kinds = [
+            (SignatureKindV2::All, TypedFacadeSignatureKindV2::All),
+            (SignatureKindV2::Class, TypedFacadeSignatureKindV2::Class),
+            (
+                SignatureKindV2::Datatype,
+                TypedFacadeSignatureKindV2::Datatype,
+            ),
+            (
+                SignatureKindV2::ObjectProperty,
+                TypedFacadeSignatureKindV2::ObjectProperty,
+            ),
+            (
+                SignatureKindV2::DataProperty,
+                TypedFacadeSignatureKindV2::DataProperty,
+            ),
+            (
+                SignatureKindV2::AnnotationProperty,
+                TypedFacadeSignatureKindV2::AnnotationProperty,
+            ),
+            (
+                SignatureKindV2::NamedIndividual,
+                TypedFacadeSignatureKindV2::NamedIndividual,
+            ),
+        ];
+        for (source, expected) in kinds {
+            let mapped = CoordinateV2 {
+                collection: CollectionV2::Signature,
+                scope: ScopeV2::Closure,
+                document_ordinal: None,
+                signature_kind: source,
+                include_builtins: false,
+            }
+            .typed()
+            .expect("structural coordinate");
+            assert_eq!(mapped.collection, TypedFacadeCollectionV2::Signature);
+            assert_eq!(mapped.scope, TypedFacadeScopeV2::Closure);
+            assert_eq!(mapped.signature_kind, expected);
+            assert!(!mapped.include_builtins);
+        }
+        assert!(CoordinateV2 {
+            collection: CollectionV2::SourceMapEntries,
+            scope: ScopeV2::Document,
+            document_ordinal: Some(0),
+            signature_kind: SignatureKindV2::All,
+            include_builtins: true,
+        }
+        .typed()
+        .is_none());
+    }
+
+    #[test]
+    fn typed_structural_owner_attaches_without_a_canonical_row_copy() {
+        let (typed, canonical) = typed_structural_owner();
+        let arena_witness = typed.arena().clone();
+        let typed_counters = typed.counters().expect("typed counters");
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.max_facade_row_bytes = canonical.len() as u64;
+        let storage = PublicationStorageV2::from_typed_structural(attestation, typed)
+            .expect("typed publication");
+
+        assert!(storage.effective_tables.is_empty());
+        assert!(storage.raw_document_tables.is_none());
+        let attached = storage
+            .typed_structural
+            .as_ref()
+            .expect("typed structural backend");
+        assert!(attached.arena().shares_storage_with(&arena_witness));
+        let counters = storage.counters.snapshot();
+        assert_eq!(counters[RETAINED_DOCUMENT_TABLES], 1);
+        assert_eq!(counters[RETAINED_ROW_FIRST + 1], 3);
+        assert_eq!(
+            counters[RETAINED_COMPONENT_BYTES],
+            typed_counters.retained_component_bytes
+        );
+        assert_eq!(counters[47], 0);
+        assert_eq!(counters[48], 0);
+        assert_eq!(counters[PUBLICATION_METADATA_RECORDS], 3);
+        assert!(counters[RETAINED_OWNER_BYTES] > typed_counters.retained_owner_bytes);
+        validate_retained_total(&counters).expect("disjoint retained owner counters");
+    }
+
+    #[test]
+    fn typed_structural_owner_rejects_attestation_drift_and_auxiliary_claims() {
+        let (typed, canonical) = typed_structural_owner();
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.max_facade_row_bytes = canonical.len() as u64 + 1;
+        assert!(PublicationStorageV2::from_typed_structural(attestation, typed).is_err());
+
+        let (typed, canonical) = typed_structural_owner();
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.max_facade_row_bytes = canonical.len() as u64;
+        attestation.capability_bits |= 8;
+        attestation.source_map_entry_count = 1;
+        assert!(PublicationStorageV2::from_typed_structural(attestation, typed).is_err());
     }
 
     #[test]

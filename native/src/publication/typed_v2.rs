@@ -385,6 +385,10 @@ impl TypedFacadeStorageV2 {
         self.maximum_row_bytes
     }
 
+    pub(crate) const fn max_memory_bytes(&self) -> Option<u64> {
+        self.limits.max_memory_bytes
+    }
+
     pub(crate) const fn arena(&self) -> &NativeComponentArena {
         &self.arena
     }
@@ -531,6 +535,21 @@ impl TypedFacadeStorageV2 {
             canonical_encode_requests: runtime.canonical_encode_requests,
             ..self.frozen_counters
         })
+    }
+
+    pub(crate) fn retained_rows(&self, collection: TypedFacadeCollectionV2) -> NativeResult<u64> {
+        self.effective_tables
+            .iter()
+            .chain(&self.raw_document_tables)
+            .filter(|table| table.coordinate.collection == collection)
+            .try_fold(0_u64, |total, table| {
+                checked_add(
+                    total,
+                    u64::try_from(table.roots.len()).map_err(|_| {
+                        NativeError::limit("typed V2 retained row count exceeds u64")
+                    })?,
+                )
+            })
     }
 
     #[cfg(test)]
