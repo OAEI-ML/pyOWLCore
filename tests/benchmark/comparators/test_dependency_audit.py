@@ -552,6 +552,21 @@ def test_artifacts_scan_packaged_python_and_stub_payloads(kind: str, tmp_path: P
     assert any("leak.pyi: forbidden import jpype" in value for value in findings)
 
 
+def test_artifact_scan_does_not_treat_relative_local_modules_as_dependencies(
+    tmp_path: Path,
+) -> None:
+    root = _clean_repository(tmp_path)
+    artifact = _wheel(
+        tmp_path,
+        {"pyowl_core/audit.py": b"from .java import audit_java\n"},
+    )
+
+    row = _artifact_rows(audit_dependency_exclusion(root, (artifact,)))[0]
+
+    assert row["status"] == "pass"
+    assert row["findings"] == []
+
+
 def test_artifact_python_scan_fails_closed_on_parse_and_size_limits(tmp_path: Path) -> None:
     root = _clean_repository(tmp_path)
     artifact = _wheel(

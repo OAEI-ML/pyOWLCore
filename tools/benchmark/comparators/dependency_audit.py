@@ -513,7 +513,7 @@ def _python_source_findings(relative: str, scope: str, text: str) -> list[str]:
                     importlib_aliases.add(alias.asname or alias.name)
                 elif alias.name == "subprocess":
                     subprocess_aliases.add(alias.asname or alias.name)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+        elif isinstance(node, ast.ImportFrom) and node.module is not None and node.level == 0:
             findings.extend(_forbidden_module_finding(relative, scope, node.module))
             if node.module == "importlib":
                 dynamic_import_aliases.update(
