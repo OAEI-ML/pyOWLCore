@@ -26,7 +26,8 @@ pub(crate) use component_index::{
 };
 #[allow(unused_imports)]
 pub(crate) use components::{
-    ComponentCounters, ComponentId, ComponentIdRemap, ComponentTables, FrozenComponentBuild,
+    ComponentCounters, ComponentFieldRef, ComponentId, ComponentIdRemap, ComponentRecordRef,
+    ComponentSequenceKind, ComponentSequenceRef, ComponentTables, FrozenComponentBuild,
     NativeComponentArena, NativeComponentBuilder, PendingComponentId,
 };
 #[allow(unused_imports)]

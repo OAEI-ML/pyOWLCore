@@ -116,7 +116,7 @@ enum ComponentValue {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-enum ComponentSequenceKind {
+pub(crate) enum ComponentSequenceKind {
     CanonicalSet,
     Ordered,
 }
@@ -642,6 +642,75 @@ pub(crate) struct NativeComponentArena {
     counters: ComponentCounters,
 }
 
+/// A borrowing view of one immutable component record.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ComponentRecordRef<'arena> {
+    arena: &'arena NativeComponentArena,
+    component: &'arena FrozenComponent,
+}
+
+impl<'arena> ComponentRecordRef<'arena> {
+    pub(crate) const fn tag(self) -> u16 {
+        self.component.tag
+    }
+
+    pub(crate) fn field_count(self) -> usize {
+        self.component.fields.len()
+    }
+
+    pub(crate) fn field(self, index: usize) -> NativeResult<ComponentFieldRef<'arena>> {
+        let value = self
+            .component
+            .fields
+            .get(index)
+            .copied()
+            .ok_or_else(|| NativeError::protocol("native component field is out of bounds"))?;
+        self.arena.field_ref(value)
+    }
+}
+
+/// A borrowing view of one model-schema-1 field or ordered-sequence item.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ComponentFieldRef<'arena> {
+    None,
+    Node(ComponentId),
+    Text(&'arena [u8]),
+    Bytes(&'arena [u8]),
+    /// Canonical-model unsigned LEB128, not encoded-view little-endian magnitude bytes.
+    NonnegativeIntegerVarint(&'arena [u8]),
+    Enum(&'arena [u8]),
+    CanonicalSet(ComponentSequenceRef<'arena>),
+    OrderedSequence(ComponentSequenceRef<'arena>),
+}
+
+/// A borrowing view of one immutable component sequence.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ComponentSequenceRef<'arena> {
+    arena: &'arena NativeComponentArena,
+    sequence: &'arena FrozenComponentSequence,
+}
+
+impl<'arena> ComponentSequenceRef<'arena> {
+    pub(crate) const fn kind(self) -> ComponentSequenceKind {
+        self.sequence.kind
+    }
+
+    pub(crate) fn len(self) -> usize {
+        self.sequence.elements.len()
+    }
+
+    pub(crate) fn is_empty(self) -> bool {
+        self.sequence.elements.is_empty()
+    }
+
+    pub(crate) fn item(self, index: usize) -> NativeResult<ComponentFieldRef<'arena>> {
+        let value = self.sequence.elements.get(index).copied().ok_or_else(|| {
+            NativeError::protocol("native component sequence item is out of bounds")
+        })?;
+        self.arena.field_ref(value)
+    }
+}
+
 impl NativeComponentArena {
     fn tables(&self) -> &ComponentTables {
         &self.tables
@@ -668,6 +737,71 @@ impl NativeComponentArena {
         }
         self.tables.component(identifier.local)?;
         Ok(identifier.local)
+    }
+
+    /// Borrow a validated record without reconstructing canonical bytes.
+    pub(crate) fn record(&self, identifier: ComponentId) -> NativeResult<ComponentRecordRef<'_>> {
+        let identifier = self.validate_identifier(identifier)?;
+        Ok(ComponentRecordRef {
+            arena: self,
+            component: self.tables.component(identifier)?,
+        })
+    }
+
+    fn field_ref(&self, value: ComponentValue) -> NativeResult<ComponentFieldRef<'_>> {
+        match value {
+            ComponentValue::None => Ok(ComponentFieldRef::None),
+            ComponentValue::String(kind, identifier) => {
+                let value = self
+                    .tables
+                    .strings
+                    .get(identifier.0.index())
+                    .map(Vec::as_slice)
+                    .ok_or_else(|| NativeError::protocol("native string id is out of bounds"))?;
+                Ok(match kind {
+                    ScalarKind::Text => ComponentFieldRef::Text(value),
+                    ScalarKind::Enum => ComponentFieldRef::Enum(value),
+                })
+            }
+            ComponentValue::Bytes(identifier) => self
+                .tables
+                .bytes
+                .get(identifier.0.index())
+                .map(Vec::as_slice)
+                .map(ComponentFieldRef::Bytes)
+                .ok_or_else(|| NativeError::protocol("native bytes id is out of bounds")),
+            ComponentValue::Integer(identifier) => self
+                .tables
+                .integers
+                .get(identifier.0.index())
+                .map(Vec::as_slice)
+                .map(ComponentFieldRef::NonnegativeIntegerVarint)
+                .ok_or_else(|| NativeError::protocol("native integer id is out of bounds")),
+            ComponentValue::Node(identifier) => {
+                self.tables.component(identifier)?;
+                Ok(ComponentFieldRef::Node(ComponentId {
+                    owner: self.owner,
+                    local: identifier,
+                }))
+            }
+            ComponentValue::Sequence(identifier) => {
+                let sequence = self
+                    .tables
+                    .sequences
+                    .get(identifier.0.index())
+                    .ok_or_else(|| NativeError::protocol("native sequence id is out of bounds"))?;
+                let sequence = ComponentSequenceRef {
+                    arena: self,
+                    sequence,
+                };
+                Ok(match sequence.kind() {
+                    ComponentSequenceKind::CanonicalSet => {
+                        ComponentFieldRef::CanonicalSet(sequence)
+                    }
+                    ComponentSequenceKind::Ordered => ComponentFieldRef::OrderedSequence(sequence),
+                })
+            }
+        }
     }
 
     pub(crate) fn category(&self, identifier: ComponentId) -> NativeResult<Category> {
@@ -3488,6 +3622,46 @@ mod tests {
         result
     }
 
+    fn literal_without_language(value: &str) -> Vec<u8> {
+        let datatype = entity("datatype", "http://www.w3.org/2001/XMLSchema#string");
+        let mut result = vec![4, 2];
+        result.extend(frame(value.as_bytes()));
+        result.push(1);
+        result.extend(frame(&datatype));
+        result.push(0);
+        result
+    }
+
+    fn anonymous_individual() -> Vec<u8> {
+        let mut result = vec![3, 3];
+        result.extend(frame(&[7; 32]));
+        result.push(3);
+        result.extend(frame(b"local"));
+        result
+    }
+
+    fn minimum_cardinality(value: u64) -> Vec<u8> {
+        let property = entity("object_property", "urn:property");
+        let filler = entity("class", "urn:Filler");
+        let mut result = vec![38, 4];
+        encode_varint(value, &mut result).expect("cardinality");
+        result.push(1);
+        result.extend(frame(&property));
+        result.push(1);
+        result.extend(frame(&filler));
+        result
+    }
+
+    fn property_chain() -> Vec<u8> {
+        let mut result = vec![11, 7, 2];
+        for value in ["urn:first", "urn:second"] {
+            let property = entity("object_property", value);
+            result.push(1);
+            result.extend(frame(&property));
+        }
+        result
+    }
+
     const fn constant_bucket(_: u64) -> u64 {
         0
     }
@@ -3608,6 +3782,150 @@ mod tests {
                 )
                 .unwrap_err()
                 .code,
+            "NATIVE_PROTOCOL"
+        );
+    }
+
+    #[test]
+    fn borrowing_traversal_covers_every_field_kind() {
+        let limits = Limits::default();
+        let mut builder = component_builder(&limits);
+        let declaration = builder
+            .intern_canonical(&declaration("urn:Class"))
+            .expect("declaration");
+        let literal = builder
+            .intern_canonical(&literal_without_language("value"))
+            .expect("literal");
+        let anonymous = builder
+            .intern_canonical(&anonymous_individual())
+            .expect("anonymous individual");
+        let cardinality = builder
+            .intern_canonical(&minimum_cardinality(128))
+            .expect("cardinality");
+        let chain = builder
+            .intern_canonical(&property_chain())
+            .expect("property chain");
+        let frozen = builder.freeze().expect("arena");
+        let declaration = frozen.resolve(declaration).expect("declaration id");
+        let literal = frozen.resolve(literal).expect("literal id");
+        let anonymous = frozen.resolve(anonymous).expect("anonymous id");
+        let cardinality = frozen.resolve(cardinality).expect("cardinality id");
+        let chain = frozen.resolve(chain).expect("chain id");
+        let arena = frozen.arena();
+
+        let declaration = arena.record(declaration).expect("declaration record");
+        assert_eq!(declaration.tag(), 60);
+        assert_eq!(declaration.field_count(), 2);
+        let entity = match declaration.field(0).expect("entity field") {
+            ComponentFieldRef::Node(identifier) => identifier,
+            other => panic!("expected node, got {other:?}"),
+        };
+        let annotations = match declaration.field(1).expect("annotations field") {
+            ComponentFieldRef::CanonicalSet(sequence) => sequence,
+            other => panic!("expected canonical set, got {other:?}"),
+        };
+        assert_eq!(annotations.kind(), ComponentSequenceKind::CanonicalSet);
+        assert_eq!(annotations.len(), 0);
+        assert!(annotations.is_empty());
+
+        let entity = arena.record(entity).expect("entity record");
+        let entity_kind = match entity.field(0).expect("entity kind") {
+            ComponentFieldRef::Enum(value) => value,
+            other => panic!("expected enum, got {other:?}"),
+        };
+        assert_eq!(entity_kind, b"class");
+        let iri = match entity.field(1).expect("entity IRI") {
+            ComponentFieldRef::Node(identifier) => identifier,
+            other => panic!("expected IRI node, got {other:?}"),
+        };
+        let iri = arena.record(iri).expect("IRI record");
+        let text = match iri.field(0).expect("IRI text") {
+            ComponentFieldRef::Text(value) => value,
+            other => panic!("expected text, got {other:?}"),
+        };
+        assert_eq!(text, b"urn:Class");
+
+        let literal = arena.record(literal).expect("literal record");
+        assert!(matches!(
+            literal.field(2).expect("optional language"),
+            ComponentFieldRef::None
+        ));
+
+        let anonymous = arena.record(anonymous).expect("anonymous record");
+        let scope = match anonymous.field(0).expect("document scope") {
+            ComponentFieldRef::Bytes(value) => value,
+            other => panic!("expected bytes, got {other:?}"),
+        };
+        assert_eq!(scope, &[7; 32]);
+
+        let cardinality = arena.record(cardinality).expect("cardinality record");
+        let integer = match cardinality.field(0).expect("cardinality value") {
+            ComponentFieldRef::NonnegativeIntegerVarint(value) => value,
+            other => panic!("expected nonnegative integer, got {other:?}"),
+        };
+        // The traversal exposes the arena's canonical unsigned LEB128.  An
+        // encoded-view builder must convert this to minimal little-endian
+        // magnitude bytes (128 => 80), rather than copying these bytes.
+        assert_eq!(integer, &[0x80, 0x01]);
+
+        let chain = arena.record(chain).expect("chain record");
+        let properties = match chain.field(0).expect("properties") {
+            ComponentFieldRef::OrderedSequence(sequence) => sequence,
+            other => panic!("expected ordered sequence, got {other:?}"),
+        };
+        assert_eq!(properties.kind(), ComponentSequenceKind::Ordered);
+        assert_eq!(properties.len(), 2);
+        assert!(!properties.is_empty());
+        assert!(matches!(
+            properties.item(0).expect("first property"),
+            ComponentFieldRef::Node(_)
+        ));
+    }
+
+    #[test]
+    fn borrowing_traversal_rejects_foreign_and_out_of_range_access() {
+        let limits = Limits::default();
+        let mut builder = component_builder(&limits);
+        let pending = builder
+            .intern_canonical(&declaration("urn:local"))
+            .expect("local declaration");
+        let frozen = builder.freeze().expect("local arena");
+        let identifier = frozen.resolve(pending).expect("local id");
+        let arena = frozen.arena();
+        let record = arena.record(identifier).expect("local record");
+        let sequence = match record.field(1).expect("annotations") {
+            ComponentFieldRef::CanonicalSet(sequence) => sequence,
+            other => panic!("expected canonical set, got {other:?}"),
+        };
+
+        assert_eq!(record.field(2).unwrap_err().code, "NATIVE_PROTOCOL");
+        assert_eq!(sequence.item(0).unwrap_err().code, "NATIVE_PROTOCOL");
+        let out_of_range = ComponentId {
+            owner: arena.owner,
+            local: LocalComponentId::Axiom(DenseId(u32::MAX)),
+        };
+        assert_eq!(
+            arena.record(out_of_range).unwrap_err().code,
+            "NATIVE_PROTOCOL"
+        );
+
+        let child = match record.field(0).expect("entity") {
+            ComponentFieldRef::Node(identifier) => identifier,
+            other => panic!("expected node, got {other:?}"),
+        };
+        let mut foreign_builder = component_builder(&limits);
+        let foreign_pending = foreign_builder
+            .intern_canonical(&declaration("urn:foreign"))
+            .expect("foreign declaration");
+        let foreign = foreign_builder.freeze().expect("foreign arena");
+        let foreign_id = foreign.resolve(foreign_pending).expect("foreign id");
+
+        assert_eq!(
+            arena.record(foreign_id).unwrap_err().code,
+            "NATIVE_PROTOCOL"
+        );
+        assert_eq!(
+            foreign.arena().record(child).unwrap_err().code,
             "NATIVE_PROTOCOL"
         );
     }
