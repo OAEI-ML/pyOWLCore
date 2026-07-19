@@ -48,6 +48,34 @@ impl NativeComponentDigestIndex {
             limits,
             cancellation,
             interrupt,
+            0,
+            structural_digest_v1,
+        )
+    }
+
+    /// Build while accounting for storage already retained by the caller.
+    ///
+    /// The external allocation is not owned by this index, but remains live
+    /// throughout allocation and canonical digest construction.  This is the
+    /// path used when several indexes share one retained publication owner.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_with_external(
+        arena: &NativeComponentArena,
+        identifiers: &[ComponentId],
+        category: Category,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+        external_retained_bytes: usize,
+    ) -> NativeResult<Self> {
+        Self::build_with_digest(
+            arena,
+            identifiers,
+            category,
+            limits,
+            cancellation,
+            interrupt,
+            external_retained_bytes,
             structural_digest_v1,
         )
     }
@@ -60,8 +88,11 @@ impl NativeComponentDigestIndex {
         limits: &Limits,
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
+        external_retained_bytes: usize,
         digest: DigestFunction,
     ) -> NativeResult<Self> {
+        let external_retained_bytes_u64 = u64::try_from(external_retained_bytes)
+            .map_err(|_| NativeError::limit("native external retained size exceeds u64"))?;
         let count = u64::try_from(identifiers.len())
             .map_err(|_| NativeError::limit("native component index row count exceeds u64"))?;
         if count > limits.value(LimitKey::MaxIndexRows) {
@@ -69,15 +100,23 @@ impl NativeComponentDigestIndex {
                 "native component digest index exceeds max_index_rows",
             ));
         }
-        check_retained_bytes(arena, minimum_index_bytes(identifiers.len())?, limits)?;
+        check_retained_bytes(
+            arena,
+            external_retained_bytes_u64,
+            minimum_index_bytes(identifiers.len())?,
+            limits,
+        )?;
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(identifiers.len())
             .map_err(|_| NativeError::limit("native component digest index allocation failed"))?;
         let retained_bytes = minimum_index_bytes(entries.capacity())?;
-        check_retained_bytes(arena, retained_bytes, limits)?;
-        let external_bytes = usize::try_from(retained_bytes)
+        check_retained_bytes(arena, external_retained_bytes_u64, retained_bytes, limits)?;
+        let retained_bytes_usize = usize::try_from(retained_bytes)
             .map_err(|_| NativeError::limit("native component index size exceeds usize"))?;
+        let encoding_external_bytes = external_retained_bytes
+            .checked_add(retained_bytes_usize)
+            .ok_or_else(|| NativeError::limit("native component index workspace overflow"))?;
         for identifier in identifiers {
             if arena.category(*identifier)? != category {
                 return Err(NativeError::protocol(
@@ -89,7 +128,7 @@ impl NativeComponentDigestIndex {
                 limits,
                 cancellation.clone(),
                 interrupt.clone(),
-                external_bytes,
+                encoding_external_bytes,
             )?;
             entries.push(DigestEntry {
                 digest: digest(&canonical),
@@ -178,6 +217,7 @@ fn minimum_index_bytes(count: usize) -> NativeResult<u64> {
 
 fn check_retained_bytes(
     arena: &NativeComponentArena,
+    external_retained_bytes: u64,
     retained_bytes: u64,
     limits: &Limits,
 ) -> NativeResult<()> {
@@ -189,7 +229,8 @@ fn check_retained_bytes(
     let total_retained = arena
         .counters()
         .retained_bytes
-        .checked_add(retained_bytes)
+        .checked_add(external_retained_bytes)
+        .and_then(|value| value.checked_add(retained_bytes))
         .ok_or_else(|| NativeError::limit("native component index memory overflow"))?;
     if limits
         .max_memory_bytes
@@ -303,6 +344,7 @@ mod tests {
             &limits,
             Cancellation::with_duration(None),
             None,
+            0,
             constant_digest,
         )
         .expect("digest index");
@@ -423,5 +465,84 @@ mod tests {
             .code,
             "NATIVE_WIRE_LIMIT"
         );
+    }
+
+    #[test]
+    fn external_retained_bytes_cover_index_capacity_and_encode_workspace() {
+        let build_limits = Limits::default();
+        let canonical = declaration("urn:index:external");
+        let mut builder = NativeComponentBuilder::new(&build_limits).expect("builder");
+        let pending = builder.intern_canonical(&canonical).expect("declaration");
+        let frozen = builder.freeze().expect("arena");
+        let identifier = frozen.resolve(pending).expect("identifier");
+        let arena = frozen.into_arena();
+        let baseline = NativeComponentDigestIndex::build(
+            &arena,
+            &[identifier],
+            Category::Axiom,
+            &build_limits,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect("baseline index");
+        let index_bytes = baseline.retained_bytes();
+        drop(baseline);
+
+        let external_bytes = 257_usize;
+        let retained_peak = arena
+            .counters()
+            .retained_bytes
+            .checked_add(u64::try_from(external_bytes).expect("external bytes"))
+            .and_then(|value| value.checked_add(index_bytes))
+            .expect("retained peak");
+        let mut retained_limits = build_limits;
+        retained_limits.max_memory_bytes = Some(retained_peak - 1);
+        assert_eq!(
+            NativeComponentDigestIndex::build_with_external(
+                &arena,
+                &[identifier],
+                Category::Axiom,
+                &retained_limits,
+                Cancellation::with_duration(None),
+                None,
+                external_bytes,
+            )
+            .unwrap_err()
+            .code,
+            "NATIVE_WIRE_LIMIT"
+        );
+
+        let encode_peak = retained_peak
+            .checked_add(u64::try_from(canonical.len()).expect("canonical bytes"))
+            .expect("encode peak");
+        let mut workspace_limits = build_limits;
+        workspace_limits.max_memory_bytes = Some(encode_peak - 1);
+        assert_eq!(
+            NativeComponentDigestIndex::build_with_external(
+                &arena,
+                &[identifier],
+                Category::Axiom,
+                &workspace_limits,
+                Cancellation::with_duration(None),
+                None,
+                external_bytes,
+            )
+            .unwrap_err()
+            .code,
+            "NATIVE_WIRE_LIMIT"
+        );
+
+        workspace_limits.max_memory_bytes = Some(encode_peak);
+        let exact = NativeComponentDigestIndex::build_with_external(
+            &arena,
+            &[identifier],
+            Category::Axiom,
+            &workspace_limits,
+            Cancellation::with_duration(None),
+            None,
+            external_bytes,
+        )
+        .expect("exact cumulative memory peak");
+        assert_eq!(exact.retained_bytes(), index_bytes);
     }
 }

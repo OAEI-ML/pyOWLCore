@@ -6,6 +6,7 @@ mod facade_v2;
 mod fixture;
 mod handle;
 mod records;
+mod typed_v2;
 
 use std::collections::HashSet;
 use std::mem::size_of;
@@ -24,6 +25,12 @@ pub(crate) use records::{
     ImportDocumentV1, ImportEdgeStatusV1, ImportEdgeV1, ImportManifestV1, ImportPolicyV1,
     LoadOptionsV1, LoadReportV1, NativeSnapshotAttestationV1, OntologyIdV1, ParseLimitsV1,
     PositiveIntegerV1, PublicationCountersV1, PublicationDraftV1,
+};
+#[allow(unused_imports)]
+pub(crate) use typed_v2::{
+    TypedFacadeCollectionV2, TypedFacadeCoordinateV2, TypedFacadeCounterSnapshotV2,
+    TypedFacadePageRequestV2, TypedFacadePageV2, TypedFacadeScopeV2, TypedFacadeSignatureKindV2,
+    TypedFacadeStorageV2, TypedFacadeTableV2,
 };
 
 pub(crate) const PUBLICATION_VERSION_V1: u8 = 1;
