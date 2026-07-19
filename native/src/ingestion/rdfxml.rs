@@ -1,11 +1,12 @@
 //! Forward-only UTF-8 RDF/XML tokenization and the first closed OWL mapping slice.
 //!
 //! This intentionally unadvertised slice accepts ontology headers, imports,
-//! version IRIs, and named entity declarations.  The event/token model is not
-//! tied to that subset: later RDF/XML productions extend the graph sink and RDF
-//! mapper rather than replacing the bounded XML scanner.
+//! named entity declarations, and the closed named-node axiom subset that does
+//! not require RDF-list or blank-expression decoding. The event/token model is
+//! not tied to that subset: later RDF/XML productions extend the graph sink and
+//! RDF mapper rather than replacing the bounded XML scanner.
 
-use crate::canonical::{entity, iri, Field, Node};
+use crate::canonical::{canonical_set, entity, iri, Field, Node};
 use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
 use crate::session::Session;
@@ -13,6 +14,7 @@ use crate::session::Session;
 use super::{CanonicalDocument, MappingEvidence};
 
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+const OWL: &str = "http://www.w3.org/2002/07/owl#";
 const XML: &str = "http://www.w3.org/XML/1998/namespace";
 const XINCLUDE: &str = "http://www.w3.org/2001/XInclude";
 
@@ -23,6 +25,17 @@ const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
 const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
 const OWL_VERSION_IRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+
+const RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+const RDFS_SUB_PROPERTY_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
+const RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
+const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
+const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
+const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
+const OWL_EQUIVALENT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#equivalentProperty";
+const OWL_PROPERTY_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#propertyDisjointWith";
+const OWL_INVERSE_OF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
+const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Span {
@@ -91,20 +104,32 @@ impl<'a> XmlStream<'a> {
             }
             if self.starts_with(start, "<!--") {
                 let body_start = start + 4;
-                let end = self.text[body_start..]
-                    .find("-->")
-                    .map(|value| body_start + value + 3)
-                    .ok_or_else(xml_syntax)?;
-                if self.text[body_start..end - 3].contains("--") {
+                let marker = bounded_find(
+                    self.text.as_bytes(),
+                    body_start,
+                    self.text.len(),
+                    b"-->",
+                    session,
+                )?
+                .ok_or_else(xml_syntax)?;
+                if bounded_find(self.text.as_bytes(), body_start, marker, b"--", session)?.is_some()
+                {
                     return Err(xml_syntax());
                 }
+                let end = marker + 3;
                 self.advance(end, session)?;
                 continue;
             }
             if self.starts_with(start, "<![CDATA[") {
                 let body_start = start + 9;
-                let marker = self.text[body_start..].find("]]>").ok_or_else(xml_syntax)?;
-                let body_end = body_start + marker;
+                let body_end = bounded_find(
+                    self.text.as_bytes(),
+                    body_start,
+                    self.text.len(),
+                    b"]]>",
+                    session,
+                )?
+                .ok_or_else(xml_syntax)?;
                 let value = owned_text(&self.text[body_start..body_end], session)?;
                 let end = body_end + 3;
                 self.advance(end, session)?;
@@ -114,17 +139,23 @@ impl<'a> XmlStream<'a> {
                 }));
             }
             if self.starts_with(start, "<?") {
-                let end = self.text[start + 2..]
-                    .find("?>")
-                    .map(|value| start + 2 + value + 2)
-                    .ok_or_else(xml_syntax)?;
+                let marker = bounded_find(
+                    self.text.as_bytes(),
+                    start + 2,
+                    self.text.len(),
+                    b"?>",
+                    session,
+                )?
+                .ok_or_else(xml_syntax)?;
+                let end = marker + 2;
                 let body = &self.text[start + 2..end - 2];
-                let target_end = body.find(char::is_whitespace).unwrap_or(body.len());
+                let target_end =
+                    bounded_find_xml_space(body.as_bytes(), session)?.unwrap_or(body.len());
                 let target = &body[..target_end];
                 if target != "xml"
                     || start != 0
                     || self.xml_declaration_seen
-                    || declaration_has_unsupported_encoding(body)
+                    || declaration_has_unsupported_encoding(body, session)?
                 {
                     return Err(xml_forbidden());
                 }
@@ -973,6 +1004,7 @@ fn map_graph(
         .try_reserve_exact(triples.len())
         .map_err(|_| NativeError::limit("native RDF consumed ledger allocation failed"))?;
     consumed.resize(triples.len(), false);
+    let kinds = collect_entity_kinds(&triples, session)?;
     let mut header_index = None;
     for (index, triple) in triples.iter().enumerate() {
         if triple.predicate == RDF_TYPE
@@ -1043,30 +1075,44 @@ fn map_graph(
             session,
             "native RDF declaration IRI exceeds max_iri_bytes",
         )?;
-        let mut fields = Vec::new();
-        session.reserve_bytes(
-            2_usize
-                .checked_mul(std::mem::size_of::<Field>())
-                .ok_or_else(|| NativeError::limit("native RDF field accounting overflow"))?,
+        let declaration = build_node(
+            60,
+            [
+                Field::Node(named_entity(kind, subject, session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
         )?;
-        fields
-            .try_reserve_exact(2)
-            .map_err(|_| NativeError::limit("native RDF declaration allocation failed"))?;
-        fields.push(Field::Node(entity(
-            kind,
-            iri(owned_text(subject, session)?)?,
-        )?));
-        fields.push(Field::Set(Vec::new()));
-        let declaration = Node::build(60, fields)?;
-        let mut encoded = Vec::new();
-        session.reserve_bytes(declaration.as_bytes().len())?;
-        encoded
-            .try_reserve_exact(declaration.as_bytes().len())
-            .map_err(|_| NativeError::limit("native RDF axiom allocation failed"))?;
-        encoded.extend_from_slice(declaration.as_bytes());
-        reserve_vec_item(&mut axioms, session)?;
-        axioms.push(encoded);
+        push_axiom(declaration, &mut axioms, session)?;
         consumed[index] = true;
+    }
+    map_equivalent_components(
+        OWL_EQUIVALENT_CLASS,
+        EquivalentKind::Class,
+        &triples,
+        &mut consumed,
+        &kinds,
+        &mut axioms,
+        session,
+    )?;
+    map_equivalent_components(
+        OWL_EQUIVALENT_PROPERTY,
+        EquivalentKind::Property,
+        &triples,
+        &mut consumed,
+        &kinds,
+        &mut axioms,
+        session,
+    )?;
+    for (index, triple) in triples.iter().enumerate() {
+        if consumed[index] {
+            continue;
+        }
+        session.step(1)?;
+        if let Some(axiom) = named_axiom(triple, &kinds, session)? {
+            push_axiom(axiom, &mut axioms, session)?;
+            consumed[index] = true;
+        }
     }
     axioms.sort_unstable();
     axioms.dedup();
@@ -1094,9 +1140,408 @@ fn map_graph(
             total_triples,
             consumed_triples: u64::try_from(consumed_triples)
                 .map_err(|_| NativeError::limit("native consumed triple count exceeds u64"))?,
-            rule_ids: &["OWL2-RDF-REVERSE-HEADER", "OWL2-RDF-REVERSE-DECLARATION"],
+            rule_ids: &[
+                "OWL2-RDF-REVERSE-HEADER",
+                "OWL2-RDF-REVERSE-DECLARATION",
+                "OWL2-RDF-REVERSE-NAMED-AXIOM",
+            ],
         },
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KindRecord<'a> {
+    iri: &'a str,
+    kind: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EquivalentKind {
+    Class,
+    Property,
+}
+
+fn collect_entity_kinds<'a>(
+    triples: &'a [Triple],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<KindRecord<'a>>> {
+    let mut output = Vec::new();
+    for triple in triples {
+        session.step(1)?;
+        if triple.predicate != RDF_TYPE {
+            continue;
+        }
+        let (Resource::Iri(subject), Term::Iri(object)) = (&triple.subject, &triple.object) else {
+            continue;
+        };
+        let Some(kind) = declaration_kind(object) else {
+            continue;
+        };
+        let record = KindRecord { iri: subject, kind };
+        if !output.contains(&record) {
+            reserve_vec_item(&mut output, session)?;
+            output.push(record);
+        }
+    }
+    Ok(output)
+}
+
+fn has_kind(kinds: &[KindRecord<'_>], value: &str, kind: &str) -> bool {
+    kinds
+        .iter()
+        .any(|record| record.iri == value && record.kind == kind)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_equivalent_components(
+    predicate: &str,
+    equivalent_kind: EquivalentKind,
+    triples: &[Triple],
+    consumed: &mut [bool],
+    kinds: &[KindRecord<'_>],
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for start in 0..triples.len() {
+        if consumed[start] {
+            continue;
+        }
+        let Some((left, right)) = named_edge(&triples[start], predicate) else {
+            continue;
+        };
+        if !equivalent_member_supported(equivalent_kind, left, kinds)
+            || !equivalent_member_supported(equivalent_kind, right, kinds)
+        {
+            continue;
+        }
+        let mut members = Vec::new();
+        add_member(&mut members, left, session)?;
+        add_member(&mut members, right, session)?;
+        consumed[start] = true;
+        loop {
+            let mut changed = false;
+            for (index, triple) in triples.iter().enumerate() {
+                session.step(1)?;
+                if consumed[index] {
+                    continue;
+                }
+                let Some((edge_left, edge_right)) = named_edge(triple, predicate) else {
+                    continue;
+                };
+                if !equivalent_member_supported(equivalent_kind, edge_left, kinds)
+                    || !equivalent_member_supported(equivalent_kind, edge_right, kinds)
+                {
+                    continue;
+                }
+                if members.contains(&edge_left) || members.contains(&edge_right) {
+                    add_member(&mut members, edge_left, session)?;
+                    add_member(&mut members, edge_right, session)?;
+                    consumed[index] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let (tag, entity_kind) = match equivalent_kind {
+            EquivalentKind::Class => (62, "class"),
+            EquivalentKind::Property
+                if members
+                    .iter()
+                    .all(|value| has_kind(kinds, value, "data_property")) =>
+            {
+                (91, "data_property")
+            }
+            EquivalentKind::Property => (71, "object_property"),
+        };
+        let members = named_set(entity_kind, &members, session)?;
+        let axiom = build_node(tag, [Field::Set(members), Field::Set(Vec::new())], session)?;
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
+fn equivalent_member_supported(
+    equivalent_kind: EquivalentKind,
+    value: &str,
+    kinds: &[KindRecord<'_>],
+) -> bool {
+    match equivalent_kind {
+        EquivalentKind::Class => !has_kind(kinds, value, "datatype"),
+        EquivalentKind::Property => !has_kind(kinds, value, "annotation_property"),
+    }
+}
+
+fn named_edge<'a>(triple: &'a Triple, predicate: &str) -> Option<(&'a str, &'a str)> {
+    if triple.predicate != predicate {
+        return None;
+    }
+    let (Resource::Iri(left), Term::Iri(right)) = (&triple.subject, &triple.object) else {
+        return None;
+    };
+    Some((left, right))
+}
+
+fn add_member<'a>(
+    members: &mut Vec<&'a str>,
+    value: &'a str,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session.step(
+        u64::try_from(members.len())
+            .map_err(|_| NativeError::limit("native RDF component work exceeds u64"))?,
+    )?;
+    if !members.contains(&value) {
+        reserve_vec_item(members, session)?;
+        members.push(value);
+    }
+    Ok(())
+}
+
+fn named_axiom(
+    triple: &Triple,
+    kinds: &[KindRecord<'_>],
+    session: &mut Session<'_>,
+) -> NativeResult<Option<Node>> {
+    let (Resource::Iri(subject), Term::Iri(object)) = (&triple.subject, &triple.object) else {
+        return Ok(None);
+    };
+    let axiom = match triple.predicate.as_str() {
+        RDFS_SUB_CLASS_OF => build_node(
+            61,
+            [
+                Field::Node(named_entity("class", subject, session)?),
+                Field::Node(named_entity("class", object, session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?,
+        OWL_DISJOINT_WITH if subject == object => build_node(
+            61,
+            [
+                Field::Node(named_entity("class", subject, session)?),
+                Field::Node(named_entity("class", OWL_NOTHING, session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?,
+        OWL_DISJOINT_WITH => build_node(
+            63,
+            [
+                Field::Set(named_set("class", &[subject, object], session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?,
+        RDFS_SUB_PROPERTY_OF
+            if has_kind(kinds, subject, "annotation_property")
+                || has_kind(kinds, object, "annotation_property") =>
+        {
+            return Ok(None);
+        }
+        RDFS_SUB_PROPERTY_OF
+            if has_kind(kinds, subject, "data_property")
+                || has_kind(kinds, object, "data_property") =>
+        {
+            build_binary_named_axiom(90, "data_property", subject, object, session)?
+        }
+        RDFS_SUB_PROPERTY_OF => {
+            build_binary_named_axiom(70, "object_property", subject, object, session)?
+        }
+        OWL_PROPERTY_DISJOINT_WITH if has_kind(kinds, subject, "data_property") => build_node(
+            92,
+            [
+                Field::Set(named_set("data_property", &[subject, object], session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?,
+        OWL_PROPERTY_DISJOINT_WITH => build_node(
+            72,
+            [
+                Field::Set(named_set("object_property", &[subject, object], session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?,
+        OWL_INVERSE_OF => {
+            let mut first = named_entity("object_property", subject, session)?;
+            let mut second = named_entity("object_property", object, session)?;
+            if second.as_bytes() < first.as_bytes() {
+                std::mem::swap(&mut first, &mut second);
+            }
+            build_node(
+                73,
+                [
+                    Field::Node(first),
+                    Field::Node(second),
+                    Field::Set(Vec::new()),
+                ],
+                session,
+            )?
+        }
+        RDFS_DOMAIN | RDFS_RANGE if has_kind(kinds, subject, "annotation_property") => {
+            return Ok(None);
+        }
+        RDFS_DOMAIN if has_kind(kinds, subject, "data_property") => build_node(
+            93,
+            [
+                Field::Node(named_entity("data_property", subject, session)?),
+                Field::Node(named_entity("class", object, session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?,
+        RDFS_RANGE if has_kind(kinds, subject, "data_property") => build_node(
+            94,
+            [
+                Field::Node(named_entity("data_property", subject, session)?),
+                Field::Node(named_entity("datatype", object, session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?,
+        RDFS_DOMAIN => build_binary_named_axiom(74, "object_property", subject, object, session)?,
+        RDFS_RANGE => build_binary_named_axiom(75, "object_property", subject, object, session)?,
+        RDF_TYPE if has_kind(kinds, subject, "annotation_property") => return Ok(None),
+        RDF_TYPE => {
+            if let Some(tag) = characteristic_tag(object, has_kind(kinds, subject, "data_property"))
+            {
+                let kind = if tag == 95 {
+                    "data_property"
+                } else {
+                    "object_property"
+                };
+                build_node(
+                    tag,
+                    [
+                        Field::Node(named_entity(kind, subject, session)?),
+                        Field::Set(Vec::new()),
+                    ],
+                    session,
+                )?
+            } else if !is_structural_type(object) {
+                build_node(
+                    112,
+                    [
+                        Field::Node(named_entity("class", object, session)?),
+                        Field::Node(named_entity("named_individual", subject, session)?),
+                        Field::Set(Vec::new()),
+                    ],
+                    session,
+                )?
+            } else {
+                return Ok(None);
+            }
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(axiom))
+}
+
+fn characteristic_tag(value: &str, data_property: bool) -> Option<u64> {
+    Some(match value {
+        "http://www.w3.org/2002/07/owl#FunctionalProperty" if data_property => 95,
+        "http://www.w3.org/2002/07/owl#FunctionalProperty" => 76,
+        "http://www.w3.org/2002/07/owl#InverseFunctionalProperty" => 77,
+        "http://www.w3.org/2002/07/owl#ReflexiveProperty" => 78,
+        "http://www.w3.org/2002/07/owl#IrreflexiveProperty" => 79,
+        "http://www.w3.org/2002/07/owl#SymmetricProperty" => 80,
+        "http://www.w3.org/2002/07/owl#AsymmetricProperty" => 81,
+        "http://www.w3.org/2002/07/owl#TransitiveProperty" => 82,
+        _ => return None,
+    })
+}
+
+fn is_structural_type(value: &str) -> bool {
+    value.starts_with(OWL)
+        || matches!(
+            value,
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#List"
+                | "http://www.w3.org/2000/01/rdf-schema#Datatype"
+        )
+}
+
+fn build_binary_named_axiom(
+    tag: u64,
+    first_kind: &'static str,
+    first: &str,
+    second: &str,
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    let second_kind = match tag {
+        74 | 75 => "class",
+        _ => first_kind,
+    };
+    build_node(
+        tag,
+        [
+            Field::Node(named_entity(first_kind, first, session)?),
+            Field::Node(named_entity(second_kind, second, session)?),
+            Field::Set(Vec::new()),
+        ],
+        session,
+    )
+}
+
+fn named_set(
+    kind: &'static str,
+    values: &[&str],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<Node>> {
+    let mut nodes = reserved_vec(values.len(), session)?;
+    for value in values {
+        nodes.push(named_entity(kind, value, session)?);
+    }
+    canonical_set(nodes, 2, None)
+}
+
+fn named_entity(kind: &'static str, value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
+    super::check_iri(
+        value,
+        session,
+        "native RDF named-node IRI exceeds max_iri_bytes",
+    )?;
+    entity(kind, iri(owned_text(value, session)?)?)
+}
+
+fn build_node<const N: usize>(
+    tag: u64,
+    fields: [Field; N],
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    let mut values = reserved_vec(N, session)?;
+    values.extend(fields);
+    Node::build(tag, values)
+}
+
+fn push_axiom(
+    axiom: Node,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session.reserve_bytes(axiom.as_bytes().len())?;
+    let mut encoded = Vec::new();
+    encoded
+        .try_reserve_exact(axiom.as_bytes().len())
+        .map_err(|_| NativeError::limit("native RDF axiom allocation failed"))?;
+    encoded.extend_from_slice(axiom.as_bytes());
+    reserve_vec_item(axioms, session)?;
+    axioms.push(encoded);
+    Ok(())
+}
+
+fn reserved_vec<T>(count: usize, session: &mut Session<'_>) -> NativeResult<Vec<T>> {
+    let bytes = count
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| NativeError::limit("native RDF allocation accounting overflow"))?;
+    session.reserve_bytes(bytes)?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(count)
+        .map_err(|_| NativeError::limit("native RDF allocation failed"))?;
+    Ok(output)
 }
 
 fn sort_iris(values: &mut [String]) {
@@ -1136,15 +1581,77 @@ fn declaration_kind(value: &str) -> Option<&'static str> {
     })
 }
 
+#[derive(Clone, Copy, Debug)]
+struct IriReference<'a> {
+    scheme: Option<&'a str>,
+    authority: Option<&'a str>,
+    path: &'a str,
+    query: Option<&'a str>,
+    fragment: Option<&'a str>,
+}
+
 fn resolve_iri(value: &str, base: Option<&str>, session: &mut Session<'_>) -> NativeResult<String> {
-    let _ = base;
-    if !has_scheme(value) {
-        return Err(NativeError::new(
-            "NATIVE_RDFXML_RELATIVE_IRI_UNSUPPORTED",
-            "native first-slice RDF/XML requires absolute IRIs",
-        ));
-    }
-    let resolved = owned_text(value, session)?;
+    enforce_resolved_iri_size(value.len(), session)?;
+    let reference = parse_iri_reference(value)?;
+    let parsed_base = match (reference.scheme, base) {
+        (Some(_), _) => None,
+        (None, Some(base)) => {
+            let parsed = parse_iri_reference(base).map_err(|_| invalid_base_iri())?;
+            if parsed.scheme.is_none() {
+                return Err(invalid_base_iri());
+            }
+            Some(parsed)
+        }
+        (None, None) => {
+            return Err(NativeError::new(
+                "NATIVE_RDFXML_RELATIVE_IRI_NO_BASE",
+                "native RDF/XML relative IRI requires an absolute base",
+            ));
+        }
+    };
+
+    let (scheme, authority, path, query) = if let Some(scheme) = reference.scheme {
+        (
+            scheme,
+            reference.authority,
+            remove_dot_segments(reference.path, session)?,
+            reference.query,
+        )
+    } else {
+        let base = parsed_base.ok_or_else(invalid_base_iri)?;
+        let scheme = base.scheme.ok_or_else(invalid_base_iri)?;
+        if reference.authority.is_some() {
+            (
+                scheme,
+                reference.authority,
+                remove_dot_segments(reference.path, session)?,
+                reference.query,
+            )
+        } else if reference.path.is_empty() {
+            (
+                scheme,
+                base.authority,
+                owned_text(base.path, session)?,
+                reference.query.or(base.query),
+            )
+        } else if reference.path.starts_with('/') {
+            (
+                scheme,
+                base.authority,
+                remove_dot_segments(reference.path, session)?,
+                reference.query,
+            )
+        } else {
+            let merged = merge_paths(base, reference.path, session)?;
+            (
+                scheme,
+                base.authority,
+                remove_dot_segments(&merged, session)?,
+                reference.query,
+            )
+        }
+    };
+    let resolved = serialize_iri(scheme, authority, &path, query, reference.fragment, session)?;
     super::check_iri(
         &resolved,
         session,
@@ -1153,18 +1660,180 @@ fn resolve_iri(value: &str, base: Option<&str>, session: &mut Session<'_>) -> Na
     Ok(resolved)
 }
 
-fn has_scheme(value: &str) -> bool {
-    value
-        .as_bytes()
-        .iter()
-        .position(|byte| *byte == b':')
-        .is_some_and(|colon| {
-            colon != 0
-                && value.as_bytes()[0].is_ascii_alphabetic()
-                && value.as_bytes()[1..colon]
-                    .iter()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'+' | b'-' | b'.'))
-        })
+fn parse_iri_reference(value: &str) -> NativeResult<IriReference<'_>> {
+    let (without_fragment, fragment) = value
+        .split_once('#')
+        .map_or((value, None), |(head, tail)| (head, Some(tail)));
+    let (hierarchical, query) = without_fragment
+        .split_once('?')
+        .map_or((without_fragment, None), |(head, tail)| (head, Some(tail)));
+    let first_slash = hierarchical.find('/').unwrap_or(hierarchical.len());
+    let colon = hierarchical.find(':');
+    let (scheme, remainder) = match colon {
+        Some(colon) if colon < first_slash && valid_scheme(&hierarchical[..colon]) => {
+            (Some(&hierarchical[..colon]), &hierarchical[colon + 1..])
+        }
+        Some(colon) if colon < first_slash => {
+            return Err(NativeError::new(
+                "NATIVE_RDFXML_IRI_REFERENCE",
+                "native RDF/XML IRI reference has an invalid scheme",
+            ));
+        }
+        _ => (None, hierarchical),
+    };
+    let (authority, path) = if let Some(remainder) = remainder.strip_prefix("//") {
+        let end = remainder.find('/').unwrap_or(remainder.len());
+        (Some(&remainder[..end]), &remainder[end..])
+    } else {
+        (None, remainder)
+    };
+    Ok(IriReference {
+        scheme,
+        authority,
+        path,
+        query,
+        fragment,
+    })
+}
+
+fn valid_scheme(value: &str) -> bool {
+    !value.is_empty()
+        && value.as_bytes()[0].is_ascii_alphabetic()
+        && value.as_bytes()[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'+' | b'-' | b'.'))
+}
+
+fn merge_paths(
+    base: IriReference<'_>,
+    reference_path: &str,
+    session: &mut Session<'_>,
+) -> NativeResult<String> {
+    let prefix = if base.authority.is_some() && base.path.is_empty() {
+        "/"
+    } else {
+        base.path
+            .rfind('/')
+            .map_or("", |position| &base.path[..=position])
+    };
+    let size = prefix
+        .len()
+        .checked_add(reference_path.len())
+        .ok_or_else(|| NativeError::limit("native RDF/XML merged path size overflow"))?;
+    enforce_resolved_iri_size(size, session)?;
+    prefixed_text(prefix, reference_path, session)
+}
+
+fn remove_dot_segments(path: &str, session: &mut Session<'_>) -> NativeResult<String> {
+    enforce_resolved_iri_size(path.len(), session)?;
+    session.reserve_bytes(path.len())?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(path.len())
+        .map_err(|_| NativeError::limit("native RDF/XML path allocation failed"))?;
+    let mut input = path;
+    while !input.is_empty() {
+        if let Some(remainder) = input.strip_prefix("../") {
+            input = remainder;
+        } else if let Some(remainder) = input.strip_prefix("./") {
+            input = remainder;
+        } else if input.starts_with("/./") {
+            input = &input[2..];
+        } else if input == "/." {
+            input = "/";
+        } else if input.starts_with("/../") {
+            input = &input[3..];
+            remove_last_path_segment(&mut output);
+        } else if input == "/.." {
+            input = "/";
+            remove_last_path_segment(&mut output);
+        } else if matches!(input, "." | "..") {
+            input = "";
+        } else {
+            let end = if let Some(remainder) = input.strip_prefix('/') {
+                remainder
+                    .find('/')
+                    .map_or(input.len(), |position| position + 1)
+            } else {
+                input.find('/').unwrap_or(input.len())
+            };
+            output.push_str(&input[..end]);
+            input = &input[end..];
+        }
+    }
+    Ok(output)
+}
+
+fn remove_last_path_segment(value: &mut String) {
+    value.truncate(value.rfind('/').unwrap_or(0));
+}
+
+fn serialize_iri(
+    scheme: &str,
+    authority: Option<&str>,
+    path: &str,
+    query: Option<&str>,
+    fragment: Option<&str>,
+    session: &mut Session<'_>,
+) -> NativeResult<String> {
+    let mut size = scheme
+        .len()
+        .checked_add(1)
+        .and_then(|value| value.checked_add(path.len()))
+        .ok_or_else(|| NativeError::limit("native RDF/XML resolved IRI size overflow"))?;
+    if let Some(authority) = authority {
+        size = size
+            .checked_add(2)
+            .and_then(|value| value.checked_add(authority.len()))
+            .ok_or_else(|| NativeError::limit("native RDF/XML resolved IRI size overflow"))?;
+    }
+    for value in [query, fragment].into_iter().flatten() {
+        size = size
+            .checked_add(1)
+            .and_then(|size| size.checked_add(value.len()))
+            .ok_or_else(|| NativeError::limit("native RDF/XML resolved IRI size overflow"))?;
+    }
+    enforce_resolved_iri_size(size, session)?;
+    session.reserve_bytes(size)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native RDF/XML resolved IRI allocation failed"))?;
+    output.push_str(scheme);
+    output.push(':');
+    if let Some(authority) = authority {
+        output.push_str("//");
+        output.push_str(authority);
+    }
+    output.push_str(path);
+    if let Some(query) = query {
+        output.push('?');
+        output.push_str(query);
+    }
+    if let Some(fragment) = fragment {
+        output.push('#');
+        output.push_str(fragment);
+    }
+    Ok(output)
+}
+
+fn enforce_resolved_iri_size(size: usize, session: &Session<'_>) -> NativeResult<()> {
+    if u64::try_from(size).map_or(true, |size| {
+        size > session.limits().value(LimitKey::MaxIriBytes)
+    }) {
+        Err(NativeError::limit(
+            "native RDF/XML resolved IRI exceeds max_iri_bytes",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn invalid_base_iri() -> NativeError {
+    NativeError::new(
+        "NATIVE_RDFXML_INVALID_BASE_IRI",
+        "native RDF/XML base IRI is not an absolute RFC 3986 IRI",
+    )
 }
 
 fn decode_references(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
@@ -1229,6 +1898,103 @@ fn scan_name(bytes: &[u8], start: usize) -> NativeResult<usize> {
     Ok(end)
 }
 
+fn bounded_find(
+    bytes: &[u8],
+    start: usize,
+    end: usize,
+    marker: &[u8],
+    session: &mut Session<'_>,
+) -> NativeResult<Option<usize>> {
+    if marker.is_empty() || start > end || end > bytes.len() {
+        return Err(xml_syntax());
+    }
+    session.finish()?;
+    let Some(last_start) = end.checked_sub(marker.len()) else {
+        return Ok(None);
+    };
+    let mut cursor = start;
+    while cursor <= last_start {
+        let batch_end = cursor.saturating_add(64 * 1024).min(last_start + 1);
+        for position in cursor..batch_end {
+            if bytes[position..].starts_with(marker) {
+                return Ok(Some(position));
+            }
+        }
+        cursor = batch_end;
+        session.finish()?;
+    }
+    Ok(None)
+}
+
+fn bounded_find_ascii_case(
+    bytes: &[u8],
+    start: usize,
+    end: usize,
+    marker: &[u8],
+    session: &mut Session<'_>,
+) -> NativeResult<Option<usize>> {
+    if marker.is_empty() || start > end || end > bytes.len() {
+        return Err(xml_syntax());
+    }
+    session.finish()?;
+    let Some(last_start) = end.checked_sub(marker.len()) else {
+        return Ok(None);
+    };
+    let mut cursor = start;
+    while cursor <= last_start {
+        let batch_end = cursor.saturating_add(64 * 1024).min(last_start + 1);
+        for position in cursor..batch_end {
+            if bytes[position..position + marker.len()].eq_ignore_ascii_case(marker) {
+                return Ok(Some(position));
+            }
+        }
+        cursor = batch_end;
+        session.finish()?;
+    }
+    Ok(None)
+}
+
+fn bounded_skip_xml_space(
+    bytes: &[u8],
+    start: usize,
+    session: &mut Session<'_>,
+) -> NativeResult<usize> {
+    if start > bytes.len() {
+        return Err(xml_syntax());
+    }
+    session.finish()?;
+    let mut cursor = start;
+    while cursor < bytes.len() {
+        let batch_end = cursor.saturating_add(64 * 1024).min(bytes.len());
+        while cursor < batch_end && matches!(bytes[cursor], b' ' | b'\t' | b'\r' | b'\n') {
+            cursor += 1;
+        }
+        if cursor < batch_end {
+            return Ok(cursor);
+        }
+        session.finish()?;
+    }
+    Ok(cursor)
+}
+
+fn bounded_find_xml_space(bytes: &[u8], session: &mut Session<'_>) -> NativeResult<Option<usize>> {
+    session.finish()?;
+    for (batch, chunk) in bytes.chunks(64 * 1024).enumerate() {
+        if let Some(position) = chunk
+            .iter()
+            .position(|value| matches!(*value, b' ' | b'\t' | b'\r' | b'\n'))
+        {
+            return batch
+                .checked_mul(64 * 1024)
+                .and_then(|offset| offset.checked_add(position))
+                .map(Some)
+                .ok_or_else(|| NativeError::limit("native XML scan offset overflow"));
+        }
+        session.finish()?;
+    }
+    Ok(None)
+}
+
 fn skip_space(bytes: &[u8], cursor: &mut usize) {
     while bytes
         .get(*cursor)
@@ -1238,32 +2004,33 @@ fn skip_space(bytes: &[u8], cursor: &mut usize) {
     }
 }
 
-fn declaration_has_unsupported_encoding(declaration: &str) -> bool {
-    let Some(position) = declaration
-        .as_bytes()
-        .windows("encoding".len())
-        .position(|value| value.eq_ignore_ascii_case(b"encoding"))
+fn declaration_has_unsupported_encoding(
+    declaration: &str,
+    session: &mut Session<'_>,
+) -> NativeResult<bool> {
+    let bytes = declaration.as_bytes();
+    let Some(position) = bounded_find_ascii_case(bytes, 0, bytes.len(), b"encoding", session)?
     else {
-        return false;
+        return Ok(false);
     };
-    let suffix = &declaration[position + "encoding".len()..];
-    let Some(equal) = suffix.find('=') else {
-        return true;
+    let suffix_start = position + "encoding".len();
+    let Some(equal) = bounded_find(bytes, suffix_start, bytes.len(), b"=", session)? else {
+        return Ok(true);
     };
-    let value = suffix[equal + 1..].trim_start();
-    let Some(quote) = value.chars().next() else {
-        return true;
+    let value_start = bounded_skip_xml_space(bytes, equal + 1, session)?;
+    let Some(quote) = bytes.get(value_start).copied() else {
+        return Ok(true);
     };
-    if !matches!(quote, '\'' | '"') {
-        return true;
+    if !matches!(quote, b'\'' | b'"') {
+        return Ok(true);
     }
-    let remainder = &value[quote.len_utf8()..];
-    let Some(end) = remainder.find(quote) else {
-        return true;
+    let Some(end) = bounded_find(bytes, value_start + 1, bytes.len(), &[quote], session)? else {
+        return Ok(true);
     };
-    !["utf-8", "utf8", "us-ascii"]
+    let value = &declaration[value_start + 1..end];
+    Ok(!["utf-8", "utf8", "us-ascii"]
         .iter()
-        .any(|encoding| remainder[..end].eq_ignore_ascii_case(encoding))
+        .any(|encoding| value.eq_ignore_ascii_case(encoding)))
 }
 
 fn clone_resource(value: &Resource, session: &mut Session<'_>) -> NativeResult<Resource> {
@@ -1393,6 +2160,7 @@ mod tests {
     use super::*;
     use crate::cancel::{Cancellation, Guard};
     use crate::limits::Limits;
+    use std::time::Duration;
 
     fn mapped(source: &[u8], document_iri: Option<&str>) -> NativeResult<CanonicalDocument> {
         let limits = Limits::default();
@@ -1403,6 +2171,17 @@ mod tests {
         );
         let mut session = Session::new(&mut guard, &limits, source.len())?;
         parse_and_map(source, document_iri, &mut session)
+    }
+
+    fn resolved(reference: &str, base: Option<&str>) -> NativeResult<String> {
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0)?;
+        resolve_iri(reference, base, &mut session)
     }
 
     #[test]
@@ -1478,21 +2257,95 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_relative_iri_forms_fail_closed_instead_of_being_misresolved() {
-        for (base, reference) in [
-            ("http://example.test/a.owl", ""),
-            ("http://example.test/a.owl", "#fragment"),
-            ("http://example.test/a.owl", "?query"),
-            ("http://example.test/a/b.owl", "../c.owl"),
-            ("http://example.test/a.owl", "/root"),
-            ("urn:document", "relative"),
+    fn rfc3986_relative_references_cover_queries_fragments_and_dot_segments() {
+        let base = "http://a/b/c/d;p?q";
+        for (reference, expected) in [
+            ("", "http://a/b/c/d;p?q"),
+            ("g", "http://a/b/c/g"),
+            ("./g", "http://a/b/c/g"),
+            ("g/", "http://a/b/c/g/"),
+            ("/g", "http://a/g"),
+            ("//g", "http://g"),
+            ("?y", "http://a/b/c/d;p?y"),
+            ("#s", "http://a/b/c/d;p?q#s"),
+            ("g?y#s", "http://a/b/c/g?y#s"),
+            (";x", "http://a/b/c/;x"),
+            (".", "http://a/b/c/"),
+            ("..", "http://a/b/"),
+            ("../g", "http://a/b/g"),
+            ("../../g", "http://a/g"),
         ] {
-            let source = format!(
-                "<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"{reference}\"/></rdf:RDF>"
-            );
             assert_eq!(
-                mapped(source.as_bytes(), Some(base)).unwrap_err().code,
-                "NATIVE_RDFXML_RELATIVE_IRI_UNSUPPORTED",
+                resolved(reference, Some(base)).expect("resolved RFC 3986 reference"),
+                expected,
+            );
+        }
+        assert_eq!(
+            resolved("next", Some("urn:base")).expect("resolved opaque base"),
+            "urn:next",
+        );
+    }
+
+    #[test]
+    fn nested_xml_base_is_resolved_before_named_mapping() {
+        let source = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+ xmlns:owl="http://www.w3.org/2002/07/owl#" xml:base="../base/">
+ <owl:Ontology rdf:about="./ontology">
+  <owl:versionIRI xml:base="versions/" rdf:resource="../v?x#f"/>
+ </owl:Ontology>
+ <owl:Class xml:base="nested/" rdf:about="../C#x"/>
+</rdf:RDF>"#;
+        let document =
+            mapped(source, Some("http://example.test/a/root.owl")).expect("nested relative bases");
+        assert_eq!(
+            document.ontology_iri.as_deref(),
+            Some("http://example.test/base/ontology"),
+        );
+        assert_eq!(
+            document.version_iri.as_deref(),
+            Some("http://example.test/base/v?x#f"),
+        );
+        assert_eq!(document.axioms.len(), 1);
+    }
+
+    #[test]
+    fn relative_reference_without_base_and_invalid_base_fail_closed() {
+        assert_eq!(
+            resolved("relative", None).unwrap_err().code,
+            "NATIVE_RDFXML_RELATIVE_IRI_NO_BASE",
+        );
+        assert_eq!(
+            resolved("relative", Some("not-an-absolute-base"))
+                .unwrap_err()
+                .code,
+            "NATIVE_RDFXML_INVALID_BASE_IRI",
+        );
+        assert_eq!(
+            resolved("1:invalid", Some("http://example.test/base"))
+                .unwrap_err()
+                .code,
+            "NATIVE_RDFXML_IRI_REFERENCE",
+        );
+    }
+
+    #[test]
+    fn long_comment_cdata_and_processing_instruction_searches_checkpoint() {
+        for source in [
+            format!("<!--{}-->", "x".repeat(256 * 1024)),
+            format!("<![CDATA[{}]]>", "x".repeat(256 * 1024)),
+            format!("<?xml {}?>", " ".repeat(256 * 1024)),
+        ] {
+            let limits = Limits::default();
+            let mut guard = Guard::new(
+                Cancellation::with_duration(Some(Duration::ZERO)),
+                limits.deadline,
+                limits.cancellation_stride,
+            );
+            let mut session =
+                Session::new(&mut guard, &limits, source.len()).expect("bounded session");
+            assert_eq!(
+                XmlStream::new(&source).next(&mut session).unwrap_err().code,
+                "NATIVE_DEADLINE",
             );
         }
     }
