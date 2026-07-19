@@ -1,8 +1,8 @@
 //! Exact tagged-length-framed v1 attestation encoding.
 
 use crate::error::{NativeError, NativeResult};
+use crate::hash::sha256;
 
-use super::hash::sha256;
 use super::records::{
     DeadlineSecondsV1, DiagnosticScalarV1, DiagnosticV1, DocumentPublicationV1, FingerprintV1,
     ImportManifestV1, LoadOptionsV1, LoadReportV1, NativeSnapshotAttestationV1, OntologyIdV1,

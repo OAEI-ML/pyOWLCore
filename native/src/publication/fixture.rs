@@ -1,10 +1,10 @@
 //! Bounded generated v1 fixture shared by Rust and extension contract tests.
 
 use crate::error::NativeResult;
+use crate::hash::sha256;
 use crate::limits::Limits;
 use crate::model::{CanonicalRowId, NativeArenaBuilder};
 
-use super::hash::sha256;
 use super::records::*;
 use super::NativeSnapshotPublicationV1;
 

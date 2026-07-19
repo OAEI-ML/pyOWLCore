@@ -1,7 +1,7 @@
-//! Dependency-free SHA-256 used by the publication attestation codec.
+//! Dependency-free streaming SHA-256 and CRC32C primitives shared by native owners.
 
 #[derive(Clone, Debug)]
-pub(super) struct Sha256 {
+pub(crate) struct Sha256 {
     state: [u32; 8],
     block: [u8; 64],
     block_len: usize,
@@ -9,7 +9,7 @@ pub(super) struct Sha256 {
 }
 
 impl Sha256 {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             state: [
                 0x6a09_e667,
@@ -27,7 +27,7 @@ impl Sha256 {
         }
     }
 
-    pub(super) fn update(&mut self, mut data: &[u8]) {
+    pub(crate) fn update(&mut self, mut data: &[u8]) {
         self.bytes = self.bytes.wrapping_add(data.len() as u64);
         if self.block_len != 0 {
             let take = (64 - self.block_len).min(data.len());
@@ -53,7 +53,7 @@ impl Sha256 {
         self.block_len = remainder.len();
     }
 
-    pub(super) fn finish(mut self) -> [u8; 32] {
+    pub(crate) fn finish(mut self) -> [u8; 32] {
         let bit_length = self.bytes.wrapping_mul(8);
         self.block[self.block_len] = 0x80;
         self.block_len += 1;
@@ -185,10 +185,21 @@ impl Sha256 {
     }
 }
 
-pub(super) fn sha256(data: &[u8]) -> [u8; 32] {
+pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hasher.finish()
+}
+
+pub(crate) fn crc32c(data: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffff_u32;
+    for byte in data {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ if crc & 1 != 0 { 0x82f6_3b78 } else { 0 };
+        }
+    }
+    crc ^ 0xffff_ffff
 }
 
 #[cfg(test)]
@@ -196,14 +207,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn publication_hash_matches_sha256_vector() {
+    fn sha256_vectors_and_streaming_match() {
         assert_eq!(
-            sha256(b"abc"),
-            [
-                0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
-                0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
-                0xf2, 0x00, 0x15, 0xad,
-            ]
+            hex(sha256(b"")),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+        assert_eq!(
+            hex(sha256(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let mut streaming = Sha256::new();
+        streaming.update(b"a");
+        streaming.update(b"bc");
+        assert_eq!(streaming.finish(), sha256(b"abc"));
+    }
+
+    #[test]
+    fn crc32c_vector() {
+        assert_eq!(crc32c(b"123456789"), 0xe306_9283);
+    }
+
+    fn hex(value: [u8; 32]) -> String {
+        use std::fmt::Write;
+
+        value.iter().fold(String::new(), |mut output, byte| {
+            write!(output, "{byte:02x}").expect("writing to String cannot fail");
+            output
+        })
     }
 }

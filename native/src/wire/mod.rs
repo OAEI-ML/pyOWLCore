@@ -1,16 +1,15 @@
 //! Owned PYOCORE v1 framing, canonical-model scanning, and semantic ledgers.
 
-mod hash;
 mod reader;
 
 use std::cmp::Ordering;
 
 use crate::cancel::Guard;
 use crate::error::{NativeError, NativeResult};
+use crate::hash::{crc32c, Sha256};
 use crate::limits::{LimitKey, Limits, MemoryBudget};
 use crate::model::{scan_canonical, validate_iri, Category, ScanBudget};
 
-use hash::{crc32c, Sha256};
 use reader::{u16_at, u32_at, u64_at, Reader};
 
 const MAGIC: &[u8; 8] = b"PYOCORE\0";

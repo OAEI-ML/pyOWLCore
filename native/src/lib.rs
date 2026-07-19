@@ -7,6 +7,7 @@ mod bindings;
 mod cancel;
 mod canonical;
 mod error;
+mod hash;
 mod index;
 mod limits;
 mod model;

@@ -4,7 +4,6 @@ mod codec;
 #[cfg(any(test, feature = "test-hooks"))]
 mod fixture;
 mod handle;
-mod hash;
 mod records;
 
 use std::collections::HashSet;
