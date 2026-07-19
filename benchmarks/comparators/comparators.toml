@@ -1,0 +1,233 @@
+schema = 1
+common_contract_schema = 1
+corpus_manifest_sha256 = "1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928"
+resolver_map_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+jdk = "Eclipse Temurin 21.0.7+6; isolated OWLAPI lane only"
+jvm_gc = "G1GC; -XX:+AlwaysPreTouch; one active processor unless a reviewed lane says otherwise"
+jvm_heap = "-Xms8g -Xmx8g"
+
+[reference_machine]
+id = "shared-darwin25-x86_64"
+approval = "pending"
+os = "Darwin 25.5.0 x86_64"
+cpu = "12 logical CPUs; exact model must be captured by approved operator"
+memory_bytes = 34359738368
+storage = "local storage; exact device/cache procedure pending approval"
+power_mode = "fixed performance mode required; current shared-host state unapproved"
+
+[[comparator]]
+id = "pyowl-python-common"
+implementation = "pyowl-core-python"
+boundary = "common-contract-ready"
+adapter = "core-python"
+pin_state = "runtime-captured"
+version = "0.1.0.dev0"
+revision = "exact Git revision and dirty state captured in every report"
+source_url = "https://github.com/OAEI-ML/pyOWLCore"
+artifact = "installed pyowl-core pure wheel or exact workspace revision"
+features = ["complete-python-backend", "common-contract-v1"]
+allocator = "CPython platform allocator"
+thread_ceiling = 1
+gating = true
+required = true
+
+[[comparator]]
+id = "pyowl-native-wheel-common"
+implementation = "pyowl-core-native-wheel"
+boundary = "common-contract-ready"
+adapter = "core-native"
+pin_state = "runtime-captured"
+version = "0.1.0.dev0"
+revision = "wheel RECORD, extension SHA-256, Git revision and dirty state captured in every report"
+source_url = "https://github.com/OAEI-ML/pyOWLCore"
+artifact = "installed platform wheel; source-tree imports are ineligible for release evidence"
+features = ["forced-native", "common-contract-v1"]
+allocator = "Rust system allocator and CPython platform allocator"
+thread_ceiling = 1
+gating = true
+required = true
+
+# External-command lanes remain non-runnable until their independently built
+# runner has runner_pin_state = "complete" and an exact runner_sha256.
+[[comparator]]
+id = "pyowl-direct-rust-common"
+implementation = "pyowl-core-direct-rust"
+boundary = "common-contract-ready"
+adapter = "external-command"
+pin_state = "runtime-captured"
+version = "0.1.0.dev0"
+revision = "Cargo.lock SHA-256 plus exact Git revision captured in every report"
+source_url = "https://github.com/OAEI-ML/pyOWLCore"
+artifact = "release direct-engine runner built from native/Cargo.lock"
+features = ["direct-rust-engine", "common-contract-v1"]
+allocator = "Rust system allocator"
+thread_ceiling = 1
+launcher_env = "PYOWL_CORE_DIRECT_RUNNER"
+runner_pin_state = "pending"
+runner_revision = "direct retained-engine runner not yet built"
+gating = true
+required = true
+
+[[comparator]]
+id = "horned-owl-raw"
+implementation = "horned-owl"
+boundary = "horned-model-ready"
+adapter = "external-command"
+pin_state = "complete"
+version = "1.4.0"
+revision = "crates.io horned-owl 1.4.0 (2026-01-09)"
+source_url = "https://github.com/phillord/horned-owl"
+artifact = "crates.io horned-owl-1.4.0.crate"
+artifact_sha256 = "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e"
+features = ["default"]
+allocator = "Rust system allocator"
+thread_ceiling = 1
+launcher_env = "PYOWL_CORE_HORNED_RUNNER"
+runner_pin_state = "pending"
+runner_revision = "raw Horned runner not yet built"
+gating = false
+required = true
+
+[[comparator]]
+id = "horned-owl-common"
+implementation = "horned-owl"
+boundary = "common-contract-ready"
+adapter = "external-command"
+pin_state = "complete"
+version = "1.4.0"
+revision = "crates.io horned-owl 1.4.0 (2026-01-09)"
+source_url = "https://github.com/phillord/horned-owl"
+artifact = "crates.io horned-owl-1.4.0.crate"
+artifact_sha256 = "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e"
+features = ["default"]
+allocator = "Rust system allocator"
+thread_ceiling = 1
+launcher_env = "PYOWL_CORE_HORNED_RUNNER"
+runner_pin_state = "pending"
+runner_revision = "independent common-contract adapter not yet built"
+gating = true
+required = true
+
+[[comparator]]
+id = "py-horned-common"
+implementation = "py-horned-owl"
+boundary = "common-contract-ready"
+adapter = "external-command"
+pin_state = "complete"
+version = "1.4.0"
+revision = "PyPI py-horned-owl 1.4.0 (2026-02-11)"
+source_url = "https://github.com/ontology-tools/py-horned-owl"
+artifact = "PyPI sdist py_horned_owl-1.4.0.tar.gz"
+artifact_sha256 = "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d"
+features = ["abi3-wrapper", "independent-common-contract-v1"]
+allocator = "Rust system allocator and CPython platform allocator"
+thread_ceiling = 1
+launcher_env = "PYOWL_CORE_PY_HORNED_RUNNER"
+runner_pin_state = "pending"
+runner_revision = "independent py-horned common-contract runner not yet built"
+gating = true
+required = true
+
+[[comparator]]
+id = "owlapi-common"
+implementation = "owlapi"
+boundary = "common-contract-ready"
+adapter = "external-command"
+pin_state = "pending"
+version = "5.5.1"
+revision = "Maven Central net.sourceforge.owlapi:owlapi-distribution:5.5.1"
+source_url = "https://github.com/owlcs/owlapi"
+artifact = "isolated runner image and JAR SHA-256 must be recorded before execution"
+features = ["isolated-java", "common-contract-v1"]
+allocator = "HotSpot G1GC"
+thread_ceiling = 1
+launcher_env = "PYOWL_CORE_OWLAPI_RUNNER"
+runner_pin_state = "pending"
+runner_revision = "isolated OWLAPI common-contract runner not yet built"
+gating = true
+required = true
+
+[[timing_fence]]
+phase = "byte_receipt"
+rationale = "Resident-byte timing starts immediately before the implementation receives identical pinned bytes."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "inside", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "syntax_parse"
+rationale = "Every lane parses the selected syntax inside its readiness boundary."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "inside", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "rdf_to_owl_mapping"
+rationale = "RDF mapping is inside when exercised and reports zero/not-applicable duration for structural syntaxes without moving work outside."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "inside", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "interning"
+rationale = "Model allocation and interning are required before either raw-model or common readiness."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "inside", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "canonicalization"
+rationale = "Observable model normalization and common-ledger ordering cannot escape the timer."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "inside", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "freeze"
+rationale = "Immutable/query-ready publication requires model freeze or the implementation's equivalent boundary."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "inside", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "document_fingerprint"
+rationale = "The common contract includes the root document fingerprint preimage/digest; raw Horned does not."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "not-applicable", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "structural_fingerprint"
+rationale = "The common contract includes closure structure and document-boundary fingerprint work."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "not-applicable", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "logical_fingerprint"
+rationale = "Annotation-free logical preimage construction and SHA-256 are common-ready work."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "not-applicable", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "signature_fingerprint"
+rationale = "Complete typed-signature preimage construction and SHA-256 are common-ready work."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "not-applicable", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "provenance"
+rationale = "Common lanes reconstruct bounded origin/import provenance; raw Horned reports only engine-owned provenance."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "not-applicable", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "diagnostics"
+rationale = "Required parse/mapping diagnostics must be available before publication."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "inside", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "required_indexes"
+rationale = "Complete signature and enumeration readiness indexes are inside every reported readiness boundary."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "inside", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "common_adapter_traversal"
+rationale = "One complete traversal materializes every common ledger record; raw Horned intentionally stops earlier."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "not-applicable", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "common_adapter_digests"
+rationale = "Inventory transcripts, identity/provenance/diagnostic digests, and contract publication hash are timed."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "not-applicable", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "publication"
+rationale = "The result must be owned, query-ready, and fully described before the timer stops."
+lanes = { pyowl-python-common = "inside", pyowl-native-wheel-common = "inside", pyowl-direct-rust-common = "inside", horned-owl-raw = "inside", horned-owl-common = "inside", py-horned-common = "inside", owlapi-common = "inside" }
+
+[[timing_fence]]
+phase = "equality_assertion"
+rationale = "Post-timer work compares already-published counts and digests only; it performs no structural conversion."
+lanes = { pyowl-python-common = "outside", pyowl-native-wheel-common = "outside", pyowl-direct-rust-common = "outside", horned-owl-raw = "outside", horned-owl-common = "outside", py-horned-common = "outside", owlapi-common = "outside" }

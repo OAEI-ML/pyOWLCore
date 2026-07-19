@@ -14,15 +14,19 @@ include native/Cargo.lock
 recursive-include native/src *.rs
 recursive-include docs *.md *.py
 recursive-include benchmarks *.md *.py *.toml *.json
+prune benchmarks/comparators
 recursive-include reports *.md *.json *.txt
+recursive-exclude reports/performance/redesign-baseline dependency-audit-*.json
 prune reports/release
 recursive-include schemas *.toml
 recursive-include specs *.md *.toml
 recursive-include src *.py *.pyi py.typed
 recursive-include tests *.py *.toml *.json *.ofn *.owx *.rdf *.ttl *.bin
+prune tests/benchmark/comparators
 include tests/fuzz/native/Cargo.lock
 recursive-include tests/fuzz/native/fuzz_targets *.rs
 recursive-include tools *.py *.md
+prune tools/benchmark/comparators
 recursive-include THIRD_PARTY_LICENSES *
 prune tests/fuzz/native/target
 global-exclude *.py[cod]
