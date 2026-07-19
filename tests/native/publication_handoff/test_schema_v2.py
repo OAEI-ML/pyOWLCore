@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import re
 from collections.abc import Mapping
 from dataclasses import fields
 from pathlib import Path
@@ -57,6 +58,7 @@ from tools.schema.native_snapshot_publication_v2 import (
 
 ROOT = Path(__file__).parents[3]
 SCHEMA = ROOT / "schemas" / "native-snapshot-publication-v2.toml"
+RUST_FACADE = ROOT / "native" / "src" / "publication" / "facade_v2.rs"
 _CANONICAL_PREFIX = b"pyowl-core:typed-toml-tree:v1\x00"
 
 
@@ -98,6 +100,15 @@ def _rows(
 ) -> tuple[tuple[object, ...], ...]:
     rows = cast(list[dict[str, object]], section[field_name])
     return tuple((row["ordinal"], row["name"], row["type"], row[tail]) for row in rows)
+
+
+def _rust_digest(name: str) -> bytes:
+    source = RUST_FACADE.read_text(encoding="utf-8")
+    matched = re.search(rf"\b{name}\b[^=]*=\s*\[(.*?)\];", source, re.DOTALL)
+    assert matched is not None, f"missing Rust V2 digest constant {name}"
+    octets = bytes(int(value, 16) for value in re.findall(r"0x([0-9a-fA-F]{2})", matched[1]))
+    assert len(octets) == 32, f"Rust V2 digest constant {name} is not bytes32"
+    return octets
 
 
 def test_v2_toml_is_the_exact_full_typed_semantic_tree() -> None:
@@ -220,6 +231,18 @@ def test_access_and_auxiliary_subtree_digests_are_independently_bound() -> None:
     assert auxiliary_digest == NATIVE_AUXILIARY_CODEC_SCHEMA_SHA256_V2
     assert _load_schema()["access_protocol"] == access
     assert _load_schema()["auxiliary_codecs"] == auxiliary
+
+
+def test_embedded_rust_hashes_match_all_three_frozen_python_vectors() -> None:
+    assert _rust_digest("PUBLICATION_LEDGER_SHA256_V2") == (
+        NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2
+    )
+    assert _rust_digest("FACADE_ACCESS_SCHEMA_SHA256_V2") == (
+        NATIVE_FACADE_ACCESS_SCHEMA_SHA256_V2
+    )
+    assert _rust_digest("AUXILIARY_CODEC_SCHEMA_SHA256_V2") == (
+        NATIVE_AUXILIARY_CODEC_SCHEMA_SHA256_V2
+    )
 
 
 def test_every_contract_mutation_changes_the_independent_ledger_digest() -> None:

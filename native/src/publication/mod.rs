@@ -1,6 +1,7 @@
 //! Versioned retained native snapshot publication and ownership.
 
 mod codec;
+mod facade_v2;
 #[cfg(any(test, feature = "test-hooks"))]
 mod fixture;
 mod handle;
@@ -30,6 +31,43 @@ pub(crate) const PUBLICATION_LEDGER_SHA256_V1: [u8; 32] = [
     0x8e, 0x2c, 0xf6, 0x76, 0xd9, 0x3f, 0xb5, 0xec, 0x39, 0x85, 0xea, 0x9b, 0xbe, 0x1a, 0x44, 0x9d,
     0x8a, 0xdf, 0xb8, 0xf2, 0xee, 0xbe, 0x0b, 0x07, 0xca, 0xae, 0xbf, 0x22, 0x4b, 0x1b, 0xb4, 0x6d,
 ];
+
+#[cfg(feature = "test-hooks")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fixture_handle_v2(
+    py: pyo3::Python<'_>,
+    attestation: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    collections: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    documents: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    report: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    root_document_key: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    load_options: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    capability_bits: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    fingerprint_evidence: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    fingerprint_preimages: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    facade_cardinality_summary: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    owl2_dl_report_summary: Option<&pyo3::Bound<'_, pyo3::types::PyAny>>,
+    raw_document_collections: Option<&pyo3::Bound<'_, pyo3::types::PyAny>>,
+    max_retained_bytes: u64,
+) -> pyo3::PyResult<NativeSnapshotHandle> {
+    let storage = facade_v2::PublicationStorageV2::from_validated_python(
+        py,
+        attestation,
+        collections,
+        documents,
+        report,
+        root_document_key,
+        load_options,
+        capability_bits,
+        fingerprint_evidence,
+        fingerprint_preimages,
+        facade_cardinality_summary,
+        owl2_dl_report_summary,
+        raw_document_collections,
+        max_retained_bytes,
+    )?;
+    Ok(NativeSnapshotHandle::from_storage_v2(storage))
+}
 
 const MAX_DIAGNOSTIC_DETAILS: usize = 64;
 const MAX_DIAGNOSTIC_IMPORT_CHAIN: usize = 128;
@@ -110,11 +148,12 @@ pub(crate) struct NativeSnapshotPublicationV1 {
     pub(crate) fingerprint_inputs_sha256: Digest,
     pub(crate) source_manifest_sha256: Digest,
     pub(crate) provenance_manifest_sha256: Digest,
+    storage: Arc<PublicationStorageV1>,
 }
 
 impl NativeSnapshotPublicationV1 {
     pub(crate) fn storage(&self) -> &Arc<PublicationStorageV1> {
-        &self.handle.storage
+        &self.storage
     }
 
     pub(crate) const fn handle(&self) -> &NativeSnapshotHandle {
@@ -207,6 +246,7 @@ impl PublicationDraftV1 {
             fingerprint_inputs_sha256: storage.fingerprint_inputs_sha256,
             source_manifest_sha256: storage.source_manifest_sha256,
             provenance_manifest_sha256: storage.provenance_manifest_sha256,
+            storage,
         })
     }
 }

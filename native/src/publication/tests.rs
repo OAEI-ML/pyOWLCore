@@ -30,7 +30,10 @@ fn snapshot_close_is_idempotent_and_forks_have_independent_lifecycle() {
     handle.close();
     assert!(handle.closed());
     assert!(!fork.closed());
-    assert_eq!(handle.storage().attestation(), fork.storage().attestation());
+    assert_eq!(
+        handle.storage().expect("V1 storage").attestation(),
+        fork.storage().expect("forked V1 storage").attestation()
+    );
 }
 
 #[test]
