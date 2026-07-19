@@ -1,0 +1,298 @@
+schema = 1
+name = "NativeSnapshotPublicationV1"
+domain = "pyowl-core:native-snapshot-publication-ledger:v1"
+ledger_canonicalization = "typed-toml-tree-v1"
+ledger_sha256 = "8e2cf676d93fb5ec3985ea9bbe1a449d8adfb8f2eebe0b07caaebf224b1bb46d"
+extension_policy = "any semantic change requires publication version 2"
+rust_parity_required = true
+capability_bits = [
+  { value = 1, name = "retained_storage" },
+  { value = 2, name = "lazy_scalar_materialization" },
+  { value = 4, name = "document_scoped_anonymous" },
+  { value = 8, name = "source_map" },
+  { value = 16, name = "origin_index" },
+  { value = 32, name = "rdf_mapping_report" },
+]
+
+[envelope]
+python_type = "NativeSnapshotPublicationV1"
+construction = "named-only"
+ownership = "one-opaque-handle"
+complexity = "O(documents+import-edges+diagnostics)"
+fields = [
+  { ordinal = 0, name = "version", type = "int", cardinality = "one" },
+  { ordinal = 1, name = "ledger_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 2, name = "handle", type = "NativeSnapshotHandleV1", cardinality = "one" },
+  { ordinal = 3, name = "documents", type = "tuple[NativeDocumentPublicationV1]", cardinality = "documents" },
+  { ordinal = 4, name = "import_manifest", type = "NativeImportManifestPublicationV1", cardinality = "one" },
+  { ordinal = 5, name = "root_document_key", type = "str", cardinality = "one" },
+  { ordinal = 6, name = "load_options", type = "LoadOptions", cardinality = "one" },
+  { ordinal = 7, name = "diagnostics", type = "tuple[NativeDiagnosticPublicationV1]", cardinality = "diagnostics" },
+  { ordinal = 8, name = "report", type = "NativeLoadReportPublicationV1", cardinality = "one" },
+  { ordinal = 9, name = "capability_bits", type = "u64", cardinality = "one" },
+  { ordinal = 10, name = "root_table_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 11, name = "fingerprint_inputs_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 12, name = "source_manifest_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 13, name = "provenance_manifest_sha256", type = "bytes32", cardinality = "one" },
+]
+
+[document]
+python_type = "NativeDocumentPublicationV1"
+construction = "named-only"
+fields = [
+  { ordinal = 0, name = "document_key", type = "str", cardinality = "one" },
+  { ordinal = 1, name = "ontology_id", type = "OntologyID", cardinality = "one" },
+  { ordinal = 2, name = "document_iri", type = "IRI|None", cardinality = "optional" },
+  { ordinal = 3, name = "direct_imports", type = "tuple[IRI]", cardinality = "import-edges" },
+  { ordinal = 4, name = "provenance", type = "NativeDocumentProvenancePublicationV1", cardinality = "one" },
+  { ordinal = 5, name = "document_fingerprint", type = "Fingerprint", cardinality = "one" },
+  { ordinal = 6, name = "diagnostics", type = "tuple[NativeDiagnosticPublicationV1]", cardinality = "diagnostics" },
+  { ordinal = 7, name = "ontology_annotation_count", type = "u64", cardinality = "one" },
+  { ordinal = 8, name = "axiom_count", type = "u64", cardinality = "one" },
+  { ordinal = 9, name = "extension_count", type = "u64", cardinality = "one" },
+  { ordinal = 10, name = "source_map_entry_count", type = "u64", cardinality = "one" },
+  { ordinal = 11, name = "origin_entry_count", type = "u64", cardinality = "one" },
+  { ordinal = 12, name = "rdf_mapping_conformant", type = "bool|None", cardinality = "optional" },
+  { ordinal = 13, name = "rdf_mapping_report_sha256", type = "bytes32|None", cardinality = "optional" },
+]
+
+[diagnostic]
+python_type = "NativeDiagnosticPublicationV1"
+construction = "named-only"
+scalar_only = true
+fields = [
+  { ordinal = 0, name = "code", type = "str", cardinality = "one" },
+  { ordinal = 1, name = "severity", type = "str", cardinality = "one" },
+  { ordinal = 2, name = "message", type = "str", cardinality = "one" },
+  { ordinal = 3, name = "document_iri", type = "str|None", cardinality = "optional" },
+  { ordinal = 4, name = "byte_start", type = "u64|None", cardinality = "optional" },
+  { ordinal = 5, name = "byte_end", type = "u64|None", cardinality = "optional" },
+  { ordinal = 6, name = "line_start", type = "u64|None", cardinality = "optional" },
+  { ordinal = 7, name = "column_start", type = "u64|None", cardinality = "optional" },
+  { ordinal = 8, name = "line_end", type = "u64|None", cardinality = "optional" },
+  { ordinal = 9, name = "column_end", type = "u64|None", cardinality = "optional" },
+  { ordinal = 10, name = "import_chain", type = "tuple[str]", cardinality = "bounded" },
+  { ordinal = 11, name = "details", type = "tuple[tuple[str,scalar]]", cardinality = "bounded" },
+]
+
+[provenance]
+python_type = "NativeDocumentProvenancePublicationV1"
+construction = "named-only"
+scalar_only = true
+fields = [
+  { ordinal = 0, name = "source_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 1, name = "digest_kind", type = "str", cardinality = "one" },
+  { ordinal = 2, name = "byte_length", type = "u64", cardinality = "one" },
+  { ordinal = 3, name = "decoded_codepoint_length", type = "u64", cardinality = "one" },
+  { ordinal = 4, name = "document_iri", type = "str|None", cardinality = "optional" },
+  { ordinal = 5, name = "acquisition_locator", type = "str|None", cardinality = "optional" },
+  { ordinal = 6, name = "format", type = "str", cardinality = "one" },
+  { ordinal = 7, name = "detection_basis", type = "str", cardinality = "one" },
+  { ordinal = 8, name = "media_type", type = "str|None", cardinality = "optional" },
+  { ordinal = 9, name = "expected_sha256", type = "bytes32|None", cardinality = "optional" },
+  { ordinal = 10, name = "parser", type = "str", cardinality = "one" },
+  { ordinal = 11, name = "backend", type = "str", cardinality = "one" },
+  { ordinal = 12, name = "api_version", type = "tuple[u32,u32]", cardinality = "one" },
+  { ordinal = 13, name = "model_schema", type = "u32", cardinality = "one" },
+]
+
+[import_document]
+python_type = "NativeImportDocumentPublicationV1"
+construction = "named-only"
+fields = [
+  { ordinal = 0, name = "document_key", type = "str", cardinality = "one" },
+  { ordinal = 1, name = "ontology_id", type = "OntologyID", cardinality = "one" },
+  { ordinal = 2, name = "document_iri", type = "IRI|None", cardinality = "optional" },
+  { ordinal = 3, name = "source_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 4, name = "document_fingerprint", type = "Fingerprint", cardinality = "one" },
+  { ordinal = 5, name = "format", type = "str", cardinality = "one" },
+  { ordinal = 6, name = "status", type = "str", cardinality = "one" },
+]
+
+[import_edge]
+python_type = "NativeImportEdgePublicationV1"
+construction = "named-only"
+fields = [
+  { ordinal = 0, name = "importing_document_key", type = "str", cardinality = "one" },
+  { ordinal = 1, name = "import_iri", type = "IRI", cardinality = "one" },
+  { ordinal = 2, name = "status", type = "str", cardinality = "one" },
+  { ordinal = 3, name = "resolved_document_key", type = "str|None", cardinality = "optional" },
+  { ordinal = 4, name = "resolver_name", type = "str|None", cardinality = "optional" },
+  { ordinal = 5, name = "sanitized_locator", type = "str|None", cardinality = "optional" },
+  { ordinal = 6, name = "diagnostic", type = "NativeDiagnosticPublicationV1|None", cardinality = "optional" },
+]
+
+[import_manifest]
+python_type = "NativeImportManifestPublicationV1"
+construction = "named-only"
+fields = [
+  { ordinal = 0, name = "policy", type = "str", cardinality = "one" },
+  { ordinal = 1, name = "offline", type = "bool", cardinality = "one" },
+  { ordinal = 2, name = "resolver_configuration_fingerprint", type = "bytes32", cardinality = "one" },
+  { ordinal = 3, name = "documents", type = "tuple[NativeImportDocumentPublicationV1]", cardinality = "documents" },
+  { ordinal = 4, name = "edges", type = "tuple[NativeImportEdgePublicationV1]", cardinality = "import-edges" },
+]
+
+[report]
+python_type = "NativeLoadReportPublicationV1"
+construction = "named-only"
+fields = [
+  { ordinal = 0, name = "backend", type = "str", cardinality = "one" },
+  { ordinal = 1, name = "api_version", type = "tuple[u32,u32]", cardinality = "one" },
+  { ordinal = 2, name = "model_schema", type = "u32", cardinality = "one" },
+  { ordinal = 3, name = "document_count", type = "u64", cardinality = "one" },
+  { ordinal = 4, name = "total_source_bytes", type = "u64", cardinality = "one" },
+  { ordinal = 5, name = "effective_axiom_count", type = "u64", cardinality = "one" },
+  { ordinal = 6, name = "resolution_attempts", type = "u64", cardinality = "one" },
+  { ordinal = 7, name = "acquisition_cache_hits", type = "u64", cardinality = "one" },
+  { ordinal = 8, name = "document_cache_hits", type = "u64", cardinality = "one" },
+  { ordinal = 9, name = "timings", type = "tuple[tuple[str,f64]]", cardinality = "bounded" },
+  { ordinal = 10, name = "structural_fingerprint", type = "Fingerprint", cardinality = "one" },
+  { ordinal = 11, name = "logical_fingerprint", type = "Fingerprint", cardinality = "one" },
+  { ordinal = 12, name = "signature_fingerprint", type = "Fingerprint", cardinality = "one" },
+  { ordinal = 13, name = "owl2_dl_validated", type = "bool", cardinality = "one" },
+  { ordinal = 14, name = "owl2_dl_conforms", type = "bool|None", cardinality = "optional" },
+  { ordinal = 15, name = "owl2_dl_report_sha256", type = "bytes32|None", cardinality = "optional" },
+]
+
+[attestation]
+python_type = "NativeSnapshotAttestationV1"
+construction = "named-only"
+domain = "pyowl-core:native-snapshot-publication-attestation:v1"
+fields = [
+  { ordinal = 0, name = "version", type = "int", cardinality = "one" },
+  { ordinal = 1, name = "ledger_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 2, name = "root_table_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 3, name = "fingerprint_inputs_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 4, name = "source_manifest_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 5, name = "provenance_manifest_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 6, name = "diagnostics_manifest_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 7, name = "load_options_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 8, name = "report_sha256", type = "bytes32", cardinality = "one" },
+  { ordinal = 9, name = "document_count", type = "u64", cardinality = "one" },
+  { ordinal = 10, name = "import_edge_count", type = "u64", cardinality = "one" },
+  { ordinal = 11, name = "diagnostic_count", type = "u64", cardinality = "one" },
+  { ordinal = 12, name = "ontology_annotation_count", type = "u64", cardinality = "one" },
+  { ordinal = 13, name = "stored_axiom_count", type = "u64", cardinality = "one" },
+  { ordinal = 14, name = "effective_axiom_count", type = "u64", cardinality = "one" },
+  { ordinal = 15, name = "extension_count", type = "u64", cardinality = "one" },
+  { ordinal = 16, name = "total_source_bytes", type = "u64", cardinality = "one" },
+  { ordinal = 17, name = "source_map_entry_count", type = "u64", cardinality = "one" },
+  { ordinal = 18, name = "origin_entry_count", type = "u64", cardinality = "one" },
+  { ordinal = 19, name = "rdf_mapping_report_count", type = "u64", cardinality = "one" },
+  { ordinal = 20, name = "capability_bits", type = "u64", cardinality = "one" },
+  { ordinal = 21, name = "api_version", type = "tuple[u32,u32]", cardinality = "one" },
+  { ordinal = 22, name = "model_schema", type = "u32", cardinality = "one" },
+  { ordinal = 23, name = "backend", type = "str", cardinality = "one" },
+  { ordinal = 24, name = "root_document_key", type = "str", cardinality = "one" },
+  { ordinal = 25, name = "owl2_dl_validated", type = "bool", cardinality = "one" },
+  { ordinal = 26, name = "owl2_dl_conforms", type = "bool|None", cardinality = "optional" },
+  { ordinal = 27, name = "owl2_dl_report_sha256", type = "bytes32|None", cardinality = "optional" },
+]
+
+[handle]
+python_type = "NativeSnapshotHandleV1"
+opaque = true
+owning = true
+sealed = true
+registration = "exact-owner-type"
+members = [
+  { ordinal = 0, name = "publication_version", type = "int", kind = "property" },
+  { ordinal = 1, name = "publication_ledger_sha256", type = "bytes32", kind = "property" },
+  { ordinal = 2, name = "attestation", type = "NativeSnapshotAttestationV1", kind = "property" },
+  { ordinal = 3, name = "closed", type = "bool", kind = "property" },
+  { ordinal = 4, name = "close", type = "() -> None", kind = "method" },
+]
+
+[handle_registration]
+rust_owner_module = "pyowl_core._native"
+rust_owner_name = "_NativeSnapshotHandle"
+owner_attestation_member = "_publication_attestation_v1"
+owner_closed_member = "_publication_closed_v1"
+owner_close_member = "_publication_close_v1"
+exact_type_only = true
+duplicate_policy = "idempotent-same-type-only"
+fixture_owner = "bounded-immutable-two-slot-tuple"
+
+[bounds]
+max_api_component = 4294967295
+max_diagnostic_details = 64
+max_diagnostic_import_chain = 128
+max_diagnostics_per_sequence = 10000
+max_direct_imports_per_document = 10000000
+max_document_key_utf8_bytes = 256
+max_documents = 1000000
+max_import_edges = 100000000
+max_iri_utf8_bytes = 1048576
+max_metadata_string_utf8_bytes = 4096
+max_timing_name_utf8_bytes = 64
+max_timing_rows = 64
+max_total_diagnostics = 1000000
+
+[capability_rules]
+known_mask = 63
+required_mask = 7
+source_map_bit = 8
+origin_index_bit = 16
+rdf_mapping_report_bit = 32
+source_map_option = "preserve_source_map"
+origin_index_option = "collect_provenance"
+table_counts_require_bits = true
+
+[lifecycle]
+initial_state = "open"
+publication_state = "open-only"
+close = "idempotent-thread-safe"
+metadata_after_close = "readable"
+copy = "identity-preserving"
+pickle = "forbidden"
+finalization = "owner-release"
+
+[ordering]
+documents = "document-key-utf8-ascending-unique"
+import_edges = "document-key+canonical-iri+status+target-ascending"
+direct_imports = "canonical-iri-bytes-ascending-unique"
+diagnostic_sequences = "producer-order-preserved"
+diagnostic_details = "producer-order-preserved-unique-keys"
+report_timings = "name-utf8-ascending-unique"
+
+[dynamic_limits]
+documents = "min(bounds.max_documents,options.limits.max_documents)"
+import_edges = "min(bounds.max_import_edges,options.limits.max_axioms)"
+diagnostics = "min(bounds.max_total_diagnostics,options.limits.max_diagnostics)"
+source_map_entries = "options.limits.max_source_map_entries"
+origin_entries = "options.limits.max_origin_entries"
+
+[metadata_rules]
+diagnostic_code = "^[A-Z][A-Z0-9_]*$"
+diagnostic_severity = "info|warning|error"
+diagnostic_spans = "nonnegative-bytes+positive-text+forward-only"
+provenance_digest_kind = "exact-bytes|normalized-text"
+document_format = "rdfxml|turtle|owlxml|functional"
+detection_basis = "explicit|media-type|content|extension"
+scalar_details = "str|i64|bool"
+
+[attestation_encoding]
+digest = "sha256"
+record = "ordinal-field-sequence"
+scalar_codec = "tagged-length-framed-v1"
+float = "finite-python-hex"
+load_options_domain = "pyowl-core:native-load-options:v1"
+report_domain = "pyowl-core:native-load-report:v1"
+diagnostics_domain = "pyowl-core:native-diagnostics-manifest:v1"
+
+[attestation_bindings]
+four_digest_fields = ["root_table_sha256", "fingerprint_inputs_sha256", "source_manifest_sha256", "provenance_manifest_sha256"]
+load_option_fields = ["format", "imports", "backend", "limits", "offline", "preserve_source_map", "collect_provenance", "validate_owl2_dl", "deterministic"]
+parse_limit_fields = ["max_source_bytes", "max_documents", "max_total_source_bytes", "max_axioms", "max_terms", "max_nesting_depth", "max_rdf_list_length", "max_literal_bytes", "max_iri_bytes", "max_prefixes", "max_import_depth", "max_redirects", "max_diagnostics", "max_memory_bytes", "deadline_seconds", "max_triples", "max_strings", "max_annotations", "max_rule_atoms", "max_sequence_arity", "max_catalog_rewrites", "max_resolver_attempts", "max_concurrent_fetches", "max_source_map_entries", "max_origin_entries", "max_overlay_depth", "max_delta_entries", "max_composite_members", "max_index_rows", "max_index_bytes", "max_wire_rows", "max_wire_bytes", "max_temporary_bytes", "max_disk_cache_bytes", "max_decompressed_bytes", "max_canonical_work", "cancellation_check_interval"]
+report_fields = ["backend", "api_version", "model_schema", "document_count", "total_source_bytes", "effective_axiom_count", "resolution_attempts", "acquisition_cache_hits", "document_cache_hits", "timings", "structural_fingerprint", "logical_fingerprint", "signature_fingerprint", "owl2_dl_validated", "owl2_dl_conforms", "owl2_dl_report_sha256"]
+capability_backed_counts = ["source_map_entry_count", "origin_entry_count", "rdf_mapping_report_count"]
+source_map_table = "source_manifest_sha256+source_map_entry_count"
+origin_table = "provenance_manifest_sha256+origin_entry_count"
+rdf_mapping_tables = "documents[].rdf_mapping_report_sha256+rdf_mapping_report_count"
+
+[rust_parity]
+required = true
+record = "NativeSnapshotPublicationV1"
+attestation = "NativeSnapshotAttestationV1"
+status_claim = "none-until-runtime-registration"
