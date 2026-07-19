@@ -18,7 +18,7 @@ prune benchmarks/comparators
 recursive-include reports *.md *.json *.txt
 recursive-exclude reports/performance/redesign-baseline dependency-audit-*.json
 prune reports/release
-recursive-include schemas *.toml
+recursive-include schemas *.toml *.json
 recursive-include specs *.md *.toml
 recursive-include src *.py *.pyi py.typed
 recursive-include tests *.py *.toml *.json *.ofn *.owx *.rdf *.ttl *.bin

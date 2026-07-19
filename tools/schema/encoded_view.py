@@ -183,6 +183,13 @@ def render_encoded_view_schema() -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_encoded_view_descriptor() -> bytes:
+    """Render the exact canonical descriptor consumed by native builds."""
+
+    _descriptor_tree()
+    return ENCODED_STRUCTURAL_DESCRIPTOR_V1
+
+
 def render_version_decision() -> str:
     """Render the no-promotion WP17 version decision."""
 
@@ -236,12 +243,15 @@ def check_generated_ledgers(root: Path) -> tuple[str, ...]:
 
     errors: list[str] = []
     expected_files = {
+        root / "schemas" / "encoded-view-v1.json": render_encoded_view_descriptor(),
         root / "schemas" / "encoded-view-v1.toml": render_encoded_view_schema(),
         root / "schemas" / "version-decision-v1.toml": render_version_decision(),
     }
     for path, expected in expected_files.items():
         try:
-            observed = path.read_text(encoding="utf-8")
+            observed = path.read_bytes() if isinstance(expected, bytes) else path.read_text(
+                encoding="utf-8"
+            )
         except OSError:
             errors.append(f"missing generated ledger: {path.relative_to(root)}")
         else:
@@ -261,12 +271,15 @@ def check_generated_ledgers(root: Path) -> tuple[str, ...]:
 
 
 def _write_generated_ledgers(root: Path) -> None:
-    targets = {
+    text_targets = {
         root / "schemas" / "encoded-view-v1.toml": render_encoded_view_schema(),
         root / "schemas" / "version-decision-v1.toml": render_version_decision(),
     }
-    for path, content in targets.items():
+    for path, content in text_targets.items():
         path.write_text(content, encoding="utf-8", newline="\n")
+    (root / "schemas" / "encoded-view-v1.json").write_bytes(
+        render_encoded_view_descriptor()
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -290,6 +303,7 @@ if __name__ == "__main__":
 __all__ = [
     "check_generated_ledgers",
     "main",
+    "render_encoded_view_descriptor",
     "render_encoded_view_schema",
     "render_version_decision",
 ]
