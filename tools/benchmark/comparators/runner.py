@@ -152,15 +152,6 @@ def run_comparator_baseline(
                     process_mode=process_mode,
                 )
                 for pin in pins:
-                    if input_mode == "file":
-                        rows.append(
-                            _not_run_file_lane(
-                                pin,
-                                request,
-                                "file runner boundary requires the approved reference adapter",
-                            )
-                        )
-                        continue
                     if process_mode == "steady-process":
                         for _ in range(warmups):
                             _run_once(pin, request)
@@ -229,7 +220,10 @@ def run_comparator_baseline(
             "comparison_order": (
                 "deterministic caller order; paired randomization is not implemented"
             ),
-            "file_lane_execution": "not implemented; requested file rows are explicit not-run",
+            "file_lane_execution": (
+                "pinned bytes are hash-checked and prepared before timing; the timer includes "
+                "the implementation's file open/read and records temporary bytes"
+            ),
             "post_timer_work": "already-published scalar/digest equality only",
             "profiler_attached": False,
         },
@@ -483,6 +477,7 @@ def _compact_sample(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def _equality_assertions(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, object]]:
     grouped: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
+    input_modes: dict[tuple[str, str, str], dict[str, Mapping[str, Any]]] = {}
     for value in rows:
         if value.get("boundary") != COMMON_BOUNDARY or value.get("status") != "ok":
             continue
@@ -492,6 +487,12 @@ def _equality_assertions(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, ob
             cast(str, value["process_mode"]),
         )
         grouped.setdefault(key, []).append(value)
+        mode_key = (
+            cast(str, value["corpus_id"]),
+            cast(str, value["process_mode"]),
+            cast(str, value["lane"]),
+        )
+        input_modes.setdefault(mode_key, {})[cast(str, value["input_mode"])] = value
     assertions: list[dict[str, object]] = []
     for key, values in sorted(grouped.items()):
         reference = next(
@@ -519,6 +520,23 @@ def _equality_assertions(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, ob
                     "reason": None if passed else "published output inventory/digests differ",
                 }
             )
+    for key, mode_rows in sorted(input_modes.items()):
+        resident = mode_rows.get("resident-bytes")
+        file_row = mode_rows.get("file")
+        if resident is None or file_row is None:
+            continue
+        resident_contract = cast(Mapping[str, Any], resident["contract"])
+        file_contract = cast(Mapping[str, Any], file_row["contract"])
+        passed = common_contract_equality_key(resident_contract) == common_contract_equality_key(
+            file_contract
+        )
+        assertions.append(
+            {
+                "id": "/".join(key) + "/resident-file-common-contract-equality",
+                "passed": passed,
+                "reason": None if passed else "resident-byte and file inventories/digests differ",
+            }
+        )
     if not assertions:
         assertions.append(
             {
@@ -638,7 +656,7 @@ def _completion_requirements(
     machine_approved = (
         comparator_manifest.reference_machine.approval == "approved" and reference_machine_matches
     )
-    file_lane_implemented = False
+    file_lane_implemented = True
     paired_randomization_implemented = False
     ratio_gates_configured = False
     ratio_gates_passed = False
@@ -750,29 +768,6 @@ def _reference_machine_evidence(
         "expected": expected,
         "observed": observed,
         "field_matches": fields,
-    }
-
-
-def _not_run_file_lane(
-    pin: ComparatorPin,
-    request: AdapterRequest,
-    reason: str,
-) -> dict[str, Any]:
-    return {
-        "lane": pin.id,
-        "implementation": pin.implementation,
-        "boundary": pin.boundary,
-        "gating": pin.gating,
-        "required": pin.required,
-        "corpus_id": request.corpus_id,
-        "source_sha256": request.source_sha256,
-        "options_sha256": request.options_sha256,
-        "input_mode": request.input_mode,
-        "process_mode": request.process_mode,
-        "status": "not-run",
-        "reason": reason,
-        "samples": [],
-        "contract": None,
     }
 
 

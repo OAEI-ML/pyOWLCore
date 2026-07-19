@@ -17,7 +17,8 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, cast
@@ -40,7 +41,7 @@ from .common_contract import (
 from .manifest import COMMON_BOUNDARY, ROOT, ComparatorPin
 
 ADAPTER_RESULT_SCHEMA = "pyowl-core/comparator-adapter-result/v1"
-ADAPTER_REQUEST_SCHEMA = "pyowl-core/comparator-adapter-request/v1"
+ADAPTER_REQUEST_SCHEMA = "pyowl-core/comparator-adapter-request/v2"
 TIMED_VALIDATION_SCHEMA = "pyowl-core/comparator-timed-validation/v1"
 RAW_INVENTORY_SCHEMA = "pyowl-core/comparator-raw-inventory/v1"
 RAW_INVENTORY_DIGEST_DOMAIN = b"pyowl-core:comparator-raw-inventory:v1\x00"
@@ -53,6 +54,7 @@ MAX_FAILURE_CHARS = 1_000
 MAX_PHASE_METRICS = 64
 MAX_PHASE_NAME_CHARS = 80
 MAX_U64 = 2**64 - 1
+_DOCUMENT_IRI_PREFIX = "urn:pyowl-core:comparator-source:sha256:"
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
@@ -185,6 +187,7 @@ class AdapterRequest:
             "corpus_id": self.corpus_id,
             "source_b64": base64.b64encode(self.source).decode("ascii"),
             "source_sha256": self.source_sha256,
+            "document_iri": self.document_iri,
             "format": self.format.value,
             "options_sha256": self.options_sha256,
             "options": options_inventory(self.options),
@@ -197,6 +200,20 @@ class AdapterRequest:
             "expected_runner_revision": pin.runner_revision,
             "expected_runner_sha256": pin.runner_sha256,
         }
+
+    @property
+    def document_iri(self) -> str:
+        """Stable semantic base shared by resident-byte and prepared-file lanes."""
+
+        return comparator_document_iri(self.source_sha256)
+
+
+def comparator_document_iri(source_sha256: str) -> str:
+    """Return the path-independent document IRI bound to pinned source bytes."""
+
+    if not isinstance(source_sha256, str) or not _SHA256.fullmatch(source_sha256):
+        raise ValueError("source_sha256 must be a lowercase SHA-256")
+    return _DOCUMENT_IRI_PREFIX + source_sha256
 
 
 def run_core_adapter(
@@ -235,38 +252,43 @@ def run_core_adapter(
 
     backend = BackendPreference.PYTHON if pin.adapter == "core-python" else BackendPreference.NATIVE
     options = _replace_backend(request.options, backend)
-    gc.collect()
-    rss_before = _rss_peak_bytes()
-    blocks_before = _allocated_blocks()
-    objects_before = len(gc.get_objects())
-    cpu_start = time.process_time_ns()
-    wall_start = time.perf_counter_ns()
     try:
-        load_start = time.perf_counter_ns()
-        loaded = load_snapshot(request.source, options=options)
-        load_end = time.perf_counter_ns()
-        if not isinstance(loaded, OntologySnapshot):
-            raise TypeError("core comparator did not publish OntologySnapshot")
-        contract_start = time.perf_counter_ns()
-        contract = build_core_common_contract(
-            loaded,
-            corpus_id=request.corpus_id,
-            source_sha256=request.source_sha256,
-            options_sha256=request.options_sha256,
-        )
-        validation_start = time.perf_counter_ns()
-        validate_common_contract(contract)
-        validation_end = time.perf_counter_ns()
-        contract_end = time.perf_counter_ns()
+        with _core_input_source(request) as input_source:
+            gc.collect()
+            rss_before = _rss_peak_bytes()
+            blocks_before = _allocated_blocks()
+            objects_before = len(gc.get_objects())
+            cpu_start = time.process_time_ns()
+            wall_start = time.perf_counter_ns()
+            load_start = time.perf_counter_ns()
+            loaded = load_snapshot(
+                input_source,
+                document_iri=request.document_iri,
+                options=options,
+            )
+            load_end = time.perf_counter_ns()
+            if not isinstance(loaded, OntologySnapshot):
+                raise TypeError("core comparator did not publish OntologySnapshot")
+            contract_start = time.perf_counter_ns()
+            contract = build_core_common_contract(
+                loaded,
+                corpus_id=request.corpus_id,
+                source_sha256=request.source_sha256,
+                options_sha256=request.options_sha256,
+            )
+            validation_start = time.perf_counter_ns()
+            validate_common_contract(contract)
+            validation_end = time.perf_counter_ns()
+            contract_end = time.perf_counter_ns()
+            wall_end = time.perf_counter_ns()
+            cpu_end = time.process_time_ns()
+            objects_after = len(gc.get_objects())
+            blocks_after = _allocated_blocks()
+            rss_after = _rss_peak_bytes()
     except BackendUnavailableError as error:
         return _not_run(pin, request, f"native backend unavailable: {error}")
     except Exception as error:  # comparator failures are evidence, not harness crashes
         return _error(pin, request, error)
-    wall_end = time.perf_counter_ns()
-    cpu_end = time.process_time_ns()
-    objects_after = len(gc.get_objects())
-    blocks_after = _allocated_blocks()
-    rss_after = _rss_peak_bytes()
     return {
         "schema": ADAPTER_RESULT_SCHEMA,
         "lane": pin.id,
@@ -296,6 +318,7 @@ def run_core_adapter(
             "rss_peak_before_bytes": rss_before,
             "rss_peak_after_bytes": rss_after,
             "rss_peak_increment_bytes": max(0, rss_after - rss_before),
+            "temporary_bytes": len(request.source) if request.input_mode == "file" else 0,
             "python_allocated_blocks_increment": max(0, blocks_after - blocks_before),
             "python_gc_objects_increment": max(0, objects_after - objects_before),
             "core_report_seconds": dict(loaded.report.timings),
@@ -313,6 +336,21 @@ def run_core_adapter(
             "runner_sha256": pin.runner_sha256,
         },
     }
+
+
+@contextmanager
+def _core_input_source(request: AdapterRequest) -> Iterator[bytes | Path]:
+    """Prepare a file lane outside the timed envelope and retain it through loading."""
+
+    if request.input_mode == "resident-bytes":
+        yield request.source
+        return
+    with tempfile.TemporaryDirectory(prefix="pyowl-core-comparator-") as directory:
+        path = Path(directory) / "ontology-input"
+        written = path.write_bytes(request.source)
+        if written != len(request.source):  # pragma: no cover - Path.write_bytes is exact or raises
+            raise OSError("prepared comparator file was truncated")
+        yield path
 
 
 def run_external_adapter(

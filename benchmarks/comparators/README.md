@@ -50,8 +50,10 @@ installed retained-native-wheel lane is separate and rejects source-tree/native
 builds; it requires an isolated delivered-wheel environment.
 
 Each external command reads one
-`pyowl-core/comparator-adapter-request/v1` JSON object on standard input and
+`pyowl-core/comparator-adapter-request/v2` JSON object on standard input and
 writes one `pyowl-core/comparator-adapter-result/v1` object to standard output.
+Request v2 adds the source-digest-derived document IRI required to make
+resident-byte and prepared-file semantic identities exact.
 Common-ready results must include a validated
 `pyowl-core/comparator-common-contract/v1` object. The runner performs only
 already-published digest/count equality after timing. Raw Horned results instead
@@ -60,11 +62,13 @@ canonical v1 scalar preimage, and are never eligible as an equivalence
 denominator.
 
 The shared Darwin entry remains explicitly `pending`; release evidence must use
-an approved versioned machine. File lanes, persistent external steady-process
-runners, paired randomized block ordering, representative medium/large RDF/XML
-corpora, executable ratio gates, native retention/copy counters, and phase
-profiles remain open and must continue to be reported as unsupported or
-`not-run`.
+an approved versioned machine. Resident-byte and file lanes are implemented:
+file inputs are hash-checked and prepared before timing, use the same stable
+source-bound document IRI as resident bytes, and include the implementation's
+file open/read in the timer. Persistent external steady-process runners, paired
+randomized block ordering, representative medium/large RDF/XML corpora,
+executable ratio gates, native retention/copy counters, and phase profiles
+remain open and must continue to be reported as unsupported or `not-run`.
 
 `dependency-audit-shared-host.json` binds passing alias-aware source,
 payload-manifest, and packaged-Python scans plus reproducible SHA-bound sdist and

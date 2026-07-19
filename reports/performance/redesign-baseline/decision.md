@@ -176,10 +176,11 @@ steady-process modes remain separate datasets.
 
 For the Python lane, retained-handle/facade publication is `n/a`: the ordinary
 Python snapshot and its common-contract ledger still complete inside the
-timer, but that completion is not a native publication capability. The current
-executable scaffold implements resident-byte fresh/steady smoke only. File
-acquisition lanes and paired randomized ordering remain unimplemented and must
-not be inferred from this timing table.
+timer, but that completion is not a native publication capability. The
+executable scaffold now implements resident-byte and prepared-file
+fresh/steady execution. The committed smoke predates the file boundary and
+exercises resident bytes only; paired randomized ordering remains
+unimplemented and must not be inferred from this timing table.
 
 ## 7. Current implementation limitations and evidence status
 
@@ -189,10 +190,12 @@ artifacts do not demonstrate a retained native document/snapshot, lazy
 ontology-sized scalar materialization, direct encoded structural columns, or a
 lazy mapped native handle.
 
-The executable scaffold now validates the comparator manifest and runs one
-tiny generated Functional Syntax input through the core Python
-common-contract adapter in fresh- and steady-process resident-byte modes. That
-smoke exercises the four fingerprint preimage checks, structural/identity/
+The executable scaffold validates the comparator manifest and runs one tiny
+generated Functional Syntax input through the core Python common-contract
+adapter in fresh- and steady-process resident-byte modes. Contract tests also
+exercise the prepared-file modes with a path-independent source-bound document
+IRI and equal common-contract digest. The committed smoke exercises the four
+fingerprint preimage checks, structural/identity/
 provenance/diagnostic inventories, raw-sample recording, and post-timer
 equality fence. Every non-Python lane is `not-run`, the reference-machine
 record remains `pending`, and `comparative_complete` is false. An intentional
@@ -223,8 +226,9 @@ The following are recorded as **not-run**, not passes:
 - py-horned and OWLAPI inputs: the py-horned package artifact and OWLAPI
   JDK/GC/heap policy are recorded, but their external runner artifacts remain
   pending;
-- file lanes and paired randomized blocks: the current runner scaffold does not
-  implement or claim them;
+- file-lane approved evidence and paired randomized blocks: the core file
+  boundary is implemented and contract-tested, but external/reference-machine
+  file samples and paired ordering are not recorded;
 - comparative ratios: executable paired ratio gates are not configured or
   passing;
 - fresh/steady NCIT, DOID, medium/list-heavy, and required large RDF/XML

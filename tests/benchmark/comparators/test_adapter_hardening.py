@@ -202,6 +202,8 @@ def test_external_success_accepts_pinned_artifacts_and_timed_contract_attestatio
     pin, request, result = _valid_external_result()
 
     protocol = request.protocol_dict(pin)
+    assert protocol["schema"] == "pyowl-core/comparator-adapter-request/v2"
+    assert protocol["document_iri"] == request.document_iri
     assert protocol["expected_artifact_sha256"] == pin.artifact_sha256
     assert protocol["expected_runner_sha256"] == pin.runner_sha256
     _validate_external_result(pin, request, result)

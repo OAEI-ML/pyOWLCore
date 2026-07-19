@@ -44,7 +44,7 @@ def test_python_reference_reports_separate_fresh_and_steady_raw_samples() -> Non
         "large": [],
         "annotation_list_heavy": [],
     }
-    assert completion["file_lane_implemented"] is False
+    assert completion["file_lane_implemented"] is True
     assert completion["paired_randomization_implemented"] is False
     assert completion["ratio_gates"] == {
         "configured": False,
@@ -52,6 +52,33 @@ def test_python_reference_reports_separate_fresh_and_steady_raw_samples() -> Non
         "reason": "no executable ratio-gate configuration is wired into this runner",
     }
     assert "not implemented" in report["methodology"]["comparison_order"]
+
+
+def test_python_file_lane_is_timed_and_semantically_matches_resident_bytes() -> None:
+    report = run_comparator_baseline(
+        corpus_ids=("generated-tiny-functional",),
+        comparator_ids=("pyowl-python-common",),
+        process_modes=("steady-process", "fresh-process"),
+        input_modes=("resident-bytes", "file"),
+        warmups=0,
+        repetitions=1,
+    )
+
+    rows = {
+        (cast(str, row["input_mode"]), cast(str, row["process_mode"])): row
+        for row in cast(list[dict[str, Any]], report["lanes"])
+    }
+    for process_mode in ("steady-process", "fresh-process"):
+        resident = rows[("resident-bytes", process_mode)]
+        file_row = rows[("file", process_mode)]
+        assert resident["status"] == file_row["status"] == "ok"
+        assert resident["contract"]["contract_sha256"] == file_row["contract"][
+            "contract_sha256"
+        ]
+        assert resident["samples"][0]["metrics"]["temporary_bytes"] == 0
+        assert file_row["samples"][0]["metrics"]["temporary_bytes"] > 0
+    completion = cast(dict[str, Any], report["completion_requirements"])
+    assert completion["file_lane_implemented"] is True
 
 
 def test_pending_horned_common_adapter_is_not_run_and_never_a_pass(

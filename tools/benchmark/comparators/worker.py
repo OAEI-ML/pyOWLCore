@@ -22,6 +22,7 @@ from .adapters import (
     ADAPTER_REQUEST_SCHEMA,
     MAX_SUBPROCESS_REQUEST_BYTES,
     AdapterRequest,
+    comparator_document_iri,
     run_core_adapter,
     sanitize_failure,
 )
@@ -36,6 +37,7 @@ _REQUEST_FIELDS = frozenset(
         "corpus_id",
         "source_b64",
         "source_sha256",
+        "document_iri",
         "format",
         "options_sha256",
         "options",
@@ -73,7 +75,7 @@ def main() -> int:
             raise TypeError("request must be a JSON object")
         value = cast(Mapping[str, Any], raw)
         if set(value) != _REQUEST_FIELDS:
-            raise ValueError("request fields differ from adapter protocol v1")
+            raise ValueError("request fields differ from adapter protocol v2")
         if value.get("schema") != ADAPTER_REQUEST_SCHEMA:
             raise ValueError("unsupported adapter request schema")
         lane = _string(value.get("lane"), "lane")
@@ -94,6 +96,8 @@ def main() -> int:
         source_sha256 = _string(value.get("source_sha256"), "source_sha256")
         if hashlib.sha256(source).hexdigest() != source_sha256:
             raise ValueError("request source differs from pinned digest")
+        if value.get("document_iri") != comparator_document_iri(source_sha256):
+            raise ValueError("request document_iri differs from pinned source digest")
         options = _options(value.get("options"))
         request = AdapterRequest(
             corpus_id=_string(value.get("corpus_id"), "corpus_id"),

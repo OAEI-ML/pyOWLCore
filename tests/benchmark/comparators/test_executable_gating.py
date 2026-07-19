@@ -33,6 +33,26 @@ def test_mismatched_common_contract_cannot_pass_equality_fence() -> None:
     assert candidate_assertion["reason"] == "published output inventory/digests differ"
 
 
+def test_resident_and_file_contracts_cannot_diverge_for_one_lane() -> None:
+    manifest = load_manifest()
+    reference = _contract(manifest.by_id("generated-tiny-functional"))
+    candidate = _contract(manifest.by_id("generated-medium-owlxml"))
+    rows = [
+        _row("pyowl-python-common", reference),
+        _row("pyowl-python-common", candidate, input_mode="file"),
+    ]
+
+    assertions = _equality_assertions(rows)
+    by_id = {cast(str, value["id"]): value for value in assertions}
+    assertion = by_id[
+        "shared-case/steady-process/pyowl-python-common/"
+        "resident-file-common-contract-equality"
+    ]
+
+    assert assertion["passed"] is False
+    assert assertion["reason"] == "resident-byte and file inventories/digests differ"
+
+
 def _contract(corpus: Any) -> dict[str, Any]:
     options = default_options(corpus.format)
     options_sha256 = hashlib.sha256(
@@ -50,13 +70,18 @@ def _contract(corpus: Any) -> dict[str, Any]:
     )
 
 
-def _row(lane: str, contract: dict[str, Any]) -> dict[str, Any]:
+def _row(
+    lane: str,
+    contract: dict[str, Any],
+    *,
+    input_mode: str = "resident-bytes",
+) -> dict[str, Any]:
     return {
         "lane": lane,
         "boundary": COMMON_BOUNDARY,
         "status": "ok",
         "corpus_id": "shared-case",
-        "input_mode": "resident-bytes",
+        "input_mode": input_mode,
         "process_mode": "steady-process",
         "contract": contract,
     }
