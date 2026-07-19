@@ -10,6 +10,8 @@ mod index;
 mod limits;
 mod model;
 mod parse;
+#[allow(dead_code)]
+mod publication;
 mod session;
 mod source;
 mod wire;
@@ -379,6 +381,12 @@ fn _panic_probe() -> PyResult<()> {
     Err(python_error(NativeError::panic()))
 }
 
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+fn _publication_fixture_v1() -> PyResult<publication::NativeSnapshotHandle> {
+    contain(publication::fixture_handle_v1).map_err(python_error)
+}
+
 #[pyfunction]
 #[pyo3(signature = (source, config, cancel=None))]
 fn parse_document<'py>(
@@ -458,6 +466,7 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("FEATURES", PyTuple::new(py, FEATURES)?)?;
     module.add("_NativeError", py.get_type::<_NativeError>())?;
     module.add_class::<Cancellation>()?;
+    publication::register_native_handle_types(py, module)?;
     module.add_function(wrap_pyfunction!(version, module)?)?;
     module.add_function(wrap_pyfunction!(self_test, module)?)?;
     module.add_function(wrap_pyfunction!(validate_canonical, module)?)?;
@@ -465,6 +474,8 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(roundtrip_wire, module)?)?;
     module.add_function(wrap_pyfunction!(_work_probe, module)?)?;
     module.add_function(wrap_pyfunction!(_panic_probe, module)?)?;
+    #[cfg(feature = "test-hooks")]
+    module.add_function(wrap_pyfunction!(_publication_fixture_v1, module)?)?;
     module.add_function(wrap_pyfunction!(parse_document, module)?)?;
     module.add_function(wrap_pyfunction!(build_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(build_index, module)?)?;
