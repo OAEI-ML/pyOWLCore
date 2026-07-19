@@ -7,6 +7,8 @@ mod arena;
 mod builder;
 mod canonical;
 #[allow(dead_code)]
+mod component_index;
+#[allow(dead_code)]
 mod components;
 #[allow(dead_code)]
 mod ids;
@@ -18,6 +20,10 @@ pub(crate) use arena::{CanonicalRow, ModelArena, NativeArena};
 #[allow(unused_imports)]
 pub(crate) use builder::NativeArenaBuilder;
 pub(crate) use canonical::{scan_canonical, validate_iri, Category, ScanBudget};
+#[allow(unused_imports)]
+pub(crate) use component_index::{
+    structural_digest_v1, NativeComponentDigestIndex, StructuralDigest,
+};
 #[allow(unused_imports)]
 pub(crate) use components::{
     ComponentCounters, ComponentId, ComponentIdRemap, ComponentTables, FrozenComponentBuild,
