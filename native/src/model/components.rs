@@ -15,7 +15,7 @@ use crate::cancel::{Cancellation, Guard, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
 use crate::limits::Limits;
 
-use super::canonical::{canonical_field_count, scan_canonical, ScanBudget};
+use super::canonical::{canonical_field_count, scan_canonical, Category, ScanBudget};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct DenseId(u32);
@@ -306,15 +306,9 @@ impl ComponentTables {
         identifier: LocalComponentId,
         work: &mut ComponentWork,
     ) -> NativeResult<Vec<u8>> {
-        work.checkpoint(true)?;
-        let encoded_len = self.encoded_node_len(identifier, 0, work)?;
-        if encoded_len > self.max_encoded_bytes {
-            return Err(NativeError::limit(
-                "native component encoding exceeds max_canonical_work",
-            ));
-        }
-        let capacity = usize::try_from(encoded_len)
-            .map_err(|_| NativeError::limit("native component encoding exceeds usize"))?;
+        let capacity = self.encoded_len_with_work(identifier, work)?;
+        let encoded_len = u64::try_from(capacity)
+            .map_err(|_| NativeError::limit("native component encoding exceeds u64"))?;
         let memory_peak = self
             .retained_bytes
             .checked_add(work.external_bytes)
@@ -344,6 +338,24 @@ impl ComponentTables {
         }
         work.checkpoint(true)?;
         Ok(output)
+    }
+
+    fn encoded_len_with_work(
+        &self,
+        identifier: LocalComponentId,
+        work: &mut ComponentWork,
+    ) -> NativeResult<usize> {
+        work.checkpoint(true)?;
+        let encoded_len = self.encoded_node_len(identifier, 0, work)?;
+        if encoded_len > self.max_encoded_bytes {
+            return Err(NativeError::limit(
+                "native component encoding exceeds max_canonical_work",
+            ));
+        }
+        let capacity = usize::try_from(encoded_len)
+            .map_err(|_| NativeError::limit("native component encoding exceeds usize"))?;
+        work.checkpoint(true)?;
+        Ok(capacity)
     }
 
     fn encoded_node_len(
@@ -648,6 +660,40 @@ impl NativeComponentArena {
         self.tables.encode_with_work(identifier.local, work)
     }
 
+    fn validate_identifier(&self, identifier: ComponentId) -> NativeResult<LocalComponentId> {
+        if identifier.owner != self.owner {
+            return Err(NativeError::protocol(
+                "native component id belongs to a different arena",
+            ));
+        }
+        self.tables.component(identifier.local)?;
+        Ok(identifier.local)
+    }
+
+    pub(crate) fn category(&self, identifier: ComponentId) -> NativeResult<Category> {
+        Ok(component_category(self.validate_identifier(identifier)?))
+    }
+
+    pub(crate) fn tag(&self, identifier: ComponentId) -> NativeResult<u16> {
+        Ok(self
+            .tables
+            .component(self.validate_identifier(identifier)?)?
+            .tag)
+    }
+
+    pub(crate) fn encoded_len(
+        &self,
+        identifier: ComponentId,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+        external_bytes: usize,
+    ) -> NativeResult<usize> {
+        let identifier = self.validate_identifier(identifier)?;
+        let mut work = ComponentWork::new(limits, cancellation, interrupt, external_bytes)?;
+        self.tables.encoded_len_with_work(identifier, &mut work)
+    }
+
     pub(crate) fn encode(
         &self,
         identifier: ComponentId,
@@ -666,6 +712,22 @@ impl NativeComponentArena {
 
     pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.tables, &other.tables)
+    }
+}
+
+const fn component_category(identifier: LocalComponentId) -> Category {
+    match identifier {
+        LocalComponentId::Iri(_) => Category::Iri,
+        LocalComponentId::Entity(_) => Category::Entity,
+        LocalComponentId::Anonymous(_) => Category::Anonymous,
+        LocalComponentId::Literal(_) => Category::Literal,
+        LocalComponentId::Annotation(_) => Category::Annotation,
+        LocalComponentId::PropertyExpression(_)
+        | LocalComponentId::FacetRestriction(_)
+        | LocalComponentId::DataRange(_)
+        | LocalComponentId::ClassExpression(_) => Category::Term,
+        LocalComponentId::Axiom(_) => Category::Axiom,
+        LocalComponentId::Swrl(_) => Category::Swrl,
     }
 }
 
@@ -3493,6 +3555,60 @@ mod tests {
                 )
                 .expect("encoded"),
             iri("urn:component")
+        );
+    }
+
+    #[test]
+    fn retained_ids_expose_checked_category_tag_and_encoded_length() {
+        let limits = Limits::default();
+        let canonical = declaration("urn:classified");
+        let mut builder = component_builder(&limits);
+        let pending = builder.intern_canonical(&canonical).expect("declaration");
+        let frozen = builder.freeze().expect("arena");
+        let identifier = frozen.resolve(pending).expect("frozen root id");
+        let arena = frozen.into_arena();
+
+        assert_eq!(
+            arena.category(identifier).expect("category"),
+            Category::Axiom
+        );
+        assert_eq!(arena.tag(identifier).expect("tag"), 60);
+        assert_eq!(
+            arena
+                .encoded_len(
+                    identifier,
+                    &limits,
+                    Cancellation::with_duration(None),
+                    None,
+                    0,
+                )
+                .expect("encoded length"),
+            canonical.len()
+        );
+
+        let mut foreign_builder = component_builder(&limits);
+        let foreign_pending = foreign_builder
+            .intern_canonical(&declaration("urn:foreign"))
+            .expect("foreign declaration");
+        let foreign = foreign_builder.freeze().expect("foreign arena");
+        let foreign_id = foreign.resolve(foreign_pending).expect("foreign root id");
+        assert_eq!(
+            arena.category(foreign_id).unwrap_err().code,
+            "NATIVE_PROTOCOL"
+        );
+        assert_eq!(arena.tag(foreign_id).unwrap_err().code, "NATIVE_PROTOCOL");
+        assert_eq!(
+            arena
+                .encoded_len(
+                    foreign_id,
+                    &limits,
+                    Cancellation::with_duration(None),
+                    None,
+                    0,
+                )
+                .unwrap_err()
+                .code,
+            "NATIVE_PROTOCOL"
         );
     }
 
