@@ -34,8 +34,6 @@ from pyowl_core.model import (
 from pyowl_core.model.axioms import AxiomNode
 from pyowl_core.model.swrl import SWRLRule
 
-from . import native
-
 if TYPE_CHECKING:
     from pyowl_core.cancellation import CancellationToken
     from pyowl_core.index.cache import IndexBuildBudget
@@ -350,6 +348,11 @@ class _Columns:
 
 def require_view_binding(capability: str) -> NativeViewExtension:
     """Require a capability registered specifically by the view seam."""
+
+    # Keep the encoded fallback and its top-level public request type usable
+    # without importing the optional native extension.  Capability lookup is
+    # the only operation in this module that needs the native dispatcher.
+    from . import native
 
     extension = native.require(capability)
     if capability not in extension.VIEW_FEATURES:
