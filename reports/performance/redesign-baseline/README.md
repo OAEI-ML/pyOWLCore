@@ -35,9 +35,10 @@ This is not comparative performance evidence. The reference-machine entry is
 still `pending`; only the tiny generated corpus was run; all external runner
 pins are pending and non-runnable; and the installed retained-native wheel/bulk
 path was not run. File lanes, persistent external steady-process execution,
-paired implementation-order randomization, and executable ratio gates are not
-implemented. Therefore no Horned/OWLAPI ratio, threshold pass, bulk-consumer
-result, or retained-native claim is made.
+paired implementation-order randomization, and executable ratio gates were not
+implemented when this historical artifact was captured and remain absent from
+it. Therefore no Horned/OWLAPI ratio, threshold pass, bulk-consumer result, or
+retained-native claim is made.
 
 Historical pre-redesign profile evidence remains in
 `reports/performance/profiles/`. Those generated-large profiles locate parser,
@@ -110,7 +111,8 @@ Release evidence must run medium/large RDF/XML and annotation/list-heavy
 corpora with paired randomized blocks, at least the repetitions in
 `specs/performance.md`, an approved machine, exact engine/adapter/image hashes,
 separate resident/file lanes, and the full fresh/steady matrix. It must also
-capture persistent external runners, phase profiles, object/copy/RSS counters,
-the remaining native-wheel/SBOM/release-packaging audits, and executable paired
-ratio gates. None of those capabilities is implemented by this smoke command,
-and the smoke must not be promoted into an equivalence claim.
+capture executions of the implemented persistent external-runner lifecycle,
+phase profiles, object/copy/RSS counters, the remaining
+native-wheel/SBOM/release-packaging audits, and results from the implemented
+paired ratio gates. None of that evidence is produced by this historical smoke
+command, and the smoke must not be promoted into an equivalence claim.

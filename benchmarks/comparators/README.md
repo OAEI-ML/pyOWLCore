@@ -65,6 +65,30 @@ publish a bounded integer `raw_inventory` whose SHA-256 is recomputed from the
 canonical v1 scalar preimage, and are never eligible as an equivalence
 denominator.
 
+Fresh-process lanes use that one-request/one-result command directly. A
+steady-process lane instead starts one exact SHA-256-verified executable before
+warm-ups and samples, and keeps that single process for the lane lifecycle.
+The child must first send an exact
+`pyowl-core/comparator-persistent-handshake/v1` attestation for protocol
+`pyowl-core/comparator-persistent-runner/v1`: lane and boundary identity, its
+actual child PID, request/result schemas, fresh-ontology-per-request support,
+and the complete artifact and runner pins must all match before any request is
+eligible to run. Startup and handshake time are lifecycle evidence and are
+outside call-to-ready samples.
+
+Persistent handshake, request, response, and shutdown messages use a canonical
+decimal byte length, newline, JSON payload, and terminal newline. Requests and
+responses carry an exact monotonic sequence; every successful response also
+carries a new lowercase SHA-256 ontology-instance identifier. Nonblocking
+selector I/O enforces request, response, cumulative stderr, handshake, and
+per-response time limits. Partial, malformed, oversized, replayed, unsolicited,
+extra, or late frames fail the entire lane closed. Shutdown requires a
+versioned acknowledgement and clean exit, with process-group termination and a
+kill fallback on error or timeout. A forked client cannot use or signal the
+parent-owned runner. The lifecycle audit records the authenticated handshake,
+PID, startup, request/response and unique-instance counts, bounded stderr, and
+shutdown result.
+
 The runner accepts an exact unsigned 64-bit `--seed` and records it with the
 schedule and every measured raw sample. Each measured repetition is one paired
 block; implementation order is shuffled independently in every scenario/block
@@ -93,15 +117,16 @@ invalid, nonpositive, unpaired, contract-mismatched, or unavailable evidence
 leaves the gate configured but failed with scenario-specific reasons.
 
 The shared Darwin entry remains explicitly `pending`; release evidence must use
-an approved versioned machine. Resident-byte and file lanes are implemented:
-file inputs are hash-checked and prepared before timing, use the same stable
-source-bound document IRI as resident bytes, and include the implementation's
-file open/read in the timer. Persistent external steady-process runners,
-representative medium/large approved-machine samples, native retention/copy
-counters, and phase profiles remain open and must continue to be reported as
-unsupported or `not-run`. Because all external runner pins are still pending,
-the configured ratio gates currently fail closed; no performance threshold has
-passed merely because its evaluator now exists.
+an approved versioned machine. Resident-byte and file lanes and the audited
+persistent lifecycle are implemented and contract-tested. File inputs are
+hash-checked and prepared before timing, use the same stable source-bound
+document IRI as resident bytes, and include the implementation's file open/read
+in the timer. Every external runner pin is still pending, so no real persistent
+runner has executed and every external lane remains `not-run`. Representative
+medium/large approved-machine samples, native retention/copy counters, and
+phase profiles remain open. The configured ratio gates therefore fail closed;
+no performance threshold has passed merely because its evaluator and lifecycle
+now exist.
 
 `dependency-audit-shared-host.json` binds passing alias-aware source,
 payload-manifest, and packaged-Python scans plus reproducible SHA-bound sdist and

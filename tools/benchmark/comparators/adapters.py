@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, cast
@@ -371,7 +371,7 @@ def run_external_adapter(
         return _not_run(
             pin,
             request,
-            "persistent external worker protocol is not implemented",
+            "steady external requests require the audited persistent lifecycle",
         )
     command_text = os.environ.get(pin.launcher_env)
     if not command_text:
@@ -577,11 +577,17 @@ def _validate_external_result(
             ("artifact", pin.artifact),
             ("features", list(pin.features)),
             ("allocator", pin.allocator),
-            ("thread_ceiling", pin.thread_ceiling),
         )
         for name, expected_value in expected_artifact:
             if artifact.get(name) != expected_value:
                 raise ValueError(f"external runner {name} differs from expected pin")
+        observed_thread_ceiling = artifact.get("thread_ceiling")
+        if (
+            isinstance(observed_thread_ceiling, bool)
+            or not isinstance(observed_thread_ceiling, int)
+            or observed_thread_ceiling != pin.thread_ceiling
+        ):
+            raise ValueError("external runner thread_ceiling differs from expected pin")
         observed_artifact_sha256 = artifact.get("artifact_sha256")
         if not isinstance(observed_artifact_sha256, str) or not _SHA256.fullmatch(
             observed_artifact_sha256
@@ -958,18 +964,44 @@ def _external_environment(pin: ComparatorPin) -> dict[str, str]:
     return selected
 
 
-def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+def _terminate_process(
+    process: subprocess.Popen[bytes],
+    *,
+    grace_seconds: float = 0.2,
+) -> None:
+    """Terminate a process group, then kill it if the grace period expires."""
+
     if process.poll() is not None:
         return
     if os.name == "posix":
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-            return
+            os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             return
         except PermissionError:
-            pass
-    process.kill()
+            process.terminate()
+    else:
+        process.terminate()
+    try:
+        process.wait(timeout=grace_seconds)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            process.kill()
+    else:
+        process.kill()
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:  # pragma: no cover - kernel-level process failure
+        process.kill()
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=grace_seconds)
 
 
 def _rss_peak_bytes() -> int:

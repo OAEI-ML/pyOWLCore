@@ -44,6 +44,13 @@ from .manifest import (
     ComparatorPin,
     load_comparator_manifest,
 )
+from .persistent import (
+    PERSISTENT_PROTOCOL_SCHEMA,
+    PersistentExternalRunner,
+    PersistentRunnerError,
+    PersistentRunnerUnavailable,
+    unavailable_lifecycle_audit,
+)
 from .ratio_statistics import (
     DEFAULT_BOOTSTRAP_RESAMPLES,
     MAX_U64,
@@ -159,66 +166,84 @@ def run_comparator_baseline(
     resolved_cache = cache_dir or ROOT / "benchmarks" / "results" / "corpora"
     sources = {value.id: _source(value, resolved_cache) for value in corpora}
 
+    persistent_runners, persistent_failures, persistent_audits = (
+        _start_persistent_lifecycles(pins, process_modes)
+    )
     rows: list[dict[str, Any]] = []
-    for corpus in corpora:
-        source = sources[corpus.id]
-        options = default_options(corpus.format)
-        options_sha256 = options_digest(options)
-        for input_mode in input_modes:
-            for process_mode in process_modes:
-                request = AdapterRequest(
-                    corpus_id=corpus.id,
-                    source=source,
-                    source_sha256=corpus.sha256,
-                    format=corpus.format,
-                    options=options,
-                    options_sha256=options_sha256,
-                    input_mode=input_mode,
-                    process_mode=process_mode,
-                )
-                samples_by_pin: dict[str, list[dict[str, Any]]] = {
-                    pin.id: [] for pin in pins
-                }
-                if process_mode == "steady-process":
-                    for block_index in range(warmups):
+    try:
+        for corpus in corpora:
+            source = sources[corpus.id]
+            options = default_options(corpus.format)
+            options_sha256 = options_digest(options)
+            for input_mode in input_modes:
+                for process_mode in process_modes:
+                    request = AdapterRequest(
+                        corpus_id=corpus.id,
+                        source=source,
+                        source_sha256=corpus.sha256,
+                        format=corpus.format,
+                        options=options,
+                        options_sha256=options_sha256,
+                        input_mode=input_mode,
+                        process_mode=process_mode,
+                    )
+                    samples_by_pin: dict[str, list[dict[str, Any]]] = {
+                        pin.id: [] for pin in pins
+                    }
+                    if process_mode == "steady-process":
+                        for block_index in range(warmups):
+                            ordered_pins = _paired_implementation_order(
+                                pins,
+                                request=request,
+                                seed=seed,
+                                block_kind="warmup",
+                                block_index=block_index,
+                            )
+                            for pin in ordered_pins:
+                                try:
+                                    _run_once_with_persistent_lifecycle(
+                                        pin,
+                                        request,
+                                        runners=persistent_runners,
+                                        failures=persistent_failures,
+                                    )
+                                finally:
+                                    _cleanup_barrier()
+                    for block_index in range(repetitions):
                         ordered_pins = _paired_implementation_order(
                             pins,
                             request=request,
                             seed=seed,
-                            block_kind="warmup",
+                            block_kind="measured",
                             block_index=block_index,
                         )
-                        for pin in ordered_pins:
+                        for order_index, pin in enumerate(ordered_pins):
                             try:
-                                _run_once(pin, request)
+                                sample = _run_once_with_persistent_lifecycle(
+                                    pin,
+                                    request,
+                                    runners=persistent_runners,
+                                    failures=persistent_failures,
+                                )
                             finally:
                                 _cleanup_barrier()
-                for block_index in range(repetitions):
-                    ordered_pins = _paired_implementation_order(
-                        pins,
-                        request=request,
-                        seed=seed,
-                        block_kind="measured",
-                        block_index=block_index,
-                    )
-                    for order_index, pin in enumerate(ordered_pins):
-                        try:
-                            sample = _run_once(pin, request)
-                        finally:
-                            _cleanup_barrier()
-                        samples_by_pin[pin.id].append(
-                            _with_schedule_metadata(
-                                sample,
-                                seed=seed,
-                                block_index=block_index,
-                                order_index=order_index,
-                                block_size=len(ordered_pins),
+                            samples_by_pin[pin.id].append(
+                                _with_schedule_metadata(
+                                    sample,
+                                    seed=seed,
+                                    block_index=block_index,
+                                    order_index=order_index,
+                                    block_size=len(ordered_pins),
+                                )
                             )
+                    for pin in pins:
+                        rows.append(
+                            _aggregate_samples(pin, request, samples_by_pin[pin.id])
                         )
-                for pin in pins:
-                    rows.append(
-                        _aggregate_samples(pin, request, samples_by_pin[pin.id])
-                    )
+    finally:
+        persistent_audits.extend(_close_persistent_lifecycles(persistent_runners))
+    persistent_audits.sort(key=lambda value: cast(str, value["lane"]))
+    _apply_persistent_lifecycle_failures(rows, persistent_audits)
 
     assertions = _equality_assertions(rows)
     required_lanes = {value.id for value in pins if value.required}
@@ -294,8 +319,11 @@ def run_comparator_baseline(
             "input_modes": list(input_modes),
             "process_modes": list(process_modes),
             "network_during_samples": (
-                "core lanes are offline; external process isolation is not implemented"
+                "core lanes are offline; fresh external lanes are isolated one-shot "
+                "processes and steady external lanes use one audited process per lane"
             ),
+            "persistent_external_protocol": PERSISTENT_PROTOCOL_SCHEMA,
+            "persistent_external_startup": "outside every call-to-ready sample",
             "comparison_order": (
                 "seeded implementation-order shuffle within every paired warmup/measured block"
             ),
@@ -317,6 +345,7 @@ def run_comparator_baseline(
             for value in corpora
         ],
         "lanes": rows,
+        "persistent_runner_lifecycles": persistent_audits,
         "equality_assertions": assertions,
         "execution_errors": execution_errors,
         "contract_valid": assertions_pass and not execution_errors,
@@ -334,6 +363,80 @@ def _run_once(pin: ComparatorPin, request: AdapterRequest) -> dict[str, Any]:
             return _run_fresh_core(pin, request)
         return run_core_adapter(pin, request)
     return run_external_adapter(pin, request)
+
+
+def _start_persistent_lifecycles(
+    pins: Sequence[ComparatorPin],
+    process_modes: Sequence[str],
+) -> tuple[
+    dict[str, PersistentExternalRunner],
+    dict[str, tuple[str, str]],
+    list[dict[str, Any]],
+]:
+    runners: dict[str, PersistentExternalRunner] = {}
+    failures: dict[str, tuple[str, str]] = {}
+    audits: list[dict[str, Any]] = []
+    if "steady-process" not in process_modes:
+        return runners, failures, audits
+    for pin in pins:
+        if pin.adapter != "external-command":
+            continue
+        try:
+            runners[pin.id] = PersistentExternalRunner.open(pin, cwd=ROOT)
+        except PersistentRunnerUnavailable as error:
+            reason = sanitize_failure(error)
+            failures[pin.id] = ("not-run", reason)
+            audits.append(
+                unavailable_lifecycle_audit(pin, status="not-run", reason=reason)
+            )
+        except (OSError, TypeError, ValueError, PersistentRunnerError) as error:
+            reason = sanitize_failure(error)
+            failures[pin.id] = ("error", reason)
+            audits.append(unavailable_lifecycle_audit(pin, status="error", reason=reason))
+    return runners, failures, audits
+
+
+def _run_once_with_persistent_lifecycle(
+    pin: ComparatorPin,
+    request: AdapterRequest,
+    *,
+    runners: Mapping[str, PersistentExternalRunner],
+    failures: Mapping[str, tuple[str, str]],
+) -> dict[str, Any]:
+    if request.process_mode != "steady-process" or pin.adapter != "external-command":
+        return _run_once(pin, request)
+    runner = runners.get(pin.id)
+    if runner is not None:
+        return runner.run(request)
+    status, reason = failures.get(
+        pin.id,
+        ("error", "persistent external lifecycle was not prepared"),
+    )
+    return adapter_status_result(pin, request, status, reason)
+
+
+def _close_persistent_lifecycles(
+    runners: Mapping[str, PersistentExternalRunner],
+) -> list[dict[str, Any]]:
+    return [runners[lane].close() for lane in sorted(runners)]
+
+
+def _apply_persistent_lifecycle_failures(
+    rows: Sequence[dict[str, Any]],
+    audits: Sequence[Mapping[str, Any]],
+) -> None:
+    failures = {
+        cast(str, audit["lane"]): sanitize_failure(audit.get("reason"))
+        for audit in audits
+        if audit.get("status") == "error"
+    }
+    for row in rows:
+        lane = cast(str, row.get("lane"))
+        if row.get("process_mode") != "steady-process" or lane not in failures:
+            continue
+        row["status"] = "error"
+        row["reason"] = f"persistent lifecycle audit failed: {failures[lane]}"
+        row["contract"] = None
 
 
 def _paired_implementation_order(
@@ -505,13 +608,19 @@ def _validate_fresh_core_result(
         ("artifact", pin.artifact),
         ("features", list(pin.features)),
         ("allocator", pin.allocator),
-        ("thread_ceiling", pin.thread_ceiling),
         ("runner_revision", pin.runner_revision),
         ("runner_sha256", pin.runner_sha256),
     )
     for name, expected_value in expected_artifact:
         if artifact.get(name) != expected_value:
             raise ValueError(f"fresh-process artifact {name} differs from expected pin")
+    observed_thread_ceiling = artifact.get("thread_ceiling")
+    if (
+        isinstance(observed_thread_ceiling, bool)
+        or not isinstance(observed_thread_ceiling, int)
+        or observed_thread_ceiling != pin.thread_ceiling
+    ):
+        raise ValueError("fresh-process artifact thread_ceiling differs from expected pin")
     if status != "ok":
         if not isinstance(value.get("reason"), str) or not value.get("reason"):
             raise ValueError("non-success fresh-process result requires a reason")

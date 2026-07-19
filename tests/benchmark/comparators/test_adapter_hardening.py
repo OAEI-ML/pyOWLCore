@@ -149,7 +149,7 @@ def test_external_steady_mode_is_not_mislabeled_as_a_fresh_subprocess(
     result = run_external_adapter(pin, request)
 
     assert result["status"] == "not-run"
-    assert "persistent external worker" in result["reason"]
+    assert "audited persistent lifecycle" in result["reason"]
 
 
 def test_failure_diagnostics_are_redacted_flattened_and_bounded() -> None:

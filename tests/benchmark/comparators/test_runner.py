@@ -146,16 +146,31 @@ def test_partial_mode_never_masks_a_selected_lane_execution_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    original_run_once = runner_module._run_once
+    original_run_once = runner_module._run_once_with_persistent_lifecycle
 
-    def inject_error(pin: Any, request: Any) -> dict[str, Any]:
-        result = original_run_once(pin, request)
+    def inject_error(
+        pin: Any,
+        request: Any,
+        *,
+        runners: Any,
+        failures: Any,
+    ) -> dict[str, Any]:
+        result = original_run_once(
+            pin,
+            request,
+            runners=runners,
+            failures=failures,
+        )
         if pin.id == "horned-owl-common":
             result["status"] = "error"
             result["reason"] = "hostile runner fixture"
         return result
 
-    monkeypatch.setattr(runner_module, "_run_once", inject_error)
+    monkeypatch.setattr(
+        runner_module,
+        "_run_once_with_persistent_lifecycle",
+        inject_error,
+    )
     report = run_comparator_baseline(
         corpus_ids=("generated-tiny-functional",),
         comparator_ids=("pyowl-python-common", "horned-owl-common"),
@@ -185,22 +200,37 @@ def test_partial_mode_never_masks_a_selected_lane_execution_error(
 def test_paired_schedule_is_reproducible_and_balances_warmups_and_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original_run_once = runner_module._run_once
+    original_run_once = runner_module._run_once_with_persistent_lifecycle
 
     def execute() -> tuple[list[str], int, dict[str, Any]]:
         invocations: list[str] = []
         cleanup_count = 0
 
-        def record_run(pin: Any, request: Any) -> dict[str, Any]:
+        def record_run(
+            pin: Any,
+            request: Any,
+            *,
+            runners: Any,
+            failures: Any,
+        ) -> dict[str, Any]:
             invocations.append(cast(str, pin.id))
-            return original_run_once(pin, request)
+            return original_run_once(
+                pin,
+                request,
+                runners=runners,
+                failures=failures,
+            )
 
         def record_cleanup() -> None:
             nonlocal cleanup_count
             cleanup_count += 1
 
         with monkeypatch.context() as context:
-            context.setattr(runner_module, "_run_once", record_run)
+            context.setattr(
+                runner_module,
+                "_run_once_with_persistent_lifecycle",
+                record_run,
+            )
             context.setattr(runner_module, "_cleanup_barrier", record_cleanup)
             report = run_comparator_baseline(
                 corpus_ids=("generated-tiny-functional",),

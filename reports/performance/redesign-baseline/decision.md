@@ -216,8 +216,10 @@ The following are recorded as **not-run**, not passes:
 - external runners: direct retained Rust, raw Horned, common-contract Horned,
   py-horned, and OWLAPI each have a separate runner pin; every runner pin is
   `pending` without a runner artifact hash, so all five lanes are non-runnable;
-- external steady-process execution: no audited persistent runner lifecycle,
-  equal warm-up, or cleanup barrier is implemented;
+- external steady-process evidence: the authenticated, framed, bounded
+  one-process-per-lane lifecycle, equal warm-ups, and cleanup barriers are
+  implemented and contract-tested, but no completed external runner pin exists
+  with which to execute it;
 - installed retained-native-wheel/bulk lane: the scaffold refuses a
   source-tree/native build and no isolated delivered-wheel run is recorded;
 - Horned engine inputs: raw and common-contract lanes share the exact
@@ -227,10 +229,11 @@ The following are recorded as **not-run**, not passes:
   JDK/GC/heap policy are recorded, but their external runner artifacts remain
   pending;
 - file-lane approved evidence and paired randomized blocks: the core file
-  boundary is implemented and contract-tested, but external/reference-machine
-  file samples and paired ordering are not recorded;
-- comparative ratios: executable paired ratio gates are not configured or
-  passing;
+  boundary and paired scheduler are implemented and contract-tested, but
+  external/reference-machine file samples and approved paired results are not
+  recorded;
+- comparative ratios: executable paired ratio gates are configured but cannot
+  pass without the pending representative samples;
 - fresh/steady NCIT, DOID, medium/list-heavy, and required large RDF/XML
   redesign samples: no approved reference-machine run is recorded;
 - retained allocation/copy/RSS counters and full redesign phase profiles: the
