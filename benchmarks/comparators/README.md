@@ -6,10 +6,13 @@ reference-machine key, and phase boundary used by the redesign scaffold. It
 deliberately distinguishes raw `horned-model-ready` from gating
 `common-contract-ready`.
 
-The current checked-in evidence is only a tiny Functional Syntax smoke of the
-core Python common-contract adapter in fresh- and steady-process resident-byte
-modes. It validates orchestration and output-fence mechanics; it is not a
-representative comparator baseline or retained-native result.
+The current checked-in evidence is a historical tiny Functional Syntax smoke of
+the core Python common-contract adapter in fresh- and steady-process
+resident-byte modes. It predates the paired scheduler and executable ratio-gate
+output described below, so its `paired_randomization_implemented = false` and
+unconfigured-gate fields remain accurate for that artifact. It validates only
+the orchestration and output-fence mechanics available when it was captured; it
+is not a representative comparator baseline or retained-native result.
 
 Validate the ledger without installing or invoking any comparator:
 
@@ -24,6 +27,7 @@ PYTHONPATH=src:. python -m tools.benchmark.comparators.runner \
   --corpus generated-tiny-functional \
   --lane pyowl-python-common \
   --process-mode steady-process \
+  --seed 0 \
   --repetitions 5 \
   --allow-partial \
   --output reports/performance/redesign-baseline/shared-host-python.json
@@ -61,14 +65,43 @@ publish a bounded integer `raw_inventory` whose SHA-256 is recomputed from the
 canonical v1 scalar preimage, and are never eligible as an equivalence
 denominator.
 
+The runner accepts an exact unsigned 64-bit `--seed` and records it with the
+schedule and every measured raw sample. Each measured repetition is one paired
+block; implementation order is shuffled independently in every scenario/block
+by a stable SHA-256 rank derived from that seed. Steady-process warm-ups use the
+same paired scheduling, every selected implementation receives the same warm-up
+count, and an equal out-of-timer cleanup barrier follows every invocation.
+
+The ratio evaluator is executable and fixed to the normative minimum gates. It
+uses only resident-byte fresh- and steady-process pairs, computes per-corpus
+median native/comparator ratios, and aggregates the required non-synthetic
+medium/large set by geometric mean under stratified paired bootstrap resampling.
+Bootstrap indexes come from the reported v1 SHA-256 counter stream with
+rejection sampling, not a runtime-dependent standard-library PRNG. Fresh-process
+wall gates use startup-to-ready measurements: `metrics.startup_to_ready_ns` for
+the isolated native-wheel worker and `transport_metrics.parent_wall_ns` for
+external runners. Steady-process wall gates use call-to-ready `metrics.wall_ns`;
+the separately specified installed-wheel/direct overhead remains call-to-ready
+in both modes.
+The upper endpoint of the 95% interval must be `<= 1.10` for wall time and
+`<= 1.15` for incremental peak RSS; every required large-corpus median must be
+`<= 1.25`. Direct Rust is paired only with Horned common readiness, the installed
+wheel only with py-horned common readiness, and installed-wheel median
+call-to-ready overhead over direct Rust must be `<= 1.15`. Raw
+`horned-model-ready` is hard-excluded from equivalence denominators. Missing,
+invalid, nonpositive, unpaired, contract-mismatched, or unavailable evidence
+leaves the gate configured but failed with scenario-specific reasons.
+
 The shared Darwin entry remains explicitly `pending`; release evidence must use
 an approved versioned machine. Resident-byte and file lanes are implemented:
 file inputs are hash-checked and prepared before timing, use the same stable
 source-bound document IRI as resident bytes, and include the implementation's
-file open/read in the timer. Persistent external steady-process runners, paired
-randomized block ordering, representative medium/large RDF/XML corpora,
-executable ratio gates, native retention/copy counters, and phase profiles
-remain open and must continue to be reported as unsupported or `not-run`.
+file open/read in the timer. Persistent external steady-process runners,
+representative medium/large approved-machine samples, native retention/copy
+counters, and phase profiles remain open and must continue to be reported as
+unsupported or `not-run`. Because all external runner pins are still pending,
+the configured ratio gates currently fail closed; no performance threshold has
+passed merely because its evaluator now exists.
 
 `dependency-audit-shared-host.json` binds passing alias-aware source,
 payload-manifest, and packaged-Python scans plus reproducible SHA-bound sdist and

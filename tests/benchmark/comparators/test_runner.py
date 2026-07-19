@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -9,7 +10,9 @@ import pytest
 
 import tools.benchmark.comparators.runner as runner_module
 from tools.benchmark.comparators.manifest import DEFAULT_COMPARATOR_MANIFEST, ROOT
+from tools.benchmark.comparators.ratio_statistics import MAX_U64
 from tools.benchmark.comparators.runner import (
+    ComparatorRunError,
     main,
     run_comparator_baseline,
 )
@@ -42,16 +45,20 @@ def test_python_reference_reports_separate_fresh_and_steady_raw_samples() -> Non
     assert completion["selected_representative_corpora"] == {
         "medium": [],
         "large": [],
+        "large_biomedical_rdfxml": [],
         "annotation_list_heavy": [],
     }
     assert completion["file_lane_implemented"] is True
-    assert completion["paired_randomization_implemented"] is False
-    assert completion["ratio_gates"] == {
-        "configured": False,
-        "passed": False,
-        "reason": "no executable ratio-gate configuration is wired into this runner",
-    }
-    assert "not implemented" in report["methodology"]["comparison_order"]
+    assert completion["paired_randomization_implemented"] is True
+    assert completion["ratio_gates"]["configured"] is True
+    assert completion["ratio_gates"]["passed"] is False
+    assert report["methodology"]["schedule"]["seed"] == 0
+    assert "seeded" in report["methodology"]["comparison_order"]
+    sample = rows[0]["samples"][0]
+    assert sample["schedule_seed"] == 0
+    assert sample["paired_block"] == 0
+    assert sample["implementation_order"] == 0
+    assert sample["paired_block_size"] == 1
 
 
 def test_python_file_lane_is_timed_and_semantically_matches_resident_bytes() -> None:
@@ -175,6 +182,86 @@ def test_partial_mode_never_masks_a_selected_lane_execution_error(
     assert main(("--allow-partial", "--output", str(tmp_path / "report.json"))) == 1
 
 
+def test_paired_schedule_is_reproducible_and_balances_warmups_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_run_once = runner_module._run_once
+
+    def execute() -> tuple[list[str], int, dict[str, Any]]:
+        invocations: list[str] = []
+        cleanup_count = 0
+
+        def record_run(pin: Any, request: Any) -> dict[str, Any]:
+            invocations.append(cast(str, pin.id))
+            return original_run_once(pin, request)
+
+        def record_cleanup() -> None:
+            nonlocal cleanup_count
+            cleanup_count += 1
+
+        with monkeypatch.context() as context:
+            context.setattr(runner_module, "_run_once", record_run)
+            context.setattr(runner_module, "_cleanup_barrier", record_cleanup)
+            report = run_comparator_baseline(
+                corpus_ids=("generated-tiny-functional",),
+                comparator_ids=("pyowl-python-common", "horned-owl-common"),
+                process_modes=("steady-process",),
+                input_modes=("resident-bytes",),
+                warmups=2,
+                repetitions=3,
+                seed=123456789,
+            )
+        return invocations, cleanup_count, report
+
+    first_invocations, first_cleanup_count, first_report = execute()
+    second_invocations, second_cleanup_count, second_report = execute()
+
+    assert first_invocations == second_invocations
+    assert first_cleanup_count == second_cleanup_count == 10
+    assert first_invocations.count("pyowl-python-common") == 5
+    assert first_invocations.count("horned-owl-common") == 5
+    assert _measured_schedule(first_report) == _measured_schedule(second_report)
+    for row in cast(list[dict[str, Any]], second_report["lanes"]):
+        assert [sample["paired_block"] for sample in row["samples"]] == [0, 1, 2]
+        assert all(sample["schedule_seed"] == 123456789 for sample in row["samples"])
+
+
+@pytest.mark.parametrize("seed", [-1, MAX_U64 + 1, True, 1.0])
+def test_runner_api_rejects_non_u64_seed(seed: object) -> None:
+    with pytest.raises(ComparatorRunError, match="seed"):
+        run_comparator_baseline(warmups=0, repetitions=1, seed=cast(Any, seed))
+
+
+@pytest.mark.parametrize("seed", ["-1", str(MAX_U64 + 1), "+1", "1.0", "true"])
+def test_cli_rejects_seed_outside_exact_unsigned_decimal_domain(seed: str) -> None:
+    with pytest.raises(SystemExit) as raised:
+        main(("--seed", seed, "--allow-partial"))
+    assert raised.value.code == 2
+
+
+def test_cli_records_maximum_u64_seed(tmp_path: Path) -> None:
+    output = tmp_path / "seed.json"
+    assert (
+        main(
+            (
+                "--seed",
+                str(MAX_U64),
+                "--warmups",
+                "0",
+                "--repetitions",
+                "1",
+                "--allow-partial",
+                "--output",
+                str(output),
+            )
+        )
+        == 0
+    )
+    report = cast(dict[str, Any], json.loads(output.read_text(encoding="utf-8")))
+    assert report["methodology"]["schedule"]["seed"] == MAX_U64
+    assert report["lanes"][0]["samples"][0]["schedule_seed"] == MAX_U64
+
+
 def test_committed_shared_host_smoke_matches_current_manifests() -> None:
     evidence_path = (
         ROOT / "reports" / "performance" / "redesign-baseline" / "shared-host-smoke.json"
@@ -219,3 +306,20 @@ def test_committed_shared_host_smoke_matches_current_manifests() -> None:
     assert completion["passed"] is False
     assert completion["file_lane_implemented"] is False
     assert completion["paired_randomization_implemented"] is False
+
+
+def _measured_schedule(report: Mapping[str, Any]) -> tuple[tuple[str, ...], ...]:
+    rows = cast(Sequence[Mapping[str, Any]], report["lanes"])
+    by_block: dict[int, list[tuple[int, str]]] = {}
+    for row in rows:
+        for sample in cast(Sequence[Mapping[str, Any]], row["samples"]):
+            by_block.setdefault(cast(int, sample["paired_block"]), []).append(
+                (
+                    cast(int, sample["implementation_order"]),
+                    cast(str, row["lane"]),
+                )
+            )
+    return tuple(
+        tuple(lane for _, lane in sorted(by_block[block_index]))
+        for block_index in sorted(by_block)
+    )

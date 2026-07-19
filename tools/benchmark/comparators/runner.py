@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import sys
@@ -43,13 +44,32 @@ from .manifest import (
     ComparatorPin,
     load_comparator_manifest,
 )
+from .ratio_statistics import (
+    DEFAULT_BOOTSTRAP_RESAMPLES,
+    MAX_U64,
+    RatioStatisticsError,
+    paired_bootstrap_ratio_summary,
+)
 
 REPORT_SCHEMA = "pyowl-core/comparator-baseline/v1"
 SOURCE_IDENTITY_SCHEMA = "pyowl-core/comparator-runtime-source/v1"
 SOURCE_IDENTITY_DOMAIN = b"pyowl-core:comparator-runtime-source:v1\x00"
+PAIRED_SCHEDULE_SCHEMA = "pyowl-core/comparator-paired-schedule/v1"
+RATIO_GATES_SCHEMA = "pyowl-core/comparator-ratio-gates/v1"
+DEFAULT_SCHEDULE_SEED = 0
 _REQUIRED_PROCESS_MODES = ("fresh-process", "steady-process")
 _REQUIRED_INPUT_MODES = ("resident-bytes", "file")
 _REQUIRED_CORPUS_TIERS = ("medium", "large")
+_STARTUP_TO_READY_WALL = "startup-to-ready-wall"
+_CALL_TO_READY_WALL = "call-to-ready-wall"
+_INCREMENTAL_PEAK_RSS = "incremental-peak-rss"
+_FRESH_STARTUP_METRIC_SOURCES = {
+    "pyowl-python-common": ("metrics", "startup_to_ready_ns"),
+    "pyowl-native-wheel-common": ("metrics", "startup_to_ready_ns"),
+    "pyowl-direct-rust-common": ("transport_metrics", "parent_wall_ns"),
+    "horned-owl-common": ("transport_metrics", "parent_wall_ns"),
+    "py-horned-common": ("transport_metrics", "parent_wall_ns"),
+}
 _FRESH_CORE_METRICS = (
     "wall_ns",
     "cpu_ns",
@@ -105,11 +125,16 @@ def run_comparator_baseline(
     input_modes: Sequence[str] = ("resident-bytes",),
     warmups: int = 1,
     repetitions: int = 5,
+    seed: int = DEFAULT_SCHEDULE_SEED,
 ) -> dict[str, Any]:
     """Run a correctness-qualified raw-sample baseline without network access."""
 
     if warmups < 0 or repetitions < 1:
         raise ComparatorRunError("warmups must be nonnegative and repetitions positive")
+    try:
+        _require_u64(seed, "seed")
+    except (TypeError, ValueError) as error:
+        raise ComparatorRunError(str(error)) from error
     _require_unique_nonempty(corpus_ids, "corpus_ids")
     _require_unique_nonempty(comparator_ids, "comparator_ids")
     _require_unique_nonempty(process_modes, "process_modes")
@@ -151,12 +176,49 @@ def run_comparator_baseline(
                     input_mode=input_mode,
                     process_mode=process_mode,
                 )
+                samples_by_pin: dict[str, list[dict[str, Any]]] = {
+                    pin.id: [] for pin in pins
+                }
+                if process_mode == "steady-process":
+                    for block_index in range(warmups):
+                        ordered_pins = _paired_implementation_order(
+                            pins,
+                            request=request,
+                            seed=seed,
+                            block_kind="warmup",
+                            block_index=block_index,
+                        )
+                        for pin in ordered_pins:
+                            try:
+                                _run_once(pin, request)
+                            finally:
+                                _cleanup_barrier()
+                for block_index in range(repetitions):
+                    ordered_pins = _paired_implementation_order(
+                        pins,
+                        request=request,
+                        seed=seed,
+                        block_kind="measured",
+                        block_index=block_index,
+                    )
+                    for order_index, pin in enumerate(ordered_pins):
+                        try:
+                            sample = _run_once(pin, request)
+                        finally:
+                            _cleanup_barrier()
+                        samples_by_pin[pin.id].append(
+                            _with_schedule_metadata(
+                                sample,
+                                seed=seed,
+                                block_index=block_index,
+                                order_index=order_index,
+                                block_size=len(ordered_pins),
+                            )
+                        )
                 for pin in pins:
-                    if process_mode == "steady-process":
-                        for _ in range(warmups):
-                            _run_once(pin, request)
-                    samples = [_run_once(pin, request) for _ in range(repetitions)]
-                    rows.append(_aggregate_samples(pin, request, samples))
+                    rows.append(
+                        _aggregate_samples(pin, request, samples_by_pin[pin.id])
+                    )
 
     assertions = _equality_assertions(rows)
     required_lanes = {value.id for value in pins if value.required}
@@ -175,6 +237,12 @@ def run_comparator_baseline(
     ):
         raise ComparatorRunError("runtime source inputs changed during the comparator run")
     machine_evidence = _reference_machine_evidence(comparator_manifest, environment)
+    ratio_gates = _evaluate_ratio_gates(
+        corpora=corpora,
+        rows=rows,
+        repetitions=repetitions,
+        seed=seed,
+    )
     completion = _completion_requirements(
         comparator_manifest=comparator_manifest,
         corpora=corpora,
@@ -183,6 +251,7 @@ def run_comparator_baseline(
         process_modes=process_modes,
         input_modes=input_modes,
         reference_machine_matches=cast(bool, machine_evidence["matches"]),
+        ratio_gates=ratio_gates,
     )
     execution_errors = [
         {
@@ -212,13 +281,23 @@ def run_comparator_baseline(
         "methodology": {
             "warmups": warmups,
             "repetitions": repetitions,
+            "schedule": {
+                "schema": PAIRED_SCHEDULE_SCHEMA,
+                "seed": seed,
+                "seed_type": "unsigned-64-bit integer",
+                "algorithm": "SHA-256 rank per scenario, block kind/index, and lane",
+                "warmup_blocks": warmups,
+                "measured_blocks": repetitions,
+                "warmups_apply_to": ["steady-process"],
+                "cleanup_barrier": "gc.collect after every implementation invocation",
+            },
             "input_modes": list(input_modes),
             "process_modes": list(process_modes),
             "network_during_samples": (
                 "core lanes are offline; external process isolation is not implemented"
             ),
             "comparison_order": (
-                "deterministic caller order; paired randomization is not implemented"
+                "seeded implementation-order shuffle within every paired warmup/measured block"
             ),
             "file_lane_execution": (
                 "pinned bytes are hash-checked and prepared before timing; the timer includes "
@@ -242,6 +321,7 @@ def run_comparator_baseline(
         "execution_errors": execution_errors,
         "contract_valid": assertions_pass and not execution_errors,
         "completion_requirements": completion,
+        "ratio_gates": ratio_gates,
         "comparative_complete": completion["passed"],
         "not_run_required": sorted(required_lanes - completed_required),
     }
@@ -254,6 +334,63 @@ def _run_once(pin: ComparatorPin, request: AdapterRequest) -> dict[str, Any]:
             return _run_fresh_core(pin, request)
         return run_core_adapter(pin, request)
     return run_external_adapter(pin, request)
+
+
+def _paired_implementation_order(
+    pins: Sequence[ComparatorPin],
+    *,
+    request: AdapterRequest,
+    seed: int,
+    block_kind: str,
+    block_index: int,
+) -> tuple[ComparatorPin, ...]:
+    """Return a reproducible seed-derived permutation for one paired block."""
+
+    if block_kind not in {"warmup", "measured"}:
+        raise ValueError("block_kind must be warmup or measured")
+    _require_u64(seed, "seed")
+    _nonnegative_integer(block_index, "block_index")
+    scenario = {
+        "schema": PAIRED_SCHEDULE_SCHEMA,
+        "seed": seed,
+        "corpus_id": request.corpus_id,
+        "input_mode": request.input_mode,
+        "process_mode": request.process_mode,
+        "block_kind": block_kind,
+        "block_index": block_index,
+    }
+    prefix = _canonical_json(scenario) + b"\x00"
+
+    def rank(pin: ComparatorPin) -> tuple[bytes, str]:
+        return hashlib.sha256(prefix + pin.id.encode("utf-8")).digest(), pin.id
+
+    return tuple(sorted(pins, key=rank))
+
+
+def _with_schedule_metadata(
+    sample: Mapping[str, Any],
+    *,
+    seed: int,
+    block_index: int,
+    order_index: int,
+    block_size: int,
+) -> dict[str, Any]:
+    result = dict(sample)
+    result.update(
+        {
+            "schedule_seed": seed,
+            "paired_block": block_index,
+            "implementation_order": order_index,
+            "paired_block_size": block_size,
+        }
+    )
+    return result
+
+
+def _cleanup_barrier() -> None:
+    """Run the equal out-of-timer cleanup barrier between paired invocations."""
+
+    gc.collect()
 
 
 def _run_fresh_core(pin: ComparatorPin, request: AdapterRequest) -> dict[str, Any]:
@@ -548,6 +685,562 @@ def _equality_assertions(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, ob
     return assertions
 
 
+def _evaluate_ratio_gates(
+    *,
+    corpora: Sequence[Corpus],
+    rows: Sequence[Mapping[str, Any]],
+    repetitions: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Evaluate the fixed WP14 minimum ratios from paired resident-byte samples."""
+
+    medium_corpora, large_corpora, annotation_corpora, large_rdfxml_corpora = (
+        _representative_corpus_ids(corpora)
+    )
+    representative_corpora = medium_corpora + large_corpora
+    qualification_reasons: list[dict[str, object]] = []
+    if not medium_corpora:
+        qualification_reasons.append(
+            {"reason": "no non-synthetic representative medium corpus was selected"}
+        )
+    if not large_corpora:
+        qualification_reasons.append(
+            {"reason": "no non-synthetic representative large corpus was selected"}
+        )
+    if not large_rdfxml_corpora:
+        qualification_reasons.append(
+            {"reason": "no representative large biomedical RDF/XML corpus was selected"}
+        )
+    if not annotation_corpora:
+        qualification_reasons.append(
+            {
+                "reason": (
+                    "no annotation/list-heavy representative medium-or-larger corpus "
+                    "was selected"
+                )
+            }
+        )
+
+    rows_by_scenario: dict[tuple[str, str, str, str], list[Mapping[str, Any]]] = {}
+    for row in rows:
+        key = (
+            cast(str, row.get("lane")),
+            cast(str, row.get("corpus_id")),
+            cast(str, row.get("input_mode")),
+            cast(str, row.get("process_mode")),
+        )
+        rows_by_scenario.setdefault(key, []).append(row)
+
+    comparisons: list[dict[str, Any]] = []
+    for comparison_id, numerator_lane, denominator_lane in (
+        (
+            "direct-rust-vs-horned-common",
+            "pyowl-direct-rust-common",
+            "horned-owl-common",
+        ),
+        (
+            "installed-wheel-vs-py-horned-common",
+            "pyowl-native-wheel-common",
+            "py-horned-common",
+        ),
+    ):
+        for process_mode in _REQUIRED_PROCESS_MODES:
+            wall_selector = (
+                _STARTUP_TO_READY_WALL
+                if process_mode == "fresh-process"
+                else _CALL_TO_READY_WALL
+            )
+            metric_results = {
+                "wall": _evaluate_ratio_metric(
+                    rows_by_scenario=rows_by_scenario,
+                    corpus_ids=representative_corpora,
+                    large_corpus_ids=large_corpora,
+                    numerator_lane=numerator_lane,
+                    denominator_lane=denominator_lane,
+                    process_mode=process_mode,
+                    metric_selector=wall_selector,
+                    repetitions=repetitions,
+                    schedule_seed=seed,
+                    bootstrap_seed=_derived_statistics_seed(
+                        seed, f"{comparison_id}/{process_mode}/{wall_selector}"
+                    ),
+                    aggregate_threshold=1.10,
+                    large_corpus_threshold=1.25,
+                    gate_on_upper_bound=True,
+                ),
+                "rss": _evaluate_ratio_metric(
+                    rows_by_scenario=rows_by_scenario,
+                    corpus_ids=representative_corpora,
+                    large_corpus_ids=large_corpora,
+                    numerator_lane=numerator_lane,
+                    denominator_lane=denominator_lane,
+                    process_mode=process_mode,
+                    metric_selector=_INCREMENTAL_PEAK_RSS,
+                    repetitions=repetitions,
+                    schedule_seed=seed,
+                    bootstrap_seed=_derived_statistics_seed(
+                        seed, f"{comparison_id}/{process_mode}/rss_peak_increment_bytes"
+                    ),
+                    aggregate_threshold=1.15,
+                    large_corpus_threshold=1.25,
+                    gate_on_upper_bound=True,
+                ),
+            }
+            comparisons.append(
+                {
+                    "id": f"{comparison_id}/{process_mode}/resident-bytes",
+                    "numerator_lane": numerator_lane,
+                    "denominator_lane": denominator_lane,
+                    "boundary": COMMON_BOUNDARY,
+                    "input_mode": "resident-bytes",
+                    "process_mode": process_mode,
+                    "passed": all(value["passed"] is True for value in metric_results.values()),
+                    "metrics": metric_results,
+                }
+            )
+
+    overhead: list[dict[str, Any]] = []
+    for process_mode in _REQUIRED_PROCESS_MODES:
+        result = _evaluate_ratio_metric(
+            rows_by_scenario=rows_by_scenario,
+            corpus_ids=representative_corpora,
+            large_corpus_ids=(),
+            numerator_lane="pyowl-native-wheel-common",
+            denominator_lane="pyowl-direct-rust-common",
+            process_mode=process_mode,
+            metric_selector=_CALL_TO_READY_WALL,
+            repetitions=repetitions,
+            schedule_seed=seed,
+            bootstrap_seed=_derived_statistics_seed(
+                seed,
+                f"installed-wheel-vs-direct-rust/{process_mode}/{_CALL_TO_READY_WALL}",
+            ),
+            aggregate_threshold=1.15,
+            large_corpus_threshold=None,
+            gate_on_upper_bound=False,
+        )
+        overhead.append(
+            {
+                "id": f"installed-wheel-call-overhead/{process_mode}/resident-bytes",
+                "numerator_lane": "pyowl-native-wheel-common",
+                "denominator_lane": "pyowl-direct-rust-common",
+                "metric": "call-to-ready wall_ns",
+                "input_mode": "resident-bytes",
+                "process_mode": process_mode,
+                "passed": result["passed"],
+                "result": result,
+            }
+        )
+
+    reasons = list(qualification_reasons)
+    for comparison in comparisons:
+        comparison_id = cast(str, comparison["id"])
+        metrics = cast(Mapping[str, Mapping[str, Any]], comparison["metrics"])
+        for metric_label, metric_result in metrics.items():
+            for reason in cast(Sequence[Mapping[str, object]], metric_result["reasons"]):
+                reasons.append(
+                    {"comparison": comparison_id, "metric": metric_label, **reason}
+                )
+    for comparison in overhead:
+        overhead_result = cast(Mapping[str, Any], comparison["result"])
+        for reason in cast(Sequence[Mapping[str, object]], overhead_result["reasons"]):
+            reasons.append(
+                {
+                    "comparison": comparison["id"],
+                    "metric": "call-to-ready wall_ns",
+                    **reason,
+                }
+            )
+
+    passed = (
+        not qualification_reasons
+        and all(value["passed"] is True for value in comparisons)
+        and all(value["passed"] is True for value in overhead)
+    )
+    return {
+        "schema": RATIO_GATES_SCHEMA,
+        "configured": True,
+        "passed": passed,
+        "ratio_direction": "pyowl-core native / comparator",
+        "required_corpora": {
+            "medium": list(medium_corpora),
+            "large": list(large_corpora),
+            "large_biomedical_rdfxml": list(large_rdfxml_corpora),
+            "annotation_list_heavy": list(annotation_corpora),
+        },
+        "required_input_mode": "resident-bytes",
+        "required_process_modes": list(_REQUIRED_PROCESS_MODES),
+        "raw_horned_equivalence_denominator_allowed": False,
+        "excluded_equivalence_denominator_lanes": ["horned-owl-raw"],
+        "comparisons": comparisons,
+        "installed_wheel_call_to_ready_overhead": overhead,
+        "reasons": reasons,
+    }
+
+
+def _evaluate_ratio_metric(
+    *,
+    rows_by_scenario: Mapping[
+        tuple[str, str, str, str], Sequence[Mapping[str, Any]]
+    ],
+    corpus_ids: Sequence[str],
+    large_corpus_ids: Sequence[str],
+    numerator_lane: str,
+    denominator_lane: str,
+    process_mode: str,
+    metric_selector: str,
+    repetitions: int,
+    schedule_seed: int,
+    bootstrap_seed: int,
+    aggregate_threshold: float,
+    large_corpus_threshold: float | None,
+    gate_on_upper_bound: bool,
+) -> dict[str, Any]:
+    pairs_by_corpus, reasons = _paired_metric_samples(
+        rows_by_scenario=rows_by_scenario,
+        corpus_ids=corpus_ids,
+        numerator_lane=numerator_lane,
+        denominator_lane=denominator_lane,
+        process_mode=process_mode,
+        metric_selector=metric_selector,
+        repetitions=repetitions,
+        schedule_seed=schedule_seed,
+    )
+    summary: dict[str, object] | None = None
+    if not reasons:
+        try:
+            summary = paired_bootstrap_ratio_summary(
+                pairs_by_corpus,
+                seed=bootstrap_seed,
+                resamples=DEFAULT_BOOTSTRAP_RESAMPLES,
+            )
+        except RatioStatisticsError as error:
+            reasons.append({"reason": str(error)})
+
+    aggregate_value: float | None = None
+    aggregate_passed = False
+    guardrails: list[dict[str, object]] = []
+    if summary is not None:
+        aggregate = cast(Mapping[str, float], summary["aggregate"])
+        statistic_name = "upper_confidence_bound" if gate_on_upper_bound else "estimate"
+        aggregate_value = aggregate[statistic_name]
+        aggregate_passed = aggregate_value <= aggregate_threshold
+        by_corpus = {
+            cast(str, value["corpus_id"]): cast(float, value["median_ratio"])
+            for value in cast(Sequence[Mapping[str, object]], summary["corpora"])
+        }
+        if large_corpus_threshold is not None:
+            for corpus_id in large_corpus_ids:
+                median_ratio = by_corpus[corpus_id]
+                guardrails.append(
+                    {
+                        "corpus_id": corpus_id,
+                        "median_ratio": median_ratio,
+                        "threshold": large_corpus_threshold,
+                        "passed": median_ratio <= large_corpus_threshold,
+                    }
+                )
+    guardrails_passed = all(value["passed"] is True for value in guardrails)
+    passed = not reasons and aggregate_passed and guardrails_passed
+    return {
+        "metric": _metric_output_label(metric_selector),
+        "metric_selector": metric_selector,
+        "sample_sources": {
+            "numerator": _metric_source_path(metric_selector, numerator_lane),
+            "denominator": _metric_source_path(metric_selector, denominator_lane),
+        },
+        "passed": passed,
+        "gate_statistic": (
+            "aggregate upper endpoint of two-sided 95% paired-bootstrap interval"
+            if gate_on_upper_bound
+            else "aggregate median-ratio estimate"
+        ),
+        "aggregate_threshold": aggregate_threshold,
+        "aggregate_value": aggregate_value,
+        "aggregate_passed": aggregate_passed,
+        "large_corpus_threshold": large_corpus_threshold,
+        "large_corpus_guardrails": guardrails,
+        "large_corpus_guardrails_passed": guardrails_passed,
+        "statistics": summary,
+        "reasons": reasons,
+    }
+
+
+def _paired_metric_samples(
+    *,
+    rows_by_scenario: Mapping[
+        tuple[str, str, str, str], Sequence[Mapping[str, Any]]
+    ],
+    corpus_ids: Sequence[str],
+    numerator_lane: str,
+    denominator_lane: str,
+    process_mode: str,
+    metric_selector: str,
+    repetitions: int,
+    schedule_seed: int,
+) -> tuple[dict[str, tuple[tuple[int, int], ...]], list[dict[str, object]]]:
+    pairs_by_corpus: dict[str, tuple[tuple[int, int], ...]] = {}
+    reasons: list[dict[str, object]] = []
+    if not corpus_ids:
+        return {}, [{"reason": "required representative corpus set is empty"}]
+    for corpus_id in corpus_ids:
+        scenario = {
+            "corpus_id": corpus_id,
+            "input_mode": "resident-bytes",
+            "process_mode": process_mode,
+        }
+        numerator_rows = rows_by_scenario.get(
+            (numerator_lane, corpus_id, "resident-bytes", process_mode), ()
+        )
+        denominator_rows = rows_by_scenario.get(
+            (denominator_lane, corpus_id, "resident-bytes", process_mode), ()
+        )
+        if len(numerator_rows) != 1:
+            reasons.append(
+                {
+                    **scenario,
+                    "lane": numerator_lane,
+                    "reason": (
+                        "required scenario row is missing"
+                        if not numerator_rows
+                        else "required scenario row is duplicated"
+                    ),
+                }
+            )
+            continue
+        if len(denominator_rows) != 1:
+            reasons.append(
+                {
+                    **scenario,
+                    "lane": denominator_lane,
+                    "reason": (
+                        "required scenario row is missing"
+                        if not denominator_rows
+                        else "required scenario row is duplicated"
+                    ),
+                }
+            )
+            continue
+        numerator_row = numerator_rows[0]
+        denominator_row = denominator_rows[0]
+        row_reason = _ratio_row_reason(numerator_row, numerator_lane)
+        if row_reason is not None:
+            reasons.append({**scenario, "lane": numerator_lane, "reason": row_reason})
+            continue
+        row_reason = _ratio_row_reason(denominator_row, denominator_lane)
+        if row_reason is not None:
+            reasons.append({**scenario, "lane": denominator_lane, "reason": row_reason})
+            continue
+        try:
+            numerator_contract = cast(Mapping[str, Any], numerator_row["contract"])
+            denominator_contract = cast(Mapping[str, Any], denominator_row["contract"])
+            if common_contract_equality_key(
+                numerator_contract
+            ) != common_contract_equality_key(denominator_contract):
+                reasons.append(
+                    {
+                        **scenario,
+                        "reason": "numerator and denominator common contracts differ",
+                    }
+                )
+                continue
+        except (KeyError, TypeError, ValueError):
+            reasons.append(
+                {**scenario, "reason": "common-contract equality evidence is invalid"}
+            )
+            continue
+        numerator_samples, numerator_reason = _samples_by_paired_block(
+            numerator_row,
+            lane=numerator_lane,
+            metric_selector=metric_selector,
+            repetitions=repetitions,
+            schedule_seed=schedule_seed,
+        )
+        denominator_samples, denominator_reason = _samples_by_paired_block(
+            denominator_row,
+            lane=denominator_lane,
+            metric_selector=metric_selector,
+            repetitions=repetitions,
+            schedule_seed=schedule_seed,
+        )
+        if numerator_reason is not None:
+            reasons.append({**scenario, "lane": numerator_lane, "reason": numerator_reason})
+            continue
+        if denominator_reason is not None:
+            reasons.append(
+                {**scenario, "lane": denominator_lane, "reason": denominator_reason}
+            )
+            continue
+        pairs: list[tuple[int, int]] = []
+        pairing_invalid = False
+        for block_index in range(repetitions):
+            numerator_sample = numerator_samples[block_index]
+            denominator_sample = denominator_samples[block_index]
+            if (
+                numerator_sample["paired_block_size"]
+                != denominator_sample["paired_block_size"]
+                or numerator_sample["implementation_order"]
+                == denominator_sample["implementation_order"]
+            ):
+                reasons.append(
+                    {
+                        **scenario,
+                        "paired_block": block_index,
+                        "reason": "paired block has inconsistent or duplicate implementation order",
+                    }
+                )
+                pairing_invalid = True
+                break
+            pairs.append(
+                (numerator_sample["metric_value"], denominator_sample["metric_value"])
+            )
+        if not pairing_invalid:
+            pairs_by_corpus[corpus_id] = tuple(pairs)
+    return pairs_by_corpus, reasons
+
+
+def _ratio_row_reason(row: Mapping[str, Any], lane: str) -> str | None:
+    if lane == "horned-owl-raw" or row.get("boundary") != COMMON_BOUNDARY:
+        return "raw/asymmetric readiness is forbidden as an equivalence denominator"
+    if row.get("status") != "ok":
+        reason = sanitize_failure(row.get("reason"))
+        return f"scenario status is {row.get('status')}: {reason}"
+    if not isinstance(row.get("contract"), Mapping):
+        return "successful common-ready row lacks its equality contract"
+    return None
+
+
+def _samples_by_paired_block(
+    row: Mapping[str, Any],
+    *,
+    lane: str,
+    metric_selector: str,
+    repetitions: int,
+    schedule_seed: int,
+) -> tuple[dict[int, dict[str, int]], str | None]:
+    samples = row.get("samples")
+    if not isinstance(samples, list) or len(samples) != repetitions:
+        return {}, f"{lane}: expected exactly {repetitions} measured raw samples"
+    by_block: dict[int, dict[str, int]] = {}
+    for sample_index, sample in enumerate(samples):
+        if not isinstance(sample, Mapping):
+            return {}, f"{lane}: raw sample {sample_index} is not an object"
+        try:
+            observed_seed = _require_u64(sample.get("schedule_seed"), "schedule_seed")
+            block_index = _nonnegative_integer(sample.get("paired_block"), "paired_block")
+            order_index = _nonnegative_integer(
+                sample.get("implementation_order"), "implementation_order"
+            )
+            block_size = _nonnegative_integer(
+                sample.get("paired_block_size"), "paired_block_size"
+            )
+        except (TypeError, ValueError) as error:
+            return {}, f"{lane}: raw sample {sample_index} schedule is invalid: {error}"
+        if observed_seed != schedule_seed:
+            return {}, f"{lane}: raw sample {sample_index} uses a different schedule seed"
+        if block_index >= repetitions or block_size < 1 or order_index >= block_size:
+            return {}, f"{lane}: raw sample {sample_index} schedule is out of range"
+        if block_index in by_block:
+            return {}, f"{lane}: paired block {block_index} is duplicated"
+        try:
+            metric_value = _selected_metric_value(
+                sample,
+                lane=lane,
+                metric_selector=metric_selector,
+            )
+        except (TypeError, ValueError) as error:
+            return {}, f"{lane}: paired block {block_index} has invalid metric: {error}"
+        by_block[block_index] = {
+            "implementation_order": order_index,
+            "paired_block_size": block_size,
+            "metric_value": metric_value,
+        }
+    if set(by_block) != set(range(repetitions)):
+        return {}, f"{lane}: paired block coverage is incomplete"
+    return by_block, None
+
+
+def _selected_metric_value(
+    sample: Mapping[str, Any],
+    *,
+    lane: str,
+    metric_selector: str,
+) -> int:
+    container_name, metric_name = _metric_source(metric_selector, lane)
+    container = sample.get(container_name)
+    if not isinstance(container, Mapping):
+        raise TypeError(f"{container_name} must be an object")
+    return _positive_u64_metric(
+        container.get(metric_name),
+        f"{container_name}.{metric_name}",
+    )
+
+
+def _metric_source(metric_selector: str, lane: str) -> tuple[str, str]:
+    if metric_selector == _CALL_TO_READY_WALL:
+        return "metrics", "wall_ns"
+    if metric_selector == _INCREMENTAL_PEAK_RSS:
+        return "metrics", "rss_peak_increment_bytes"
+    if metric_selector == _STARTUP_TO_READY_WALL:
+        try:
+            return _FRESH_STARTUP_METRIC_SOURCES[lane]
+        except KeyError:
+            raise ValueError(
+                f"{lane}: no fresh-process startup-to-ready metric source is defined"
+            ) from None
+    raise ValueError(f"unsupported ratio metric selector: {metric_selector}")
+
+
+def _metric_source_path(metric_selector: str, lane: str) -> str:
+    return ".".join(_metric_source(metric_selector, lane))
+
+
+def _metric_output_label(metric_selector: str) -> str:
+    labels = {
+        _STARTUP_TO_READY_WALL: "startup-to-ready wall_ns",
+        _CALL_TO_READY_WALL: "call-to-ready wall_ns",
+        _INCREMENTAL_PEAK_RSS: "incremental peak RSS bytes",
+    }
+    try:
+        return labels[metric_selector]
+    except KeyError:
+        raise ValueError(f"unsupported ratio metric selector: {metric_selector}") from None
+
+
+def _derived_statistics_seed(seed: int, label: str) -> int:
+    payload = seed.to_bytes(8, "big") + b"\x00" + label.encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
+
+
+def _representative_corpus_ids(
+    corpora: Sequence[Corpus],
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    medium = tuple(
+        value.id
+        for value in corpora
+        if value.tier == "medium" and "synthetic" not in value.families
+    )
+    large = tuple(
+        value.id
+        for value in corpora
+        if value.tier == "large" and "synthetic" not in value.families
+    )
+    representative = set(medium + large)
+    annotation = tuple(
+        value.id
+        for value in corpora
+        if value.id in representative and "annotation-list-heavy" in value.families
+    )
+    large_rdfxml = tuple(
+        value.id
+        for value in corpora
+        if value.id in large
+        and value.format.value == "rdfxml"
+        and "biomedical" in value.families
+    )
+    return medium, large, annotation, large_rdfxml
+
+
 def _completion_requirements(
     *,
     comparator_manifest: ComparatorManifest,
@@ -557,29 +1250,16 @@ def _completion_requirements(
     process_modes: Sequence[str],
     input_modes: Sequence[str],
     reference_machine_matches: bool,
+    ratio_gates: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Evaluate the complete release matrix; partial smoke runs fail closed."""
 
     required_pins = tuple(value for value in comparator_manifest.comparators if value.required)
     required_pin_ids = tuple(value.id for value in required_pins)
-    medium_corpora = tuple(
-        value.id
-        for value in corpora
-        if value.tier == "medium" and "synthetic" not in value.families
-    )
-    large_corpora = tuple(
-        value.id
-        for value in corpora
-        if value.tier == "large"
-        and value.format.value == "rdfxml"
-        and "biomedical" in value.families
+    medium_corpora, large_corpora, annotation_corpora, large_rdfxml_corpora = (
+        _representative_corpus_ids(corpora)
     )
     representative_corpora = medium_corpora + large_corpora
-    annotation_corpora = tuple(
-        value.id
-        for value in corpora
-        if value.id in representative_corpora and "annotation-list-heavy" in value.families
-    )
     rows_by_scenario = {
         (
             cast(str, value.get("lane")),
@@ -657,15 +1337,17 @@ def _completion_requirements(
         comparator_manifest.reference_machine.approval == "approved" and reference_machine_matches
     )
     file_lane_implemented = True
-    paired_randomization_implemented = False
-    ratio_gates_configured = False
-    ratio_gates_passed = False
+    paired_randomization_implemented = True
+    ratio_gates_configured = ratio_gates.get("configured") is True
+    ratio_gates_passed = ratio_gates.get("passed") is True
     all_scenarios_succeeded = bool(representative_corpora) and not failures
 
     reasons: list[str] = []
     if not medium_corpora:
         reasons.append("no non-synthetic representative medium corpus was selected")
     if not large_corpora:
+        reasons.append("no non-synthetic representative large corpus was selected")
+    if not large_rdfxml_corpora:
         reasons.append("no representative large biomedical RDF/XML corpus was selected")
     if not annotation_corpora:
         reasons.append("no annotation/list-heavy medium-or-larger corpus was selected")
@@ -681,15 +1363,16 @@ def _completion_requirements(
         reasons.append("the reference machine is not approved and matched to captured evidence")
     if not file_lane_implemented:
         reasons.append("file-lane execution is not implemented")
-    if not paired_randomization_implemented:
-        reasons.append("paired implementation-order randomization is not implemented")
-    if not ratio_gates_configured or not ratio_gates_passed:
-        reasons.append("executable comparative ratio gates are not configured and passing")
+    if not ratio_gates_configured:
+        reasons.append("executable comparative ratio gates are not configured")
+    elif not ratio_gates_passed:
+        reasons.append("executable comparative ratio gates are configured but did not pass")
 
     passed = all(
         (
             medium_corpora,
             large_corpora,
+            large_rdfxml_corpora,
             annotation_corpora,
             required_modes_requested,
             not missing_required_pins,
@@ -712,6 +1395,7 @@ def _completion_requirements(
         "selected_representative_corpora": {
             "medium": list(medium_corpora),
             "large": list(large_corpora),
+            "large_biomedical_rdfxml": list(large_rdfxml_corpora),
             "annotation_list_heavy": list(annotation_corpora),
         },
         "missing_required_pins": missing_required_pins,
@@ -730,11 +1414,7 @@ def _completion_requirements(
         "reference_machine_matches_environment": reference_machine_matches,
         "file_lane_implemented": file_lane_implemented,
         "paired_randomization_implemented": paired_randomization_implemented,
-        "ratio_gates": {
-            "configured": ratio_gates_configured,
-            "passed": ratio_gates_passed,
-            "reason": "no executable ratio-gate configuration is wired into this runner",
-        },
+        "ratio_gates": ratio_gates,
         "reasons": reasons,
     }
 
@@ -872,6 +1552,17 @@ def _nonnegative_integer(value: object, name: str) -> int:
     return value
 
 
+def _require_u64(value: object, name: str) -> int:
+    return _nonnegative_integer(value, name)
+
+
+def _positive_u64_metric(value: object, name: str) -> int:
+    result = _require_u64(value, name)
+    if result == 0:
+        raise ValueError(f"{name} must be positive for a ratio gate")
+    return result
+
+
 def _is_sha256(value: object) -> bool:
     return (
         isinstance(value, str)
@@ -891,6 +1582,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-mode", action="append", dest="input_modes")
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=5)
+    parser.add_argument(
+        "--seed",
+        type=_parse_cli_u64,
+        default=DEFAULT_SCHEDULE_SEED,
+        help="unsigned 64-bit seed for paired implementation-order scheduling",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--allow-partial",
@@ -901,6 +1598,15 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     return parser
+
+
+def _parse_cli_u64(value: str) -> int:
+    if not value or any(character not in "0123456789" for character in value):
+        raise argparse.ArgumentTypeError("seed must be an unsigned decimal integer")
+    parsed = int(value, 10)
+    if parsed > MAX_U64:
+        raise argparse.ArgumentTypeError("seed must fit unsigned 64-bit range")
+    return parsed
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -924,6 +1630,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         input_modes=tuple(args.input_modes or ("resident-bytes",)),
         warmups=args.warmups,
         repetitions=args.repetitions,
+        seed=args.seed,
     )
     if args.output is None:
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -939,6 +1646,8 @@ if __name__ == "__main__":  # pragma: no cover - CLI entry point
 
 
 __all__ = [
+    "PAIRED_SCHEDULE_SCHEMA",
+    "RATIO_GATES_SCHEMA",
     "REPORT_SCHEMA",
     "SOURCE_IDENTITY_SCHEMA",
     "ComparatorRunError",
