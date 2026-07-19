@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::all)]
 
+mod bindings;
 mod cancel;
 mod canonical;
 mod error;
@@ -34,7 +35,7 @@ use wire::WireArena;
 const ABI_VERSION: u32 = 1;
 const MODEL_SCHEMA_VERSION: u32 = 1;
 const WIRE_FORMAT_VERSION: (u16, u16) = (1, 1);
-const FEATURES: [&str; 10] = [
+const FOUNDATION_FEATURES: [&str; 10] = [
     "cancellation",
     "canonical-model-v1",
     "deadlines",
@@ -494,10 +495,24 @@ fn build_index<'py>(
 
 #[pymodule]
 fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    let binding_features = bindings::register(py, module)?;
+    let mut features = Vec::from(FOUNDATION_FEATURES);
+    features.extend(binding_features.combined()?);
+    features.sort_unstable();
+    if features.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "native foundation and binding feature ledgers overlap",
+        ));
+    }
     module.add("ABI_VERSION", ABI_VERSION)?;
     module.add("MODEL_SCHEMA_VERSION", MODEL_SCHEMA_VERSION)?;
     module.add("WIRE_FORMAT_VERSION", WIRE_FORMAT_VERSION)?;
-    module.add("FEATURES", PyTuple::new(py, FEATURES)?)?;
+    module.add("FEATURES", PyTuple::new(py, &features)?)?;
+    module.add(
+        "INGESTION_FEATURES",
+        PyTuple::new(py, binding_features.ingestion)?,
+    )?;
+    module.add("VIEW_FEATURES", PyTuple::new(py, binding_features.views)?)?;
     module.add("_NativeError", py.get_type::<_NativeError>())?;
     module.add_class::<Cancellation>()?;
     publication::register_native_handle_types(py, module)?;
@@ -530,9 +545,9 @@ mod tests {
 
     #[test]
     fn feature_ledger_is_sorted_and_foundational() {
-        assert!(FEATURES.windows(2).all(|pair| pair[0] < pair[1]));
-        assert!(FEATURES.contains(&"wire-v1"));
-        assert!(FEATURES.contains(&"parse-functional-v1"));
-        assert!(FEATURES.contains(&"index-axiom-types-v1"));
+        assert!(FOUNDATION_FEATURES.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(FOUNDATION_FEATURES.contains(&"wire-v1"));
+        assert!(FOUNDATION_FEATURES.contains(&"parse-functional-v1"));
+        assert!(FOUNDATION_FEATURES.contains(&"index-axiom-types-v1"));
     }
 }

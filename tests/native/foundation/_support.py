@@ -23,6 +23,8 @@ class NativeTestExtension(Protocol):
     MODEL_SCHEMA_VERSION: int
     WIRE_FORMAT_VERSION: tuple[int, int]
     FEATURES: tuple[str, ...]
+    INGESTION_FEATURES: tuple[str, ...]
+    VIEW_FEATURES: tuple[str, ...]
     _NativeError: type[Exception]
     _Cancellation: Callable[[float | None], NativeTestCancellation]
 

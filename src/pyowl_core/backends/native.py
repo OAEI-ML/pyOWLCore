@@ -63,6 +63,10 @@ _FOUNDATION_FEATURES = frozenset(
         "wire-v1",
     }
 )
+_FOUNDATION_FEATURE_LEDGER = _FOUNDATION_FEATURES | {
+    "index-axiom-types-v1",
+    "parse-functional-v1",
+}
 
 
 class _NativeCancellation(Protocol):
@@ -77,6 +81,8 @@ class _Extension(Protocol):
     MODEL_SCHEMA_VERSION: int
     WIRE_FORMAT_VERSION: tuple[int, int]
     FEATURES: tuple[str, ...]
+    INGESTION_FEATURES: tuple[str, ...]
+    VIEW_FEATURES: tuple[str, ...]
     _NativeError: type[Exception]
     _Cancellation: Callable[[float | None], _NativeCancellation]
 
@@ -421,13 +427,43 @@ def _validate_metadata(extension: _Extension) -> tuple[str, ...]:
         raise ValueError("native wire version mismatch")
     features = extension.FEATURES
     if (
-        not isinstance(features, tuple)
-        or not all(isinstance(value, str) and value for value in features)
+        type(features) is not tuple
+        or not all(
+            type(value) is str and value and value.isascii() for value in features
+        )
         or tuple(sorted(set(features))) != features
         or not _FOUNDATION_FEATURES.issubset(features)
     ):
         raise ValueError("native feature ledger is invalid")
+    ingestion = _validate_feature_partition(
+        "ingestion", extension.INGESTION_FEATURES, features
+    )
+    views = _validate_feature_partition("view", extension.VIEW_FEATURES, features)
+    ingestion_set = set(ingestion)
+    view_set = set(views)
+    successor_features = ingestion_set | view_set
+    if ingestion_set & view_set:
+        raise ValueError("native ingestion and view feature partitions overlap")
+    if successor_features & _FOUNDATION_FEATURE_LEDGER:
+        raise ValueError("native successor feature partitions overlap the foundation")
+    if set(features) != _FOUNDATION_FEATURE_LEDGER | successor_features:
+        raise ValueError("native feature partitions do not cover the feature ledger")
     return features
+
+
+def _validate_feature_partition(
+    name: str,
+    values: object,
+    features: tuple[str, ...],
+) -> tuple[str, ...]:
+    if (
+        type(values) is not tuple
+        or not all(type(value) is str and value and value.isascii() for value in values)
+        or tuple(sorted(set(values))) != values
+        or not set(values).issubset(features)
+    ):
+        raise ValueError(f"native {name} feature partition is invalid")
+    return cast(tuple[str, ...], values)
 
 
 def _runtime_policy_reason() -> str | None:

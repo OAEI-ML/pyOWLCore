@@ -8,6 +8,8 @@ ABI_VERSION: Final[int]
 MODEL_SCHEMA_VERSION: Final[int]
 WIRE_FORMAT_VERSION: Final[tuple[int, int]]
 FEATURES: Final[tuple[str, ...]]
+INGESTION_FEATURES: Final[tuple[str, ...]]
+VIEW_FEATURES: Final[tuple[str, ...]]
 
 class _NativeError(Exception): ...
 
