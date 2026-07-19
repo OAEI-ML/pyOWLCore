@@ -66,8 +66,9 @@ corpora, executable ratio gates, native retention/copy counters, and phase
 profiles remain open and must continue to be reported as unsupported or
 `not-run`.
 
-`dependency-audit-shared-host.json` records passing source dependency/import/
-payload-manifest checks and passing SHA-bound sdist and pure-wheel exclusion
-checks. That limited audit is not native-wheel release evidence: native-wheel
-platform linkage, a release SBOM/license review, and approved release packaging
-remain open.
+`dependency-audit-shared-host.json` binds passing alias-aware source,
+payload-manifest, and packaged-Python scans plus reproducible SHA-bound sdist and
+pure-wheel checks to one clean Git commit. That limited audit explicitly records
+platform linkage as `not-run` and is not native-wheel release evidence: a native
+wheel, platform linkage, release SBOM/license review, and approved release
+packaging remain open.
