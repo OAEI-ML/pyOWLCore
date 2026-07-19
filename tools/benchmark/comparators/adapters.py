@@ -943,7 +943,15 @@ def _verified_runner_command(
 
 
 def _external_environment(pin: ComparatorPin) -> dict[str, str]:
-    """Return a minimal child environment with deterministic thread ceilings."""
+    """Return a minimal, lane-bound child environment with deterministic ceilings.
+
+    Raw and common Horned lanes intentionally share one executable pin.  The
+    launcher therefore needs an authenticated, parent-selected lane before it
+    emits its pre-request handshake; the request itself arrives only after that
+    handshake has been validated.  These three values are descriptive inputs,
+    not trust anchors: the parent still verifies every handshake/result field
+    against ``pin`` and the executable digest before accepting evidence.
+    """
 
     selected = {
         name: value
@@ -957,6 +965,9 @@ def _external_environment(pin: ComparatorPin) -> dict[str, str]:
             "NUMEXPR_NUM_THREADS": ceiling,
             "OMP_NUM_THREADS": ceiling,
             "OPENBLAS_NUM_THREADS": ceiling,
+            "PYOWL_CORE_COMPARATOR_BOUNDARY": pin.boundary,
+            "PYOWL_CORE_COMPARATOR_IMPLEMENTATION": pin.implementation,
+            "PYOWL_CORE_COMPARATOR_LANE": pin.id,
             "RAYON_NUM_THREADS": ceiling,
             "TOKIO_WORKER_THREADS": ceiling,
         }

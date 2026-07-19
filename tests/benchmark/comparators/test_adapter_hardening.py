@@ -15,6 +15,7 @@ from tools.benchmark.comparators.adapters import (
     RAW_INVENTORY_SCHEMA,
     TIMED_VALIDATION_SCHEMA,
     AdapterRequest,
+    _external_environment,
     _validate_external_result,
     default_options,
     options_digest,
@@ -150,6 +151,29 @@ def test_external_steady_mode_is_not_mislabeled_as_a_fresh_subprocess(
 
     assert result["status"] == "not-run"
     assert "audited persistent lifecycle" in result["reason"]
+
+
+def test_external_environment_selects_shared_runner_lane_without_leaking_parent_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYOWL_CORE_SECRET_FIXTURE", "must-not-cross")
+    manifest = load_comparator_manifest()
+    raw = manifest.by_id("horned-owl-raw")
+    common = manifest.by_id("horned-owl-common")
+
+    raw_environment = _external_environment(raw)
+    common_environment = _external_environment(common)
+
+    assert raw_environment["PYOWL_CORE_COMPARATOR_LANE"] == raw.id
+    assert raw_environment["PYOWL_CORE_COMPARATOR_IMPLEMENTATION"] == raw.implementation
+    assert raw_environment["PYOWL_CORE_COMPARATOR_BOUNDARY"] == raw.boundary
+    assert common_environment["PYOWL_CORE_COMPARATOR_LANE"] == common.id
+    assert common_environment["PYOWL_CORE_COMPARATOR_IMPLEMENTATION"] == common.implementation
+    assert common_environment["PYOWL_CORE_COMPARATOR_BOUNDARY"] == common.boundary
+    assert raw_environment["RAYON_NUM_THREADS"] == str(raw.thread_ceiling)
+    assert common_environment["RAYON_NUM_THREADS"] == str(common.thread_ceiling)
+    assert "PYOWL_CORE_SECRET_FIXTURE" not in raw_environment
+    assert "PYOWL_CORE_SECRET_FIXTURE" not in common_environment
 
 
 def test_failure_diagnostics_are_redacted_flattened_and_bounded() -> None:
