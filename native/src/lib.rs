@@ -22,6 +22,8 @@ use std::sync::Arc;
 use cancel::{interrupt_slot, take_interrupt, Cancellation, Guard, InterruptSlot};
 use error::{NativeError, NativeResult};
 use limits::Limits;
+#[cfg(feature = "test-hooks")]
+use model::NativeComponentBuilder;
 use model::{scan_canonical, CanonicalRow, ModelArena, ScanBudget};
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyTypeError};
@@ -387,6 +389,38 @@ fn _publication_fixture_v1() -> PyResult<publication::NativeSnapshotHandle> {
     contain(publication::fixture_handle_v1).map_err(python_error)
 }
 
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (canonical, config, cancel=None))]
+fn _component_roundtrip_v1<'py>(
+    py: Python<'py>,
+    canonical: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, Cancellation>>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let limits = limits_from_python(config)?;
+    let cancellation = cancellation_or_default(cancel);
+    let owned = owned_buffer(py, canonical, Some(&limits), false)?;
+    let input_size = owned.len();
+    contain(|| limits.check_output_size(input_size, input_size)).map_err(python_error)?;
+    let output = run_detached(py, move |interrupt| {
+        let mut builder = NativeComponentBuilder::with_control(
+            &limits,
+            cancellation,
+            Some(interrupt),
+            input_size,
+        )?;
+        let pending = builder.intern_canonical(&owned)?;
+        let mut frozen = builder.freeze()?;
+        let identifier = frozen.resolve(pending)?;
+        frozen.encode(identifier)
+    })?;
+    PyBytes::new_with(py, output.len(), |buffer| {
+        buffer.copy_from_slice(&output);
+        Ok(())
+    })
+}
+
 #[pyfunction]
 #[pyo3(signature = (source, config, cancel=None))]
 fn parse_document<'py>(
@@ -476,6 +510,8 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(_panic_probe, module)?)?;
     #[cfg(feature = "test-hooks")]
     module.add_function(wrap_pyfunction!(_publication_fixture_v1, module)?)?;
+    #[cfg(feature = "test-hooks")]
+    module.add_function(wrap_pyfunction!(_component_roundtrip_v1, module)?)?;
     module.add_function(wrap_pyfunction!(parse_document, module)?)?;
     module.add_function(wrap_pyfunction!(build_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(build_index, module)?)?;

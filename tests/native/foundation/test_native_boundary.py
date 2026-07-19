@@ -13,7 +13,15 @@ from unittest.mock import patch
 from pyowl_core import ParseLimits, canonical_bytes
 from pyowl_core.backends import native
 from pyowl_core.exceptions import PyOWLCoreError, WireCorruptionError, WireError, WireLimitError
-from pyowl_core.model import IRI, RDF_PLAIN_LITERAL, Literal, decode_canonical
+from pyowl_core.extensions.swrl import Variable
+from pyowl_core.model import (
+    IRI,
+    RDF_PLAIN_LITERAL,
+    Literal,
+    ObjectPropertyChain,
+    constructor_spec,
+    decode_canonical,
+)
 from tests.generated.model.fixtures import model_fixtures
 from tests.native.foundation._support import NativeTestExtension, load_extension
 
@@ -65,6 +73,40 @@ class NativeBoundaryTests(unittest.TestCase):
             with self.subTest(constructor=constructor.__name__):
                 expected = canonical_bytes(value)
                 self.assertEqual(native.validate_canonical(memoryview(expected)), expected)
+
+    def test_every_model_constructor_roundtrips_retained_component(self) -> None:
+        if not hasattr(self.extension, "_component_roundtrip_v1"):
+            if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+                self.fail("selected native test-hooks artifact lacks _component_roundtrip_v1")
+            self.skipTest("native retained-component test hook is unavailable")
+        config = native._encode_config(ParseLimits(), None, verify=True)
+        fixtures = model_fixtures()
+        self.assertEqual(len(fixtures), 76)
+        self.assertEqual(constructor_spec(fixtures[ObjectPropertyChain]).tag, 11)
+        self.assertEqual(constructor_spec(fixtures[Variable]).tag, 140)
+        for constructor, value in fixtures.items():
+            with self.subTest(
+                constructor=constructor.__name__,
+                tag=constructor_spec(value).tag,
+            ):
+                expected = canonical_bytes(value)
+                self.assertEqual(
+                    self.extension._component_roundtrip_v1(memoryview(expected), config, None),
+                    expected,
+                )
+
+    def test_retained_component_hook_propagates_cancellation(self) -> None:
+        if not hasattr(self.extension, "_component_roundtrip_v1"):
+            if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+                self.fail("selected native test-hooks artifact lacks _component_roundtrip_v1")
+            self.skipTest("native retained-component test hook is unavailable")
+        config = native._encode_config(ParseLimits(), None, verify=True)
+        value = canonical_bytes(next(iter(model_fixtures().values())))
+        cancel = self.extension._Cancellation(None)
+        cancel.cancel()
+        with self.assertRaises(self.extension._NativeError) as raised:
+            self.extension._component_roundtrip_v1(memoryview(value), config, cancel)
+        self.assertEqual(raised.exception.args[0], "NATIVE_CANCELLED")
 
     def test_every_constructor_byte_mutation_matches_python_acceptance(self) -> None:
         def python_accepts(value: bytes) -> bool:

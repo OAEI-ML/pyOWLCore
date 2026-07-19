@@ -155,6 +155,10 @@ pub(crate) fn scan_canonical(data: &[u8], budget: &mut ScanBudget) -> NativeResu
     Ok(meta.category)
 }
 
+pub(crate) fn canonical_field_count(tag: u16) -> Option<u8> {
+    spec(u64::from(tag)).map(|value| value.fields)
+}
+
 fn scan_node<'a>(
     data: &'a [u8],
     mut offset: usize,
