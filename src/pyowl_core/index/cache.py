@@ -487,7 +487,9 @@ def request_index_view(
     if (
         isinstance(schema_name, str)
         and schema_name.startswith("pyowl-core/")
-        and not view_type.__module__.startswith("pyowl_core.index.")
+        and not view_type.__module__.startswith(
+            ("pyowl_core.index.", "pyowl_core.backends.native_views")
+        )
     ):
         raise ValueError("third-party view factories cannot claim a built-in schema name")
     allowed = {item.name for item in fields(options_type)}

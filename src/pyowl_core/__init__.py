@@ -18,6 +18,7 @@ from .api import (
     parse_document,
     write_snapshot,
 )
+from .backends.native_views import EncodedStructuralView
 from .backends.python import PythonParser
 from .cancellation import CancellationSource, CancellationToken
 from .config import BackendPreference, DocumentFormat, ImportPolicy, LoadOptions
@@ -205,6 +206,7 @@ __all__ = [
     "DocumentIdentityConflictError",
     "DocumentRecord",
     "DocumentStatus",
+    "EncodedStructuralView",
     "FormatDetectionError",
     "FormatDetection",
     "FormatGuessWarning",

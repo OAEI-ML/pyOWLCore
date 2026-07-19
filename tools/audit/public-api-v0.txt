@@ -41,6 +41,7 @@ Expression
 ExpressionOccurrence
 ExpressionOccurrenceIndex
 ExpressionOccurrenceOptions
+EncodedStructuralView
 FIELD_ROLE_TABLE
 FieldID
 IndexBuildBudget

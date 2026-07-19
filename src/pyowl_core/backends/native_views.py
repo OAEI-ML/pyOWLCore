@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, ClassVar, Final, NoReturn, Protocol, cast
 
 from pyowl_core.document.document import Fingerprint
 from pyowl_core.document.overlay import view_limits
@@ -35,6 +35,10 @@ from pyowl_core.model.axioms import AxiomNode
 from pyowl_core.model.swrl import SWRLRule
 
 from . import native
+
+if TYPE_CHECKING:
+    from pyowl_core.cancellation import CancellationToken
+    from pyowl_core.index.cache import IndexBuildBudget
 
 ENCODED_STRUCTURAL_SCHEMA_NAME_V1: Final = "pyowl-core/structural-columns"
 ENCODED_STRUCTURAL_SCHEMA_VERSION_V1: Final = 1
@@ -216,6 +220,38 @@ class EncodedStructuralSegmentPublicationV1(Protocol):
     member_token: bytes | None
 
 
+@dataclass(frozen=True, slots=True)
+class EncodedStructuralOptionsV1:
+    """Canonical request options for the frozen structural-column schema."""
+
+    schema_version: int = ENCODED_STRUCTURAL_SCHEMA_VERSION_V1
+    scope: AxiomScope = AxiomScope.CLOSURE
+    document_key: str | None = None
+    limits: ParseLimits | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, int)
+            or self.schema_version != ENCODED_STRUCTURAL_SCHEMA_VERSION_V1
+        ):
+            raise ValueError(
+                "schema_version must select encoded structural schema version 1"
+            )
+        scope = self.scope
+        if isinstance(scope, str) and not isinstance(scope, AxiomScope):
+            try:
+                scope = AxiomScope(scope)
+            except ValueError as error:
+                raise ValueError("scope must be a valid AxiomScope") from error
+            object.__setattr__(self, "scope", scope)
+        elif not isinstance(scope, AxiomScope):
+            raise TypeError("scope must be AxiomScope")
+        _validate_selection(scope, self.document_key)
+        if self.limits is not None and not isinstance(self.limits, ParseLimits):
+            raise TypeError("limits must be ParseLimits or None")
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class EncodedStructuralSegmentV1:
     """One local or referenced segment in an encoded structural view."""
@@ -229,9 +265,14 @@ class EncodedStructuralSegmentV1:
     _retained_source: object
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, eq=False)
 class EncodedStructuralViewV1:
     """One validated, owner-retaining encoded structural column set."""
+
+    SCHEMA_NAME: ClassVar[str] = ENCODED_STRUCTURAL_SCHEMA_NAME_V1
+    SCHEMA_VERSION: ClassVar[int] = ENCODED_STRUCTURAL_SCHEMA_VERSION_V1
+    OPTIONS_TYPE: ClassVar[type[object]] = EncodedStructuralOptionsV1
+    DEPENDENCIES: ClassVar[tuple[type[object], ...]] = ()
 
     schema_name: str
     schema_version: int
@@ -245,6 +286,36 @@ class EncodedStructuralViewV1:
     document_key: str | None
     _retained_source: object
     _seal: object
+
+    @classmethod
+    def _build(
+        cls,
+        ontology: object,
+        options: object,
+        budget: IndexBuildBudget,
+        cancellation_token: CancellationToken | None,
+        started: float,
+    ) -> EncodedStructuralViewV1:
+        del started
+        if not isinstance(options, EncodedStructuralOptionsV1):
+            raise TypeError("options must be EncodedStructuralOptionsV1")
+        if not isinstance(ontology, OntologyView):
+            raise TypeError("ontology must implement OntologyView")
+        budget.check()
+        created = produce_encoded_structural_view_v1(
+            ontology,
+            scope=options.scope,
+            document_key=options.document_key,
+            limits=options.limits,
+            _budget=budget,
+        )
+        budget.check()
+        return created
+
+
+# Stable public request type; the V1 spelling remains available for callers
+# that explicitly pin the publication schema.
+EncodedStructuralView = EncodedStructuralViewV1
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +366,7 @@ def produce_encoded_structural_view_v1(
     scope: AxiomScope = AxiomScope.CLOSURE,
     document_key: str | None = None,
     limits: ParseLimits | None = None,
+    _budget: IndexBuildBudget | None = None,
 ) -> EncodedStructuralViewV1:
     """Build deterministic v1 columns through public scalar traversal only."""
 
@@ -302,6 +374,16 @@ def produce_encoded_structural_view_v1(
     if not isinstance(owner, OntologyView):
         raise TypeError("owner must implement OntologyView")
     selected_limits = _selected_limits(owner, limits)
+
+    def reserve(table: str, bytes_: int) -> None:
+        if _budget is not None:
+            _budget.add(table, rows=0, bytes_=bytes_)
+
+    # The offset column contains its initial zero even for an empty view.  Its
+    # reservation is deliberately first so a tight cache policy fails before
+    # scalar traversal or proportional temporary state begins.
+    reserve("encoded_node_field_offsets", 8)
+    reserve("encoded_segments", 128)
 
     roots: list[tuple[int, StructuralNode, bytes]] = []
     axiom_root_count = 0
@@ -312,6 +394,7 @@ def produce_encoded_structural_view_v1(
         if kind == _ROOT_AXIOM:
             axiom_root_count += 1
             selected_limits.enforce("max_axioms", axiom_root_count)
+        reserve("encoded_roots", 5)
         roots.append((kind, value, key))
 
     annotations = owner.ontology_annotations(scope=scope, document_key=document_key)
@@ -353,6 +436,7 @@ def produce_encoded_structural_view_v1(
                 if key not in nodes_by_key:
                     selected_limits.enforce("max_terms", len(nodes_by_key) + 1)
                     selected_limits.enforce("max_index_rows", len(nodes_by_key) + 1)
+                    reserve("encoded_nodes", 10)
                 nodes_by_key[key] = node
                 keys_by_identity[id(node)] = key
     except (TypeError, ValueError) as error:
@@ -407,6 +491,7 @@ def produce_encoded_structural_view_v1(
         offset = len(scalar_bytes)
         selected_limits.enforce("max_index_bytes", offset + len(payload))
         selected_limits.enforce("max_canonical_work", walked_nodes + offset + len(payload))
+        reserve("encoded_scalar_bytes", len(payload))
         scalar_bytes.extend(payload)
         return kind, offset, len(payload)
 
@@ -421,6 +506,7 @@ def produce_encoded_structural_view_v1(
 
     def append_item(value: object) -> None:
         selected_limits.enforce("max_index_rows", len(item_kinds) + 1)
+        reserve("encoded_items", 17)
         if isinstance(value, StructuralNode):
             item_kinds.append(_NODE)
             item_values.append(node_id(value))
@@ -433,6 +519,7 @@ def produce_encoded_structural_view_v1(
 
     def append_field(value: object) -> None:
         selected_limits.enforce("max_index_rows", len(field_kinds) + 1)
+        reserve("encoded_fields", 17)
         if isinstance(value, StructuralNode):
             field_kinds.append(_NODE)
             field_values.append(node_id(value))
@@ -1371,9 +1458,11 @@ __all__ = [
     "ENCODED_STRUCTURAL_MODEL_SCHEMA_V1",
     "ENCODED_STRUCTURAL_SCHEMA_NAME_V1",
     "ENCODED_STRUCTURAL_SCHEMA_VERSION_V1",
+    "EncodedStructuralOptionsV1",
     "EncodedStructuralPublicationV1",
     "EncodedStructuralSegmentPublicationV1",
     "EncodedStructuralSegmentV1",
+    "EncodedStructuralView",
     "EncodedStructuralViewV1",
     "NativeViewExtension",
     "produce_encoded_structural_view_v1",
