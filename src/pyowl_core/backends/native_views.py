@@ -695,13 +695,21 @@ def _request_encoded_source_v1(
     result = owner.view(EncodedStructuralViewV1, **options)
     if type(result) is not EncodedStructuralViewV1 or result._seal is not _VALIDATED_VIEW_SEAL:
         _fail("referenced owner returned an invalid encoded view", "ENCODED_VIEW_SEGMENTS")
+    exporters = tuple(value.obj for value in result.buffers.values())
+    trusted_zero_copy = _TRUSTED_ZERO_COPY
+    if (
+        exporters
+        and all(type(value) is _mmap.mmap for value in exporters)
+        and all(value is exporters[0] for value in exporters[1:])
+    ):
+        trusted_zero_copy = _TRUSTED_MAPPED_ZERO_COPY
     return _freeze_encoded_structural_view_v1(
         result,
         expected_owner=owner,
         expected_scope=scope,
         expected_document_key=document_key,
         limits=limits,
-        trusted_zero_copy=_TRUSTED_ZERO_COPY,
+        trusted_zero_copy=trusted_zero_copy,
         active_views=frozenset(),
     )
 
@@ -793,6 +801,39 @@ def _columns_from_buffers(buffers: Mapping[str, memoryview]) -> _Columns:
         _UIntColumn(buffers["item_lengths"], 8),
         buffers["scalar_bytes"],
     )
+
+
+def _anonymous_document_scopes_from_encoded_view_v1(
+    view: EncodedStructuralViewV1,
+) -> frozenset[bytes]:
+    """Read document scopes from already-validated columns without model rows."""
+
+    if type(view) is not EncodedStructuralViewV1 or view._seal is not _VALIDATED_VIEW_SEAL:
+        _fail("anonymous scopes require a validated encoded view", "ENCODED_VIEW_STRUCTURE")
+    columns = _columns_from_buffers(view.buffers)
+    scopes: set[bytes] = set()
+    for node_index in range(len(columns.tags)):
+        if columns.tags[node_index] != 3:
+            continue
+        start = columns.field_offsets[node_index]
+        end = columns.field_offsets[node_index + 1]
+        if (
+            end - start != 2
+            or columns.field_kinds[start] != _BYTES
+            or columns.field_lengths[start] != 32
+        ):
+            _fail(
+                "anonymous individual has an invalid document scope field",
+                "ENCODED_VIEW_STRUCTURE",
+            )
+        offset = columns.field_values[start]
+        if offset > len(columns.scalar_bytes) - 32:
+            _fail(
+                "anonymous individual document scope exceeds scalar bytes",
+                "ENCODED_VIEW_STRUCTURE",
+            )
+        scopes.add(bytes(columns.scalar_bytes[offset : offset + 32]))
+    return frozenset(scopes)
 
 
 def _is_direct_encoded_view(source: EncodedStructuralViewV1) -> bool:

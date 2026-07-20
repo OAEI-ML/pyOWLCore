@@ -422,7 +422,14 @@ class MappedOntologySnapshot(OntologySnapshot):
         return None
 
     def _anonymous_document_scopes(self) -> frozenset[bytes]:
-        return self._materialized._anonymous_document_scopes()
+        self._check_open()
+        from pyowl_core.backends.native_views import (
+            EncodedStructuralViewV1,
+            _anonymous_document_scopes_from_encoded_view_v1,
+        )
+
+        encoded = self.view(EncodedStructuralViewV1)
+        return _anonymous_document_scopes_from_encoded_view_v1(encoded)
 
     def _anonymous_scope_lineage(self) -> tuple[tuple[bytes, bytes, bytes], ...]:
         leaf = fingerprint_bytes(self.structural_fingerprint)
