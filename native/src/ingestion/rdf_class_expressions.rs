@@ -17,6 +17,15 @@ const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom
 const OWL_ALL_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#allValuesFrom";
 const OWL_HAS_VALUE: &str = "http://www.w3.org/2002/07/owl#hasValue";
 const OWL_HAS_SELF: &str = "http://www.w3.org/2002/07/owl#hasSelf";
+const OWL_MIN_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#minCardinality";
+const OWL_MAX_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#maxCardinality";
+const OWL_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#cardinality";
+const OWL_MIN_QUALIFIED_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#minQualifiedCardinality";
+const OWL_MAX_QUALIFIED_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#maxQualifiedCardinality";
+const OWL_QUALIFIED_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#qualifiedCardinality";
+const OWL_ON_CLASS: &str = "http://www.w3.org/2002/07/owl#onClass";
+const OWL_ON_DATA_RANGE: &str = "http://www.w3.org/2002/07/owl#onDataRange";
+const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
 const OWL_UNION_OF: &str = "http://www.w3.org/2002/07/owl#unionOf";
 
 const ROLE_EXPRESSION: u8 = 1;
@@ -51,6 +60,25 @@ enum ClassConstructor {
     Complement { index: usize },
     OneOf { index: usize },
     Restriction { marker: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RestrictionOperator {
+    Quantified {
+        index: usize,
+        tag: u64,
+    },
+    HasValue {
+        index: usize,
+    },
+    HasSelf {
+        index: usize,
+    },
+    Cardinality {
+        index: usize,
+        tag: u64,
+        qualified: bool,
+    },
 }
 
 impl ClassConstructor {
@@ -299,11 +327,27 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         let all = self.unique_edge(subject, OWL_ALL_VALUES_FROM, session)?;
         let has_value = self.unique_edge(subject, OWL_HAS_VALUE, session)?;
         let has_self = self.unique_edge(subject, OWL_HAS_SELF, session)?;
-        let operator_count = usize::from(some.is_some())
-            .checked_add(usize::from(all.is_some()))
-            .and_then(|value| value.checked_add(usize::from(has_value.is_some())))
-            .and_then(|value| value.checked_add(usize::from(has_self.is_some())))
-            .ok_or_else(|| NativeError::limit("native RDF restriction operator count overflow"))?;
+        let min = self.unique_edge(subject, OWL_MIN_CARDINALITY, session)?;
+        let max = self.unique_edge(subject, OWL_MAX_CARDINALITY, session)?;
+        let exact = self.unique_edge(subject, OWL_CARDINALITY, session)?;
+        let min_qualified = self.unique_edge(subject, OWL_MIN_QUALIFIED_CARDINALITY, session)?;
+        let max_qualified = self.unique_edge(subject, OWL_MAX_QUALIFIED_CARDINALITY, session)?;
+        let exact_qualified = self.unique_edge(subject, OWL_QUALIFIED_CARDINALITY, session)?;
+        let operator_count = [
+            some,
+            all,
+            has_value,
+            has_self,
+            min,
+            max,
+            exact,
+            min_qualified,
+            max_qualified,
+            exact_qualified,
+        ]
+        .into_iter()
+        .flatten()
+        .count();
         if operator_count != 1 {
             return Err(unsupported(if operator_count == 0 {
                 "native RDF restriction has no supported operator"
@@ -311,6 +355,55 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 "native RDF restriction has conflicting operators"
             }));
         }
+        let operator = if let Some(index) = some {
+            RestrictionOperator::Quantified { index, tag: 34 }
+        } else if let Some(index) = all {
+            RestrictionOperator::Quantified { index, tag: 35 }
+        } else if let Some(index) = has_value {
+            RestrictionOperator::HasValue { index }
+        } else if let Some(index) = has_self {
+            RestrictionOperator::HasSelf { index }
+        } else if let Some(index) = min {
+            RestrictionOperator::Cardinality {
+                index,
+                tag: 38,
+                qualified: false,
+            }
+        } else if let Some(index) = max {
+            RestrictionOperator::Cardinality {
+                index,
+                tag: 39,
+                qualified: false,
+            }
+        } else if let Some(index) = exact {
+            RestrictionOperator::Cardinality {
+                index,
+                tag: 40,
+                qualified: false,
+            }
+        } else if let Some(index) = min_qualified {
+            RestrictionOperator::Cardinality {
+                index,
+                tag: 38,
+                qualified: true,
+            }
+        } else if let Some(index) = max_qualified {
+            RestrictionOperator::Cardinality {
+                index,
+                tag: 39,
+                qualified: true,
+            }
+        } else if let Some(index) = exact_qualified {
+            RestrictionOperator::Cardinality {
+                index,
+                tag: 40,
+                qualified: true,
+            }
+        } else {
+            return Err(NativeError::protocol(
+                "native RDF restriction operator ledger is empty",
+            ));
+        };
         let property_iri = match self.triples[on_property].object {
             RdfTerm::Iri(value) => value,
             RdfTerm::Blank(_) | RdfTerm::Literal(_) => {
@@ -320,45 +413,123 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             }
         };
         push_index(consumed, on_property, session)?;
-        if let Some(quantifier) = some.or(all) {
+        match operator {
+            RestrictionOperator::Quantified { index, tag } => {
+                session.step(usize_as_u64(
+                    self.data_properties.len(),
+                    "native RDF property-kind work exceeds u64",
+                )?)?;
+                if self.data_properties.contains(&property_iri) {
+                    return Err(unsupported(
+                        "native bounded RDF restriction does not map data properties",
+                    ));
+                }
+                push_index(consumed, index, session)?;
+                let filler = self.decode_into(self.triples[index].object, consumed, session)?;
+                let property = named_entity("object_property", property_iri, session)?;
+                let fields =
+                    reserved_fields([Field::Node(property), Field::Node(filler)], session)?;
+                Node::build(tag, fields)
+            }
+            RestrictionOperator::HasValue { index } => {
+                push_index(consumed, index, session)?;
+                let individual = self.decode_individual(self.triples[index].object, session)?;
+                let property = named_entity("object_property", property_iri, session)?;
+                let fields =
+                    reserved_fields([Field::Node(property), Field::Node(individual)], session)?;
+                Node::build(36, fields)
+            }
+            RestrictionOperator::HasSelf { index } => {
+                if !matches!(
+                    self.triples[index].object,
+                    RdfTerm::Literal(value) if value.eq_ignore_ascii_case("true")
+                ) {
+                    return Err(unsupported("native RDF owl:hasSelf value must be true"));
+                }
+                push_index(consumed, index, session)?;
+                let property = named_entity("object_property", property_iri, session)?;
+                let fields = reserved_fields([Field::Node(property)], session)?;
+                Node::build(37, fields)
+            }
+            RestrictionOperator::Cardinality {
+                index,
+                tag,
+                qualified,
+            } => self.decode_object_cardinality(
+                subject,
+                property_iri,
+                index,
+                tag,
+                qualified,
+                consumed,
+                session,
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn decode_object_cardinality(
+        &mut self,
+        subject: &'data str,
+        property_iri: &'data str,
+        cardinality_index: usize,
+        tag: u64,
+        qualified: bool,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        let cardinality = nonnegative_integer(self.triples[cardinality_index].object, session)?;
+        let on_class = self.unique_edge(subject, OWL_ON_CLASS, session)?;
+        let on_data = self.unique_edge(subject, OWL_ON_DATA_RANGE, session)?;
+        let filler_index = if qualified {
+            match (on_class, on_data) {
+                (Some(index), None) => Some(index),
+                (None, Some(_)) => {
+                    return Err(unsupported(
+                        "native bounded RDF restriction does not map data cardinalities",
+                    ));
+                }
+                (Some(_), Some(_)) | (None, None) => {
+                    return Err(unsupported(
+                        "native qualified RDF cardinality requires one class filler",
+                    ));
+                }
+            }
+        } else {
+            if on_data.is_some() {
+                return Err(unsupported(
+                    "native bounded RDF restriction does not map data cardinalities",
+                ));
+            }
             session.step(usize_as_u64(
                 self.data_properties.len(),
                 "native RDF property-kind work exceeds u64",
             )?)?;
             if self.data_properties.contains(&property_iri) {
                 return Err(unsupported(
-                    "native bounded RDF restriction does not map data properties",
+                    "native bounded RDF restriction does not map data cardinalities",
                 ));
             }
-            push_index(consumed, quantifier, session)?;
-            let filler = self.decode_into(self.triples[quantifier].object, consumed, session)?;
-            let property = named_entity("object_property", property_iri, session)?;
-            let fields = reserved_fields([Field::Node(property), Field::Node(filler)], session)?;
-            return Node::build(if some.is_some() { 34 } else { 35 }, fields);
-        }
-        if let Some(has_value) = has_value {
-            push_index(consumed, has_value, session)?;
-            let individual = self.decode_individual(self.triples[has_value].object, session)?;
-            let property = named_entity("object_property", property_iri, session)?;
-            let fields =
-                reserved_fields([Field::Node(property), Field::Node(individual)], session)?;
-            return Node::build(36, fields);
-        }
-        if let Some(has_self) = has_self {
-            if !matches!(
-                self.triples[has_self].object,
-                RdfTerm::Literal(value) if value.eq_ignore_ascii_case("true")
-            ) {
-                return Err(unsupported("native RDF owl:hasSelf value must be true"));
-            }
-            push_index(consumed, has_self, session)?;
-            let property = named_entity("object_property", property_iri, session)?;
-            let fields = reserved_fields([Field::Node(property)], session)?;
-            return Node::build(37, fields);
-        }
-        Err(NativeError::protocol(
-            "native RDF restriction operator ledger is empty",
-        ))
+            on_class
+        };
+
+        push_index(consumed, cardinality_index, session)?;
+        let filler = if let Some(index) = filler_index {
+            push_index(consumed, index, session)?;
+            self.decode_into(self.triples[index].object, consumed, session)?
+        } else {
+            named_class(OWL_THING, session)?
+        };
+        let property = named_entity("object_property", property_iri, session)?;
+        let fields = reserved_fields(
+            [
+                Field::Integer(cardinality),
+                Field::Node(property),
+                Field::Node(filler),
+            ],
+            session,
+        )?;
+        Node::build(tag, fields)
     }
 
     fn decode_individual(
@@ -472,6 +643,43 @@ fn named_class(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
 
 fn named_individual(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
     named_entity("named_individual", value, session)
+}
+
+fn nonnegative_integer(value: RdfTerm<'_>, session: &mut Session<'_>) -> NativeResult<String> {
+    let RdfTerm::Literal(value) = value else {
+        return Err(unsupported(
+            "native RDF cardinality must be a nonnegative integer literal",
+        ));
+    };
+    if usize_as_u64(value.len(), "native RDF cardinality length exceeds u64")?
+        > session.limits().value(LimitKey::MaxLiteralBytes)
+    {
+        return Err(NativeError::limit(
+            "native RDF cardinality exceeds max_literal_bytes",
+        ));
+    }
+    session.step(usize_as_u64(
+        value.len(),
+        "native RDF cardinality work exceeds u64",
+    )?)?;
+    if value.is_empty() || !value.bytes().all(|value| value.is_ascii_digit()) {
+        return Err(unsupported(
+            "native RDF cardinality must be a nonnegative integer literal",
+        ));
+    }
+    let significant = value.trim_start_matches('0');
+    let significant = if significant.is_empty() {
+        "0"
+    } else {
+        significant
+    };
+    session.reserve_bytes(significant.len())?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(significant.len())
+        .map_err(|_| NativeError::limit("native RDF cardinality allocation failed"))?;
+    output.push_str(significant);
+    Ok(output)
 }
 
 fn named_entity(kind: &'static str, value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
@@ -715,11 +923,84 @@ mod tests {
     }
 
     #[test]
+    fn object_cardinalities_match_canonical_tags_and_arbitrary_integers() {
+        for (predicate, tag, qualified, lexical, normalized) in [
+            (OWL_MIN_CARDINALITY, 38, false, "0002", "2"),
+            (OWL_MAX_CARDINALITY, 39, false, "0", "0"),
+            (
+                OWL_CARDINALITY,
+                40,
+                false,
+                "18446744073709551616",
+                "18446744073709551616",
+            ),
+            (OWL_MIN_QUALIFIED_CARDINALITY, 38, true, "2", "2"),
+            (OWL_MAX_QUALIFIED_CARDINALITY, 39, true, "3", "3"),
+            (OWL_QUALIFIED_CARDINALITY, 40, true, "4", "4"),
+        ] {
+            let mut graph = vec![
+                edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+                edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+                edge("e", predicate, RdfTerm::Literal(lexical)),
+            ];
+            if qualified {
+                graph.push(edge("e", OWL_ON_CLASS, iri_term("urn:Filler")));
+            }
+            let decoded = decode(&graph, blank_term("e")).expect("object cardinality");
+            let filler = if qualified {
+                entity("class", iri("urn:Filler".to_owned()).unwrap()).unwrap()
+            } else {
+                entity("class", iri(OWL_THING.to_owned()).unwrap()).unwrap()
+            };
+            let expected = Node::build(
+                tag,
+                vec![
+                    Field::Integer(normalized.to_owned()),
+                    Field::Node(
+                        entity("object_property", iri("urn:p".to_owned()).unwrap()).unwrap(),
+                    ),
+                    Field::Node(filler),
+                ],
+            )
+            .unwrap();
+            assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+            assert_eq!(decoded.consumed, (0..graph.len()).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
     fn declared_data_property_is_not_misclassified_as_object_restriction() {
         let graph = [
             edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
             edge("e", OWL_ON_PROPERTY, iri_term("urn:data")),
             edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:Filler")),
+        ];
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut decoder = RdfClassExpressionDecoder::new(&graph);
+        decoder
+            .register_data_property("urn:data", &mut session)
+            .expect("data property kind");
+        assert_eq!(
+            decoder
+                .decode_term(blank_term("e"), &mut session)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+    }
+
+    #[test]
+    fn declared_data_property_is_not_misclassified_as_object_cardinality() {
+        let graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:data")),
+            edge("e", OWL_MIN_CARDINALITY, RdfTerm::Literal("1")),
         ];
         let limits = Limits::default();
         let mut guard = Guard::new(
@@ -792,6 +1073,40 @@ mod tests {
             edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
             edge("e", OWL_HAS_SELF, iri_term("urn:true")),
         ];
+        let conflicting_cardinalities = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_MIN_CARDINALITY, RdfTerm::Literal("1")),
+            edge("e", OWL_MAX_CARDINALITY, RdfTerm::Literal("2")),
+        ];
+        let nonliteral_cardinality = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_CARDINALITY, iri_term("urn:one")),
+        ];
+        let negative_cardinality = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_CARDINALITY, RdfTerm::Literal("-1")),
+        ];
+        let qualified_without_filler = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_MIN_QUALIFIED_CARDINALITY, RdfTerm::Literal("1")),
+        ];
+        let qualified_data_filler = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_MAX_QUALIFIED_CARDINALITY, RdfTerm::Literal("1")),
+            edge("e", OWL_ON_DATA_RANGE, iri_term("urn:datatype")),
+        ];
+        let qualified_conflicting_fillers = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_QUALIFIED_CARDINALITY, RdfTerm::Literal("1")),
+            edge("e", OWL_ON_CLASS, iri_term("urn:Class")),
+            edge("e", OWL_ON_DATA_RANGE, iri_term("urn:datatype")),
+        ];
         for (graph, value) in [
             (conflict.as_slice(), blank_term("e")),
             (cycle.as_slice(), blank_term("e")),
@@ -803,6 +1118,12 @@ mod tests {
             (literal_has_value.as_slice(), blank_term("e")),
             (false_has_self.as_slice(), blank_term("e")),
             (resource_has_self.as_slice(), blank_term("e")),
+            (conflicting_cardinalities.as_slice(), blank_term("e")),
+            (nonliteral_cardinality.as_slice(), blank_term("e")),
+            (negative_cardinality.as_slice(), blank_term("e")),
+            (qualified_without_filler.as_slice(), blank_term("e")),
+            (qualified_data_filler.as_slice(), blank_term("e")),
+            (qualified_conflicting_fillers.as_slice(), blank_term("e")),
             (&[][..], RdfTerm::Literal("not-a-class")),
         ] {
             assert_eq!(

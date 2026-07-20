@@ -3107,6 +3107,98 @@ mod tests {
     }
 
     #[test]
+    fn object_cardinalities_map_defaults_qualifiers_and_wide_integers() {
+        let unqualified_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:minCardinality>0002</owl:minCardinality></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let unqualified =
+            mapped(unqualified_source.as_bytes(), None).expect("unqualified cardinality");
+        let restriction = Node::build(
+            38,
+            vec![
+                Field::Integer("2".to_owned()),
+                Field::Node(
+                    entity(
+                        "object_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("object property"),
+                ),
+                Field::Node(class_node("http://www.w3.org/2002/07/owl#Thing")),
+            ],
+        )
+        .expect("minimum cardinality node");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(unqualified
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            unqualified.mapping.total_triples,
+            unqualified.mapping.consumed_triples,
+        );
+
+        let qualified_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:qualifiedCardinality>18446744073709551616</owl:qualifiedCardinality><owl:onClass rdf:resource=\"urn:B\"/></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let qualified = mapped(qualified_source.as_bytes(), None).expect("qualified cardinality");
+        let restriction = Node::build(
+            40,
+            vec![
+                Field::Integer("18446744073709551616".to_owned()),
+                Field::Node(
+                    entity(
+                        "object_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("object property"),
+                ),
+                Field::Node(class_node("urn:B")),
+            ],
+        )
+        .expect("exact cardinality node");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(qualified
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            qualified.mapping.total_triples,
+            qualified.mapping.consumed_triples,
+        );
+
+        let negative = unqualified_source.replace(">0002<", ">-1<");
+        assert_eq!(
+            mapped(negative.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+        let data_property = unqualified_source.replace(
+            "<rdf:Description rdf:about=\"urn:A\">",
+            "<owl:DatatypeProperty rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:A\">",
+        );
+        assert_eq!(
+            mapped(data_property.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+    }
+
+    #[test]
     fn malformed_collection_reached_through_class_mapping_fails_closed() {
         let cyclic = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf rdf:nodeID=\"e\"/></rdf:Description><rdf:Description rdf:nodeID=\"e\"><owl:intersectionOf rdf:nodeID=\"h\"/></rdf:Description><rdf:Description rdf:nodeID=\"h\"><rdf:first rdf:resource=\"urn:B\"/><rdf:rest rdf:nodeID=\"h\"/></rdf:Description></rdf:RDF>"
