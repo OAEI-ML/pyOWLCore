@@ -58,14 +58,35 @@ py-horned, OWLAPI, a JVM, or a comparator runner. Missing launchers and pending
 artifact pins produce `not-run`; they can never become a pass.
 
 Every external lane has its own runner pin: direct retained Rust, raw Horned,
-common-contract Horned, py-horned, and OWLAPI. The development-only Horned and
-py-horned runners are complete and SHA-256 bound. The direct retained-Rust and
-OWLAPI runner pins remain `pending`, so those lanes are non-runnable even if
-their launcher environment variables are configured. Horned-OWL 1.4.0 has one
+common-contract Horned, py-horned, and OWLAPI. The direct retained-Rust, Horned,
+and py-horned runners are complete and SHA-256 bound. The OWLAPI runner remains
+`pending`, so that lane is non-runnable even if its launcher environment
+variable is configured. Horned-OWL 1.4.0 has one
 exact engine and executable artifact shared by its raw and common lanes, while
 the boundary and runner revision remain lane-bound. The installed retained-
 native-wheel lane is separate and rejects source-tree/native builds; it
 requires an isolated delivered-wheel environment.
+
+The direct retained-engine runner is an excluded Rust binary linked to the
+native crate as an `rlib`; it neither imports Python nor crosses PyO3 objects.
+Reproduce and authenticate the pinned Darwin x86_64 executable with:
+
+```console
+cd benchmarks/comparators/runners/direct
+cargo +1.97.1 build --locked --release
+printf '%s  %s\n' \
+  a36fd6f0bcef1ef60474585001425199ae2c5fec2b9fe21c33fd82bbdf982525 \
+  target/release/pyowl-core-direct-comparator | shasum -a 256 -c -
+export PYOWL_CORE_DIRECT_RUNNER="$PWD/target/release/pyowl-core-direct-comparator"
+```
+
+Runner v1 verifies its embedded native `Cargo.lock`, executable hash, exact
+semantic options, source/document identity, allocator, thread ceiling, lane,
+and boundary. Functional Syntax uses the retained parser arena and RDF/XML uses
+the streaming mapper's retained arena. Both construct and fully validate the
+common contract inside the timer for resident/file and fresh/persistent modes.
+OWL/XML and Turtle are explicit `ineligible` results because no native retained
+parser is advertised for those syntaxes.
 
 The Horned runner is an excluded development binary, built from its own exact
 Cargo lock and Rust 1.97.1 toolchain. Reproduce the recorded Darwin x86_64
@@ -202,8 +223,8 @@ an approved versioned machine. Resident-byte and file lanes and the audited
 persistent lifecycle are implemented and contract-tested. File inputs are
 hash-checked and prepared before timing, use the same stable source-bound
 document IRI as resident bytes, and include the implementation's file open/read
-in the timer. The complete raw/common Horned and py-horned runners can exercise
-that lifecycle, while the direct retained-Rust and OWLAPI runner pins remain
+in the timer. The complete direct retained-Rust, raw/common Horned, and
+py-horned runners can exercise that lifecycle, while the OWLAPI runner remains
 pending.
 Representative medium/large approved-machine samples, native retention/copy
 counters, and phase profiles remain open. The configured ratio gates therefore

@@ -101,8 +101,16 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     assert common_horned.runner_sha256 == raw_horned.runner_sha256
     assert common_horned.artifact_is_runnable is True
 
+    direct = manifest.by_id("pyowl-direct-rust-common")
+    assert direct.runner_pin_state == "complete"
+    assert direct.runner_revision == "pyowl-core-direct-rust-common-runner-v1"
+    assert direct.runner_sha256 == (
+        "a36fd6f0bcef1ef60474585001425199ae2c5fec2b9fe21c33fd82bbdf982525"
+    )
+    assert direct.artifact_is_runnable is True
+
     for pin in external:
-        if pin in {py_horned, raw_horned, common_horned}:
+        if pin in {py_horned, raw_horned, common_horned, direct}:
             continue
         assert pin.runner_pin_state == "pending"
         assert pin.runner_revision
@@ -129,9 +137,7 @@ def test_external_runner_requires_its_own_complete_hash_before_runnable(
     raw = load_comparator_manifest(complete_path).by_id("horned-owl-raw")
 
     assert raw.runner_revision == "pyowl-core-horned-raw-runner-v2"
-    assert raw.runner_sha256 == (
-        "ffd20194b7c3715d6d07ec8ba9167d590ed484c278305754148711c44ae8887b"
-    )
+    assert raw.runner_sha256 == ("ffd20194b7c3715d6d07ec8ba9167d590ed484c278305754148711c44ae8887b")
     assert raw.artifact_is_runnable is True
 
 

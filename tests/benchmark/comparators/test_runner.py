@@ -79,9 +79,7 @@ def test_python_file_lane_is_timed_and_semantically_matches_resident_bytes() -> 
         resident = rows[("resident-bytes", process_mode)]
         file_row = rows[("file", process_mode)]
         assert resident["status"] == file_row["status"] == "ok"
-        assert resident["contract"]["contract_sha256"] == file_row["contract"][
-            "contract_sha256"
-        ]
+        assert resident["contract"]["contract_sha256"] == file_row["contract"]["contract_sha256"]
         assert resident["samples"][0]["metrics"]["temporary_bytes"] == 0
         assert file_row["samples"][0]["metrics"]["temporary_bytes"] > 0
     completion = cast(dict[str, Any], report["completion_requirements"])
@@ -103,14 +101,37 @@ def test_complete_horned_common_adapter_requires_an_explicit_launcher(
     rows = {value["lane"]: value for value in cast(list[dict[str, Any]], report["lanes"])}
     assert rows["pyowl-python-common"]["status"] == "ok"
     assert rows["horned-owl-common"]["status"] == "not-run"
-    assert "launcher environment PYOWL_CORE_HORNED_RUNNER is unset" in rows[
-        "horned-owl-common"
-    ]["reason"]
+    assert (
+        "launcher environment PYOWL_CORE_HORNED_RUNNER is unset"
+        in rows["horned-owl-common"]["reason"]
+    )
     assert report["comparative_complete"] is False
     assert report["not_run_required"] == ["horned-owl-common"]
     completion = cast(dict[str, Any], report["completion_requirements"])
     assert "horned-owl-common" not in completion["missing_required_pins"]
     assert "owlapi-common" in completion["missing_required_pins"]
+
+
+def test_complete_direct_adapter_requires_an_explicit_launcher(
+    monkeypatch: object,
+) -> None:
+    cast(Any, monkeypatch).delenv("PYOWL_CORE_DIRECT_RUNNER", raising=False)
+    report = run_comparator_baseline(
+        corpus_ids=("generated-tiny-functional",),
+        comparator_ids=("pyowl-python-common", "pyowl-direct-rust-common"),
+        warmups=0,
+        repetitions=1,
+    )
+
+    rows = {value["lane"]: value for value in cast(list[dict[str, Any]], report["lanes"])}
+    assert rows["pyowl-python-common"]["status"] == "ok"
+    assert rows["pyowl-direct-rust-common"]["status"] == "not-run"
+    assert (
+        "launcher environment PYOWL_CORE_DIRECT_RUNNER is unset"
+        in rows["pyowl-direct-rust-common"]["reason"]
+    )
+    completion = cast(dict[str, Any], report["completion_requirements"])
+    assert "pyowl-direct-rust-common" not in completion["missing_required_pins"]
 
 
 def test_pending_owlapi_pin_cannot_execute_even_when_launcher_is_set(
@@ -304,9 +325,10 @@ def test_committed_shared_host_smoke_is_self_bound_historical_evidence() -> None
     assert evidence["comparator_manifest_sha256"] == (
         "54fa26e8f35b4d252e2b0b62bfea90635b66e37892244117c40d7d1967df23ae"
     )
-    assert evidence["comparator_manifest_sha256"] != hashlib.sha256(
-        DEFAULT_COMPARATOR_MANIFEST.read_bytes()
-    ).hexdigest()
+    assert (
+        evidence["comparator_manifest_sha256"]
+        != hashlib.sha256(DEFAULT_COMPARATOR_MANIFEST.read_bytes()).hexdigest()
+    )
     assert (
         evidence["corpus_manifest_sha256"]
         == hashlib.sha256(DEFAULT_MANIFEST.read_bytes()).hexdigest()
@@ -347,11 +369,7 @@ def test_committed_shared_host_smoke_is_self_bound_historical_evidence() -> None
 
 def test_committed_py_horned_smoke_attests_real_persistent_lifecycle() -> None:
     evidence_path = (
-        ROOT
-        / "reports"
-        / "performance"
-        / "redesign-baseline"
-        / "shared-host-py-horned-smoke.json"
+        ROOT / "reports" / "performance" / "redesign-baseline" / "shared-host-py-horned-smoke.json"
     )
     evidence = cast(dict[str, Any], json.loads(evidence_path.read_text(encoding="utf-8")))
 
@@ -380,8 +398,7 @@ def test_committed_py_horned_smoke_attests_real_persistent_lifecycle() -> None:
         "py-horned-common",
     }
     assert all(
-        row["status"] == "ok" and len(cast(list[object], row["samples"])) == 3
-        for row in lanes
+        row["status"] == "ok" and len(cast(list[object], row["samples"])) == 3 for row in lanes
     )
     assertions = cast(list[dict[str, Any]], evidence["equality_assertions"])
     assert len(assertions) == 12
@@ -418,27 +435,21 @@ def test_committed_py_horned_smoke_attests_real_persistent_lifecycle() -> None:
 
 def test_committed_raw_horned_smoke_attests_real_persistent_lifecycle() -> None:
     evidence_path = (
-        ROOT
-        / "reports"
-        / "performance"
-        / "redesign-baseline"
-        / "shared-host-horned-raw-smoke.json"
+        ROOT / "reports" / "performance" / "redesign-baseline" / "shared-host-horned-raw-smoke.json"
     )
     evidence = cast(dict[str, Any], json.loads(evidence_path.read_text(encoding="utf-8")))
 
     assert evidence["schema"] == "pyowl-core/comparator-baseline/v1"
     manifest_sha256 = "2ea395c5b1bbbdb6ce31013b59604b455fa837cc5a3a0d2485fc93e4c4614527"
     assert evidence["comparator_manifest_sha256"] == manifest_sha256
-    assert evidence["comparator_manifest_sha256"] != hashlib.sha256(
-        DEFAULT_COMPARATOR_MANIFEST.read_bytes()
-    ).hexdigest()
+    assert (
+        evidence["comparator_manifest_sha256"]
+        != hashlib.sha256(DEFAULT_COMPARATOR_MANIFEST.read_bytes()).hexdigest()
+    )
     source_identity = cast(dict[str, Any], evidence["source_identity"])
     source_inputs = cast(list[dict[str, Any]], source_identity["inputs"])
     inputs_by_path = {cast(str, value["path"]): value for value in source_inputs}
-    assert (
-        inputs_by_path["benchmarks/comparators/comparators.toml"]["sha256"]
-        == manifest_sha256
-    )
+    assert inputs_by_path["benchmarks/comparators/comparators.toml"]["sha256"] == manifest_sha256
     environment = cast(dict[str, Any], evidence["environment"])
     assert environment["git_commit"] == "f6845ecf42cb756776084de286085ee70ccaad82"
     assert environment["git_dirty"] is False
@@ -453,8 +464,7 @@ def test_committed_raw_horned_smoke_attests_real_persistent_lifecycle() -> None:
         "horned-owl-raw",
     }
     assert all(
-        row["status"] == "ok" and len(cast(list[object], row["samples"])) == 3
-        for row in lanes
+        row["status"] == "ok" and len(cast(list[object], row["samples"])) == 3 for row in lanes
     )
     raw_rows = [row for row in lanes if row["lane"] == "horned-owl-raw"]
     raw_samples = [
@@ -533,9 +543,10 @@ def test_committed_horned_common_smoke_attests_exact_shared_runner_lanes() -> No
         cast(str, value["path"]): value
         for value in cast(list[dict[str, Any]], evidence["source_identity"]["inputs"])
     }
-    assert source_inputs["benchmarks/comparators/comparators.toml"]["sha256"] == evidence[
-        "comparator_manifest_sha256"
-    ]
+    assert (
+        source_inputs["benchmarks/comparators/comparators.toml"]["sha256"]
+        == evidence["comparator_manifest_sha256"]
+    )
     environment = cast(dict[str, Any], evidence["environment"])
     assert environment["git_commit"] == "f12a4f1d9661969ca9fb3777f5e379489eda8f23"
     assert environment["git_dirty"] is False
@@ -552,17 +563,14 @@ def test_committed_horned_common_smoke_attests_exact_shared_runner_lanes() -> No
         "horned-owl-common",
     }
     assert all(
-        row["status"] == "ok" and len(cast(list[object], row["samples"])) == 3
-        for row in lanes
+        row["status"] == "ok" and len(cast(list[object], row["samples"])) == 3 for row in lanes
     )
     common_contracts = {
         cast(str, cast(dict[str, Any], row["contract"])["contract_sha256"])
         for row in lanes
         if row["lane"] in {"pyowl-python-common", "horned-owl-common"}
     }
-    assert common_contracts == {
-        "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8"
-    }
+    assert common_contracts == {"85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8"}
     assertions = cast(list[dict[str, Any]], evidence["equality_assertions"])
     assert len(assertions) == 12
     assert all(row["passed"] is True for row in assertions)
@@ -586,9 +594,10 @@ def test_committed_horned_common_smoke_attests_exact_shared_runner_lanes() -> No
     assert lifecycles["horned-owl-raw"]["handshake"]["artifact"]["runner_revision"] == (
         "pyowl-core-horned-raw-runner-v2"
     )
-    assert lifecycles["horned-owl-common"]["handshake"]["artifact"][
-        "runner_revision"
-    ] == "pyowl-core-horned-common-runner-v1"
+    assert (
+        lifecycles["horned-owl-common"]["handshake"]["artifact"]["runner_revision"]
+        == "pyowl-core-horned-common-runner-v1"
+    )
 
 
 def _measured_schedule(report: Mapping[str, Any]) -> tuple[tuple[str, ...], ...]:
@@ -603,6 +612,5 @@ def _measured_schedule(report: Mapping[str, Any]) -> tuple[tuple[str, ...], ...]
                 )
             )
     return tuple(
-        tuple(lane for _, lane in sorted(by_block[block_index]))
-        for block_index in sorted(by_block)
+        tuple(lane for _, lane in sorted(by_block[block_index])) for block_index in sorted(by_block)
     )
