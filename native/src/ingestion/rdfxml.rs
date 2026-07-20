@@ -13,7 +13,7 @@ use crate::session::Session;
 
 use super::rdf_class_expressions::{
     DecodedClassCollection, DecodedClassExpression, DecodedIndividualCollection,
-    DecodedPropertyCollection, RdfClassExpressionDecoder,
+    DecodedKeyCollection, DecodedPropertyCollection, RdfClassExpressionDecoder,
 };
 use super::rdf_lists::{RdfResource as ListResource, RdfTerm as ListTerm, RdfTriple as ListTriple};
 use super::{CanonicalDocument, MappingEvidence};
@@ -51,6 +51,7 @@ const OWL_ALL_DISJOINT_CLASSES: &str = "http://www.w3.org/2002/07/owl#AllDisjoin
 const OWL_ALL_DISJOINT_PROPERTIES: &str = "http://www.w3.org/2002/07/owl#AllDisjointProperties";
 const OWL_DISTINCT_MEMBERS: &str = "http://www.w3.org/2002/07/owl#distinctMembers";
 const OWL_MEMBERS: &str = "http://www.w3.org/2002/07/owl#members";
+const OWL_HAS_KEY: &str = "http://www.w3.org/2002/07/owl#hasKey";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1274,6 +1275,13 @@ fn map_graph(
         &mut axioms,
         session,
     )?;
+    map_has_keys(
+        &list_graph,
+        &mut consumed,
+        &mut expressions,
+        &mut axioms,
+        session,
+    )?;
     map_equivalent_class_components(
         &list_graph,
         &mut consumed,
@@ -1629,6 +1637,53 @@ fn map_property_chains<'view, 'graph>(
             [
                 Field::Node(chain),
                 Field::Node(named_entity("object_property", super_property, session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?;
+        consume_collection_indexes(collection_consumed, consumed, session)?;
+        consumed[index] = true;
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
+fn map_has_keys<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index] || triple.predicate != OWL_HAS_KEY {
+            continue;
+        }
+        let class_expression = decode_class_expression(
+            expressions,
+            ClassTerm::from_resource(triple.subject).as_term(),
+            consumed,
+            session,
+        )?;
+        let DecodedKeyCollection {
+            object_properties,
+            data_properties,
+            consumed: collection_consumed,
+        } = expressions.decode_key_collection(triple.object, session)?;
+        if object_properties.is_empty() && data_properties.is_empty() {
+            return Err(rdf_mapping_cardinality(
+                "native owl:hasKey has no property members",
+            ));
+        }
+        let object_properties = canonical_set(object_properties, 0, None)?;
+        let data_properties = canonical_set(data_properties, 0, None)?;
+        let axiom = build_node(
+            101,
+            [
+                Field::Node(class_expression),
+                Field::Set(object_properties),
+                Field::Set(data_properties),
                 Field::Set(Vec::new()),
             ],
             session,
@@ -4473,6 +4528,70 @@ mod tests {
         assert_eq!(
             mapped(blank_super.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
+    }
+
+    #[test]
+    fn has_key_splits_object_and_data_property_members() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:DatatypeProperty rdf:about=\"urn:d\"/><rdf:Description><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:intersectionOf><owl:hasKey rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:p\"/><rdf:Description><owl:inverseOf rdf:resource=\"urn:q\"/></rdf:Description><rdf:Description rdf:about=\"urn:d\"/></owl:hasKey></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("HasKey");
+        let property = |kind: &'static str, value: &str| {
+            entity(kind, iri(value.to_owned()).expect("property IRI")).expect("property")
+        };
+        let inverse = Node::build(10, vec![Field::Node(property("object_property", "urn:q"))])
+            .expect("inverse property");
+        let expected = Node::build(
+            101,
+            vec![
+                Field::Node(boolean_node(30, &["urn:A", "urn:B"])),
+                Field::Set(
+                    canonical_set(vec![property("object_property", "urn:p"), inverse], 0, None)
+                        .expect("object keys"),
+                ),
+                Field::Set(
+                    canonical_set(vec![property("data_property", "urn:d")], 0, None)
+                        .expect("data keys"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("HasKey axiom");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let duplicate_data = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:DatatypeProperty rdf:about=\"urn:d\"/><owl:Class rdf:about=\"urn:A\"><owl:hasKey rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:d\"/><rdf:Description rdf:about=\"urn:d\"/></owl:hasKey></owl:Class></rdf:RDF>"
+        );
+        let duplicate = mapped(duplicate_data.as_bytes(), None).expect("duplicate data key");
+        let expected_duplicate = Node::build(
+            101,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Set(Vec::new()),
+                Field::Set(vec![property("data_property", "urn:d")]),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("deduplicated data key");
+        assert!(duplicate
+            .axioms
+            .iter()
+            .any(|value| value == expected_duplicate.as_bytes()));
+
+        let empty = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"><owl:hasKey rdf:parseType=\"Collection\"/></owl:Class></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(empty.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
         );
     }
 

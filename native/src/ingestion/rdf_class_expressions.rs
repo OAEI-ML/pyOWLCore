@@ -68,6 +68,13 @@ pub(crate) struct DecodedPropertyCollection {
     pub(crate) data_properties: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DecodedKeyCollection {
+    pub(crate) object_properties: Vec<Node>,
+    pub(crate) data_properties: Vec<Node>,
+    pub(crate) consumed: Vec<usize>,
+}
+
 /// Retains recursion and RDF-list ownership state across every expression
 /// decoded from one source graph.
 pub(crate) struct RdfClassExpressionDecoder<'graph, 'data> {
@@ -1150,6 +1157,45 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             properties,
             consumed,
             data_properties: false,
+        })
+    }
+
+    pub(crate) fn decode_key_collection(
+        &mut self,
+        head: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<DecodedKeyCollection> {
+        let decoded = self.lists.decode(head, session)?;
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        let mut consumed = decoded.consumed;
+        let mut object_properties = Vec::new();
+        let mut data_properties = Vec::new();
+        for item in decoded.items {
+            session.step(usize_as_u64(
+                self.data_properties.len(),
+                "native RDF property-kind work exceeds u64",
+            )?)?;
+            if matches!(item, RdfTerm::Iri(value) if self.data_properties.contains(&value)) {
+                reserve_item(&mut data_properties, session)?;
+                data_properties.push(named_data_property(item, session)?);
+            } else {
+                reserve_item(&mut object_properties, session)?;
+                object_properties.push(self.decode_object_property(
+                    item,
+                    &mut consumed,
+                    session,
+                )?);
+            }
+        }
+        consumed.sort_unstable();
+        consumed.dedup();
+        session.finish()?;
+        Ok(DecodedKeyCollection {
+            object_properties,
+            data_properties,
+            consumed,
         })
     }
 
