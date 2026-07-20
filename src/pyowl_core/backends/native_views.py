@@ -9,6 +9,7 @@ object layout.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -19,7 +20,12 @@ from typing import TYPE_CHECKING, ClassVar, Final, NoReturn, Protocol, cast
 from pyowl_core.document.document import Fingerprint
 from pyowl_core.document.overlay import view_limits
 from pyowl_core.document.snapshot import AxiomScope, OntologyView
-from pyowl_core.exceptions import BackendProtocolError, ResourceLimitError
+from pyowl_core.exceptions import (
+    BackendProtocolError,
+    ClosedSnapshotError,
+    OperationCancelledError,
+    ResourceLimitError,
+)
 from pyowl_core.limits import ParseLimits
 from pyowl_core.model import (
     CONSTRUCTOR_SPECS,
@@ -200,6 +206,12 @@ _VALIDATED_VIEW_SEAL = object()
 
 class NativeViewExtension(Protocol):
     VIEW_FEATURES: tuple[str, ...]
+
+
+class _NativeCancellationRelay(Protocol):
+    def __enter__(self) -> object: ...
+
+    def __exit__(self, *error: object) -> None: ...
 
 
 class EncodedStructuralPublicationV1(Protocol):
@@ -808,8 +820,166 @@ def _produce_native_direct_view_v1(
 ) -> EncodedStructuralViewV1 | None:
     """Return retained native columns when the installed backend exposes them."""
 
-    del owner, scope, document_key, limits, budget, cancellation_token
-    return None
+    state = getattr(owner, "_native_snapshot_state", None)
+    owner_state = getattr(state, "owner", None)
+    handle = getattr(owner_state, "handle", None)
+    if handle is None:
+        return None
+    try:
+        raw_owner = object.__getattribute__(handle, "_owner_v2")
+    except AttributeError:
+        return None
+    try:
+        extension = importlib.import_module(type(raw_owner).__module__)
+    except (ImportError, ValueError):
+        return None
+    raw_operation = getattr(extension, "_encoded_structural_columns_v1", None)
+    if not callable(raw_operation):
+        return None
+    native_scope = getattr(owner, "_native_scope", None)
+    if not callable(native_scope):
+        return None
+    selected_scope, document_ordinal = native_scope(scope, document_key)
+    scope_value = getattr(selected_scope, "value", None)
+    if type(scope_value) is not str or scope_value not in {"closure", "document"}:
+        _fail("native owner returned an invalid encoded-view scope", "NATIVE_VIEW_SCOPE")
+
+    from . import native
+
+    config_encoder = cast(Callable[..., bytes], native._encode_config)
+    relay_factory = cast(
+        Callable[[object, ParseLimits, object | None], _NativeCancellationRelay],
+        native._relay,
+    )
+    operation = cast(Callable[..., object], raw_operation)
+    config = config_encoder(limits, cancellation_token, verify=False)
+    try:
+        with relay_factory(extension, limits, cancellation_token) as cancel:
+            result = operation(
+                raw_owner,
+                scope_value,
+                document_ordinal,
+                config,
+                cancel,
+            )
+    except (MemoryError, KeyboardInterrupt, SystemExit):
+        raise
+    except (ClosedSnapshotError, OperationCancelledError, ResourceLimitError):
+        raise
+    except Exception as error:
+        code_reader = cast(Callable[[object, Exception], str | None], native._private_error_code)
+        message_reader = cast(Callable[[Exception], str], native._private_error_message)
+        code = code_reader(extension, error)
+        message = message_reader(error)
+        if code in {"NATIVE_CANCELLED", "NATIVE_DEADLINE"}:
+            raise OperationCancelledError(message, code=code) from error
+        if code == "NATIVE_WIRE_LIMIT":
+            raise ResourceLimitError(message, code=code) from error
+        if code is None:
+            raise BackendProtocolError(
+                "native encoded-view producer raised an unrecognized exception",
+                code="NATIVE_EXCEPTION",
+            ) from error
+        raise BackendProtocolError(message, code=code) from error
+
+    if type(result) is not tuple or len(result) != 2:
+        _fail("native encoded-view result has invalid framing", "NATIVE_VIEW_RESULT")
+    raw_buffers, raw_counters = result
+    if not isinstance(raw_buffers, Mapping) or not isinstance(raw_counters, Mapping):
+        _fail("native encoded-view result has invalid tables", "NATIVE_VIEW_RESULT")
+    if set(raw_buffers) != set(_BUFFER_NAMES):
+        _fail("native encoded-view result has invalid columns", "NATIVE_VIEW_RESULT")
+    buffers = MappingProxyType(
+        {name: cast(memoryview, raw_buffers[name]) for name in _BUFFER_NAMES}
+    )
+    counters = _validate_native_column_counters(buffers, raw_counters)
+    if budget is not None:
+        budget.add(
+            "encoded_native_columns",
+            rows=(
+                counters["root_rows"]
+                + counters["node_rows"]
+                + counters["field_rows"]
+                + counters["item_rows"]
+            ),
+            bytes_=counters["retained_buffer_bytes"] + 128,
+        )
+    segment = EncodedStructuralSegmentV1(
+        _SEGMENT_DIRECT,
+        owner,
+        None,
+        _POSTINGS_ALL,
+        _empty_bytes_view(),
+        _empty_bytes_view(),
+        None,
+        owner,
+    )
+    segments = (segment,)
+    candidate = EncodedStructuralViewV1(
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
+        owner,
+        buffers,
+        ENCODED_STRUCTURAL_DESCRIPTOR_V1,
+        _fingerprint(buffers, segments),
+        segments,
+        scope,
+        document_key,
+        owner,
+        None,
+    )
+    return _freeze_encoded_structural_view_v1(
+        candidate,
+        expected_owner=owner,
+        expected_scope=scope,
+        expected_document_key=document_key,
+        limits=limits,
+        trusted_zero_copy=_TRUSTED_ZERO_COPY,
+        active_views=frozenset(),
+    )
+
+
+def _validate_native_column_counters(
+    buffers: Mapping[str, memoryview], raw_counters: Mapping[object, object]
+) -> Mapping[str, int]:
+    required = {
+        "root_rows",
+        "node_rows",
+        "field_rows",
+        "item_rows",
+        "scalar_bytes",
+        "retained_buffer_bytes",
+        "retained_metadata_bytes",
+        "peak_owned_bytes",
+        "peak_workspace_bytes",
+        "scalar_copy_bytes",
+        "canonical_work",
+        "canonical_comparison_bytes",
+        "complete_root_encode_calls",
+        "python_bridge_copy_bytes",
+    }
+    if set(raw_counters) != required:
+        _fail("native encoded-view counters are incomplete", "NATIVE_VIEW_COUNTERS")
+    counters: dict[str, int] = {}
+    for name in sorted(required):
+        value = raw_counters[name]
+        if type(value) is not int or value < 0:
+            _fail("native encoded-view counter is invalid", "NATIVE_VIEW_COUNTERS")
+        counters[name] = value
+    expected = {
+        "root_rows": len(buffers["root_ids"]) // 4,
+        "node_rows": len(buffers["node_tags"]) // 2,
+        "field_rows": len(buffers["field_kinds"]),
+        "item_rows": len(buffers["item_kinds"]),
+        "scalar_bytes": len(buffers["scalar_bytes"]),
+        "retained_buffer_bytes": sum(len(value) for value in buffers.values()),
+    }
+    if any(counters[name] != value for name, value in expected.items()):
+        _fail("native encoded-view counters disagree with columns", "NATIVE_VIEW_COUNTERS")
+    if counters["complete_root_encode_calls"] != 0 or counters["python_bridge_copy_bytes"] != 0:
+        _fail("native encoded-view path copied complete roots", "NATIVE_VIEW_COUNTERS")
+    return MappingProxyType(counters)
 
 
 def _produce_local_encoded_structural_view_v1(
