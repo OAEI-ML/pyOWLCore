@@ -6,7 +6,7 @@ reference-machine key, and phase boundary used by the redesign scaffold. It
 deliberately distinguishes raw `horned-model-ready` from gating
 `common-contract-ready`.
 
-The checked-in evidence has three explicitly development-only artifacts.
+The checked-in evidence has four explicitly development-only artifacts.
 `shared-host-smoke.json` is the historical tiny Functional Syntax smoke of the
 core Python adapter; it predates the paired scheduler and executable ratio
 gates, so its older fields remain accurate. `shared-host-py-horned-smoke.json`
@@ -18,7 +18,11 @@ clean shutdown. `shared-host-horned-raw-smoke.json` binds raw runner v1 and its
 exact executable to clean commit `f6845ec`; the same four mode combinations and
 three repetitions publish one stable raw inventory, while one persistent child
 serves eight requests with eight distinct ontology identities and clean
-shutdown. The reference machine is still unapproved, each committed corpus is
+shutdown. `shared-host-horned-common-smoke.json` binds the shared raw v2/common
+v1 executable to clean commit `f12a4f1`. It records three paired repetitions in
+all four mode combinations, 12 passing Python/common and resident/file equality
+assertions, and clean eight-request persistent lifecycles for both Horned
+boundaries. The reference machine is still unapproved, each committed corpus is
 tiny, and the required native numerators were not selected, so these are
 lifecycle and correctness evidence—not performance gates or retained-native
 results.
