@@ -1,7 +1,8 @@
 # Native-redesign comparator baseline
 
-Status: executable manifest, core-Python smoke, and pinned py-horned lifecycle
-smoke implemented; approved-machine comparative evidence remains open.
+Status: executable manifest, core-Python smoke, and pinned py-horned/raw-Horned
+lifecycle smokes implemented; approved-machine comparative evidence remains
+open.
 
 `shared-host-py-horned-smoke.json` is the current development-only external
 runner checkpoint. It is bound to clean commit `3315c22`, the exact py-horned
@@ -14,6 +15,15 @@ reference machine is unapproved, the selected corpus is tiny, and no installed-
 wheel numerator is present, so the configured ratio gates correctly remain
 failed.
 
+`shared-host-horned-raw-smoke.json` is the raw-engine lifecycle checkpoint. It
+binds clean commit `f6845ec`, the exact Horned 1.4.0 crates.io checksum, Rust
+1.97.1, and raw-runner executable SHA-256. Three repetitions in each
+fresh/steady and resident/file combination produce one stable Horned inventory;
+the persistent child completes eight requests with eight distinct ontology
+identities, empty stderr, and clean shutdown. It is explicitly asymmetric raw
+model evidence, excluded from equivalence denominators, and makes no performance
+claim on this unapproved host.
+
 The committed `shared-host-smoke.json` exercises one pinned 1,450-byte generated
 Functional Syntax input through the core Python common-contract lane, once in a
 steady process and once in a fresh process. It records every other requested
@@ -21,8 +31,8 @@ lane as `not-run`; no such row contributes a pass or timing ratio. Each of the
 five external lanes has a separate runner pin, and every one was `pending`
 without a runner artifact hash when this historical artifact was captured.
 Its rows therefore report `artifact or external runner pin is pending`. The
-current manifest now has a complete SHA-bound py-horned runner; that later
-implementation does not retroactively alter this report. The
+current manifest now has complete SHA-bound py-horned and raw Horned runners;
+those later implementations do not retroactively alter this report. The
 installed-native-wheel row separately reports that a source-tree/native build
 is ineligible and an isolated delivered wheel is required.
 

@@ -6,7 +6,7 @@ reference-machine key, and phase boundary used by the redesign scaffold. It
 deliberately distinguishes raw `horned-model-ready` from gating
 `common-contract-ready`.
 
-The checked-in evidence has two explicitly development-only artifacts.
+The checked-in evidence has three explicitly development-only artifacts.
 `shared-host-smoke.json` is the historical tiny Functional Syntax smoke of the
 core Python adapter; it predates the paired scheduler and executable ratio
 gates, so its older fields remain accurate. `shared-host-py-horned-smoke.json`
@@ -14,9 +14,14 @@ binds the first complete external runner to clean commit `3315c22`. Across
 fresh/steady and resident/file modes, three paired repetitions per scenario
 produce 12 passing common-contract assertions. Its persistent process attests
 eight requests, eight distinct ontology instances, bounded empty stderr, and a
-clean shutdown. The reference machine is still unapproved, the corpus is tiny,
-and the installed-wheel numerator was not selected, so this is lifecycle and
-correctness evidence—not a performance gate or retained-native result.
+clean shutdown. `shared-host-horned-raw-smoke.json` binds raw runner v1 and its
+exact executable to clean commit `f6845ec`; the same four mode combinations and
+three repetitions publish one stable raw inventory, while one persistent child
+serves eight requests with eight distinct ontology identities and clean
+shutdown. The reference machine is still unapproved, each committed corpus is
+tiny, and the required native numerators were not selected, so these are
+lifecycle and correctness evidence—not performance gates or retained-native
+results.
 
 Validate the ledger without installing or invoking any comparator:
 

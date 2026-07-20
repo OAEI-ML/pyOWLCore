@@ -1,0 +1,4481 @@
+{
+  "comparative_complete": false,
+  "comparator_manifest_sha256": "2ea395c5b1bbbdb6ce31013b59604b455fa837cc5a3a0d2485fc93e4c4614527",
+  "completion_requirements": {
+    "all_scenarios_succeeded": false,
+    "contracts_match": false,
+    "expected_scenario_count": 0,
+    "file_lane_implemented": true,
+    "missing_required_pins": [
+      "horned-owl-common",
+      "owlapi-common",
+      "py-horned-common",
+      "pyowl-direct-rust-common",
+      "pyowl-native-wheel-common"
+    ],
+    "paired_randomization_implemented": true,
+    "passed": false,
+    "ratio_gates": {
+      "comparisons": [
+        {
+          "boundary": "common-contract-ready",
+          "denominator_lane": "horned-owl-common",
+          "id": "direct-rust-vs-horned-common/fresh-process/resident-bytes",
+          "input_mode": "resident-bytes",
+          "metrics": {
+            "rss": {
+              "aggregate_passed": false,
+              "aggregate_threshold": 1.15,
+              "aggregate_value": null,
+              "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+              "large_corpus_guardrails": [],
+              "large_corpus_guardrails_passed": true,
+              "large_corpus_threshold": 1.25,
+              "metric": "incremental peak RSS bytes",
+              "metric_selector": "incremental-peak-rss",
+              "passed": false,
+              "reasons": [
+                {
+                  "reason": "required representative corpus set is empty"
+                }
+              ],
+              "sample_sources": {
+                "denominator": "metrics.rss_peak_increment_bytes",
+                "numerator": "metrics.rss_peak_increment_bytes"
+              },
+              "statistics": null
+            },
+            "wall": {
+              "aggregate_passed": false,
+              "aggregate_threshold": 1.1,
+              "aggregate_value": null,
+              "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+              "large_corpus_guardrails": [],
+              "large_corpus_guardrails_passed": true,
+              "large_corpus_threshold": 1.25,
+              "metric": "startup-to-ready wall_ns",
+              "metric_selector": "startup-to-ready-wall",
+              "passed": false,
+              "reasons": [
+                {
+                  "reason": "required representative corpus set is empty"
+                }
+              ],
+              "sample_sources": {
+                "denominator": "transport_metrics.parent_wall_ns",
+                "numerator": "transport_metrics.parent_wall_ns"
+              },
+              "statistics": null
+            }
+          },
+          "numerator_lane": "pyowl-direct-rust-common",
+          "passed": false,
+          "process_mode": "fresh-process"
+        },
+        {
+          "boundary": "common-contract-ready",
+          "denominator_lane": "horned-owl-common",
+          "id": "direct-rust-vs-horned-common/steady-process/resident-bytes",
+          "input_mode": "resident-bytes",
+          "metrics": {
+            "rss": {
+              "aggregate_passed": false,
+              "aggregate_threshold": 1.15,
+              "aggregate_value": null,
+              "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+              "large_corpus_guardrails": [],
+              "large_corpus_guardrails_passed": true,
+              "large_corpus_threshold": 1.25,
+              "metric": "incremental peak RSS bytes",
+              "metric_selector": "incremental-peak-rss",
+              "passed": false,
+              "reasons": [
+                {
+                  "reason": "required representative corpus set is empty"
+                }
+              ],
+              "sample_sources": {
+                "denominator": "metrics.rss_peak_increment_bytes",
+                "numerator": "metrics.rss_peak_increment_bytes"
+              },
+              "statistics": null
+            },
+            "wall": {
+              "aggregate_passed": false,
+              "aggregate_threshold": 1.1,
+              "aggregate_value": null,
+              "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+              "large_corpus_guardrails": [],
+              "large_corpus_guardrails_passed": true,
+              "large_corpus_threshold": 1.25,
+              "metric": "call-to-ready wall_ns",
+              "metric_selector": "call-to-ready-wall",
+              "passed": false,
+              "reasons": [
+                {
+                  "reason": "required representative corpus set is empty"
+                }
+              ],
+              "sample_sources": {
+                "denominator": "metrics.wall_ns",
+                "numerator": "metrics.wall_ns"
+              },
+              "statistics": null
+            }
+          },
+          "numerator_lane": "pyowl-direct-rust-common",
+          "passed": false,
+          "process_mode": "steady-process"
+        },
+        {
+          "boundary": "common-contract-ready",
+          "denominator_lane": "py-horned-common",
+          "id": "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes",
+          "input_mode": "resident-bytes",
+          "metrics": {
+            "rss": {
+              "aggregate_passed": false,
+              "aggregate_threshold": 1.15,
+              "aggregate_value": null,
+              "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+              "large_corpus_guardrails": [],
+              "large_corpus_guardrails_passed": true,
+              "large_corpus_threshold": 1.25,
+              "metric": "incremental peak RSS bytes",
+              "metric_selector": "incremental-peak-rss",
+              "passed": false,
+              "reasons": [
+                {
+                  "reason": "required representative corpus set is empty"
+                }
+              ],
+              "sample_sources": {
+                "denominator": "metrics.rss_peak_increment_bytes",
+                "numerator": "metrics.rss_peak_increment_bytes"
+              },
+              "statistics": null
+            },
+            "wall": {
+              "aggregate_passed": false,
+              "aggregate_threshold": 1.1,
+              "aggregate_value": null,
+              "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+              "large_corpus_guardrails": [],
+              "large_corpus_guardrails_passed": true,
+              "large_corpus_threshold": 1.25,
+              "metric": "startup-to-ready wall_ns",
+              "metric_selector": "startup-to-ready-wall",
+              "passed": false,
+              "reasons": [
+                {
+                  "reason": "required representative corpus set is empty"
+                }
+              ],
+              "sample_sources": {
+                "denominator": "transport_metrics.parent_wall_ns",
+                "numerator": "metrics.startup_to_ready_ns"
+              },
+              "statistics": null
+            }
+          },
+          "numerator_lane": "pyowl-native-wheel-common",
+          "passed": false,
+          "process_mode": "fresh-process"
+        },
+        {
+          "boundary": "common-contract-ready",
+          "denominator_lane": "py-horned-common",
+          "id": "installed-wheel-vs-py-horned-common/steady-process/resident-bytes",
+          "input_mode": "resident-bytes",
+          "metrics": {
+            "rss": {
+              "aggregate_passed": false,
+              "aggregate_threshold": 1.15,
+              "aggregate_value": null,
+              "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+              "large_corpus_guardrails": [],
+              "large_corpus_guardrails_passed": true,
+              "large_corpus_threshold": 1.25,
+              "metric": "incremental peak RSS bytes",
+              "metric_selector": "incremental-peak-rss",
+              "passed": false,
+              "reasons": [
+                {
+                  "reason": "required representative corpus set is empty"
+                }
+              ],
+              "sample_sources": {
+                "denominator": "metrics.rss_peak_increment_bytes",
+                "numerator": "metrics.rss_peak_increment_bytes"
+              },
+              "statistics": null
+            },
+            "wall": {
+              "aggregate_passed": false,
+              "aggregate_threshold": 1.1,
+              "aggregate_value": null,
+              "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+              "large_corpus_guardrails": [],
+              "large_corpus_guardrails_passed": true,
+              "large_corpus_threshold": 1.25,
+              "metric": "call-to-ready wall_ns",
+              "metric_selector": "call-to-ready-wall",
+              "passed": false,
+              "reasons": [
+                {
+                  "reason": "required representative corpus set is empty"
+                }
+              ],
+              "sample_sources": {
+                "denominator": "metrics.wall_ns",
+                "numerator": "metrics.wall_ns"
+              },
+              "statistics": null
+            }
+          },
+          "numerator_lane": "pyowl-native-wheel-common",
+          "passed": false,
+          "process_mode": "steady-process"
+        }
+      ],
+      "configured": true,
+      "excluded_equivalence_denominator_lanes": [
+        "horned-owl-raw"
+      ],
+      "installed_wheel_call_to_ready_overhead": [
+        {
+          "denominator_lane": "pyowl-direct-rust-common",
+          "id": "installed-wheel-call-overhead/fresh-process/resident-bytes",
+          "input_mode": "resident-bytes",
+          "metric": "call-to-ready wall_ns",
+          "numerator_lane": "pyowl-native-wheel-common",
+          "passed": false,
+          "process_mode": "fresh-process",
+          "result": {
+            "aggregate_passed": false,
+            "aggregate_threshold": 1.15,
+            "aggregate_value": null,
+            "gate_statistic": "aggregate median-ratio estimate",
+            "large_corpus_guardrails": [],
+            "large_corpus_guardrails_passed": true,
+            "large_corpus_threshold": null,
+            "metric": "call-to-ready wall_ns",
+            "metric_selector": "call-to-ready-wall",
+            "passed": false,
+            "reasons": [
+              {
+                "reason": "required representative corpus set is empty"
+              }
+            ],
+            "sample_sources": {
+              "denominator": "metrics.wall_ns",
+              "numerator": "metrics.wall_ns"
+            },
+            "statistics": null
+          }
+        },
+        {
+          "denominator_lane": "pyowl-direct-rust-common",
+          "id": "installed-wheel-call-overhead/steady-process/resident-bytes",
+          "input_mode": "resident-bytes",
+          "metric": "call-to-ready wall_ns",
+          "numerator_lane": "pyowl-native-wheel-common",
+          "passed": false,
+          "process_mode": "steady-process",
+          "result": {
+            "aggregate_passed": false,
+            "aggregate_threshold": 1.15,
+            "aggregate_value": null,
+            "gate_statistic": "aggregate median-ratio estimate",
+            "large_corpus_guardrails": [],
+            "large_corpus_guardrails_passed": true,
+            "large_corpus_threshold": null,
+            "metric": "call-to-ready wall_ns",
+            "metric_selector": "call-to-ready-wall",
+            "passed": false,
+            "reasons": [
+              {
+                "reason": "required representative corpus set is empty"
+              }
+            ],
+            "sample_sources": {
+              "denominator": "metrics.wall_ns",
+              "numerator": "metrics.wall_ns"
+            },
+            "statistics": null
+          }
+        }
+      ],
+      "passed": false,
+      "ratio_direction": "pyowl-core native / comparator",
+      "raw_horned_equivalence_denominator_allowed": false,
+      "reasons": [
+        {
+          "reason": "no non-synthetic representative medium corpus was selected"
+        },
+        {
+          "reason": "no non-synthetic representative large corpus was selected"
+        },
+        {
+          "reason": "no representative large biomedical RDF/XML corpus was selected"
+        },
+        {
+          "reason": "no annotation/list-heavy representative medium-or-larger corpus was selected"
+        },
+        {
+          "comparison": "direct-rust-vs-horned-common/fresh-process/resident-bytes",
+          "metric": "wall",
+          "reason": "required representative corpus set is empty"
+        },
+        {
+          "comparison": "direct-rust-vs-horned-common/fresh-process/resident-bytes",
+          "metric": "rss",
+          "reason": "required representative corpus set is empty"
+        },
+        {
+          "comparison": "direct-rust-vs-horned-common/steady-process/resident-bytes",
+          "metric": "wall",
+          "reason": "required representative corpus set is empty"
+        },
+        {
+          "comparison": "direct-rust-vs-horned-common/steady-process/resident-bytes",
+          "metric": "rss",
+          "reason": "required representative corpus set is empty"
+        },
+        {
+          "comparison": "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes",
+          "metric": "wall",
+          "reason": "required representative corpus set is empty"
+        },
+        {
+          "comparison": "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes",
+          "metric": "rss",
+          "reason": "required representative corpus set is empty"
+        },
+        {
+          "comparison": "installed-wheel-vs-py-horned-common/steady-process/resident-bytes",
+          "metric": "wall",
+          "reason": "required representative corpus set is empty"
+        },
+        {
+          "comparison": "installed-wheel-vs-py-horned-common/steady-process/resident-bytes",
+          "metric": "rss",
+          "reason": "required representative corpus set is empty"
+        },
+        {
+          "comparison": "installed-wheel-call-overhead/fresh-process/resident-bytes",
+          "metric": "call-to-ready wall_ns",
+          "reason": "required representative corpus set is empty"
+        },
+        {
+          "comparison": "installed-wheel-call-overhead/steady-process/resident-bytes",
+          "metric": "call-to-ready wall_ns",
+          "reason": "required representative corpus set is empty"
+        }
+      ],
+      "required_corpora": {
+        "annotation_list_heavy": [],
+        "large": [],
+        "large_biomedical_rdfxml": [],
+        "medium": []
+      },
+      "required_input_mode": "resident-bytes",
+      "required_process_modes": [
+        "fresh-process",
+        "steady-process"
+      ],
+      "schema": "pyowl-core/comparator-ratio-gates/v1"
+    },
+    "reasons": [
+      "no non-synthetic representative medium corpus was selected",
+      "no non-synthetic representative large corpus was selected",
+      "no representative large biomedical RDF/XML corpus was selected",
+      "no annotation/list-heavy medium-or-larger corpus was selected",
+      "not every required comparator pin was selected",
+      "the complete required common-contract matrix did not match",
+      "the reference machine is not approved and matched to captured evidence",
+      "executable comparative ratio gates are configured but did not pass"
+    ],
+    "reference_machine_approved": false,
+    "reference_machine_matches_environment": false,
+    "required_corpus_tiers": [
+      "medium",
+      "large"
+    ],
+    "required_input_modes": [
+      "resident-bytes",
+      "file"
+    ],
+    "required_modes_requested": true,
+    "required_pin_ids": [
+      "pyowl-python-common",
+      "pyowl-native-wheel-common",
+      "pyowl-direct-rust-common",
+      "horned-owl-raw",
+      "horned-owl-common",
+      "py-horned-common",
+      "owlapi-common"
+    ],
+    "required_process_modes": [
+      "fresh-process",
+      "steady-process"
+    ],
+    "scenario_failures": [],
+    "selected_representative_corpora": {
+      "annotation_list_heavy": [],
+      "large": [],
+      "large_biomedical_rdfxml": [],
+      "medium": []
+    },
+    "successful_scenario_count": 0
+  },
+  "contract_valid": true,
+  "corpora": [
+    {
+      "bytes": 1450,
+      "format": "functional",
+      "id": "generated-tiny-functional",
+      "sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+      "tier": "tiny"
+    }
+  ],
+  "corpus_manifest_sha256": "1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928",
+  "environment": {
+    "captured_utc": "2026-07-20T19:42:43.619688+00:00",
+    "comparison_key": "a32e35c085c5a7cde43f06ef760f9fed56c22eb9ba4e601e911ef01a72e65da6",
+    "cpu": {
+      "logical_count": 12,
+      "model": null
+    },
+    "git_commit": "f6845ecf42cb756776084de286085ee70ccaad82",
+    "git_dirty": false,
+    "memory": {
+      "physical_bytes": 34359738368
+    },
+    "native": {
+      "artifact": null,
+      "available": false,
+      "features": [],
+      "reason": "native extension is not installed",
+      "version": null
+    },
+    "platform": {
+      "machine": "x86_64",
+      "processor": "i386",
+      "python_build_platform": "macOS-26.5.2-x86_64-i386-64bit",
+      "release": "25.5.0",
+      "system": "Darwin",
+      "version": "Darwin Kernel Version 25.5.0: Tue Jun  9 22:26:23 PDT 2026; root:xnu-12377.121.10~1/RELEASE_X86_64"
+    },
+    "power_mode": "not measured; reference operator must record externally",
+    "python": {
+      "compiler": "Clang 15.0.0 (clang-1500.3.9.4)",
+      "executable": "python",
+      "implementation": "CPython",
+      "pyowl_core": "0.1.0.dev0",
+      "version": "3.12.3"
+    },
+    "rust": {
+      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+    },
+    "storage": "not measured; corpus bytes are resident before timed phases",
+    "tool_versions": {
+      "mypy": "2.3.0",
+      "pytest": "9.1.1",
+      "ruff": "0.15.22",
+      "tomli": null
+    }
+  },
+  "equality_assertions": [
+    {
+      "id": "generated-tiny-functional/file/fresh-process/pyowl-python-common/common-contract-equality",
+      "passed": true,
+      "reason": null
+    },
+    {
+      "id": "generated-tiny-functional/file/steady-process/pyowl-python-common/common-contract-equality",
+      "passed": true,
+      "reason": null
+    },
+    {
+      "id": "generated-tiny-functional/resident-bytes/fresh-process/pyowl-python-common/common-contract-equality",
+      "passed": true,
+      "reason": null
+    },
+    {
+      "id": "generated-tiny-functional/resident-bytes/steady-process/pyowl-python-common/common-contract-equality",
+      "passed": true,
+      "reason": null
+    },
+    {
+      "id": "generated-tiny-functional/fresh-process/pyowl-python-common/resident-file-common-contract-equality",
+      "passed": true,
+      "reason": null
+    },
+    {
+      "id": "generated-tiny-functional/steady-process/pyowl-python-common/resident-file-common-contract-equality",
+      "passed": true,
+      "reason": null
+    }
+  ],
+  "execution_errors": [],
+  "lanes": [
+    {
+      "boundary": "common-contract-ready",
+      "contract": {
+        "complete_import_closure": true,
+        "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+        "corpus_id": "generated-tiny-functional",
+        "diagnostics": [],
+        "fingerprints": {
+          "document": {
+            "algorithm": "sha256",
+            "digest": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+            "preimage_bytes": 1538,
+            "preimage_sha256": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+            "schema": 1
+          },
+          "logical": {
+            "algorithm": "sha256",
+            "digest": "04933473201dcf51c49116feaf7f417310619a6926d8fbf84764744fd9058381",
+            "preimage_bytes": 974,
+            "preimage_sha256": "04933473201dcf51c49116feaf7f417310619a6926d8fbf84764744fd9058381",
+            "schema": 1
+          },
+          "signature": {
+            "algorithm": "sha256",
+            "digest": "b66fc3c366b742d8a6accf42758cb819ea8a2fd99affb5bf3df889eed9cd1b9b",
+            "preimage_bytes": 531,
+            "preimage_sha256": "b66fc3c366b742d8a6accf42758cb819ea8a2fd99affb5bf3df889eed9cd1b9b",
+            "schema": 1
+          },
+          "structural": {
+            "algorithm": "sha256",
+            "digest": "0bd511c9eb62016cf0c0d7b4ded76f903b40c9f9509da79e3dd26672ecd4fc7d",
+            "preimage_bytes": 1794,
+            "preimage_sha256": "0bd511c9eb62016cf0c0d7b4ded76f903b40c9f9509da79e3dd26672ecd4fc7d",
+            "schema": 1
+          }
+        },
+        "identity": {
+          "documents": [
+            {
+              "document_fingerprint": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+              "document_iri": "01026875726e3a70796f776c2d636f72653a636f6d70617261746f722d736f757263653a7368613235363a61313839653763363239616536323938636632326635663861326661333664343134623334306337633861363231616539373437623662353735653631653261",
+              "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+              "format": "functional",
+              "ontology_iri": "01022868747470733a2f2f6578616d706c652e6f72672f70796f776c2d636f72652f62656e63686d61726b",
+              "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+              "status": "root",
+              "version_iri": null
+            }
+          ],
+          "import_policy": "record_unresolved",
+          "imports": [],
+          "offline": true,
+          "resolver_configuration_sha256": "52ee331006a67fd86ad16cd4f7bd4be7cff89b81f0617c210618765cbf6872d8",
+          "root_document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d"
+        },
+        "ledger": {
+          "diagnostic_count": 0,
+          "diagnostics_bytes": 2,
+          "diagnostics_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "identity_bytes": 921,
+          "identity_sha256": "a089e4acf97cecf638b395b272df7b7ea5d867fda817527267d6a491de20162a",
+          "inventories": {
+            "axioms": {
+              "canonical_bytes": 1431,
+              "count": 15,
+              "sha256": "375a55b4cfbee4f1098dc6823aeb4cc66175213405445129f92693547cd86e88",
+              "transcript_bytes": 1496
+            },
+            "documents": {
+              "canonical_bytes": 132,
+              "count": 1,
+              "sha256": "aa3f43122ee3298e3c2536a29fc083af2af963c6020b87dcdc542c87b6e7ef86",
+              "transcript_bytes": 177
+            },
+            "extensions": {
+              "canonical_bytes": 0,
+              "count": 0,
+              "sha256": "0712b6859e228ce2e0c927d25e42f43bd99a4543ae06ad54ddf81cda4a030893",
+              "transcript_bytes": 43
+            },
+            "ontology_annotations": {
+              "canonical_bytes": 0,
+              "count": 0,
+              "sha256": "0712b6859e228ce2e0c927d25e42f43bd99a4543ae06ad54ddf81cda4a030893",
+              "transcript_bytes": 43
+            },
+            "signature": {
+              "canonical_bytes": 488,
+              "count": 8,
+              "sha256": "640b598b476bec30196a64f5933223c17cd395d0f6e38f09e8d61086d256ab76",
+              "transcript_bytes": 539
+            }
+          },
+          "provenance_bytes": 3371,
+          "provenance_sha256": "be0d7b7da2ce34e17547aa69ce9aa1573a29642ca01874b2b8622901fbf45bcf"
+        },
+        "model_schema": 1,
+        "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+        "provenance": {
+          "document_count": 1,
+          "origin_entry_count": 15,
+          "origins": [
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 7,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "0650a1a00698f847a71010f6ecfd814db524291a482f7cf358df20878bac154f"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 14,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "0b99b66bc67a6d0b518ff64b6a5e306750643337e6e2247effcba98d020c2d43"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 2,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "29bf7c41bc6c8d3f61104b2d73348c4f577829bc2b1491f731540cb419b3ebc6"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 0,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "319a75c5aa7e4210228e5210b8016133a90b70d20fb7adace367ccdc1309f849"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 10,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "3429729a67cab0f15998a7478ecd1ad274cd7a7dc7c8340304cb9ef652e67aff"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 12,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "443406c14614f793c2dbf539dbed3ec0bde32567b3232d36f047b896f8da54f5"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 6,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "4e83edb6319f0d8dd5ff808d932fc7f0e8cfdc03b3b53913dec62cf7c6e9b9bc"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 8,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "6d8492b54d415f98ad8dc2563cafcd7c878f141fe91c7739bb00c59caf15d5b6"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 13,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "79f83b334d68a9c712831a2f4c4c9d7d06f52fa1cb4d24a3c12ec855eb69d4ce"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 3,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "876748b6dbbc8336924da14103bdddc0fa507043182ac08d2d76ad21445d839d"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 5,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "88af7b170ab03ba7d2587e675409fdca8d5c4afbf284ace3adbb9580312f757a"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 1,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "ef14b0ef2a320a9cc384476fb23239bc9566575375fc3d602f4430de80b8243d"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 9,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "f57d5a144aa953b1de942c9ea605c3bd8a8d248fe7774d68753e66420eecf0bc"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 4,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "fd9eafd902ad656ada743250b059943d7d715abab6bf69323229470cc79fe775"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 11,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "ff5ec1b20cda076f71f981c14bc580548d511f79de874f15fb74f905929ceead"
+            }
+          ],
+          "source_byte_count": 1450
+        },
+        "root_document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+        "schema": "pyowl-core/comparator-common-contract/v1",
+        "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a"
+      },
+      "corpus_id": "generated-tiny-functional",
+      "gating": true,
+      "implementation": "pyowl-core-python",
+      "input_mode": "resident-bytes",
+      "lane": "pyowl-python-common",
+      "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+      "process_mode": "steady-process",
+      "reason": null,
+      "required": true,
+      "samples": [
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 0,
+          "input_mode": "resident-bytes",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 6324923,
+            "core_report_seconds": {
+              "load_seconds": 0.009690005012089387
+            },
+            "cpu_ns": 17859000,
+            "load_ns": 13397470,
+            "python_allocated_blocks_increment": 710,
+            "python_gc_objects_increment": 284,
+            "rss_peak_after_bytes": 40632320,
+            "rss_peak_before_bytes": 40591360,
+            "rss_peak_increment_bytes": 40960,
+            "temporary_bytes": 0,
+            "wall_ns": 19726196
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 0,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 1012377
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 1,
+          "input_mode": "resident-bytes",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 2741913,
+            "core_report_seconds": {
+              "load_seconds": 0.007072736014379188
+            },
+            "cpu_ns": 11419000,
+            "load_ns": 8684669,
+            "python_allocated_blocks_increment": 709,
+            "python_gc_objects_increment": 284,
+            "rss_peak_after_bytes": 40673280,
+            "rss_peak_before_bytes": 40640512,
+            "rss_peak_increment_bytes": 32768,
+            "temporary_bytes": 0,
+            "wall_ns": 11427951
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 1,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 465035
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 1,
+          "input_mode": "resident-bytes",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 3824473,
+            "core_report_seconds": {
+              "load_seconds": 0.00497751499642618
+            },
+            "cpu_ns": 10260000,
+            "load_ns": 6557175,
+            "python_allocated_blocks_increment": 709,
+            "python_gc_objects_increment": 284,
+            "rss_peak_after_bytes": 40722432,
+            "rss_peak_before_bytes": 40673280,
+            "rss_peak_increment_bytes": 49152,
+            "temporary_bytes": 0,
+            "wall_ns": 10382948
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 2,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 846194
+          }
+        }
+      ],
+      "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+      "status": "ok"
+    },
+    {
+      "boundary": "horned-model-ready",
+      "contract": null,
+      "corpus_id": "generated-tiny-functional",
+      "gating": false,
+      "implementation": "horned-owl",
+      "input_mode": "resident-bytes",
+      "lane": "horned-owl-raw",
+      "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+      "process_mode": "steady-process",
+      "reason": null,
+      "required": true,
+      "samples": [
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 1,
+          "input_mode": "resident-bytes",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 388000,
+            "load_ns": 367860,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 367860,
+              "raw_inventory": 14706
+            },
+            "rss_peak_after_bytes": 3211264,
+            "rss_peak_before_bytes": 3096576,
+            "rss_peak_increment_bytes": 114688,
+            "temporary_bytes": 0,
+            "wall_ns": 386160
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 0,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "ontology_instance_id": "4c2f6c144925238f9c6f38d99f4deae794c4c77ec8dfd23eeeebed58b4573685",
+            "parent_cpu_ns": 499000,
+            "parent_wall_ns": 54109542,
+            "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
+            "persistent_runner_pid": 84364,
+            "persistent_sequence": 1,
+            "request_bytes": 4211,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1699
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 0,
+          "input_mode": "resident-bytes",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 426000,
+            "load_ns": 402783,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 402783,
+              "raw_inventory": 15430
+            },
+            "rss_peak_after_bytes": 3465216,
+            "rss_peak_before_bytes": 3350528,
+            "rss_peak_increment_bytes": 114688,
+            "temporary_bytes": 0,
+            "wall_ns": 422316
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 1,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "ontology_instance_id": "f3037444e8199fd50b4975abeb829653e6e77b0c1332f2fb590d0b4b1c5f877e",
+            "parent_cpu_ns": 439000,
+            "parent_wall_ns": 45510311,
+            "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
+            "persistent_runner_pid": 84364,
+            "persistent_sequence": 2,
+            "request_bytes": 4211,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1699
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 0,
+          "input_mode": "resident-bytes",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 234000,
+            "load_ns": 220548,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 220548,
+              "raw_inventory": 9146
+            },
+            "rss_peak_after_bytes": 3592192,
+            "rss_peak_before_bytes": 3497984,
+            "rss_peak_increment_bytes": 94208,
+            "temporary_bytes": 0,
+            "wall_ns": 232155
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 2,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "ontology_instance_id": "c710f81f2ba4d4e833a7b67e3c734075aa50f26bedfa72bf1b8c2d9d68af994b",
+            "parent_cpu_ns": 293000,
+            "parent_wall_ns": 35953508,
+            "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
+            "persistent_runner_pid": 84364,
+            "persistent_sequence": 3,
+            "request_bytes": 4211,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1697
+          }
+        }
+      ],
+      "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+      "status": "ok"
+    },
+    {
+      "boundary": "common-contract-ready",
+      "contract": {
+        "complete_import_closure": true,
+        "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+        "corpus_id": "generated-tiny-functional",
+        "diagnostics": [],
+        "fingerprints": {
+          "document": {
+            "algorithm": "sha256",
+            "digest": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+            "preimage_bytes": 1538,
+            "preimage_sha256": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+            "schema": 1
+          },
+          "logical": {
+            "algorithm": "sha256",
+            "digest": "04933473201dcf51c49116feaf7f417310619a6926d8fbf84764744fd9058381",
+            "preimage_bytes": 974,
+            "preimage_sha256": "04933473201dcf51c49116feaf7f417310619a6926d8fbf84764744fd9058381",
+            "schema": 1
+          },
+          "signature": {
+            "algorithm": "sha256",
+            "digest": "b66fc3c366b742d8a6accf42758cb819ea8a2fd99affb5bf3df889eed9cd1b9b",
+            "preimage_bytes": 531,
+            "preimage_sha256": "b66fc3c366b742d8a6accf42758cb819ea8a2fd99affb5bf3df889eed9cd1b9b",
+            "schema": 1
+          },
+          "structural": {
+            "algorithm": "sha256",
+            "digest": "0bd511c9eb62016cf0c0d7b4ded76f903b40c9f9509da79e3dd26672ecd4fc7d",
+            "preimage_bytes": 1794,
+            "preimage_sha256": "0bd511c9eb62016cf0c0d7b4ded76f903b40c9f9509da79e3dd26672ecd4fc7d",
+            "schema": 1
+          }
+        },
+        "identity": {
+          "documents": [
+            {
+              "document_fingerprint": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+              "document_iri": "01026875726e3a70796f776c2d636f72653a636f6d70617261746f722d736f757263653a7368613235363a61313839653763363239616536323938636632326635663861326661333664343134623334306337633861363231616539373437623662353735653631653261",
+              "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+              "format": "functional",
+              "ontology_iri": "01022868747470733a2f2f6578616d706c652e6f72672f70796f776c2d636f72652f62656e63686d61726b",
+              "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+              "status": "root",
+              "version_iri": null
+            }
+          ],
+          "import_policy": "record_unresolved",
+          "imports": [],
+          "offline": true,
+          "resolver_configuration_sha256": "52ee331006a67fd86ad16cd4f7bd4be7cff89b81f0617c210618765cbf6872d8",
+          "root_document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d"
+        },
+        "ledger": {
+          "diagnostic_count": 0,
+          "diagnostics_bytes": 2,
+          "diagnostics_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "identity_bytes": 921,
+          "identity_sha256": "a089e4acf97cecf638b395b272df7b7ea5d867fda817527267d6a491de20162a",
+          "inventories": {
+            "axioms": {
+              "canonical_bytes": 1431,
+              "count": 15,
+              "sha256": "375a55b4cfbee4f1098dc6823aeb4cc66175213405445129f92693547cd86e88",
+              "transcript_bytes": 1496
+            },
+            "documents": {
+              "canonical_bytes": 132,
+              "count": 1,
+              "sha256": "aa3f43122ee3298e3c2536a29fc083af2af963c6020b87dcdc542c87b6e7ef86",
+              "transcript_bytes": 177
+            },
+            "extensions": {
+              "canonical_bytes": 0,
+              "count": 0,
+              "sha256": "0712b6859e228ce2e0c927d25e42f43bd99a4543ae06ad54ddf81cda4a030893",
+              "transcript_bytes": 43
+            },
+            "ontology_annotations": {
+              "canonical_bytes": 0,
+              "count": 0,
+              "sha256": "0712b6859e228ce2e0c927d25e42f43bd99a4543ae06ad54ddf81cda4a030893",
+              "transcript_bytes": 43
+            },
+            "signature": {
+              "canonical_bytes": 488,
+              "count": 8,
+              "sha256": "640b598b476bec30196a64f5933223c17cd395d0f6e38f09e8d61086d256ab76",
+              "transcript_bytes": 539
+            }
+          },
+          "provenance_bytes": 3371,
+          "provenance_sha256": "be0d7b7da2ce34e17547aa69ce9aa1573a29642ca01874b2b8622901fbf45bcf"
+        },
+        "model_schema": 1,
+        "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+        "provenance": {
+          "document_count": 1,
+          "origin_entry_count": 15,
+          "origins": [
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 7,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "0650a1a00698f847a71010f6ecfd814db524291a482f7cf358df20878bac154f"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 14,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "0b99b66bc67a6d0b518ff64b6a5e306750643337e6e2247effcba98d020c2d43"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 2,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "29bf7c41bc6c8d3f61104b2d73348c4f577829bc2b1491f731540cb419b3ebc6"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 0,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "319a75c5aa7e4210228e5210b8016133a90b70d20fb7adace367ccdc1309f849"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 10,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "3429729a67cab0f15998a7478ecd1ad274cd7a7dc7c8340304cb9ef652e67aff"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 12,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "443406c14614f793c2dbf539dbed3ec0bde32567b3232d36f047b896f8da54f5"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 6,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "4e83edb6319f0d8dd5ff808d932fc7f0e8cfdc03b3b53913dec62cf7c6e9b9bc"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 8,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "6d8492b54d415f98ad8dc2563cafcd7c878f141fe91c7739bb00c59caf15d5b6"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 13,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "79f83b334d68a9c712831a2f4c4c9d7d06f52fa1cb4d24a3c12ec855eb69d4ce"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 3,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "876748b6dbbc8336924da14103bdddc0fa507043182ac08d2d76ad21445d839d"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 5,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "88af7b170ab03ba7d2587e675409fdca8d5c4afbf284ace3adbb9580312f757a"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 1,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "ef14b0ef2a320a9cc384476fb23239bc9566575375fc3d602f4430de80b8243d"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 9,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "f57d5a144aa953b1de942c9ea605c3bd8a8d248fe7774d68753e66420eecf0bc"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 4,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "fd9eafd902ad656ada743250b059943d7d715abab6bf69323229470cc79fe775"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 11,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "ff5ec1b20cda076f71f981c14bc580548d511f79de874f15fb74f905929ceead"
+            }
+          ],
+          "source_byte_count": 1450
+        },
+        "root_document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+        "schema": "pyowl-core/comparator-common-contract/v1",
+        "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a"
+      },
+      "corpus_id": "generated-tiny-functional",
+      "gating": true,
+      "implementation": "pyowl-core-python",
+      "input_mode": "resident-bytes",
+      "lane": "pyowl-python-common",
+      "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+      "process_mode": "fresh-process",
+      "reason": null,
+      "required": true,
+      "samples": [
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 1,
+          "input_mode": "resident-bytes",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 5060426,
+            "core_report_seconds": {
+              "load_seconds": 0.16861434699967504
+            },
+            "cpu_ns": 19104000,
+            "load_ns": 173887667,
+            "python_allocated_blocks_increment": 942,
+            "python_gc_objects_increment": 410,
+            "rss_peak_after_bytes": 35397632,
+            "rss_peak_before_bytes": 34836480,
+            "rss_peak_increment_bytes": 561152,
+            "startup_to_ready_ns": 1744679682,
+            "temporary_bytes": 0,
+            "wall_ns": 178950773
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 0,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 824275
+          },
+          "transport_metrics": {
+            "request_bytes": 3972,
+            "stderr_bytes": 0,
+            "stdout_bytes": 8328
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 1,
+          "input_mode": "resident-bytes",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 2994863,
+            "core_report_seconds": {
+              "load_seconds": 0.006103613995946944
+            },
+            "cpu_ns": 11060000,
+            "load_ns": 8134496,
+            "python_allocated_blocks_increment": 937,
+            "python_gc_objects_increment": 410,
+            "rss_peak_after_bytes": 34611200,
+            "rss_peak_before_bytes": 34430976,
+            "rss_peak_increment_bytes": 180224,
+            "startup_to_ready_ns": 1045031914,
+            "temporary_bytes": 0,
+            "wall_ns": 11131225
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 1,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 488049
+          },
+          "transport_metrics": {
+            "request_bytes": 3972,
+            "stderr_bytes": 0,
+            "stdout_bytes": 8326
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 0,
+          "input_mode": "resident-bytes",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 3052199,
+            "core_report_seconds": {
+              "load_seconds": 0.005579309014137834
+            },
+            "cpu_ns": 10267000,
+            "load_ns": 7233641,
+            "python_allocated_blocks_increment": 944,
+            "python_gc_objects_increment": 410,
+            "rss_peak_after_bytes": 34217984,
+            "rss_peak_before_bytes": 33763328,
+            "rss_peak_increment_bytes": 454656,
+            "startup_to_ready_ns": 710394561,
+            "temporary_bytes": 0,
+            "wall_ns": 10287559
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 2,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 526325
+          },
+          "transport_metrics": {
+            "request_bytes": 3972,
+            "stderr_bytes": 0,
+            "stdout_bytes": 8326
+          }
+        }
+      ],
+      "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+      "status": "ok"
+    },
+    {
+      "boundary": "horned-model-ready",
+      "contract": null,
+      "corpus_id": "generated-tiny-functional",
+      "gating": false,
+      "implementation": "horned-owl",
+      "input_mode": "resident-bytes",
+      "lane": "horned-owl-raw",
+      "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+      "process_mode": "fresh-process",
+      "reason": null,
+      "required": true,
+      "samples": [
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 0,
+          "input_mode": "resident-bytes",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 569000,
+            "load_ns": 529797,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 529797,
+              "raw_inventory": 30482
+            },
+            "rss_peak_after_bytes": 2850816,
+            "rss_peak_before_bytes": 2170880,
+            "rss_peak_increment_bytes": 679936,
+            "temporary_bytes": 0,
+            "wall_ns": 563706
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 0,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "parent_cpu_ns": 8371000,
+            "parent_wall_ns": 76118545,
+            "request_bytes": 4068,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1466
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 0,
+          "input_mode": "resident-bytes",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 709000,
+            "load_ns": 661493,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 661493,
+              "raw_inventory": 38589
+            },
+            "rss_peak_after_bytes": 2838528,
+            "rss_peak_before_bytes": 2179072,
+            "rss_peak_increment_bytes": 659456,
+            "temporary_bytes": 0,
+            "wall_ns": 704097
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 1,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "parent_cpu_ns": 7589000,
+            "parent_wall_ns": 75203265,
+            "request_bytes": 4068,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1466
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 1,
+          "input_mode": "resident-bytes",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 513000,
+            "load_ns": 476870,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 476870,
+              "raw_inventory": 28909
+            },
+            "rss_peak_after_bytes": 2818048,
+            "rss_peak_before_bytes": 2138112,
+            "rss_peak_increment_bytes": 679936,
+            "temporary_bytes": 0,
+            "wall_ns": 508601
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 2,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "parent_cpu_ns": 7382000,
+            "parent_wall_ns": 76454473,
+            "request_bytes": 4068,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1466
+          }
+        }
+      ],
+      "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+      "status": "ok"
+    },
+    {
+      "boundary": "common-contract-ready",
+      "contract": {
+        "complete_import_closure": true,
+        "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+        "corpus_id": "generated-tiny-functional",
+        "diagnostics": [],
+        "fingerprints": {
+          "document": {
+            "algorithm": "sha256",
+            "digest": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+            "preimage_bytes": 1538,
+            "preimage_sha256": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+            "schema": 1
+          },
+          "logical": {
+            "algorithm": "sha256",
+            "digest": "04933473201dcf51c49116feaf7f417310619a6926d8fbf84764744fd9058381",
+            "preimage_bytes": 974,
+            "preimage_sha256": "04933473201dcf51c49116feaf7f417310619a6926d8fbf84764744fd9058381",
+            "schema": 1
+          },
+          "signature": {
+            "algorithm": "sha256",
+            "digest": "b66fc3c366b742d8a6accf42758cb819ea8a2fd99affb5bf3df889eed9cd1b9b",
+            "preimage_bytes": 531,
+            "preimage_sha256": "b66fc3c366b742d8a6accf42758cb819ea8a2fd99affb5bf3df889eed9cd1b9b",
+            "schema": 1
+          },
+          "structural": {
+            "algorithm": "sha256",
+            "digest": "0bd511c9eb62016cf0c0d7b4ded76f903b40c9f9509da79e3dd26672ecd4fc7d",
+            "preimage_bytes": 1794,
+            "preimage_sha256": "0bd511c9eb62016cf0c0d7b4ded76f903b40c9f9509da79e3dd26672ecd4fc7d",
+            "schema": 1
+          }
+        },
+        "identity": {
+          "documents": [
+            {
+              "document_fingerprint": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+              "document_iri": "01026875726e3a70796f776c2d636f72653a636f6d70617261746f722d736f757263653a7368613235363a61313839653763363239616536323938636632326635663861326661333664343134623334306337633861363231616539373437623662353735653631653261",
+              "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+              "format": "functional",
+              "ontology_iri": "01022868747470733a2f2f6578616d706c652e6f72672f70796f776c2d636f72652f62656e63686d61726b",
+              "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+              "status": "root",
+              "version_iri": null
+            }
+          ],
+          "import_policy": "record_unresolved",
+          "imports": [],
+          "offline": true,
+          "resolver_configuration_sha256": "52ee331006a67fd86ad16cd4f7bd4be7cff89b81f0617c210618765cbf6872d8",
+          "root_document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d"
+        },
+        "ledger": {
+          "diagnostic_count": 0,
+          "diagnostics_bytes": 2,
+          "diagnostics_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "identity_bytes": 921,
+          "identity_sha256": "a089e4acf97cecf638b395b272df7b7ea5d867fda817527267d6a491de20162a",
+          "inventories": {
+            "axioms": {
+              "canonical_bytes": 1431,
+              "count": 15,
+              "sha256": "375a55b4cfbee4f1098dc6823aeb4cc66175213405445129f92693547cd86e88",
+              "transcript_bytes": 1496
+            },
+            "documents": {
+              "canonical_bytes": 132,
+              "count": 1,
+              "sha256": "aa3f43122ee3298e3c2536a29fc083af2af963c6020b87dcdc542c87b6e7ef86",
+              "transcript_bytes": 177
+            },
+            "extensions": {
+              "canonical_bytes": 0,
+              "count": 0,
+              "sha256": "0712b6859e228ce2e0c927d25e42f43bd99a4543ae06ad54ddf81cda4a030893",
+              "transcript_bytes": 43
+            },
+            "ontology_annotations": {
+              "canonical_bytes": 0,
+              "count": 0,
+              "sha256": "0712b6859e228ce2e0c927d25e42f43bd99a4543ae06ad54ddf81cda4a030893",
+              "transcript_bytes": 43
+            },
+            "signature": {
+              "canonical_bytes": 488,
+              "count": 8,
+              "sha256": "640b598b476bec30196a64f5933223c17cd395d0f6e38f09e8d61086d256ab76",
+              "transcript_bytes": 539
+            }
+          },
+          "provenance_bytes": 3371,
+          "provenance_sha256": "be0d7b7da2ce34e17547aa69ce9aa1573a29642ca01874b2b8622901fbf45bcf"
+        },
+        "model_schema": 1,
+        "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+        "provenance": {
+          "document_count": 1,
+          "origin_entry_count": 15,
+          "origins": [
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 7,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "0650a1a00698f847a71010f6ecfd814db524291a482f7cf358df20878bac154f"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 14,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "0b99b66bc67a6d0b518ff64b6a5e306750643337e6e2247effcba98d020c2d43"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 2,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "29bf7c41bc6c8d3f61104b2d73348c4f577829bc2b1491f731540cb419b3ebc6"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 0,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "319a75c5aa7e4210228e5210b8016133a90b70d20fb7adace367ccdc1309f849"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 10,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "3429729a67cab0f15998a7478ecd1ad274cd7a7dc7c8340304cb9ef652e67aff"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 12,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "443406c14614f793c2dbf539dbed3ec0bde32567b3232d36f047b896f8da54f5"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 6,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "4e83edb6319f0d8dd5ff808d932fc7f0e8cfdc03b3b53913dec62cf7c6e9b9bc"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 8,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "6d8492b54d415f98ad8dc2563cafcd7c878f141fe91c7739bb00c59caf15d5b6"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 13,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "79f83b334d68a9c712831a2f4c4c9d7d06f52fa1cb4d24a3c12ec855eb69d4ce"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 3,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "876748b6dbbc8336924da14103bdddc0fa507043182ac08d2d76ad21445d839d"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 5,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "88af7b170ab03ba7d2587e675409fdca8d5c4afbf284ace3adbb9580312f757a"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 1,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "ef14b0ef2a320a9cc384476fb23239bc9566575375fc3d602f4430de80b8243d"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 9,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "f57d5a144aa953b1de942c9ea605c3bd8a8d248fe7774d68753e66420eecf0bc"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 4,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "fd9eafd902ad656ada743250b059943d7d715abab6bf69323229470cc79fe775"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 11,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "ff5ec1b20cda076f71f981c14bc580548d511f79de874f15fb74f905929ceead"
+            }
+          ],
+          "source_byte_count": 1450
+        },
+        "root_document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+        "schema": "pyowl-core/comparator-common-contract/v1",
+        "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a"
+      },
+      "corpus_id": "generated-tiny-functional",
+      "gating": true,
+      "implementation": "pyowl-core-python",
+      "input_mode": "file",
+      "lane": "pyowl-python-common",
+      "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+      "process_mode": "steady-process",
+      "reason": null,
+      "required": true,
+      "samples": [
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 1,
+          "input_mode": "file",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 3589087,
+            "core_report_seconds": {
+              "load_seconds": 0.006714567018207163
+            },
+            "cpu_ns": 12902000,
+            "load_ns": 9598698,
+            "python_allocated_blocks_increment": 713,
+            "python_gc_objects_increment": 284,
+            "rss_peak_after_bytes": 46120960,
+            "rss_peak_before_bytes": 45719552,
+            "rss_peak_increment_bytes": 401408,
+            "temporary_bytes": 1450,
+            "wall_ns": 13188857
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 0,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 667693
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 0,
+          "input_mode": "file",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 2901699,
+            "core_report_seconds": {
+              "load_seconds": 0.004136254021432251
+            },
+            "cpu_ns": 8293000,
+            "load_ns": 5412970,
+            "python_allocated_blocks_increment": 713,
+            "python_gc_objects_increment": 284,
+            "rss_peak_after_bytes": 46133248,
+            "rss_peak_before_bytes": 46120960,
+            "rss_peak_increment_bytes": 12288,
+            "temporary_bytes": 1450,
+            "wall_ns": 8316086
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 1,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 824489
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 0,
+          "input_mode": "file",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 3992523,
+            "core_report_seconds": {
+              "load_seconds": 0.006109595007728785
+            },
+            "cpu_ns": 11543000,
+            "load_ns": 7885496,
+            "python_allocated_blocks_increment": 713,
+            "python_gc_objects_increment": 284,
+            "rss_peak_after_bytes": 46284800,
+            "rss_peak_before_bytes": 46133248,
+            "rss_peak_increment_bytes": 151552,
+            "temporary_bytes": 1450,
+            "wall_ns": 11879088
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 2,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 602492
+          }
+        }
+      ],
+      "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+      "status": "ok"
+    },
+    {
+      "boundary": "horned-model-ready",
+      "contract": null,
+      "corpus_id": "generated-tiny-functional",
+      "gating": false,
+      "implementation": "horned-owl",
+      "input_mode": "file",
+      "lane": "horned-owl-raw",
+      "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+      "process_mode": "steady-process",
+      "reason": null,
+      "required": true,
+      "samples": [
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 0,
+          "input_mode": "file",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 386000,
+            "load_ns": 389832,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 389832,
+              "raw_inventory": 12001
+            },
+            "rss_peak_after_bytes": 3850240,
+            "rss_peak_before_bytes": 3772416,
+            "rss_peak_increment_bytes": 77824,
+            "temporary_bytes": 1450,
+            "wall_ns": 405132
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 0,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "ontology_instance_id": "2affa18f5277f07bb41b67688dfbf46273d032f25941fb249cabd3a7fb8f5bdc",
+            "parent_cpu_ns": 509000,
+            "parent_wall_ns": 35150283,
+            "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
+            "persistent_runner_pid": 84364,
+            "persistent_sequence": 5,
+            "request_bytes": 4201,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1691
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 1,
+          "input_mode": "file",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 255000,
+            "load_ns": 288637,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 288637,
+              "raw_inventory": 12852
+            },
+            "rss_peak_after_bytes": 3923968,
+            "rss_peak_before_bytes": 3899392,
+            "rss_peak_increment_bytes": 24576,
+            "temporary_bytes": 1450,
+            "wall_ns": 304540
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 1,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "ontology_instance_id": "fecfd0d4644de84dc48aaaf60ec4f1c37bbc1148a063dccfde2ef24378657890",
+            "parent_cpu_ns": 331000,
+            "parent_wall_ns": 37493867,
+            "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
+            "persistent_runner_pid": 84364,
+            "persistent_sequence": 6,
+            "request_bytes": 4201,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1691
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 1,
+          "input_mode": "file",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 264000,
+            "load_ns": 246749,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 246749,
+              "raw_inventory": 10359
+            },
+            "rss_peak_after_bytes": 3973120,
+            "rss_peak_before_bytes": 3973120,
+            "rss_peak_increment_bytes": 0,
+            "temporary_bytes": 1450,
+            "wall_ns": 259889
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 2,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "ontology_instance_id": "307a26241503f36b80cb98f8b962baade28a0368023c5e5a3b93ac966bf8af5a",
+            "parent_cpu_ns": 326000,
+            "parent_wall_ns": 36567192,
+            "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
+            "persistent_runner_pid": 84364,
+            "persistent_sequence": 7,
+            "request_bytes": 4201,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1687
+          }
+        }
+      ],
+      "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+      "status": "ok"
+    },
+    {
+      "boundary": "common-contract-ready",
+      "contract": {
+        "complete_import_closure": true,
+        "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+        "corpus_id": "generated-tiny-functional",
+        "diagnostics": [],
+        "fingerprints": {
+          "document": {
+            "algorithm": "sha256",
+            "digest": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+            "preimage_bytes": 1538,
+            "preimage_sha256": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+            "schema": 1
+          },
+          "logical": {
+            "algorithm": "sha256",
+            "digest": "04933473201dcf51c49116feaf7f417310619a6926d8fbf84764744fd9058381",
+            "preimage_bytes": 974,
+            "preimage_sha256": "04933473201dcf51c49116feaf7f417310619a6926d8fbf84764744fd9058381",
+            "schema": 1
+          },
+          "signature": {
+            "algorithm": "sha256",
+            "digest": "b66fc3c366b742d8a6accf42758cb819ea8a2fd99affb5bf3df889eed9cd1b9b",
+            "preimage_bytes": 531,
+            "preimage_sha256": "b66fc3c366b742d8a6accf42758cb819ea8a2fd99affb5bf3df889eed9cd1b9b",
+            "schema": 1
+          },
+          "structural": {
+            "algorithm": "sha256",
+            "digest": "0bd511c9eb62016cf0c0d7b4ded76f903b40c9f9509da79e3dd26672ecd4fc7d",
+            "preimage_bytes": 1794,
+            "preimage_sha256": "0bd511c9eb62016cf0c0d7b4ded76f903b40c9f9509da79e3dd26672ecd4fc7d",
+            "schema": 1
+          }
+        },
+        "identity": {
+          "documents": [
+            {
+              "document_fingerprint": "8bf86694780338879e5673be76f8e0450a3c2ef9775ac88f57d5a6c09a8d2c37",
+              "document_iri": "01026875726e3a70796f776c2d636f72653a636f6d70617261746f722d736f757263653a7368613235363a61313839653763363239616536323938636632326635663861326661333664343134623334306337633861363231616539373437623662353735653631653261",
+              "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+              "format": "functional",
+              "ontology_iri": "01022868747470733a2f2f6578616d706c652e6f72672f70796f776c2d636f72652f62656e63686d61726b",
+              "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+              "status": "root",
+              "version_iri": null
+            }
+          ],
+          "import_policy": "record_unresolved",
+          "imports": [],
+          "offline": true,
+          "resolver_configuration_sha256": "52ee331006a67fd86ad16cd4f7bd4be7cff89b81f0617c210618765cbf6872d8",
+          "root_document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d"
+        },
+        "ledger": {
+          "diagnostic_count": 0,
+          "diagnostics_bytes": 2,
+          "diagnostics_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "identity_bytes": 921,
+          "identity_sha256": "a089e4acf97cecf638b395b272df7b7ea5d867fda817527267d6a491de20162a",
+          "inventories": {
+            "axioms": {
+              "canonical_bytes": 1431,
+              "count": 15,
+              "sha256": "375a55b4cfbee4f1098dc6823aeb4cc66175213405445129f92693547cd86e88",
+              "transcript_bytes": 1496
+            },
+            "documents": {
+              "canonical_bytes": 132,
+              "count": 1,
+              "sha256": "aa3f43122ee3298e3c2536a29fc083af2af963c6020b87dcdc542c87b6e7ef86",
+              "transcript_bytes": 177
+            },
+            "extensions": {
+              "canonical_bytes": 0,
+              "count": 0,
+              "sha256": "0712b6859e228ce2e0c927d25e42f43bd99a4543ae06ad54ddf81cda4a030893",
+              "transcript_bytes": 43
+            },
+            "ontology_annotations": {
+              "canonical_bytes": 0,
+              "count": 0,
+              "sha256": "0712b6859e228ce2e0c927d25e42f43bd99a4543ae06ad54ddf81cda4a030893",
+              "transcript_bytes": 43
+            },
+            "signature": {
+              "canonical_bytes": 488,
+              "count": 8,
+              "sha256": "640b598b476bec30196a64f5933223c17cd395d0f6e38f09e8d61086d256ab76",
+              "transcript_bytes": 539
+            }
+          },
+          "provenance_bytes": 3371,
+          "provenance_sha256": "be0d7b7da2ce34e17547aa69ce9aa1573a29642ca01874b2b8622901fbf45bcf"
+        },
+        "model_schema": 1,
+        "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+        "provenance": {
+          "document_count": 1,
+          "origin_entry_count": 15,
+          "origins": [
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 7,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "0650a1a00698f847a71010f6ecfd814db524291a482f7cf358df20878bac154f"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 14,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "0b99b66bc67a6d0b518ff64b6a5e306750643337e6e2247effcba98d020c2d43"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 2,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "29bf7c41bc6c8d3f61104b2d73348c4f577829bc2b1491f731540cb419b3ebc6"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 0,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "319a75c5aa7e4210228e5210b8016133a90b70d20fb7adace367ccdc1309f849"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 10,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "3429729a67cab0f15998a7478ecd1ad274cd7a7dc7c8340304cb9ef652e67aff"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 12,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "443406c14614f793c2dbf539dbed3ec0bde32567b3232d36f047b896f8da54f5"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 6,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "4e83edb6319f0d8dd5ff808d932fc7f0e8cfdc03b3b53913dec62cf7c6e9b9bc"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 8,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "6d8492b54d415f98ad8dc2563cafcd7c878f141fe91c7739bb00c59caf15d5b6"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 13,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "79f83b334d68a9c712831a2f4c4c9d7d06f52fa1cb4d24a3c12ec855eb69d4ce"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 3,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "876748b6dbbc8336924da14103bdddc0fa507043182ac08d2d76ad21445d839d"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 5,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "88af7b170ab03ba7d2587e675409fdca8d5c4afbf284ace3adbb9580312f757a"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 1,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "ef14b0ef2a320a9cc384476fb23239bc9566575375fc3d602f4430de80b8243d"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 9,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "f57d5a144aa953b1de942c9ea605c3bd8a8d248fe7774d68753e66420eecf0bc"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 4,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "fd9eafd902ad656ada743250b059943d7d715abab6bf69323229470cc79fe775"
+            },
+            {
+              "occurrences": [
+                {
+                  "document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+                  "occurrence": 11,
+                  "span": null
+                }
+              ],
+              "structural_sha256": "ff5ec1b20cda076f71f981c14bc580548d511f79de874f15fb74f905929ceead"
+            }
+          ],
+          "source_byte_count": 1450
+        },
+        "root_document_key": "d1:427ba002d6e40d55c2d585cc7f3ef2f419efa5383c7db79ba321afab113bad7d",
+        "schema": "pyowl-core/comparator-common-contract/v1",
+        "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a"
+      },
+      "corpus_id": "generated-tiny-functional",
+      "gating": true,
+      "implementation": "pyowl-core-python",
+      "input_mode": "file",
+      "lane": "pyowl-python-common",
+      "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+      "process_mode": "fresh-process",
+      "reason": null,
+      "required": true,
+      "samples": [
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 1,
+          "input_mode": "file",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 2954034,
+            "core_report_seconds": {
+              "load_seconds": 0.005944716016529128
+            },
+            "cpu_ns": 10584000,
+            "load_ns": 7686951,
+            "python_allocated_blocks_increment": 940,
+            "python_gc_objects_increment": 409,
+            "rss_peak_after_bytes": 34086912,
+            "rss_peak_before_bytes": 33554432,
+            "rss_peak_increment_bytes": 532480,
+            "startup_to_ready_ns": 750487365,
+            "temporary_bytes": 1450,
+            "wall_ns": 10642878
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 0,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 497709
+          },
+          "transport_metrics": {
+            "request_bytes": 3962,
+            "stderr_bytes": 0,
+            "stdout_bytes": 8319
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 0,
+          "input_mode": "file",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 2866408,
+            "core_report_seconds": {
+              "load_seconds": 0.0057362900115549564
+            },
+            "cpu_ns": 10801000,
+            "load_ns": 7991063,
+            "python_allocated_blocks_increment": 940,
+            "python_gc_objects_increment": 409,
+            "rss_peak_after_bytes": 34402304,
+            "rss_peak_before_bytes": 34136064,
+            "rss_peak_increment_bytes": 266240,
+            "startup_to_ready_ns": 724455682,
+            "temporary_bytes": 1450,
+            "wall_ns": 10859138
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 1,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 482266
+          },
+          "transport_metrics": {
+            "request_bytes": 3962,
+            "stderr_bytes": 0,
+            "stdout_bytes": 8320
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 1,
+          "input_mode": "file",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 2455011,
+            "core_report_seconds": {
+              "load_seconds": 0.005461019987706095
+            },
+            "cpu_ns": 9331000,
+            "load_ns": 6936716,
+            "python_allocated_blocks_increment": 943,
+            "python_gc_objects_increment": 409,
+            "rss_peak_after_bytes": 33972224,
+            "rss_peak_before_bytes": 33685504,
+            "rss_peak_increment_bytes": 286720,
+            "startup_to_ready_ns": 618570859,
+            "temporary_bytes": 1450,
+            "wall_ns": 9393788
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 2,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 378442
+          },
+          "transport_metrics": {
+            "request_bytes": 3962,
+            "stderr_bytes": 0,
+            "stdout_bytes": 8317
+          }
+        }
+      ],
+      "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+      "status": "ok"
+    },
+    {
+      "boundary": "horned-model-ready",
+      "contract": null,
+      "corpus_id": "generated-tiny-functional",
+      "gating": false,
+      "implementation": "horned-owl",
+      "input_mode": "file",
+      "lane": "horned-owl-raw",
+      "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+      "process_mode": "fresh-process",
+      "reason": null,
+      "required": true,
+      "samples": [
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 0,
+          "input_mode": "file",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 544000,
+            "load_ns": 515733,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 515733,
+              "raw_inventory": 22955
+            },
+            "rss_peak_after_bytes": 2781184,
+            "rss_peak_before_bytes": 2134016,
+            "rss_peak_increment_bytes": 647168,
+            "temporary_bytes": 1450,
+            "wall_ns": 541338
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 0,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "parent_cpu_ns": 5915000,
+            "parent_wall_ns": 61976662,
+            "request_bytes": 4058,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1459
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 1,
+          "input_mode": "file",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 573000,
+            "load_ns": 587782,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 587782,
+              "raw_inventory": 22994
+            },
+            "rss_peak_after_bytes": 2813952,
+            "rss_peak_before_bytes": 2162688,
+            "rss_peak_increment_bytes": 651264,
+            "temporary_bytes": 1450,
+            "wall_ns": 613575
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 1,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "parent_cpu_ns": 6272000,
+            "parent_wall_ns": 64751614,
+            "request_bytes": 4058,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1459
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "Rust system allocator",
+            "artifact": "crates.io horned-owl-1.4.0.crate",
+            "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+            "features": [
+              "default"
+            ],
+            "pin_state": "complete",
+            "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+            "runner_revision": "pyowl-core-horned-raw-runner-v1",
+            "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "horned-model-ready",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "horned-owl",
+          "implementation_order": 0,
+          "input_mode": "file",
+          "lane": "horned-owl-raw",
+          "metrics": {
+            "cpu_ns": 503000,
+            "load_ns": 520305,
+            "object_count": 24,
+            "phase_ns": {
+              "horned_engine_load": 520305,
+              "raw_inventory": 19051
+            },
+            "rss_peak_after_bytes": 2830336,
+            "rss_peak_before_bytes": 2134016,
+            "rss_peak_increment_bytes": 696320,
+            "temporary_bytes": 1450,
+            "wall_ns": 541730
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 2,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": {
+            "annotation_count": 0,
+            "axiom_count": 15,
+            "diagnostic_count": 0,
+            "entity_count": 8,
+            "import_count": 0,
+            "inventory_sha256": "a980867761d4a9a25eb34dac6a3ce76dfa046533c341fae81839c3c36f076729",
+            "model_kind": "horned-model-ready",
+            "schema": "pyowl-core/comparator-raw-inventory/v1"
+          },
+          "reason": null,
+          "schedule_seed": 20260720,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": null,
+          "transport_metrics": {
+            "parent_cpu_ns": 5841000,
+            "parent_wall_ns": 58388815,
+            "request_bytes": 4058,
+            "stderr_bytes": 0,
+            "stdout_bytes": 1459
+          }
+        }
+      ],
+      "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+      "status": "ok"
+    }
+  ],
+  "methodology": {
+    "comparison_order": "seeded implementation-order shuffle within every paired warmup/measured block",
+    "file_lane_execution": "pinned bytes are hash-checked and prepared before timing; the timer includes the implementation's file open/read and records temporary bytes",
+    "input_modes": [
+      "resident-bytes",
+      "file"
+    ],
+    "network_during_samples": "core lanes are offline; fresh external lanes are isolated one-shot processes and steady external lanes use one audited process per lane",
+    "persistent_external_protocol": "pyowl-core/comparator-persistent-runner/v1",
+    "persistent_external_startup": "outside every call-to-ready sample",
+    "post_timer_work": "already-published scalar/digest equality only",
+    "process_modes": [
+      "steady-process",
+      "fresh-process"
+    ],
+    "profiler_attached": false,
+    "repetitions": 3,
+    "schedule": {
+      "algorithm": "SHA-256 rank per scenario, block kind/index, and lane",
+      "cleanup_barrier": "gc.collect after every implementation invocation",
+      "measured_blocks": 3,
+      "schema": "pyowl-core/comparator-paired-schedule/v1",
+      "seed": 20260720,
+      "seed_type": "unsigned-64-bit integer",
+      "warmup_blocks": 1,
+      "warmups_apply_to": [
+        "steady-process"
+      ]
+    },
+    "warmups": 1
+  },
+  "not_run_required": [],
+  "persistent_runner_lifecycles": [
+    {
+      "handshake": {
+        "artifact": {
+          "allocator": "Rust system allocator",
+          "artifact": "crates.io horned-owl-1.4.0.crate",
+          "artifact_sha256": "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e",
+          "features": [
+            "default"
+          ],
+          "pin_state": "complete",
+          "revision": "crates.io horned-owl 1.4.0 (2026-01-09)",
+          "runner_revision": "pyowl-core-horned-raw-runner-v1",
+          "runner_sha256": "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a",
+          "thread_ceiling": 1,
+          "version": "1.4.0"
+        },
+        "boundary": "horned-model-ready",
+        "fresh_ontology_per_request": true,
+        "implementation": "horned-owl",
+        "lane": "horned-owl-raw",
+        "pid": 84364,
+        "protocol": "pyowl-core/comparator-persistent-runner/v1",
+        "request_schema": "pyowl-core/comparator-adapter-request/v2",
+        "result_schema": "pyowl-core/comparator-adapter-result/v1",
+        "schema": "pyowl-core/comparator-persistent-handshake/v1"
+      },
+      "lane": "horned-owl-raw",
+      "owner_pid": 84360,
+      "protocol": "pyowl-core/comparator-persistent-runner/v1",
+      "reason": null,
+      "request_count": 8,
+      "response_count": 8,
+      "runner_pid": 84364,
+      "schema": "pyowl-core/comparator-persistent-lifecycle/v1",
+      "shutdown": "clean-exit",
+      "startup_ns": 45482982,
+      "status": "pass",
+      "stderr_bytes": 0,
+      "unique_ontology_instance_count": 8
+    }
+  ],
+  "ratio_gates": {
+    "comparisons": [
+      {
+        "boundary": "common-contract-ready",
+        "denominator_lane": "horned-owl-common",
+        "id": "direct-rust-vs-horned-common/fresh-process/resident-bytes",
+        "input_mode": "resident-bytes",
+        "metrics": {
+          "rss": {
+            "aggregate_passed": false,
+            "aggregate_threshold": 1.15,
+            "aggregate_value": null,
+            "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+            "large_corpus_guardrails": [],
+            "large_corpus_guardrails_passed": true,
+            "large_corpus_threshold": 1.25,
+            "metric": "incremental peak RSS bytes",
+            "metric_selector": "incremental-peak-rss",
+            "passed": false,
+            "reasons": [
+              {
+                "reason": "required representative corpus set is empty"
+              }
+            ],
+            "sample_sources": {
+              "denominator": "metrics.rss_peak_increment_bytes",
+              "numerator": "metrics.rss_peak_increment_bytes"
+            },
+            "statistics": null
+          },
+          "wall": {
+            "aggregate_passed": false,
+            "aggregate_threshold": 1.1,
+            "aggregate_value": null,
+            "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+            "large_corpus_guardrails": [],
+            "large_corpus_guardrails_passed": true,
+            "large_corpus_threshold": 1.25,
+            "metric": "startup-to-ready wall_ns",
+            "metric_selector": "startup-to-ready-wall",
+            "passed": false,
+            "reasons": [
+              {
+                "reason": "required representative corpus set is empty"
+              }
+            ],
+            "sample_sources": {
+              "denominator": "transport_metrics.parent_wall_ns",
+              "numerator": "transport_metrics.parent_wall_ns"
+            },
+            "statistics": null
+          }
+        },
+        "numerator_lane": "pyowl-direct-rust-common",
+        "passed": false,
+        "process_mode": "fresh-process"
+      },
+      {
+        "boundary": "common-contract-ready",
+        "denominator_lane": "horned-owl-common",
+        "id": "direct-rust-vs-horned-common/steady-process/resident-bytes",
+        "input_mode": "resident-bytes",
+        "metrics": {
+          "rss": {
+            "aggregate_passed": false,
+            "aggregate_threshold": 1.15,
+            "aggregate_value": null,
+            "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+            "large_corpus_guardrails": [],
+            "large_corpus_guardrails_passed": true,
+            "large_corpus_threshold": 1.25,
+            "metric": "incremental peak RSS bytes",
+            "metric_selector": "incremental-peak-rss",
+            "passed": false,
+            "reasons": [
+              {
+                "reason": "required representative corpus set is empty"
+              }
+            ],
+            "sample_sources": {
+              "denominator": "metrics.rss_peak_increment_bytes",
+              "numerator": "metrics.rss_peak_increment_bytes"
+            },
+            "statistics": null
+          },
+          "wall": {
+            "aggregate_passed": false,
+            "aggregate_threshold": 1.1,
+            "aggregate_value": null,
+            "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+            "large_corpus_guardrails": [],
+            "large_corpus_guardrails_passed": true,
+            "large_corpus_threshold": 1.25,
+            "metric": "call-to-ready wall_ns",
+            "metric_selector": "call-to-ready-wall",
+            "passed": false,
+            "reasons": [
+              {
+                "reason": "required representative corpus set is empty"
+              }
+            ],
+            "sample_sources": {
+              "denominator": "metrics.wall_ns",
+              "numerator": "metrics.wall_ns"
+            },
+            "statistics": null
+          }
+        },
+        "numerator_lane": "pyowl-direct-rust-common",
+        "passed": false,
+        "process_mode": "steady-process"
+      },
+      {
+        "boundary": "common-contract-ready",
+        "denominator_lane": "py-horned-common",
+        "id": "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes",
+        "input_mode": "resident-bytes",
+        "metrics": {
+          "rss": {
+            "aggregate_passed": false,
+            "aggregate_threshold": 1.15,
+            "aggregate_value": null,
+            "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+            "large_corpus_guardrails": [],
+            "large_corpus_guardrails_passed": true,
+            "large_corpus_threshold": 1.25,
+            "metric": "incremental peak RSS bytes",
+            "metric_selector": "incremental-peak-rss",
+            "passed": false,
+            "reasons": [
+              {
+                "reason": "required representative corpus set is empty"
+              }
+            ],
+            "sample_sources": {
+              "denominator": "metrics.rss_peak_increment_bytes",
+              "numerator": "metrics.rss_peak_increment_bytes"
+            },
+            "statistics": null
+          },
+          "wall": {
+            "aggregate_passed": false,
+            "aggregate_threshold": 1.1,
+            "aggregate_value": null,
+            "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+            "large_corpus_guardrails": [],
+            "large_corpus_guardrails_passed": true,
+            "large_corpus_threshold": 1.25,
+            "metric": "startup-to-ready wall_ns",
+            "metric_selector": "startup-to-ready-wall",
+            "passed": false,
+            "reasons": [
+              {
+                "reason": "required representative corpus set is empty"
+              }
+            ],
+            "sample_sources": {
+              "denominator": "transport_metrics.parent_wall_ns",
+              "numerator": "metrics.startup_to_ready_ns"
+            },
+            "statistics": null
+          }
+        },
+        "numerator_lane": "pyowl-native-wheel-common",
+        "passed": false,
+        "process_mode": "fresh-process"
+      },
+      {
+        "boundary": "common-contract-ready",
+        "denominator_lane": "py-horned-common",
+        "id": "installed-wheel-vs-py-horned-common/steady-process/resident-bytes",
+        "input_mode": "resident-bytes",
+        "metrics": {
+          "rss": {
+            "aggregate_passed": false,
+            "aggregate_threshold": 1.15,
+            "aggregate_value": null,
+            "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+            "large_corpus_guardrails": [],
+            "large_corpus_guardrails_passed": true,
+            "large_corpus_threshold": 1.25,
+            "metric": "incremental peak RSS bytes",
+            "metric_selector": "incremental-peak-rss",
+            "passed": false,
+            "reasons": [
+              {
+                "reason": "required representative corpus set is empty"
+              }
+            ],
+            "sample_sources": {
+              "denominator": "metrics.rss_peak_increment_bytes",
+              "numerator": "metrics.rss_peak_increment_bytes"
+            },
+            "statistics": null
+          },
+          "wall": {
+            "aggregate_passed": false,
+            "aggregate_threshold": 1.1,
+            "aggregate_value": null,
+            "gate_statistic": "aggregate upper endpoint of two-sided 95% paired-bootstrap interval",
+            "large_corpus_guardrails": [],
+            "large_corpus_guardrails_passed": true,
+            "large_corpus_threshold": 1.25,
+            "metric": "call-to-ready wall_ns",
+            "metric_selector": "call-to-ready-wall",
+            "passed": false,
+            "reasons": [
+              {
+                "reason": "required representative corpus set is empty"
+              }
+            ],
+            "sample_sources": {
+              "denominator": "metrics.wall_ns",
+              "numerator": "metrics.wall_ns"
+            },
+            "statistics": null
+          }
+        },
+        "numerator_lane": "pyowl-native-wheel-common",
+        "passed": false,
+        "process_mode": "steady-process"
+      }
+    ],
+    "configured": true,
+    "excluded_equivalence_denominator_lanes": [
+      "horned-owl-raw"
+    ],
+    "installed_wheel_call_to_ready_overhead": [
+      {
+        "denominator_lane": "pyowl-direct-rust-common",
+        "id": "installed-wheel-call-overhead/fresh-process/resident-bytes",
+        "input_mode": "resident-bytes",
+        "metric": "call-to-ready wall_ns",
+        "numerator_lane": "pyowl-native-wheel-common",
+        "passed": false,
+        "process_mode": "fresh-process",
+        "result": {
+          "aggregate_passed": false,
+          "aggregate_threshold": 1.15,
+          "aggregate_value": null,
+          "gate_statistic": "aggregate median-ratio estimate",
+          "large_corpus_guardrails": [],
+          "large_corpus_guardrails_passed": true,
+          "large_corpus_threshold": null,
+          "metric": "call-to-ready wall_ns",
+          "metric_selector": "call-to-ready-wall",
+          "passed": false,
+          "reasons": [
+            {
+              "reason": "required representative corpus set is empty"
+            }
+          ],
+          "sample_sources": {
+            "denominator": "metrics.wall_ns",
+            "numerator": "metrics.wall_ns"
+          },
+          "statistics": null
+        }
+      },
+      {
+        "denominator_lane": "pyowl-direct-rust-common",
+        "id": "installed-wheel-call-overhead/steady-process/resident-bytes",
+        "input_mode": "resident-bytes",
+        "metric": "call-to-ready wall_ns",
+        "numerator_lane": "pyowl-native-wheel-common",
+        "passed": false,
+        "process_mode": "steady-process",
+        "result": {
+          "aggregate_passed": false,
+          "aggregate_threshold": 1.15,
+          "aggregate_value": null,
+          "gate_statistic": "aggregate median-ratio estimate",
+          "large_corpus_guardrails": [],
+          "large_corpus_guardrails_passed": true,
+          "large_corpus_threshold": null,
+          "metric": "call-to-ready wall_ns",
+          "metric_selector": "call-to-ready-wall",
+          "passed": false,
+          "reasons": [
+            {
+              "reason": "required representative corpus set is empty"
+            }
+          ],
+          "sample_sources": {
+            "denominator": "metrics.wall_ns",
+            "numerator": "metrics.wall_ns"
+          },
+          "statistics": null
+        }
+      }
+    ],
+    "passed": false,
+    "ratio_direction": "pyowl-core native / comparator",
+    "raw_horned_equivalence_denominator_allowed": false,
+    "reasons": [
+      {
+        "reason": "no non-synthetic representative medium corpus was selected"
+      },
+      {
+        "reason": "no non-synthetic representative large corpus was selected"
+      },
+      {
+        "reason": "no representative large biomedical RDF/XML corpus was selected"
+      },
+      {
+        "reason": "no annotation/list-heavy representative medium-or-larger corpus was selected"
+      },
+      {
+        "comparison": "direct-rust-vs-horned-common/fresh-process/resident-bytes",
+        "metric": "wall",
+        "reason": "required representative corpus set is empty"
+      },
+      {
+        "comparison": "direct-rust-vs-horned-common/fresh-process/resident-bytes",
+        "metric": "rss",
+        "reason": "required representative corpus set is empty"
+      },
+      {
+        "comparison": "direct-rust-vs-horned-common/steady-process/resident-bytes",
+        "metric": "wall",
+        "reason": "required representative corpus set is empty"
+      },
+      {
+        "comparison": "direct-rust-vs-horned-common/steady-process/resident-bytes",
+        "metric": "rss",
+        "reason": "required representative corpus set is empty"
+      },
+      {
+        "comparison": "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes",
+        "metric": "wall",
+        "reason": "required representative corpus set is empty"
+      },
+      {
+        "comparison": "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes",
+        "metric": "rss",
+        "reason": "required representative corpus set is empty"
+      },
+      {
+        "comparison": "installed-wheel-vs-py-horned-common/steady-process/resident-bytes",
+        "metric": "wall",
+        "reason": "required representative corpus set is empty"
+      },
+      {
+        "comparison": "installed-wheel-vs-py-horned-common/steady-process/resident-bytes",
+        "metric": "rss",
+        "reason": "required representative corpus set is empty"
+      },
+      {
+        "comparison": "installed-wheel-call-overhead/fresh-process/resident-bytes",
+        "metric": "call-to-ready wall_ns",
+        "reason": "required representative corpus set is empty"
+      },
+      {
+        "comparison": "installed-wheel-call-overhead/steady-process/resident-bytes",
+        "metric": "call-to-ready wall_ns",
+        "reason": "required representative corpus set is empty"
+      }
+    ],
+    "required_corpora": {
+      "annotation_list_heavy": [],
+      "large": [],
+      "large_biomedical_rdfxml": [],
+      "medium": []
+    },
+    "required_input_mode": "resident-bytes",
+    "required_process_modes": [
+      "fresh-process",
+      "steady-process"
+    ],
+    "schema": "pyowl-core/comparator-ratio-gates/v1"
+  },
+  "reference_machine": {
+    "approval": "pending",
+    "environment_evidence": {
+      "expected": {
+        "cpu": "12 logical CPUs; exact model must be captured by approved operator",
+        "memory_bytes": 34359738368,
+        "os": "Darwin 25.5.0 x86_64",
+        "power_mode": "fixed performance mode required; current shared-host state unapproved",
+        "storage": "local storage; exact device/cache procedure pending approval"
+      },
+      "field_matches": {
+        "cpu": false,
+        "memory_bytes": true,
+        "os": true,
+        "power_mode": false,
+        "storage": false
+      },
+      "matches": false,
+      "observed": {
+        "cpu": "12 logical CPUs; None",
+        "memory_bytes": 34359738368,
+        "os": "Darwin 25.5.0 x86_64",
+        "power_mode": "not measured; reference operator must record externally",
+        "storage": "not measured; corpus bytes are resident before timed phases"
+      }
+    },
+    "id": "shared-darwin25-x86_64"
+  },
+  "schema": "pyowl-core/comparator-baseline/v1",
+  "source_identity": {
+    "domain": "pyowl-core:comparator-runtime-source:v1",
+    "input_bytes": 3803956,
+    "input_count": 164,
+    "inputs": [
+      {
+        "bytes": 12211,
+        "path": "benchmarks/comparators/comparators.toml",
+        "sha256": "2ea395c5b1bbbdb6ce31013b59604b455fa837cc5a3a0d2485fc93e4c4614527"
+      },
+      {
+        "bytes": 8339,
+        "path": "benchmarks/corpora.toml",
+        "sha256": "1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928"
+      },
+      {
+        "bytes": 3421,
+        "path": "native/Cargo.lock",
+        "sha256": "143c6038631949aaddc13f33f21d3d37e421497e80de6a7cff76c38eb9779707"
+      },
+      {
+        "bytes": 721,
+        "path": "native/Cargo.toml",
+        "sha256": "e3a897b232255c1289e142756c8e986b728a11783f7040c61f4f3addc2f7f2c9"
+      },
+      {
+        "bytes": 9041,
+        "path": "native/build.rs",
+        "sha256": "d7c3fb9e87a963aeafa3eb16a8c4f9084cf707e9bda2b93f25984bc917a82b36"
+      },
+      {
+        "bytes": 31203,
+        "path": "native/src/bindings/ingestion.rs",
+        "sha256": "91bb5042432724b6908d689ce78fdb9268c38ca7d5f34a133dada89e7de74818"
+      },
+      {
+        "bytes": 2493,
+        "path": "native/src/bindings/mod.rs",
+        "sha256": "176e06216192a1407da67efb8aedf6c7ea991cc47eb16a42796bbcb1988bcade"
+      },
+      {
+        "bytes": 11857,
+        "path": "native/src/bindings/views.rs",
+        "sha256": "9a1fa4d94d7b8f4ceeafd019d099f9a51a2efd028e2c074d9b9373e39d55b834"
+      },
+      {
+        "bytes": 37379,
+        "path": "native/src/builder.rs",
+        "sha256": "f223277a275dab42da1d5ff692632d8a300f03a5b472fd553b1f0466546dd62f"
+      },
+      {
+        "bytes": 5424,
+        "path": "native/src/cancel.rs",
+        "sha256": "fd20fc8124bacac8d830cb9ef82694f72abd290d835b31c20675ba37ac9540ca"
+      },
+      {
+        "bytes": 8798,
+        "path": "native/src/canonical.rs",
+        "sha256": "322be9100d27b0a42b85292a91e92b720caa5d693cbceb88996bde4b35af438b"
+      },
+      {
+        "bytes": 1502,
+        "path": "native/src/error.rs",
+        "sha256": "44fa0f7e5021e1499cd98a08309cbc4abde25e2e62d579363718d7984fa2cd31"
+      },
+      {
+        "bytes": 7088,
+        "path": "native/src/hash.rs",
+        "sha256": "02c133ffd3426302363e1bd88c882db1529ab84f5fdf6e2153c36a9853bd0337"
+      },
+      {
+        "bytes": 6500,
+        "path": "native/src/index/mod.rs",
+        "sha256": "dbcac94ceb22dc6801f7cec630bd8e393d8a0dc943b2f948929d7afaba832669"
+      },
+      {
+        "bytes": 19704,
+        "path": "native/src/index/retained.rs",
+        "sha256": "ec1002ef1253503d2c8ffdedddb5dbb7b693a0632a5d2cb6f6acda0ac37147bb"
+      },
+      {
+        "bytes": 14412,
+        "path": "native/src/ingestion/mod.rs",
+        "sha256": "1d63a27f05b776fe6fe6f28bb0fc952a566bd9b1a9a4df5a9945af43845ea54d"
+      },
+      {
+        "bytes": 99399,
+        "path": "native/src/ingestion/rdf_class_expressions.rs",
+        "sha256": "ac39cacfa298f3135c2a6a104161527dfc423711e35ea0eca244e45ac6e97833"
+      },
+      {
+        "bytes": 16399,
+        "path": "native/src/ingestion/rdf_lists.rs",
+        "sha256": "b665fded59f8119ba80c401b3325799839a80cee1c9f0a8fa5a266db9adab81a"
+      },
+      {
+        "bytes": 341266,
+        "path": "native/src/ingestion/rdfxml.rs",
+        "sha256": "00b0e2b5126229912974c6fda326ff9872d57b2f30b2eb36a7817e402c22eef2"
+      },
+      {
+        "bytes": 17799,
+        "path": "native/src/ingestion/v1_adapter.rs",
+        "sha256": "1717da21892ae4e4ab52c26656a8dab4e9b9b41f20763630904a337d8ffe4a80"
+      },
+      {
+        "bytes": 6485,
+        "path": "native/src/ingestion/v2_adapter.rs",
+        "sha256": "4b5210fddd1e3fcc59a8bfe658575e97e554c301b3e4f491e5c33e344c82f272"
+      },
+      {
+        "bytes": 22117,
+        "path": "native/src/lib.rs",
+        "sha256": "900c7a5788e59d14e9a85c1b1adcb276841e66f232a71257c8d37e5f3aeae7af"
+      },
+      {
+        "bytes": 11009,
+        "path": "native/src/limits.rs",
+        "sha256": "3c56e4c169e6a06f2a2f122a64c5738f66b72316fdddb1306f916b3ff543be1c"
+      },
+      {
+        "bytes": 2979,
+        "path": "native/src/model/arena.rs",
+        "sha256": "816a441da494120dbe8f1e972e38dab36c8eb001ce74e618e7977d44692f06ff"
+      },
+      {
+        "bytes": 38174,
+        "path": "native/src/model/canonical.rs",
+        "sha256": "b027094ddb9fa4d5717838782a3f4a55ac914233f48f4e2a455355ee778f3cfe"
+      },
+      {
+        "bytes": 18711,
+        "path": "native/src/model/component_index.rs",
+        "sha256": "80c349a4202fd9a0c22dfb54cc6325300bce0cf21d75f0bf7b4401dea32bccdd"
+      },
+      {
+        "bytes": 169926,
+        "path": "native/src/model/components.rs",
+        "sha256": "7ba7f3843bbad0eba130503d3a6897f7f9d68903c9e1d278873239657bd5142b"
+      },
+      {
+        "bytes": 97333,
+        "path": "native/src/model/encoded_columns.rs",
+        "sha256": "8f8cadd71b802d3bdd1f2da7cac48abf338d4c67173334350ca31e7166bd1bc5"
+      },
+      {
+        "bytes": 2424,
+        "path": "native/src/model/ids.rs",
+        "sha256": "c16596e1751c405a1e0b5a5258a7d5d9b3016149d7cda40901f71277b2fdb437"
+      },
+      {
+        "bytes": 1791,
+        "path": "native/src/model/mod.rs",
+        "sha256": "7e2454d99436621505cc6a9d79b00ecd86d36f9a198aef5b815399a792e6eece"
+      },
+      {
+        "bytes": 5922,
+        "path": "native/src/model/tables.rs",
+        "sha256": "0ff326219c40fd735c850d188c60b15a6ea5d55d4c3a235ee7040b02a0624370"
+      },
+      {
+        "bytes": 45093,
+        "path": "native/src/parse/functional.rs",
+        "sha256": "aaf290b7c85aa9363c7b703571b0f3f9b93a7b151090a3e8e14318fe34961d2c"
+      },
+      {
+        "bytes": 13174,
+        "path": "native/src/parse/mod.rs",
+        "sha256": "7fcb008bc0cf64ea38355890e0741eaf7a5e1672f76709a99ad12826d66d86a7"
+      },
+      {
+        "bytes": 52735,
+        "path": "native/src/parse/retained.rs",
+        "sha256": "8454b667a8efbec47eef418e09ba094ede5fd8fba0c50fb7f0d5189f9759bfd3"
+      },
+      {
+        "bytes": 25992,
+        "path": "native/src/publication/codec.rs",
+        "sha256": "3fa6681ede070a7bac51b441ed7b66f3863bab27a2171d2176cef2ed108d1eab"
+      },
+      {
+        "bytes": 166557,
+        "path": "native/src/publication/facade_v2.rs",
+        "sha256": "f7d6b084a9810a91ef63dd261518f4acb4352d8a43a1ce923a53e855870c3ed7"
+      },
+      {
+        "bytes": 6235,
+        "path": "native/src/publication/fixture.rs",
+        "sha256": "38d4b29d01a9620f7a985b6c5cf6f566cbdc6f56a597a9333807904d2847a0b4"
+      },
+      {
+        "bytes": 19122,
+        "path": "native/src/publication/handle.rs",
+        "sha256": "d7ead18e999590b2cfe9a4f2feecb9870edc9b07e975809595efed88f4af2c3b"
+      },
+      {
+        "bytes": 36797,
+        "path": "native/src/publication/mod.rs",
+        "sha256": "c86aa61d387532fca0f881a9136a69c66111da7e55daf8c0ed39fa3024fb14ed"
+      },
+      {
+        "bytes": 16423,
+        "path": "native/src/publication/records.rs",
+        "sha256": "2509e6562a1bda9fc21c496cf1fbd95f2e39429d7b1ece80c659647854855345"
+      },
+      {
+        "bytes": 4337,
+        "path": "native/src/publication/tests.rs",
+        "sha256": "df4b3864d1379b10670aff06640009a925d0b72c1d7aae52b03c3e7bd6aecc96"
+      },
+      {
+        "bytes": 44649,
+        "path": "native/src/publication/typed_builder_v2.rs",
+        "sha256": "1a8f91020969187e55c6ffcb9cfccfab3df355cbd267b9b8379e7c80ca4ce3d3"
+      },
+      {
+        "bytes": 70689,
+        "path": "native/src/publication/typed_v2.rs",
+        "sha256": "d93706a937c648020efc4ea934bb2c0680b7e693ca35482f6ea1d58b84130cfb"
+      },
+      {
+        "bytes": 1413,
+        "path": "native/src/session.rs",
+        "sha256": "233e074ebb853631e5f4c09770512013881d2f0760ce561a39740fac29339ae3"
+      },
+      {
+        "bytes": 1857,
+        "path": "native/src/source.rs",
+        "sha256": "7a6e3f27b2a2180dcd41c8603aaeaaf2e33bef6827d54299e271d0fb14aea650"
+      },
+      {
+        "bytes": 50362,
+        "path": "native/src/wire/mod.rs",
+        "sha256": "bbc71ce8acdd670cfe953f61111fd976bd42655a63f161045f833d293ae6c176"
+      },
+      {
+        "bytes": 2683,
+        "path": "native/src/wire/reader.rs",
+        "sha256": "30ff08094199e1a2595475553cd9b3655ae3693eb733829cbb5e41935e9a04bd"
+      },
+      {
+        "bytes": 9961,
+        "path": "pyowl_build.py",
+        "sha256": "9a3ee55e9431ca8a36d444624ce270ec8fdc394605142051edd6dd14a99a1933"
+      },
+      {
+        "bytes": 1690,
+        "path": "pyproject.toml",
+        "sha256": "7ea2a1e1ac78ff0022e01d8240178058ccf6d0dee9f180f02e5e4cb1545732ca"
+      },
+      {
+        "bytes": 2809,
+        "path": "setup.py",
+        "sha256": "e07baac9df972f7d908bdcf5cf2dc30d3a457f67b237e96f7ee5112e4268aa63"
+      },
+      {
+        "bytes": 7545,
+        "path": "src/pyowl_core/__init__.py",
+        "sha256": "e9434210bf6e1cd837d7b7bf6ce7b8b440ea92aaf05f67d4bc099db287d44a73"
+      },
+      {
+        "bytes": 1877,
+        "path": "src/pyowl_core/_immutable.py",
+        "sha256": "778f435a9b808e6492be9560f1458f9cadbacf8d8b3060c74d221b9b2df5df31"
+      },
+      {
+        "bytes": 5940,
+        "path": "src/pyowl_core/_native.pyi",
+        "sha256": "617f9f4d0decb3bc10918410e74d14bab4cde79d213a17f11955574056005ccf"
+      },
+      {
+        "bytes": 1967,
+        "path": "src/pyowl_core/adapters/__init__.py",
+        "sha256": "f6dc728e2543c21050cb8da675bc9dfc31f32a25daf6fb6486d51734af3252af"
+      },
+      {
+        "bytes": 10326,
+        "path": "src/pyowl_core/adapters/cache.py",
+        "sha256": "a67c6e5520da72e7d0f6e7947fe694fa617ccd323a0f11c50b3869e78185548e"
+      },
+      {
+        "bytes": 14003,
+        "path": "src/pyowl_core/adapters/compatibility.py",
+        "sha256": "6a4eb1e8c827e81032ca55bc0a71f32194fad05bab25606e9b0cc24c43b69ce4"
+      },
+      {
+        "bytes": 15794,
+        "path": "src/pyowl_core/adapters/conformance.py",
+        "sha256": "7b90641877a84a54c3d1709cff2f87787d1ebfb2553f664980896bb7316c9339"
+      },
+      {
+        "bytes": 1752,
+        "path": "src/pyowl_core/adapters/features.py",
+        "sha256": "cf5bfe2362e0f78b1d4ba2753f12ba85d7c546caa79ce8be477cc5b471823b58"
+      },
+      {
+        "bytes": 4277,
+        "path": "src/pyowl_core/adapters/plugins.py",
+        "sha256": "73f043536a5f07281f9c01f116aa84817c3e75050cd515eefd8a094d413080e8"
+      },
+      {
+        "bytes": 8249,
+        "path": "src/pyowl_core/api.py",
+        "sha256": "f7e8de0b5ba3d187b412b588ce94655ed6ba5bec314caa9dcb1c31da97fe57b1"
+      },
+      {
+        "bytes": 100,
+        "path": "src/pyowl_core/backends/__init__.py",
+        "sha256": "42be8d462af59ba7bbb2961bd13d638e94942d5697250a92e744def5df3b081c"
+      },
+      {
+        "bytes": 4467,
+        "path": "src/pyowl_core/backends/dispatch.py",
+        "sha256": "8b55790c696384ceb81d3ebe4a29ca993709ec51d0b77d8aac9c20111cab83fa"
+      },
+      {
+        "bytes": 47793,
+        "path": "src/pyowl_core/backends/native.py",
+        "sha256": "2bbf7223a8d77cebf9843e36a83e63ecbe4ef3d5bd06605abe67df738da5b066"
+      },
+      {
+        "bytes": 77692,
+        "path": "src/pyowl_core/backends/native_handoff.py",
+        "sha256": "2c42dd8ba8879c9e2b8992dc9d4d3f4f935233751c4f82ec310016f317031eb8"
+      },
+      {
+        "bytes": 276478,
+        "path": "src/pyowl_core/backends/native_handoff_v2.py",
+        "sha256": "38878de5b46d8191851f0fe01816cdcc4edfb688fdfb998e1b400fd59ffbf1af"
+      },
+      {
+        "bytes": 68278,
+        "path": "src/pyowl_core/backends/native_ingestion.py",
+        "sha256": "f4189ad7da2662d4894f2afdd50b653ad7b88d8bf4d557ef8bbe5f2309d11910"
+      },
+      {
+        "bytes": 98996,
+        "path": "src/pyowl_core/backends/native_views.py",
+        "sha256": "f91f43caeaf40b053c4d062f8f97dfa1dea5d4bac40227ac7ae6217f7a0ac552"
+      },
+      {
+        "bytes": 146,
+        "path": "src/pyowl_core/backends/python/__init__.py",
+        "sha256": "f10175cf92cab39561fe2a632b3deea34b2a5154df565454f9a6c053e060d5f8"
+      },
+      {
+        "bytes": 22767,
+        "path": "src/pyowl_core/backends/python/parser.py",
+        "sha256": "0f7bba5a33be67f5f758d6017a3b9a55aa962149edb90e4f91c45534bd8939e1"
+      },
+      {
+        "bytes": 3044,
+        "path": "src/pyowl_core/cancellation.py",
+        "sha256": "f26ea534790e4c0590c00d6fa1253abc7791aadc005a0853ecd3d5fa794fefe5"
+      },
+      {
+        "bytes": 1977,
+        "path": "src/pyowl_core/config.py",
+        "sha256": "05acdc032150fe1077f5eb32acf85a490064286f24c3001aeef233dbbb1b0a9d"
+      },
+      {
+        "bytes": 8203,
+        "path": "src/pyowl_core/diagnostics.py",
+        "sha256": "911a002a6c50beaa92b71e00795ac227e64f4fdd912b70979caf1d8463b7a102"
+      },
+      {
+        "bytes": 2161,
+        "path": "src/pyowl_core/document/__init__.py",
+        "sha256": "1e09e355dc84ca9472641b23a9acb6232cedf07b4980066d3fe64c73497f6832"
+      },
+      {
+        "bytes": 47576,
+        "path": "src/pyowl_core/document/composite.py",
+        "sha256": "75ae3920a4f59132cdfb97a4fa8c0d39dc875b53338fa99748baa667385ea5f5"
+      },
+      {
+        "bytes": 9335,
+        "path": "src/pyowl_core/document/delta.py",
+        "sha256": "0351371f2e7d2b1da14c5fd52c6973ea20375e5574dc32bae4379369b45b51e2"
+      },
+      {
+        "bytes": 15666,
+        "path": "src/pyowl_core/document/document.py",
+        "sha256": "a6954fef17f4bf0cc2e1b3f20a0cb697894ec65adb14b4157f3e8a0f73249ab8"
+      },
+      {
+        "bytes": 11354,
+        "path": "src/pyowl_core/document/fingerprint.py",
+        "sha256": "4465b40091637de70ed97f31e0cbead26ea68b60d6f88d66aab0df96b6dfd429"
+      },
+      {
+        "bytes": 3601,
+        "path": "src/pyowl_core/document/identity.py",
+        "sha256": "78da53e23dc485881782ca57f7fdd6dea49af9f99838b3099fa84145e3fdd418"
+      },
+      {
+        "bytes": 39751,
+        "path": "src/pyowl_core/document/imports.py",
+        "sha256": "5759c412bb11ce2d535d40c83fa3a4cc3def8d3c1c5536bacbf496f018e63a12"
+      },
+      {
+        "bytes": 102568,
+        "path": "src/pyowl_core/document/native_storage.py",
+        "sha256": "cafde3277bcb3b12744ac0cc333fdd0a87b132aa49ed4a8b0b150c323f6274d5"
+      },
+      {
+        "bytes": 34331,
+        "path": "src/pyowl_core/document/overlay.py",
+        "sha256": "28976fdae19098467e551516fd69170d7b1c70c2b41ee2823330d798cfaca0bb"
+      },
+      {
+        "bytes": 11266,
+        "path": "src/pyowl_core/document/provenance.py",
+        "sha256": "1dabf7a094e29ccba1ba2122e4bdb8fe6a3ea9b217d20044fd16bf3580983f1a"
+      },
+      {
+        "bytes": 40576,
+        "path": "src/pyowl_core/document/snapshot.py",
+        "sha256": "64dcfc2ab994ec1993f4a74cd764f1ee3a9008b3e393908e50c2b51044ab544e"
+      },
+      {
+        "bytes": 6543,
+        "path": "src/pyowl_core/exceptions.py",
+        "sha256": "da6bb1766f046d8acdbb734981ac4159ff419e2f004dccb310a4b5de63d12998"
+      },
+      {
+        "bytes": 97,
+        "path": "src/pyowl_core/extensions/__init__.py",
+        "sha256": "ae46f4451a75b7e81a86d3f7bed01572ce0e702a3a79ce4bdf12052478800490"
+      },
+      {
+        "bytes": 878,
+        "path": "src/pyowl_core/extensions/swrl.py",
+        "sha256": "08b236ba8cdeb7b600a49a155aff20ccc2563c586b0bbc5aa6df439d70c07d7f"
+      },
+      {
+        "bytes": 3624,
+        "path": "src/pyowl_core/index/__init__.py",
+        "sha256": "e88fbdb0ecdb796fd68553164818238db42ec93ef6d4e8ba5ab53d4a208dcab0"
+      },
+      {
+        "bytes": 20170,
+        "path": "src/pyowl_core/index/annotations.py",
+        "sha256": "ed46147f5329449f4d7d04e149573a16e7f63edb52c411d691b2473e2e6fc489"
+      },
+      {
+        "bytes": 13954,
+        "path": "src/pyowl_core/index/axiom_types.py",
+        "sha256": "24625d1013ab75071c48c6fa8656e1738435b1eb384d8c1e2ae07d47d0a0b7b7"
+      },
+      {
+        "bytes": 19364,
+        "path": "src/pyowl_core/index/cache.py",
+        "sha256": "e8c0f0dd12ca486f4b55ed1535685dd5d4e9690b2d2fdffa27b1145f87475711"
+      },
+      {
+        "bytes": 14402,
+        "path": "src/pyowl_core/index/common.py",
+        "sha256": "a41a136cc7578d56ec8544c5a5e48a56c24005b8a6b8023c9d86fa10cbb772aa"
+      },
+      {
+        "bytes": 10175,
+        "path": "src/pyowl_core/index/declarations.py",
+        "sha256": "176f12897b82483bf5bdeec62086d9c0df019c5e3ad8e04de1ef16e0dd0915e1"
+      },
+      {
+        "bytes": 12597,
+        "path": "src/pyowl_core/index/domains.py",
+        "sha256": "98b70a4e556ffe4f0a8c9b4a268b1e4af202b3cbdc4c38a50239672f702f54e1"
+      },
+      {
+        "bytes": 15012,
+        "path": "src/pyowl_core/index/expressions.py",
+        "sha256": "185b49dec17f13aa4d9bafe9d0d5166a68e2389f12921c12f154d60b9c86e0a9"
+      },
+      {
+        "bytes": 37959,
+        "path": "src/pyowl_core/index/hierarchy.py",
+        "sha256": "d80a912df3c0fb95e47dbde58a430630595847ccd653e39a9787913818136d6d"
+      },
+      {
+        "bytes": 6540,
+        "path": "src/pyowl_core/index/identities.py",
+        "sha256": "d5c27a2f5e8aee12e53a0b3f1f1e788782d78162e6423100c332fa52b1939984"
+      },
+      {
+        "bytes": 15225,
+        "path": "src/pyowl_core/index/references.py",
+        "sha256": "7986b177fc8d923a74ebe7beedd14017d3365a61babe36168e2ef08454b0702f"
+      },
+      {
+        "bytes": 16389,
+        "path": "src/pyowl_core/index/signature.py",
+        "sha256": "b863be35e5318b7e099e70f8291d5cbebebed6d75bdd3944d7e1c65b831bb920"
+      },
+      {
+        "bytes": 1044,
+        "path": "src/pyowl_core/io/__init__.py",
+        "sha256": "f874305939596bef1df87fd67a51f35af779d6f4dc46ec82a1baf286a19afaa0"
+      },
+      {
+        "bytes": 793,
+        "path": "src/pyowl_core/io/formats/__init__.py",
+        "sha256": "801c226d973913869bd7ac96ad705e8aee810a08ede121d46527730095d17c91"
+      },
+      {
+        "bytes": 2195,
+        "path": "src/pyowl_core/io/formats/common.py",
+        "sha256": "a531355b68befe09811b79abf82fa25b8c05f39f313128a6dc9dd259a9cb92a0"
+      },
+      {
+        "bytes": 5929,
+        "path": "src/pyowl_core/io/formats/detection.py",
+        "sha256": "d8f2b01d065c6883e3e98931fb966ecd7acfe404386e81bad15f77899d304ac0"
+      },
+      {
+        "bytes": 41397,
+        "path": "src/pyowl_core/io/formats/functional.py",
+        "sha256": "f8a7443ba47ccf4f5cc2415d96bd3b484ef3369d3c7a880c5613f4718174b76c"
+      },
+      {
+        "bytes": 31217,
+        "path": "src/pyowl_core/io/formats/owlxml.py",
+        "sha256": "3321e9babd4c964909ad81537914568099538e1848e4fbeffbf7f3a7afdc8fbb"
+      },
+      {
+        "bytes": 77845,
+        "path": "src/pyowl_core/io/formats/rdf.py",
+        "sha256": "79ca3456e056ed694dea2543637c7ad056adb8ffea20de173dadb5f77a39aa71"
+      },
+      {
+        "bytes": 19563,
+        "path": "src/pyowl_core/io/formats/rdfxml.py",
+        "sha256": "c895f9d313cb4717f24a9a82e87f5f624889a54f7bb1b04df7e66b74c2a500b9"
+      },
+      {
+        "bytes": 6619,
+        "path": "src/pyowl_core/io/formats/rendering.py",
+        "sha256": "0deab9f80e51f028864b61699d3c32ba312d4a72139c310033da7e97943f1844"
+      },
+      {
+        "bytes": 19365,
+        "path": "src/pyowl_core/io/formats/turtle.py",
+        "sha256": "ded654c9151d82d0d9f1a487af3d9176f8a07b64791d78c8c49887e3f0ed5598"
+      },
+      {
+        "bytes": 991,
+        "path": "src/pyowl_core/io/resolver/__init__.py",
+        "sha256": "945615e3b07acede26c55a9ccc4ff0e896c834254513688d56e8ca1088de17cc"
+      },
+      {
+        "bytes": 11253,
+        "path": "src/pyowl_core/io/resolver/base.py",
+        "sha256": "86d375ed11b1220ee332295ec7d1f3fea1cd41912c3aa26368d88302ed6b1e92"
+      },
+      {
+        "bytes": 16370,
+        "path": "src/pyowl_core/io/resolver/catalog.py",
+        "sha256": "bd18f0063efac27532a358d54d14ab02e15aa781a491d1beb4bed676aaee33ca"
+      },
+      {
+        "bytes": 2425,
+        "path": "src/pyowl_core/io/resolver/composite.py",
+        "sha256": "1b2d3dfc7bed0707de868a57f31c873398f1fc829587b92eb5c3a3309479a538"
+      },
+      {
+        "bytes": 6824,
+        "path": "src/pyowl_core/io/resolver/directory.py",
+        "sha256": "74bd5e0495c87f367e4fcbfc0902f5307fc38dbf139c0150b9046e4f99374c1f"
+      },
+      {
+        "bytes": 19564,
+        "path": "src/pyowl_core/io/resolver/http.py",
+        "sha256": "aa07603ffd277024fedeb4e61d24aeb5e26974b384781344bc4b2b3606597902"
+      },
+      {
+        "bytes": 5183,
+        "path": "src/pyowl_core/io/resolver/mapping.py",
+        "sha256": "e4946df4ca44f86187943a584523d09d5b74c3d06797cfc7a58a56869a790255"
+      },
+      {
+        "bytes": 7115,
+        "path": "src/pyowl_core/io/source.py",
+        "sha256": "8d30fe5a1e4b6d0a3acdd86f12b82175e66c968e71d7fed76b88e517016dfbd2"
+      },
+      {
+        "bytes": 5412,
+        "path": "src/pyowl_core/limits.py",
+        "sha256": "e4fb4ccf830c117c35a403b9e8298fe19581f4509e0a55afe2434f9b1f1cadcf"
+      },
+      {
+        "bytes": 7649,
+        "path": "src/pyowl_core/model/__init__.py",
+        "sha256": "97ed504e6d2a86a19b82c05058171f621b3b86ef31e3cbaf8c2531e4a1a2d4f8"
+      },
+      {
+        "bytes": 4198,
+        "path": "src/pyowl_core/model/_tags.py",
+        "sha256": "9886767b4759a3e390a4202cf5551e33cd7beae2ca53a4873474b5eb098b2aed"
+      },
+      {
+        "bytes": 1577,
+        "path": "src/pyowl_core/model/annotations.py",
+        "sha256": "cbf50761c0eef8a8b6475efd2661d801429ee2c82a5f307f97483e6d060ec4e4"
+      },
+      {
+        "bytes": 15189,
+        "path": "src/pyowl_core/model/anonymous.py",
+        "sha256": "15754fae1b259e4f4251a157dd13f7783d305a2f8882951c690f52617ae0990a"
+      },
+      {
+        "bytes": 23362,
+        "path": "src/pyowl_core/model/axioms.py",
+        "sha256": "3f4efe08d71fac0e95e4c9f8d18273a7fbf489c9854ec2dc11b023591a6e656b"
+      },
+      {
+        "bytes": 6378,
+        "path": "src/pyowl_core/model/base.py",
+        "sha256": "c397c9fee21d858ba464d06f419898a29dd052c489536252f3cc3107507882f0"
+      },
+      {
+        "bytes": 12069,
+        "path": "src/pyowl_core/model/canonical.py",
+        "sha256": "9418b38429f829dc7ee26334194a0479ac10c3ad2afaaf04b795b087e03a392b"
+      },
+      {
+        "bytes": 3040,
+        "path": "src/pyowl_core/model/dataranges.py",
+        "sha256": "ad8bdd34ace660d0d5cbbd34610a23af5c00b9a804f66d87045e52f8fc1b5c97"
+      },
+      {
+        "bytes": 8752,
+        "path": "src/pyowl_core/model/expressions.py",
+        "sha256": "edb40c0593d5d69af3b327332eede0c80567da41f30aba147b8ba8ce29ac1891"
+      },
+      {
+        "bytes": 7592,
+        "path": "src/pyowl_core/model/factory.py",
+        "sha256": "a849a5215201eeb7f5081a08c317176e9bdaf7654d71aa719e4c91deeec997f8"
+      },
+      {
+        "bytes": 10391,
+        "path": "src/pyowl_core/model/primitives.py",
+        "sha256": "ab36ad8cf38d00f4d41568298f77eb548f0f75b1b85ca3f49d7bbb6d4c59debc"
+      },
+      {
+        "bytes": 1600,
+        "path": "src/pyowl_core/model/properties.py",
+        "sha256": "2721e4eeedeb44388eaf31c8ebddf2a4e43c1cfcc8c872ce85049c20a53a84e9"
+      },
+      {
+        "bytes": 3837,
+        "path": "src/pyowl_core/model/provenance.py",
+        "sha256": "4012ed056627c21ff65e67bb10b67a04c6311d613be2f2b2b0f4f93fbcbd20d3"
+      },
+      {
+        "bytes": 9532,
+        "path": "src/pyowl_core/model/registry.py",
+        "sha256": "349e2e44032650ab0ac4d212b4867b806aaa2bcfe983e9db109e42ab1dda3914"
+      },
+      {
+        "bytes": 5223,
+        "path": "src/pyowl_core/model/swrl.py",
+        "sha256": "135810775f5f2659a5ae7720738da7d32ed1eb0c3aa4e65c715a5046003c07be"
+      },
+      {
+        "bytes": 18650,
+        "path": "src/pyowl_core/model/validation.py",
+        "sha256": "ba3cc360adfc41b29739f9e0216368bb5cfa1d5cca71f46ce11d30538fc58247"
+      },
+      {
+        "bytes": 4219,
+        "path": "src/pyowl_core/model/visitor.py",
+        "sha256": "7d144cc6cd23ce9cb8f0284052402217139f4866555dc1ae62bdc76b190085fb"
+      },
+      {
+        "bytes": 3631,
+        "path": "src/pyowl_core/progress.py",
+        "sha256": "689565bf7019ea618c7c4aff11c1f0b0c49394e03877b90cecdd21bde5532ec4"
+      },
+      {
+        "bytes": 1,
+        "path": "src/pyowl_core/py.typed",
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+      },
+      {
+        "bytes": 558,
+        "path": "src/pyowl_core/wire/__init__.py",
+        "sha256": "59da899216dc75b92dbb0460e591223129cf709822ed1e22d2e5eccc04c22d0d"
+      },
+      {
+        "bytes": 17559,
+        "path": "src/pyowl_core/wire/_binary.py",
+        "sha256": "e7dc70acc65507f0bd864a65c2de5dde7c366693374c01b9cc80d9b6ca022f17"
+      },
+      {
+        "bytes": 17435,
+        "path": "src/pyowl_core/wire/cache.py",
+        "sha256": "336384f06dfafb67121c56644259c605edc0e08309d9df9a86b183d806578ab8"
+      },
+      {
+        "bytes": 94795,
+        "path": "src/pyowl_core/wire/codec.py",
+        "sha256": "6c01540f9c2d859efd97cab7766cb4b2644f9bad53f315cda957feabf5aae2e3"
+      },
+      {
+        "bytes": 19638,
+        "path": "src/pyowl_core/wire/mapping.py",
+        "sha256": "4c53af6f32c18ec4512ffc5441717b4744366b4bdfb238607a9dd34a04dff70b"
+      },
+      {
+        "bytes": 7062,
+        "path": "src/pyowl_core/wire/reference.py",
+        "sha256": "cd54f5449ad920345caf9012ad1566d54a1e08ec288a958c407a9cdddc94ba37"
+      },
+      {
+        "bytes": 1839,
+        "path": "src/pyowl_core/wire/schema.py",
+        "sha256": "97b403afc3a2afe3c4b89d02b5bf393cbde876acf5847b988f0de4497bdb7eb2"
+      },
+      {
+        "bytes": 172,
+        "path": "tools/benchmark/__init__.py",
+        "sha256": "cf4ef8ec5ffcba7a8399cb3512b4d45a5496788e29f1d144cee0ef5ffd28d46c"
+      },
+      {
+        "bytes": 1193,
+        "path": "tools/benchmark/comparators/__init__.py",
+        "sha256": "a1cafe38a3d5da2f3ac8ffcab3ba32a31c7e54bdfcc3436cb462fda83cceb729"
+      },
+      {
+        "bytes": 40028,
+        "path": "tools/benchmark/comparators/adapters.py",
+        "sha256": "5c204fef719984cca7e5163f0021e0deb5953181fe9a6f3978e7dee701749628"
+      },
+      {
+        "bytes": 40016,
+        "path": "tools/benchmark/comparators/common_contract.py",
+        "sha256": "ccd1f33e63dbe56c3127fa43662d7f0ff44366ef1d7fd6092df16fba901450cb"
+      },
+      {
+        "bytes": 50700,
+        "path": "tools/benchmark/comparators/dependency_audit.py",
+        "sha256": "94436e63f372fe2539cddf0d5e3fc999e01f09e9bdaf7cb0cec792cb3e584a11"
+      },
+      {
+        "bytes": 24016,
+        "path": "tools/benchmark/comparators/manifest.py",
+        "sha256": "547c9d70b4b2e14306a4d13d58c7f1c2e71fd17eb6a530280fe5a3286aa60c76"
+      },
+      {
+        "bytes": 34202,
+        "path": "tools/benchmark/comparators/persistent.py",
+        "sha256": "d1b641ba41d51dc86ece15b7c93df96d125ad89e2aa8ec46fe40c0e6f5294e3d"
+      },
+      {
+        "bytes": 8611,
+        "path": "tools/benchmark/comparators/ratio_statistics.py",
+        "sha256": "8bda1e8aa6c674139a6f081a4c63b5358230f043dedaad8e9942c2df6c4762cd"
+      },
+      {
+        "bytes": 69471,
+        "path": "tools/benchmark/comparators/runner.py",
+        "sha256": "9e5b639837a7ca4d1d29c230fb297f067aef6d506182fe3cf4d497dc1778d44f"
+      },
+      {
+        "bytes": 6037,
+        "path": "tools/benchmark/comparators/worker.py",
+        "sha256": "508d8cddf120e0de01cb72f118f4154f60b021bbfb6bed97290f9bf5093e2de2"
+      },
+      {
+        "bytes": 35255,
+        "path": "tools/benchmark/harness.py",
+        "sha256": "e72d35d1dfa70322c115242482503a528cac793e2189e7d3a5e6545e6a50ff3e"
+      },
+      {
+        "bytes": 5998,
+        "path": "tools/benchmark/instrumentation.py",
+        "sha256": "c2f426dafb3ff9b8439713996988cba0ebfdc07f225bfa9788403c63bd7642f7"
+      },
+      {
+        "bytes": 23872,
+        "path": "tools/benchmark/manifest.py",
+        "sha256": "11f875fa0a37eefd1bd8176b513a67779e33f96a6f80e4795610dce5c717a43a"
+      },
+      {
+        "bytes": 3417,
+        "path": "tools/benchmark/metrics.py",
+        "sha256": "998ffa58586795b78db0f99a943576151b960073aa8c03acf49f047aa53d0881"
+      },
+      {
+        "bytes": 58,
+        "path": "tools/benchmark/native_redesign/__init__.py",
+        "sha256": "70d9d0595347dee4bd24640dfa89ace0f95498f5ba2dea3f7dc42f2fef87987b"
+      },
+      {
+        "bytes": 35871,
+        "path": "tools/benchmark/native_redesign/encoded_contract.py",
+        "sha256": "fc8d8f361bd61b5fa68abcbde1a027b5a6bbb254a205bb38eb779b00c2d2372e"
+      },
+      {
+        "bytes": 9808,
+        "path": "tools/benchmark/native_redesign/release_decision.py",
+        "sha256": "72bf025ea937bd2ec250769a99c34196004b482fec3caf28f9b5c2156f9e3d21"
+      },
+      {
+        "bytes": 7090,
+        "path": "tools/benchmark/profile.py",
+        "sha256": "aab2998fb0f9676f4266ca8d3beeafc1cbd2b61d4346a5fd28416d8b99324c14"
+      },
+      {
+        "bytes": 10229,
+        "path": "tools/benchmark/regression.py",
+        "sha256": "d4b3b5628aa107fb1e9165bf30f4ff007ff3b00f89c67704662aa2db05e3d2ec"
+      },
+      {
+        "bytes": 7064,
+        "path": "tools/benchmark/report.py",
+        "sha256": "a8044566f257c81cf40468deca6ac467a7ef489f065a9003d45811de9fad82de"
+      },
+      {
+        "bytes": 6778,
+        "path": "tools/benchmark/synthetic.py",
+        "sha256": "e0a9e8055a459a5baace35c8ff83f982b3481f4c6c07666e52116c56ee7e3a49"
+      }
+    ],
+    "preimage_format": "UTF-8 domain, one NUL byte, then compact canonical JSON of path/bytes/sha256 rows sorted by path",
+    "schema": "pyowl-core/comparator-runtime-source/v1",
+    "sha256": "daa0375a6deca23da8da5f4f182c7781118e3459e2b569a1591e8658c539b9f9"
+  }
+}
