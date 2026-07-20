@@ -11,6 +11,10 @@ const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
 const OWL_COMPLEMENT_OF: &str = "http://www.w3.org/2002/07/owl#complementOf";
 const OWL_INTERSECTION_OF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
 const OWL_ONE_OF: &str = "http://www.w3.org/2002/07/owl#oneOf";
+const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
+const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
+const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
+const OWL_ALL_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#allValuesFrom";
 const OWL_UNION_OF: &str = "http://www.w3.org/2002/07/owl#unionOf";
 
 const ROLE_EXPRESSION: u8 = 1;
@@ -30,6 +34,7 @@ pub(crate) struct RdfClassExpressionDecoder<'graph, 'data> {
     lists: RdfListDecoder<'graph, 'data>,
     active: Vec<&'data str>,
     blank_roles: Vec<BlankRole<'data>>,
+    data_properties: Vec<&'data str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,6 +48,7 @@ enum ClassConstructor {
     Boolean { index: usize, tag: u64 },
     Complement { index: usize },
     OneOf { index: usize },
+    Restriction { marker: usize },
 }
 
 impl ClassConstructor {
@@ -51,6 +57,7 @@ impl ClassConstructor {
             Self::Boolean { index, .. } | Self::Complement { index } | Self::OneOf { index } => {
                 index
             }
+            Self::Restriction { marker } => marker,
         }
     }
 }
@@ -62,7 +69,24 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             lists: RdfListDecoder::new(triples),
             active: Vec::new(),
             blank_roles: Vec::new(),
+            data_properties: Vec::new(),
         }
+    }
+
+    pub(crate) fn register_data_property(
+        &mut self,
+        value: &'data str,
+        session: &mut Session<'_>,
+    ) -> NativeResult<()> {
+        session.step(usize_as_u64(
+            self.data_properties.len(),
+            "native RDF property-kind work exceeds u64",
+        )?)?;
+        if !self.data_properties.contains(&value) {
+            reserve_item(&mut self.data_properties, session)?;
+            self.data_properties.push(value);
+        }
+        Ok(())
     }
 
     pub(crate) fn decode_term(
@@ -135,10 +159,12 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         let complement = self.unique_edge(subject, OWL_COMPLEMENT_OF, session)?;
         let intersection = self.unique_edge(subject, OWL_INTERSECTION_OF, session)?;
         let one_of = self.unique_edge(subject, OWL_ONE_OF, session)?;
+        let restriction = self.unique_marker(subject, OWL_RESTRICTION, session)?;
         let union = self.unique_edge(subject, OWL_UNION_OF, session)?;
         let constructor_count = usize::from(complement.is_some())
             .checked_add(usize::from(intersection.is_some()))
             .and_then(|value| value.checked_add(usize::from(one_of.is_some())))
+            .and_then(|value| value.checked_add(usize::from(restriction.is_some())))
             .and_then(|value| value.checked_add(usize::from(union.is_some())))
             .ok_or_else(|| NativeError::limit("native RDF constructor count overflow"))?;
         if constructor_count != 1 {
@@ -156,6 +182,8 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             ClassConstructor::Complement { index }
         } else if let Some(index) = one_of {
             ClassConstructor::OneOf { index }
+        } else if let Some(marker) = restriction {
+            ClassConstructor::Restriction { marker }
         } else {
             return Err(NativeError::protocol(
                 "native RDF constructor ledger is empty",
@@ -163,7 +191,9 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         };
 
         push_index(consumed, constructor.index(), session)?;
-        self.consume_class_markers(subject, consumed, session)?;
+        if !matches!(constructor, ClassConstructor::Restriction { .. }) {
+            self.consume_class_markers(subject, consumed, session)?;
+        }
         let target = self.triples[constructor.index()].object;
         match constructor {
             ClassConstructor::Boolean { tag, .. } => {
@@ -175,6 +205,9 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 Node::build(32, fields)
             }
             ClassConstructor::OneOf { .. } => self.decode_one_of(target, consumed, session),
+            ClassConstructor::Restriction { .. } => {
+                self.decode_restriction(subject, consumed, session)
+            }
         }
     }
 
@@ -251,6 +284,57 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         Node::build(33, fields)
     }
 
+    fn decode_restriction(
+        &mut self,
+        subject: &'data str,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        let on_property = self
+            .unique_edge(subject, OWL_ON_PROPERTY, session)?
+            .ok_or_else(|| unsupported("native RDF restriction has no property selector"))?;
+        let some = self.unique_edge(subject, OWL_SOME_VALUES_FROM, session)?;
+        let all = self.unique_edge(subject, OWL_ALL_VALUES_FROM, session)?;
+        let (quantifier, tag) = match (some, all) {
+            (Some(index), None) => (index, 34),
+            (None, Some(index)) => (index, 35),
+            (Some(_), Some(_)) => {
+                return Err(unsupported(
+                    "native RDF restriction has conflicting quantifiers",
+                ));
+            }
+            (None, None) => {
+                return Err(unsupported(
+                    "native RDF restriction has no supported quantifier",
+                ));
+            }
+        };
+        let property = match self.triples[on_property].object {
+            RdfTerm::Iri(value) => value,
+            RdfTerm::Blank(_) | RdfTerm::Literal(_) => {
+                return Err(unsupported(
+                    "native bounded RDF restriction requires a named object property",
+                ));
+            }
+        };
+        session.step(usize_as_u64(
+            self.data_properties.len(),
+            "native RDF property-kind work exceeds u64",
+        )?)?;
+        if self.data_properties.contains(&property) {
+            return Err(unsupported(
+                "native bounded RDF restriction does not map data properties",
+            ));
+        }
+
+        push_index(consumed, on_property, session)?;
+        push_index(consumed, quantifier, session)?;
+        let filler = self.decode_into(self.triples[quantifier].object, consumed, session)?;
+        let property = named_entity("object_property", property, session)?;
+        let fields = reserved_fields([Field::Node(property), Field::Node(filler)], session)?;
+        Node::build(tag, fields)
+    }
+
     fn decode_individual(
         &mut self,
         value: RdfTerm<'data>,
@@ -311,6 +395,28 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             {
                 return Err(unsupported(
                     "native RDF class constructor has multiple targets",
+                ));
+            }
+        }
+        Ok(selected)
+    }
+
+    fn unique_marker(
+        &mut self,
+        subject: &'data str,
+        object: &str,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Option<usize>> {
+        let mut selected = None;
+        for (index, triple) in self.triples.iter().enumerate() {
+            session.step(1)?;
+            if triple.subject == RdfResource::Blank(subject)
+                && triple.predicate == RDF_TYPE
+                && triple.object == RdfTerm::Iri(object)
+                && selected.replace(index).is_some()
+            {
+                return Err(unsupported(
+                    "native RDF class marker is duplicated in the source graph",
                 ));
             }
         }
@@ -524,6 +630,57 @@ mod tests {
     }
 
     #[test]
+    fn named_object_quantified_restrictions_match_canonical_tags() {
+        for (predicate, tag) in [(OWL_SOME_VALUES_FROM, 34), (OWL_ALL_VALUES_FROM, 35)] {
+            let graph = [
+                edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+                edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+                edge("e", predicate, iri_term("urn:Filler")),
+            ];
+            let decoded = decode(&graph, blank_term("e")).expect("quantified restriction");
+            let expected = Node::build(
+                tag,
+                vec![
+                    Field::Node(
+                        entity("object_property", iri("urn:p".to_owned()).unwrap()).unwrap(),
+                    ),
+                    Field::Node(entity("class", iri("urn:Filler".to_owned()).unwrap()).unwrap()),
+                ],
+            )
+            .unwrap();
+            assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+            assert_eq!(decoded.consumed, [0, 1, 2]);
+        }
+    }
+
+    #[test]
+    fn declared_data_property_is_not_misclassified_as_object_restriction() {
+        let graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:data")),
+            edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:Filler")),
+        ];
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut decoder = RdfClassExpressionDecoder::new(&graph);
+        decoder
+            .register_data_property("urn:data", &mut session)
+            .expect("data property kind");
+        assert_eq!(
+            decoder
+                .decode_term(blank_term("e"), &mut session)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+    }
+
+    #[test]
     fn constructor_conflicts_expression_cycles_and_literals_fail_closed() {
         let conflict = [
             edge("e", OWL_INTERSECTION_OF, iri_term(RDF_NIL)),
@@ -542,11 +699,24 @@ mod tests {
             edge("h", RDF_FIRST, blank_term("e")),
             edge("h", RDF_REST, iri_term(RDF_NIL)),
         ];
+        let conflicting_quantifiers = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:A")),
+            edge("e", OWL_ALL_VALUES_FROM, iri_term("urn:B")),
+        ];
+        let blank_property = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, blank_term("p")),
+            edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:A")),
+        ];
         for (graph, value) in [
             (conflict.as_slice(), blank_term("e")),
             (cycle.as_slice(), blank_term("e")),
             (complement_literal.as_slice(), blank_term("e")),
             (ambiguous_individual.as_slice(), blank_term("e")),
+            (conflicting_quantifiers.as_slice(), blank_term("e")),
+            (blank_property.as_slice(), blank_term("e")),
             (&[][..], RdfTerm::Literal("not-a-class")),
         ] {
             assert_eq!(

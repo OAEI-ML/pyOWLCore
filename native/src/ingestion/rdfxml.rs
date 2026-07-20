@@ -1222,6 +1222,11 @@ fn map_graph(
     }
     let list_graph = list_graph_view(&triples, session)?;
     let mut expressions = RdfClassExpressionDecoder::new(&list_graph);
+    for kind in &kinds {
+        if kind.kind == "data_property" {
+            expressions.register_data_property(kind.iri, session)?;
+        }
+    }
     map_equivalent_class_components(
         &list_graph,
         &mut consumed,
@@ -2966,6 +2971,53 @@ mod tests {
         assert_eq!(
             one_of.mapping.total_triples,
             one_of.mapping.consumed_triples
+        );
+    }
+
+    #[test]
+    fn named_object_quantified_restrictions_map_with_nested_fillers() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:someValuesFrom><rdf:Description><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:B\"/><rdf:Description rdf:about=\"urn:C\"/></owl:unionOf></rdf:Description></owl:someValuesFrom></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("nested object restriction");
+        let restriction = Node::build(
+            34,
+            vec![
+                Field::Node(
+                    entity(
+                        "object_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("object property"),
+                ),
+                Field::Node(boolean_node(31, &["urn:B", "urn:C"])),
+            ],
+        )
+        .expect("restriction node");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()),);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let declared_data = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:DatatypeProperty rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:allValuesFrom rdf:resource=\"urn:B\"/></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(declared_data.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
         );
     }
 
