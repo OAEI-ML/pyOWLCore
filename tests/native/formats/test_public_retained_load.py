@@ -737,13 +737,14 @@ def test_eligible_owner_construction_failure_propagates_without_fallback(
 
     def fail(
         parsed: object,
+        prepared_summary: object,
         attestation: object,
         cancel: object,
     ) -> object:
         nonlocal calls
         calls += 1
         tampered = replace(cast(Any, attestation), root_table_sha256=b"\x00" * 32)
-        return finalize(parsed, tampered, cancel)
+        return finalize(parsed, prepared_summary, tampered, cancel)
 
     monkeypatch.setattr(cast(Any, extension), "_finalize_parsed_structural_snapshot_v2", fail)
     with pytest.raises(BackendProtocolError) as raised:

@@ -595,6 +595,7 @@ class _PreparedRetainedPublicationV2:
         _RetainedFingerprintEvidenceV2,
         _RetainedFingerprintEvidenceV2,
         _RetainedFingerprintEvidenceV2,
+        _RetainedFingerprintEvidenceV2,
     ]
     content_digests: tuple[bytes, bytes, bytes, bytes, bytes, bytes]
     record_inventories: tuple[
@@ -736,8 +737,9 @@ def _decode_prepared_retained_publication_v2(
             _RetainedFingerprintEvidenceV2,
             _RetainedFingerprintEvidenceV2,
             _RetainedFingerprintEvidenceV2,
+            _RetainedFingerprintEvidenceV2,
         ],
-        tuple(_RetainedFingerprintEvidenceV2(reader.u64(), reader.take(32)) for _ in range(3)),
+        tuple(_RetainedFingerprintEvidenceV2(reader.u64(), reader.take(32)) for _ in range(4)),
     )
     content = cast(
         tuple[bytes, bytes, bytes, bytes, bytes, bytes],
@@ -992,9 +994,13 @@ def publish_retained_functional_snapshot_v2(
         collect_provenance=options.collect_provenance,
     )
     options.limits.enforce("max_origin_entries", prepared.origin_rows_retained)
-    fingerprints = (
-        document_fingerprint,
-        *(Fingerprint("sha256", 1, item.digest) for item in prepared.fingerprints),
+    if prepared.fingerprints[0] != seed.document_fingerprint:
+        raise BackendProtocolError(
+            "native retained document fingerprint summaries diverge",
+            code="NATIVE_PARSE_MODEL",
+        )
+    fingerprints = tuple(
+        Fingerprint("sha256", 1, item.digest) for item in prepared.fingerprints
     )
     try:
         inventory_rows = tuple(
@@ -1009,20 +1015,20 @@ def publish_retained_functional_snapshot_v2(
         common_contract_summary = _NativeCommonContractSummaryV1(
             schema=1,
             document_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
-                seed.document_fingerprint.preimage_byte_length,
-                seed.document_fingerprint.digest,
-            ),
-            structural_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
                 prepared.fingerprints[0].preimage_byte_length,
                 prepared.fingerprints[0].digest,
             ),
-            logical_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
+            structural_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
                 prepared.fingerprints[1].preimage_byte_length,
                 prepared.fingerprints[1].digest,
             ),
-            signature_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
+            logical_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
                 prepared.fingerprints[2].preimage_byte_length,
                 prepared.fingerprints[2].digest,
+            ),
+            signature_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
+                prepared.fingerprints[3].preimage_byte_length,
+                prepared.fingerprints[3].digest,
             ),
             ontology_annotations=inventory_rows[0],
             axioms=inventory_rows[1],
@@ -1170,6 +1176,7 @@ def publish_retained_functional_snapshot_v2(
             extension,
             lambda: hook(
                 parsed_native_storage,
+                prepared_encoded,
                 attestation,
                 cancel,
             ),

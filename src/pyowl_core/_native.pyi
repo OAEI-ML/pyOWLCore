@@ -121,6 +121,7 @@ def _prepare_parsed_structural_snapshot_v2(
 ) -> bytes: ...
 def _finalize_parsed_structural_snapshot_v2(
     parsed: _NativeParsedStructuralStorageV2,
+    prepared_summary: bytes,
     attestation: NativeSnapshotAttestationV2,
     cancel: _Cancellation | None = None,
 ) -> _NativeSnapshotHandle: ...

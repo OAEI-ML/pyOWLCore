@@ -36,6 +36,7 @@ struct NativeParsedStructuralStorageV2 {
     storage: Option<TypedFacadeStorageV2>,
     metadata: Option<crate::parse::RetainedParseMetadataV2>,
     prepared: Option<crate::parse::PreparedRetainedPublicationV2>,
+    prepared_summary: Option<Vec<u8>>,
     limits: Limits,
     parser_bytes: u64,
 }
@@ -135,6 +136,7 @@ fn _parse_functional_retained_v2<'py>(
             storage: Some(outcome.storage),
             metadata: outcome.metadata,
             prepared: None,
+            prepared_summary: None,
             limits,
             parser_bytes,
         },
@@ -197,26 +199,33 @@ fn _prepare_parsed_structural_snapshot_v2<'py>(
         let summary = prepared.encode_summary(prepare_ns)?;
         Ok((storage, prepared, summary))
     })?;
-    let summary = PyBytes::new_with(py, summary.len(), |buffer| {
+    let encoded = PyBytes::new_with(py, summary.len(), |buffer| {
         buffer.copy_from_slice(&summary);
         Ok(())
     })?
     .unbind();
     parsed.storage = Some(storage);
     parsed.prepared = Some(prepared);
-    Ok(summary)
+    parsed.prepared_summary = Some(summary);
+    Ok(encoded)
 }
 
 /// Attach immutable metadata attestations to already prepared parser storage.
 #[pyfunction]
-#[pyo3(signature = (parsed, attestation, cancel=None))]
+#[pyo3(signature = (parsed, prepared_summary, attestation, cancel=None))]
 fn _finalize_parsed_structural_snapshot_v2<'py>(
     py: Python<'py>,
     mut parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
+    prepared_summary: &Bound<'py, PyBytes>,
     attestation: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<NativeSnapshotHandle> {
     let _cancellation = crate::cancellation_or_default(cancel);
+    if parsed.prepared_summary.as_deref() != Some(prepared_summary.as_bytes()) {
+        return Err(crate::python_error(NativeError::protocol(
+            "native retained summary diverges before final publication",
+        )));
+    }
     let parser_bytes = parsed.parser_bytes;
     let storage = parsed.storage.take().ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err(
@@ -228,6 +237,7 @@ fn _finalize_parsed_structural_snapshot_v2<'py>(
             "native parsed structural storage was not prepared",
         )
     })?;
+    parsed.prepared_summary = None;
     validate_prepared_attestation(py, &prepared, attestation)?;
     crate::publication::typed_structural_handle_v2(
         attestation,

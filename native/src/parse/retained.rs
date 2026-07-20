@@ -94,6 +94,7 @@ pub(crate) struct RecordInventoryEvidenceV1 {
 
 #[derive(Debug)]
 pub(crate) struct PreparedRetainedPublicationV2 {
+    pub(crate) document_fingerprint: FingerprintEvidenceV2,
     pub(crate) structural_fingerprint: FingerprintEvidenceV2,
     pub(crate) logical_fingerprint: FingerprintEvidenceV2,
     pub(crate) signature_fingerprint: FingerprintEvidenceV2,
@@ -120,6 +121,7 @@ impl PreparedRetainedPublicationV2 {
         append(&mut output, &RETAINED_PREPARED_SCHEMA_V2.to_le_bytes())?;
         append(&mut output, &0_u16.to_le_bytes())?;
         for evidence in [
+            self.document_fingerprint,
             self.structural_fingerprint,
             self.logical_fingerprint,
             self.signature_fingerprint,
@@ -607,6 +609,7 @@ pub(crate) fn prepare_publication(
     })?;
     cancellation.checkpoint()?;
     Ok(PreparedRetainedPublicationV2 {
+        document_fingerprint: metadata.document_fingerprint,
         structural_fingerprint,
         logical_fingerprint,
         signature_fingerprint,
