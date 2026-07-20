@@ -1,6 +1,6 @@
 {
   "schema": "pyowl-core.native-redesign-release-evidence/1",
-  "core_revision": "c7d32af9839587e0001fcff9236bebf2715a6065",
+  "core_revision": "142b037524834c98c89feee460ffb0e9d4a9a7b7",
   "core_gates": [
     {
       "id": "semantic-differential-conformance",
@@ -16,9 +16,9 @@
     },
     {
       "id": "retained-storage-no-eager-expansion",
-      "status": "fail",
-      "reason": "the eligible Functional path still reconstructs a complete proportional Python parser result and model",
-      "evidence": ["reports/workpackages/WP16.md"]
+      "status": "not-run",
+      "reason": "the guarded Functional owner-first path proves zero eager structural objects, but the complete format, option, anonymous-scope, and import-closure matrix has not run",
+      "evidence": ["reports/workpackages/WP16.md", "tests/integration/native_consumers/test_retained_view_matrix.py"]
     },
     {
       "id": "encoded-view-installed-integration",
@@ -29,8 +29,8 @@
     {
       "id": "direct-decoded-mmap-overlay-composite-parity",
       "status": "not-run",
-      "reason": "source-tree component tests pass, but the required installed format-by-view cross-product is incomplete",
-      "evidence": ["reports/workpackages/WP17.md"]
+      "reason": "the retained Functional source-tree and installed checkpoint matrices pass, but the required every-format and import-closure cross-product is incomplete",
+      "evidence": ["reports/workpackages/WP16.md", "reports/workpackages/WP17.md", "tests/integration/native_consumers/test_retained_view_matrix.py"]
     },
     {
       "id": "pure-and-native-artifact-matrix",
@@ -84,24 +84,24 @@
       "id": "projector",
       "role": "encoded-native-compiler",
       "status": "not-run",
-      "revision": "e3286fae566c89fd2f59f22ca96417b620d8f495",
-      "reason": "the complete public counter ledger exists, but the production native structural compiler is incomplete and unadvertised",
+      "revision": "9d49cc5463a1e47eaf9d376a030f4d8df84e25d2",
+      "reason": "the private Rust compiler covers the first named class-axiom slice with exact counters, but the production structural compiler remains incomplete and unadvertised",
       "evidence": ["pyOwl2Vec-Star-projector/reports/p7/encoded-native-compiler.md"]
     },
     {
       "id": "pyelk",
       "role": "encoded-native-compiler",
       "status": "not-run",
-      "revision": "0831dc2b28eb07035fbb256e6d8dfd044c757ad3",
-      "reason": "the hidden compiler path passes local parity, but complete core negotiation, corpus, installed-artifact, and performance gates remain open",
+      "revision": "2ca04b07e38202f8e44825aa3ef79741781224d2",
+      "reason": "the hidden compiler and local CPython 3.12 macOS pure/native artifacts pass, but released core negotiation, tier-one artifacts, corpora, and performance gates remain open",
       "evidence": ["pyELK/reports/workpackages/WP14.md"]
     },
     {
       "id": "pyhermit",
       "role": "encoded-native-compiler",
       "status": "not-run",
-      "revision": "bcf8ed655c69e231d8aadcf9418835297b5d8c45",
-      "reason": "the encoded compiler is still closing structural constructor coverage and remains unadvertised",
+      "revision": "3010425af937a950929e48186f8f2dfc2e976407",
+      "reason": "the encoded compiler preserves annotated role-characteristic provenance, but is still closing structural constructor coverage and remains unadvertised",
       "evidence": ["pyHermiT/specs/workpackages/WP18-native-structural-compiler.md"]
     }
   ]
