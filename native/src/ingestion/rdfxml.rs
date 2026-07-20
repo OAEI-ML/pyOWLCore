@@ -2546,6 +2546,37 @@ fn class_expression_axiom<'view, 'graph>(
                 )?
             }
         }
+        RDFS_SUB_PROPERTY_OF => {
+            let Some(object) = object else {
+                return Ok(None);
+            };
+            if matches!(triple.subject, ListResource::Iri(_)) && matches!(object, ClassTerm::Iri(_))
+            {
+                return Ok(None);
+            }
+            let DecodedPropertyExpression {
+                node: sub_property,
+                consumed: sub_consumed,
+            } = expressions.decode_object_property_term(
+                ClassTerm::from_resource(triple.subject).as_term(),
+                session,
+            )?;
+            consume_collection_indexes(sub_consumed, consumed, session)?;
+            let DecodedPropertyExpression {
+                node: super_property,
+                consumed: super_consumed,
+            } = expressions.decode_object_property_term(object.as_term(), session)?;
+            consume_collection_indexes(super_consumed, consumed, session)?;
+            build_node(
+                70,
+                [
+                    Field::Node(sub_property),
+                    Field::Node(super_property),
+                    Field::Set(cloned_annotations(annotations, session)?),
+                ],
+                session,
+            )?
+        }
         OWL_INVERSE_OF => {
             let (ListResource::Iri(first_iri), Some(second_term)) = (triple.subject, object) else {
                 return Ok(None);
@@ -2674,6 +2705,29 @@ fn class_expression_axiom<'view, 'graph>(
             let Some(class) = object else {
                 return Ok(None);
             };
+            if let ClassTerm::Iri(characteristic) = class {
+                if let Some(tag) = characteristic_tag(characteristic, false) {
+                    let ListResource::Blank(_) = triple.subject else {
+                        return Ok(None);
+                    };
+                    let DecodedPropertyExpression {
+                        node: property,
+                        consumed: property_consumed,
+                    } = expressions.decode_object_property_term(
+                        ClassTerm::from_resource(triple.subject).as_term(),
+                        session,
+                    )?;
+                    consume_collection_indexes(property_consumed, consumed, session)?;
+                    return Ok(Some(build_node(
+                        tag,
+                        [
+                            Field::Node(property),
+                            Field::Set(cloned_annotations(annotations, session)?),
+                        ],
+                        session,
+                    )?));
+                }
+            }
             if matches!(class, ClassTerm::Iri(value) if is_structural_type(value)) {
                 return Ok(None);
             }
@@ -5059,7 +5113,7 @@ mod tests {
     fn inverse_properties_map_in_domain_range_and_disjoint_positions() {
         let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
         let source = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:e=\"urn:\"><rdf:Description rdf:nodeID=\"domain\"><owl:inverseOf rdf:resource=\"urn:p\"/><rdfs:domain rdf:resource=\"urn:C\"/></rdf:Description><rdf:Description rdf:nodeID=\"range\"><owl:inverseOf rdf:resource=\"urn:q\"/><rdfs:range rdf:resource=\"urn:D\"/></rdf:Description><rdf:Description rdf:nodeID=\"disjoint\"><owl:inverseOf rdf:resource=\"urn:r\"/><owl:propertyDisjointWith rdf:resource=\"urn:s\"/></rdf:Description><owl:Axiom rdf:nodeID=\"domain-axiom\"><owl:annotatedSource rdf:nodeID=\"domain\"/><owl:annotatedProperty rdf:resource=\"{RDFS_DOMAIN}\"/><owl:annotatedTarget rdf:resource=\"urn:C\"/><e:note rdf:resource=\"urn:value\"/></owl:Axiom></rdf:RDF>"
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:e=\"urn:\"><rdf:Description rdf:nodeID=\"domain\"><owl:inverseOf rdf:resource=\"urn:p\"/><rdfs:domain rdf:resource=\"urn:C\"/></rdf:Description><rdf:Description rdf:nodeID=\"range\"><owl:inverseOf rdf:resource=\"urn:q\"/><rdfs:range rdf:resource=\"urn:D\"/></rdf:Description><rdf:Description rdf:nodeID=\"disjoint\"><owl:inverseOf rdf:resource=\"urn:r\"/><owl:propertyDisjointWith rdf:resource=\"urn:s\"/></rdf:Description><rdf:Description rdf:nodeID=\"sub\"><owl:inverseOf rdf:resource=\"urn:sub\"/><rdfs:subPropertyOf><rdf:Description><owl:inverseOf rdf:resource=\"urn:super\"/></rdf:Description></rdfs:subPropertyOf></rdf:Description><rdf:Description rdf:nodeID=\"functional\"><owl:inverseOf rdf:resource=\"urn:f\"/><rdf:type rdf:resource=\"{OWL}FunctionalProperty\"/></rdf:Description><owl:Axiom rdf:nodeID=\"domain-axiom\"><owl:annotatedSource rdf:nodeID=\"domain\"/><owl:annotatedProperty rdf:resource=\"{RDFS_DOMAIN}\"/><owl:annotatedTarget rdf:resource=\"urn:C\"/><e:note rdf:resource=\"urn:value\"/></owl:Axiom></rdf:RDF>"
         );
         let document = mapped(source.as_bytes(), None).expect("inverse property positions");
         let property = |value: &str| {
@@ -5116,7 +5170,21 @@ mod tests {
             ],
         )
         .expect("inverse disjoint properties");
-        for expected in [domain, range, disjoint] {
+        let sub_property = Node::build(
+            70,
+            vec![
+                Field::Node(inverse("urn:sub")),
+                Field::Node(inverse("urn:super")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("inverse sub-property axiom");
+        let functional = Node::build(
+            76,
+            vec![Field::Node(inverse("urn:f")), Field::Set(Vec::new())],
+        )
+        .expect("functional inverse property");
+        for expected in [domain, range, disjoint, sub_property, functional] {
             assert!(document
                 .axioms
                 .iter()
