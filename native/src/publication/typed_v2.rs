@@ -875,6 +875,7 @@ impl TypedFacadeStorageV2 {
     /// dropped before the next one is produced.  Unlike facade paging this is
     /// owner-internal validation work: it does not publish payload bytes or
     /// mutate consumer-facing page/copy counters.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn visit_canonical_roots<F>(
         &self,
         collection: TypedFacadeCollectionV2,

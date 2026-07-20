@@ -71,6 +71,8 @@ pub(crate) struct RetainedParseMetadataV2 {
     occurrences: Vec<RetainedOccurrenceV2>,
 }
 
+type RetainedSeedV2 = (Vec<u8>, RetainedParseMetadataV2, [Vec<Vec<u8>>; 3]);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RetainedContentDigestsV2 {
     pub(crate) root_table_sha256: [u8; 32],
@@ -165,7 +167,7 @@ pub(crate) fn contains_anonymous(parsed: &ParsedDocument, limits: &Limits) -> Na
 pub(crate) fn build_seed(
     parsed: ParsedDocument,
     collect_provenance: bool,
-) -> NativeResult<(Vec<u8>, RetainedParseMetadataV2, [Vec<Vec<u8>>; 3])> {
+) -> NativeResult<RetainedSeedV2> {
     let occurrence_count = total_occurrences(&parsed)?;
     let occurrences = retained_occurrences(&parsed, occurrence_count, collect_provenance)?;
     let ParsedDocument {
