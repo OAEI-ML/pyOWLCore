@@ -189,7 +189,7 @@ def test_eligible_owner_construction_failure_propagates_without_fallback(
     assert calls == 1
 
 
-def test_isolated_installed_artifact_public_load_has_python_parity() -> None:
+def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> None:
     environment = dict(os.environ)
     inherited = environment.get("PYTHONPATH", "")
     paths = [str(ROOT)]
@@ -209,7 +209,32 @@ def test_isolated_installed_artifact_public_load_has_python_parity() -> None:
     assert observed["backend"] == "native"
     assert observed["snapshot_type"] == "_NativeOntologySnapshot"
     assert observed["fingerprint_parity"] is True
+    assert observed["direct_root_parity"] is True
+    assert observed["direct_owner_identity"] is True
+    assert observed["direct_encoded_view_requests"] == 1
+    assert observed["decoded_parity"] is True
+    assert len(observed["wire_sha256"]) == 64
+    assert len(observed["wire_python_sha256"]) == 64
+    assert observed["wire_python_parity"] is (observed["wire_differing_sections"] == [])
+    assert observed["wire_differing_sections"] in ([], [13, 14])
+    assert observed["origin_parity"] is observed["wire_python_parity"]
+    assert 0 <= observed["retained_origin_rows"] <= observed["reference_origin_rows"]
+    assert observed["mapped_root_parity"] is True
+    assert observed["mapped_fingerprint_parity"] is True
+    assert observed["mapped_owner_identity"] is True
+    assert observed["mapped_one_exporter"] is True
+    assert observed["mapped_exporter_type"] == "mmap"
+    assert observed["mapped_readonly"] is True
+    assert observed["mapped_lazy"] is True
+    assert observed["mapped_close_blocked"] is True
+    assert observed["mapped_closed"] is True
+    assert observed["direct_survives_owner_close"] is True
+    assert observed["selected_closed"] is True
     assert observed["ingestion_features"] == []
+    assert observed["view_features"] == []
     assert observed["encoded_view_schemas"] == {}
+    assert observed["wire_model_rows_materialized"] >= 0
+    assert observed["wire_page_requests"] >= 0
+    assert observed["wire_rows_emitted"] >= 0
     if environment.get("PYOWL_CORE_TEST_NATIVE_LIBRARY") == "1":
         assert not Path(observed["package_file"]).is_relative_to(ROOT / "src")
