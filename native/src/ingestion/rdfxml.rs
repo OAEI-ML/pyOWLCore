@@ -1171,6 +1171,7 @@ fn map_graph(
     let mut ontology_iri = None;
     let mut version_iri = None;
     let mut imports = Vec::new();
+    let mut ontology_annotations = Vec::new();
     if let Some(header_index) = header_index {
         let header = &triples[header_index];
         consumed[header_index] = true;
@@ -1262,6 +1263,15 @@ fn map_graph(
             )?;
         }
     }
+    map_ontology_annotations(
+        header_index,
+        &list_graph,
+        &mut consumed,
+        &kinds,
+        &mut expressions,
+        &mut ontology_annotations,
+        session,
+    )?;
     map_negative_property_assertions(
         &list_graph,
         &mut consumed,
@@ -1349,9 +1359,12 @@ fn map_graph(
         )?;
         let axiom = match class_axiom {
             Some(value) => Some(value),
-            None => match assertion_axiom(index, triple, &kinds, &mut expressions, session)? {
+            None => match annotation_axiom(index, triple, &kinds, &mut expressions, session)? {
                 Some(value) => Some(value),
-                None => named_axiom(triple, &kinds, session)?,
+                None => match assertion_axiom(index, triple, &kinds, &mut expressions, session)? {
+                    Some(value) => Some(value),
+                    None => named_axiom(triple, &kinds, session)?,
+                },
             },
         };
         if let Some(axiom) = axiom {
@@ -1361,6 +1374,13 @@ fn map_graph(
     }
     axioms.sort_unstable();
     axioms.dedup();
+    ontology_annotations.sort_unstable();
+    ontology_annotations.dedup();
+    enforce_usize(
+        ontology_annotations.len(),
+        session.limits().value(LimitKey::MaxAnnotations),
+        "native RDF mapping exceeds max_annotations",
+    )?;
     enforce_usize(
         axioms.len(),
         session.limits().value(LimitKey::MaxAxioms),
@@ -1375,7 +1395,7 @@ fn map_graph(
         ontology_iri,
         version_iri,
         imports,
-        ontology_annotations: Vec::new(),
+        ontology_annotations,
         axioms,
         extensions: Vec::new(),
         source_sha256: [0; 32],
@@ -1515,6 +1535,38 @@ impl<'graph> ClassTerm<'graph> {
             Self::Blank(value) => ListTerm::Blank(value),
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_ontology_annotations<'view, 'graph>(
+    header_index: Option<usize>,
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    annotations: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    let Some(header_index) = header_index else {
+        return Ok(());
+    };
+    let subject = triples
+        .get(header_index)
+        .ok_or_else(|| NativeError::protocol("native RDF header index exceeds graph"))?
+        .subject;
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index]
+            || triple.subject != subject
+            || !is_annotation_property(triple.predicate, kinds)
+        {
+            continue;
+        }
+        let annotation = annotation_node(index, triple, expressions, session)?;
+        push_annotation(annotation, annotations, session)?;
+        consumed[index] = true;
+    }
+    Ok(())
 }
 
 fn map_negative_property_assertions<'view, 'graph>(
@@ -2234,7 +2286,7 @@ fn class_expression_axiom<'view, 'graph>(
             let (ListResource::Iri(property), Some(object)) = (triple.subject, object) else {
                 return Ok(None);
             };
-            if has_kind(kinds, property, "annotation_property") {
+            if is_annotation_property(property, kinds) {
                 return Ok(None);
             }
             if triple.predicate == RDFS_RANGE && has_kind(kinds, property, "data_property") {
@@ -2480,6 +2532,162 @@ fn add_member<'a>(
         members.push(value);
     }
     Ok(())
+}
+
+fn annotation_axiom<'view, 'graph>(
+    index: usize,
+    triple: &'graph Triple,
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Option<Node>> {
+    if triple.predicate == RDFS_SUB_PROPERTY_OF {
+        let (Resource::Iri(sub_property), Term::Iri(super_property)) =
+            (&triple.subject, &triple.object)
+        else {
+            return Ok(None);
+        };
+        if is_annotation_property(sub_property, kinds)
+            || is_annotation_property(super_property, kinds)
+        {
+            return Ok(Some(build_node(
+                121,
+                [
+                    Field::Node(named_entity("annotation_property", sub_property, session)?),
+                    Field::Node(named_entity(
+                        "annotation_property",
+                        super_property,
+                        session,
+                    )?),
+                    Field::Set(Vec::new()),
+                ],
+                session,
+            )?));
+        }
+        return Ok(None);
+    }
+    if matches!(triple.predicate.as_str(), RDFS_DOMAIN | RDFS_RANGE) {
+        let Resource::Iri(property) = &triple.subject else {
+            return Ok(None);
+        };
+        if !is_annotation_property(property, kinds) {
+            return Ok(None);
+        }
+        let target = match &triple.object {
+            Term::Iri(value) => iri_node(value, session)?,
+            Term::Blank(_) => return Err(rdf_mapping_type()),
+            Term::Literal { .. } => return Ok(None),
+        };
+        let tag = if triple.predicate == RDFS_DOMAIN {
+            122
+        } else {
+            123
+        };
+        return Ok(Some(build_node(
+            tag,
+            [
+                Field::Node(named_entity("annotation_property", property, session)?),
+                Field::Node(target),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?));
+    }
+    if triple.predicate == RDF_TYPE && !matches!(triple.object, Term::Literal { .. }) {
+        return Ok(None);
+    }
+    if !is_annotation_property(&triple.predicate, kinds) {
+        return Ok(None);
+    }
+    let subject = annotation_subject(&triple.subject, expressions, session)?;
+    let value = annotation_value(index, triple, expressions, session)?;
+    Ok(Some(build_node(
+        120,
+        [
+            Field::Node(named_entity(
+                "annotation_property",
+                &triple.predicate,
+                session,
+            )?),
+            Field::Node(subject),
+            Field::Node(value),
+            Field::Set(Vec::new()),
+        ],
+        session,
+    )?))
+}
+
+fn annotation_node<'view, 'graph>(
+    index: usize,
+    triple: &ListTriple<'graph>,
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    build_node(
+        5,
+        [
+            Field::Node(named_entity(
+                "annotation_property",
+                triple.predicate,
+                session,
+            )?),
+            Field::Node(annotation_list_value(
+                index,
+                triple.object,
+                expressions,
+                session,
+            )?),
+            Field::Set(Vec::new()),
+        ],
+        session,
+    )
+}
+
+fn annotation_subject<'view, 'graph>(
+    value: &'graph Resource,
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    match value {
+        Resource::Iri(value) => iri_node(value, session),
+        Resource::Blank(value) => expressions.decode_individual(ListTerm::Blank(value), session),
+    }
+}
+
+fn annotation_value<'view, 'graph>(
+    index: usize,
+    triple: &'graph Triple,
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    let value = match &triple.object {
+        Term::Iri(value) => ListTerm::Iri(value),
+        Term::Blank(value) => ListTerm::Blank(value),
+        Term::Literal { lexical, .. } => ListTerm::Literal(lexical),
+    };
+    annotation_list_value(index, value, expressions, session)
+}
+
+fn annotation_list_value<'view, 'graph>(
+    index: usize,
+    value: ListTerm<'graph>,
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    match value {
+        ListTerm::Iri(value) => iri_node(value, session),
+        ListTerm::Blank(value) => expressions.decode_individual(ListTerm::Blank(value), session),
+        ListTerm::Literal(_) => expressions.decode_literal(index, session),
+    }
+}
+
+fn iri_node(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
+    super::check_iri(
+        value,
+        session,
+        "native RDF annotation IRI exceeds max_iri_bytes",
+    )?;
+    iri(owned_text(value, session)?)
 }
 
 fn assertion_axiom<'view, 'graph>(
@@ -2862,6 +3070,22 @@ fn push_axiom(
     encoded.extend_from_slice(axiom.as_bytes());
     reserve_vec_item(axioms, session)?;
     axioms.push(encoded);
+    Ok(())
+}
+
+fn push_annotation(
+    annotation: Node,
+    annotations: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session.reserve_bytes(annotation.as_bytes().len())?;
+    let mut encoded = Vec::new();
+    encoded
+        .try_reserve_exact(annotation.as_bytes().len())
+        .map_err(|_| NativeError::limit("native RDF annotation allocation failed"))?;
+    encoded.extend_from_slice(annotation.as_bytes());
+    reserve_vec_item(annotations, session)?;
+    annotations.push(encoded);
     Ok(())
 }
 
@@ -4599,12 +4823,39 @@ mod tests {
         let annotation_overlap = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:AnnotationProperty rdf:about=\"urn:a\"/><owl:DatatypeProperty rdf:about=\"urn:a\"/><rdf:Description rdf:about=\"urn:s\"><e:a>note</e:a></rdf:Description></rdf:RDF>"
         );
-        assert_eq!(
-            mapped(annotation_overlap.as_bytes(), None)
-                .unwrap_err()
-                .code,
-            "NATIVE_RDF_MAPPING_INCOMPLETE",
-        );
+        let annotation_overlap =
+            mapped(annotation_overlap.as_bytes(), None).expect("annotation precedence");
+        let annotation = Node::build(
+            120,
+            vec![
+                Field::Node(
+                    entity(
+                        "annotation_property",
+                        iri("urn:a".to_owned()).expect("property IRI"),
+                    )
+                    .expect("annotation property"),
+                ),
+                Field::Node(iri("urn:s".to_owned()).expect("annotation subject")),
+                Field::Node(
+                    literal(
+                        "note".to_owned(),
+                        entity(
+                            "datatype",
+                            iri(XSD_STRING.to_owned()).expect("datatype IRI"),
+                        )
+                        .expect("datatype"),
+                        None,
+                    )
+                    .expect("annotation value"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("annotation assertion");
+        assert!(annotation_overlap
+            .axioms
+            .iter()
+            .any(|value| value == annotation.as_bytes()));
 
         let structural_overlap = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:DatatypeProperty rdf:about=\"{OWL}sameAs\"/><rdf:Description rdf:about=\"urn:s\"><owl:sameAs>not-an-assertion</owl:sameAs></rdf:Description></rdf:RDF>"
@@ -5432,6 +5683,133 @@ mod tests {
         assert_eq!(document.axioms.len(), 1);
         assert_eq!(document.mapping.total_triples, 5);
         assert_eq!(document.mapping.consumed_triples, 5);
+    }
+
+    #[test]
+    fn ontology_and_annotation_axioms_map_exact_canonical_nodes() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let xsd_integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let plain_literal = "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:e=\"urn:\"><owl:Ontology rdf:about=\"urn:o\"><rdfs:label xml:lang=\"EN\">Ontology</rdfs:label></owl:Ontology><owl:AnnotationProperty rdf:about=\"urn:sub\"><rdfs:subPropertyOf rdf:resource=\"urn:super\"/><rdfs:domain rdf:resource=\"urn:Domain\"/><rdfs:range rdf:resource=\"urn:Range\"/></owl:AnnotationProperty><owl:AnnotationProperty rdf:about=\"urn:super\"/><rdf:Description rdf:about=\"urn:subject\"><e:sub rdf:datatype=\"{xsd_integer}\">007</e:sub></rdf:Description><rdf:Description rdf:nodeID=\"anonymous-subject\"><rdfs:comment rdf:resource=\"urn:value\"/></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("annotations");
+        let annotation_property = |value: &str| {
+            entity(
+                "annotation_property",
+                iri(value.to_owned()).expect("annotation property IRI"),
+            )
+            .expect("annotation property")
+        };
+        let ontology_annotation = Node::build(
+            5,
+            vec![
+                Field::Node(annotation_property(&format!("{rdfs}label"))),
+                Field::Node(
+                    literal(
+                        "Ontology".to_owned(),
+                        entity(
+                            "datatype",
+                            iri(plain_literal.to_owned()).expect("datatype IRI"),
+                        )
+                        .expect("datatype"),
+                        Some("en".to_owned()),
+                    )
+                    .expect("annotation literal"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("ontology annotation");
+        assert_eq!(
+            document.ontology_annotations,
+            [ontology_annotation.as_bytes().to_vec()],
+        );
+
+        let literal_assertion = Node::build(
+            120,
+            vec![
+                Field::Node(annotation_property("urn:sub")),
+                Field::Node(iri("urn:subject".to_owned()).expect("annotation subject")),
+                Field::Node(
+                    literal(
+                        "007".to_owned(),
+                        entity(
+                            "datatype",
+                            iri(xsd_integer.to_owned()).expect("datatype IRI"),
+                        )
+                        .expect("datatype"),
+                        None,
+                    )
+                    .expect("annotation literal"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("literal annotation assertion");
+        let anonymous_assertion = Node::build(
+            120,
+            vec![
+                Field::Node(annotation_property(&format!("{rdfs}comment"))),
+                Field::Node(
+                    crate::canonical::anonymous("anonymous-subject").expect("anonymous subject"),
+                ),
+                Field::Node(iri("urn:value".to_owned()).expect("annotation value")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("anonymous annotation assertion");
+        let sub_property = Node::build(
+            121,
+            vec![
+                Field::Node(annotation_property("urn:sub")),
+                Field::Node(annotation_property("urn:super")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("sub annotation property");
+        let domain = Node::build(
+            122,
+            vec![
+                Field::Node(annotation_property("urn:sub")),
+                Field::Node(iri("urn:Domain".to_owned()).expect("domain IRI")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("annotation domain");
+        let range = Node::build(
+            123,
+            vec![
+                Field::Node(annotation_property("urn:sub")),
+                Field::Node(iri("urn:Range".to_owned()).expect("range IRI")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("annotation range");
+        for expected in [
+            literal_assertion,
+            anonymous_assertion,
+            sub_property,
+            domain,
+            range,
+        ] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let blank_domain = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><owl:AnnotationProperty rdf:about=\"urn:a\"><rdfs:domain rdf:nodeID=\"blank\"/></owl:AnnotationProperty></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(blank_domain.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_TYPE",
+        );
     }
 
     #[test]
