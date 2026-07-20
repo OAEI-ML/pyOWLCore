@@ -10,7 +10,10 @@ use std::sync::Mutex;
 
 use crate::cancel::{Cancellation, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
-use crate::index::{build_retained_axiom_type_index_v1, RetainedAxiomTypeIndexV1};
+use crate::index::{
+    build_retained_axiom_type_index_v1, build_retained_signature_index_v1,
+    RetainedAxiomTypeIndexV1, RetainedSignatureIndexV1,
+};
 use crate::limits::{LimitKey, Limits};
 use crate::model::{
     prepare_encoded_structural_columns_from_tables_v1, scan_canonical, structural_digest_v1,
@@ -770,6 +773,93 @@ impl TypedFacadeStorageV2 {
         {
             return Err(NativeError::protocol(
                 "typed V2 retained axiom-type layout drifted",
+            ));
+        }
+        Ok(index)
+    }
+
+    /// Count exact signature contributions over retained roots. The count
+    /// vectors follow the canonical all-kinds signature table, so Python only
+    /// materializes those entity rows and never traverses a structural root.
+    pub(crate) fn signature_index(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> NativeResult<RetainedSignatureIndexV1> {
+        let coordinate = TypedFacadeCoordinateV2 {
+            collection: TypedFacadeCollectionV2::Signature,
+            scope,
+            document_ordinal,
+            signature_kind: TypedFacadeSignatureKindV2::All,
+            include_builtins: true,
+        };
+        validate_coordinate(coordinate, self.document_count, false)?;
+        let entities = self
+            .select_table(coordinate, false)
+            .map_or(&[] as &[ComponentId], |table| table.roots.as_slice());
+        let ontology_annotations = self.structural_roots(
+            TypedFacadeCollectionV2::OntologyAnnotations,
+            scope,
+            document_ordinal,
+            false,
+        )?;
+        let axioms = self.structural_roots(
+            TypedFacadeCollectionV2::Axioms,
+            scope,
+            document_ordinal,
+            false,
+        )?;
+        let extensions = self.structural_roots(
+            TypedFacadeCollectionV2::Extensions,
+            scope,
+            document_ordinal,
+            false,
+        )?;
+        let index = build_retained_signature_index_v1(
+            &self.arena,
+            entities,
+            ontology_annotations,
+            axioms,
+            extensions,
+            limits,
+            cancellation,
+            interrupt,
+            self.external_retained_bytes,
+        )?;
+        let counters = index.counters();
+        let expected_roots = ontology_annotations
+            .len()
+            .checked_add(axioms.len())
+            .and_then(|value| value.checked_add(extensions.len()))
+            .ok_or_else(|| NativeError::limit("typed V2 signature root count overflow"))?;
+        if !index.owner().shares_storage_with(&self.arena)
+            || index.referenced_counts().len() != entities.len()
+            || index.nonannotation_counts().len() != entities.len()
+            || index.declaration_counts().len() != entities.len()
+            || index.referenced_counts().contains(&0)
+            || index
+                .referenced_counts()
+                .iter()
+                .zip(index.nonannotation_counts())
+                .any(|(referenced, nonannotation)| nonannotation > referenced)
+            || index
+                .referenced_counts()
+                .iter()
+                .zip(index.declaration_counts())
+                .any(|(referenced, declared)| declared > referenced)
+            || counters.structural_root_rows
+                != u64::try_from(expected_roots)
+                    .map_err(|_| NativeError::limit("typed V2 signature roots exceed u64"))?
+            || counters.entity_rows
+                != u64::try_from(entities.len())
+                    .map_err(|_| NativeError::limit("typed V2 signature rows exceed u64"))?
+            || counters.complete_root_encode_calls != 0
+        {
+            return Err(NativeError::protocol(
+                "typed V2 retained signature layout drifted",
             ));
         }
         Ok(index)

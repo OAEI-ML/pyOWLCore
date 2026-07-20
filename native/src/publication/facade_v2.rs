@@ -18,7 +18,7 @@ use pyo3::types::{PyAny, PyBool, PyBytes, PyDict, PyInt, PyModule, PyTuple, PyTy
 
 use crate::cancel::{Cancellation, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
-use crate::index::RetainedAxiomTypeIndexV1;
+use crate::index::{RetainedAxiomTypeIndexV1, RetainedSignatureIndexV1};
 use crate::limits::Limits;
 use crate::model::{EncodedStructuralColumnsV1, PreparedEncodedStructuralColumnsV1};
 
@@ -803,6 +803,13 @@ impl PublicationStorageV2 {
         }
     }
 
+    pub(crate) const fn retained_signature_binding_v1(&self) -> (&Digest, &Digest) {
+        (
+            &self.attestation.root_table_sha256,
+            &self.attestation.effective_root_table_sha256,
+        )
+    }
+
     pub(super) fn bump_close(&self, transitioned: bool) -> PyResult<()> {
         self.counters
             .close(transitioned)
@@ -1057,6 +1064,20 @@ impl PublicationStorageV2 {
             cancellation,
             interrupt,
         )
+    }
+
+    pub(crate) fn retained_signature_index(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> NativeResult<RetainedSignatureIndexV1> {
+        let typed = self.typed_structural.as_deref().ok_or_else(|| {
+            NativeError::protocol("native V2 publication has no typed structural owner")
+        })?;
+        typed.signature_index(scope, document_ordinal, limits, cancellation, interrupt)
     }
 
     /// Attach the production typed structural owner without retaining a

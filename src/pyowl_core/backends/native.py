@@ -93,6 +93,19 @@ class _NativeRetainedAxiomTypeIndex(Protocol):
     ]: ...
 
 
+class _NativeRetainedSignatureIndex(Protocol):
+    def _layout_v1(
+        self,
+    ) -> tuple[
+        bytes,
+        bytes,
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        dict[str, int],
+    ]: ...
+
+
 class _NativeRetainedOntologyIdentityIndex(Protocol):
     def _layout_v1(
         self,
@@ -197,6 +210,23 @@ class NativeRetainedAxiomPartition:
     axiom_rows: int
     constructor_groups: int
     category_groups: int
+    retained_buffer_bytes: int
+    peak_owned_bytes: int
+    canonical_work: int
+    complete_root_encode_calls: int
+
+
+@dataclass(frozen=True, slots=True)
+class NativeRetainedSignatureCounts:
+    owner: _NativeRetainedSignatureIndex
+    referenced_counts: tuple[int, ...]
+    nonannotation_counts: tuple[int, ...]
+    declaration_counts: tuple[int, ...]
+    structural_root_rows: int
+    entity_rows: int
+    referenced_links: int
+    nonannotation_links: int
+    declaration_links: int
     retained_buffer_bytes: int
     peak_owned_bytes: int
     canonical_work: int
@@ -738,6 +768,170 @@ def _retained_axiom_partition_v1(
         counters["axiom_rows"],
         counters["constructor_groups"],
         counters["category_groups"],
+        counters["retained_buffer_bytes"],
+        counters["peak_owned_bytes"],
+        counters["canonical_work"],
+        counters["complete_root_encode_calls"],
+    )
+
+
+def _retained_signature_counts_v1(
+    ontology: OntologyView,
+    *,
+    scope: object,
+    document_key: str | None,
+    limits: ParseLimits,
+    cancellation_token: CancellationToken | None,
+) -> NativeRetainedSignatureCounts | None:
+    """Count signature contributions directly over a compatible V2 arena."""
+
+    state = getattr(ontology, "_native_snapshot_state", None)
+    owner_state = getattr(state, "owner", None)
+    handle = getattr(owner_state, "handle", None)
+    if handle is None:
+        return None
+    try:
+        raw_owner = object.__getattribute__(handle, "_owner_v2")
+    except AttributeError:
+        return None
+    try:
+        extension = cast(_Extension, importlib.import_module(type(raw_owner).__module__))
+    except (ImportError, ValueError):
+        return None
+    raw_operation = getattr(extension, "_retained_signature_index_v1", None)
+    owner_type = getattr(extension, "_NativeRetainedSignatureIndexV1", None)
+    if not callable(raw_operation) or not isinstance(owner_type, type):
+        return None
+    native_scope = getattr(ontology, "_native_scope", None)
+    if not callable(native_scope):
+        return None
+    selected_scope, document_ordinal = native_scope(scope, document_key)
+    scope_value = getattr(selected_scope, "value", None)
+    if type(scope_value) is not str or scope_value not in {"closure", "document"}:
+        raise BackendProtocolError(
+            "native retained signature returned an invalid scope",
+            code="NATIVE_INDEX_SCOPE",
+        )
+    config = _encode_config(limits, cancellation_token, verify=False)
+    operation = cast(Callable[..., object], raw_operation)
+    with _relay(extension, limits, cancellation_token) as cancel:
+        raw_index = _call_index_value(
+            extension,
+            lambda: operation(
+                raw_owner,
+                scope_value,
+                document_ordinal,
+                config,
+                cancel,
+            ),
+        )
+    if type(raw_index) is not owner_type:
+        raise BackendProtocolError(
+            "native retained signature returned an invalid owner",
+            code="NATIVE_INDEX_RESULT",
+        )
+    layout = cast(_NativeRetainedSignatureIndex, raw_index)._layout_v1()
+    if type(layout) is not tuple or len(layout) != 6:
+        raise BackendProtocolError(
+            "native retained signature returned invalid framing",
+            code="NATIVE_INDEX_RESULT",
+        )
+    (
+        root_table_sha256,
+        effective_root_table_sha256,
+        referenced,
+        nonannotation,
+        declarations,
+        counters,
+    ) = layout
+    attestation_method = getattr(handle, "_attestation_v2", None)
+    if not callable(attestation_method):
+        raise BackendProtocolError(
+            "native retained signature has no publication attestation",
+            code="NATIVE_INDEX_RESULT",
+        )
+    attestation = attestation_method()
+    if (
+        type(root_table_sha256) is not bytes
+        or len(root_table_sha256) != 32
+        or type(effective_root_table_sha256) is not bytes
+        or len(effective_root_table_sha256) != 32
+        or root_table_sha256 != getattr(attestation, "root_table_sha256", None)
+        or effective_root_table_sha256
+        != getattr(attestation, "effective_root_table_sha256", None)
+    ):
+        raise BackendProtocolError(
+            "native retained signature belongs to a foreign publication",
+            code="NATIVE_INDEX_RESULT",
+        )
+    for name, values in (
+        ("referenced counts", referenced),
+        ("nonannotation counts", nonannotation),
+        ("declaration counts", declarations),
+    ):
+        if type(values) is not tuple or any(
+            type(value) is not int or not 0 <= value < 1 << 64 for value in values
+        ):
+            raise BackendProtocolError(
+                f"native retained signature returned invalid {name}",
+                code="NATIVE_INDEX_RESULT",
+            )
+    expected_counter_names = {
+        "structural_root_rows",
+        "entity_rows",
+        "referenced_links",
+        "nonannotation_links",
+        "declaration_links",
+        "retained_buffer_bytes",
+        "peak_owned_bytes",
+        "canonical_work",
+        "complete_root_encode_calls",
+    }
+    if type(counters) is not dict or set(counters) != expected_counter_names or any(
+        type(value) is not int or value < 0 for value in counters.values()
+    ):
+        raise BackendProtocolError(
+            "native retained signature returned invalid counters",
+            code="NATIVE_INDEX_RESULT",
+        )
+    if (
+        len(referenced) != len(nonannotation)
+        or len(referenced) != len(declarations)
+        or counters["entity_rows"] != len(referenced)
+        or any(value == 0 for value in referenced)
+        or any(
+            nonannotation_value > referenced_value
+            for referenced_value, nonannotation_value in zip(
+                referenced, nonannotation, strict=True
+            )
+        )
+        or any(
+            declaration_value > referenced_value
+            for referenced_value, declaration_value in zip(
+                referenced, declarations, strict=True
+            )
+        )
+        or counters["referenced_links"] != sum(referenced)
+        or counters["nonannotation_links"] != sum(nonannotation)
+        or counters["declaration_links"] != sum(declarations)
+        or counters["retained_buffer_bytes"] < len(referenced) * 3 * 8
+        or counters["peak_owned_bytes"] < counters["retained_buffer_bytes"]
+        or counters["complete_root_encode_calls"] != 0
+    ):
+        raise BackendProtocolError(
+            "native retained signature layout is internally inconsistent",
+            code="NATIVE_INDEX_RESULT",
+        )
+    return NativeRetainedSignatureCounts(
+        cast(_NativeRetainedSignatureIndex, raw_index),
+        referenced,
+        nonannotation,
+        declarations,
+        counters["structural_root_rows"],
+        counters["entity_rows"],
+        counters["referenced_links"],
+        counters["nonannotation_links"],
+        counters["declaration_links"],
         counters["retained_buffer_bytes"],
         counters["peak_owned_bytes"],
         counters["canonical_work"],

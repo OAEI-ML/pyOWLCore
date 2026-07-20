@@ -69,6 +69,18 @@ class _NativeRetainedAxiomTypeIndexV1:
         dict[str, int],
     ]: ...
 
+class _NativeRetainedSignatureIndexV1:
+    def _layout_v1(
+        self,
+    ) -> tuple[
+        bytes,
+        bytes,
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        dict[str, int],
+    ]: ...
+
 class _NativeRetainedOntologyIdentityIndexV1:
     def _layout_v1(
         self,
@@ -121,6 +133,13 @@ def _retained_axiom_type_index_v1(
     config: object,
     cancel: _Cancellation | None = None,
 ) -> _NativeRetainedAxiomTypeIndexV1: ...
+def _retained_signature_index_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    cancel: _Cancellation | None = None,
+) -> _NativeRetainedSignatureIndexV1: ...
 def _retained_ontology_identity_index_v1(
     handle: _NativeSnapshotHandle,
 ) -> _NativeRetainedOntologyIdentityIndexV1: ...

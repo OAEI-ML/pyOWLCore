@@ -8,9 +8,11 @@ from typing import cast
 
 from pyowl_core._immutable import FrozenMap, freeze_mapping
 from pyowl_core.cancellation import CancellationToken
+from pyowl_core.config import LoadOptions
 from pyowl_core.document.composite import OntologyComposite
 from pyowl_core.document.overlay import OntologyOverlay
 from pyowl_core.document.snapshot import AxiomScope, OntologyView, _is_ontology_view
+from pyowl_core.exceptions import BackendProtocolError
 from pyowl_core.model import IRI, Annotation, Entity, EntityKind, StructuralNode, canonical_bytes
 from pyowl_core.model.axioms import ANNOTATION_AXIOM_TYPES, AxiomNode, Declaration
 
@@ -75,6 +77,7 @@ class SignatureView:
             FrozenMap[Entity, int],
         ],
         report: ViewBuildReport,
+        native_owner: object | None = None,
     ) -> None:
         self._ontology = ontology
         self.options = options
@@ -84,6 +87,7 @@ class SignatureView:
         self._sources = sources
         self._adjustments = adjustments
         self.report = report
+        self._native_owner = native_owner
 
     @classmethod
     def _build(
@@ -198,11 +202,66 @@ class SignatureView:
                     shared_bytes=shared,
                 ),
             )
+        load_options = getattr(view, "load_options", None)
+        retained = None
+        if (
+            isinstance(load_options, LoadOptions)
+            and getattr(view, "_native_snapshot_state", None) is not None
+        ):
+            from pyowl_core.backends.native import _retained_signature_counts_v1
+
+            retained = _retained_signature_counts_v1(
+                view,
+                scope=options.scope,
+                document_key=options.document_key,
+                limits=load_options.limits,
+                cancellation_token=cancellation_token,
+            )
         counts: tuple[dict[Entity, int], dict[Entity, int], dict[Entity, int]] = (
             {},
             {},
             {},
         )
+        if retained is not None:
+            entities = view.signature(
+                scope=options.scope,
+                document_key=options.document_key,
+                include_builtins=True,
+            )
+            if len(entities) != retained.entity_rows or any(
+                not isinstance(entity, Entity) for entity in entities
+            ):
+                raise BackendProtocolError(
+                    "retained signature counts diverge from its ontology",
+                    code="NATIVE_INDEX_RESULT",
+                )
+            for entity, referenced, nonannotation, declared in zip(
+                entities,
+                retained.referenced_counts,
+                retained.nonannotation_counts,
+                retained.declaration_counts,
+                strict=True,
+            ):
+                row_bytes = 64 + len(canonical_bytes(entity))
+                for target, amount, table in (
+                    (counts[0], referenced, "referenced"),
+                    (counts[1], nonannotation, "nonannotation"),
+                    (counts[2], declared, "declarations"),
+                ):
+                    if amount:
+                        target[entity] = amount
+                        budget.add(table, rows=amount, bytes_=amount * row_bytes)
+            return cls(
+                view,
+                options,
+                freeze_mapping(counts[0]),
+                freeze_mapping(counts[1]),
+                freeze_mapping(counts[2]),
+                (),
+                (FrozenMap(), FrozenMap(), FrozenMap()),
+                build_report(cls, ViewBuildStrategy.FULL_BUILD, budget, started),
+                retained.owner,
+            )
         for root in _roots(view, options):
             contribution = _contribution(root)
             _apply(counts[0], contribution.referenced, 1, budget, "referenced")

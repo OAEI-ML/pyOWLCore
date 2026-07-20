@@ -51,6 +51,7 @@ pub(super) const FEATURES: &[&str] = &[];
 
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
     _module.add_class::<NativeRetainedAxiomTypeIndexV1>()?;
+    _module.add_class::<NativeRetainedSignatureIndexV1>()?;
     _module.add_class::<NativeRetainedOntologyIdentityIndexV1>()?;
     _module.add_function(wrap_pyfunction!(_encoded_structural_columns_v1, _module)?)?;
     _module.add_function(wrap_pyfunction!(
@@ -58,6 +59,7 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
         _module
     )?)?;
     _module.add_function(wrap_pyfunction!(_retained_axiom_type_index_v1, _module)?)?;
+    _module.add_function(wrap_pyfunction!(_retained_signature_index_v1, _module)?)?;
     _module.add_function(wrap_pyfunction!(
         _retained_ontology_identity_index_v1,
         _module
@@ -68,6 +70,107 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
         _module.add_function(wrap_pyfunction!(_encoded_structural_fixture_v1, _module)?)?;
     }
     Ok(())
+}
+
+/// Private exact signature counts built over retained root identifiers. The
+/// count rows follow the existing canonical signature facade table.
+#[pyclass(
+    module = "pyowl_core._native",
+    frozen,
+    name = "_NativeRetainedSignatureIndexV1",
+    skip_from_py_object
+)]
+struct NativeRetainedSignatureIndexV1 {
+    storage: Arc<crate::publication::PublicationStorageV2>,
+    index: crate::index::RetainedSignatureIndexV1,
+}
+
+type PyRetainedSignatureLayoutV1 = (
+    Py<PyBytes>,
+    Py<PyBytes>,
+    Py<PyTuple>,
+    Py<PyTuple>,
+    Py<PyTuple>,
+    Py<PyDict>,
+);
+
+#[pymethods]
+impl NativeRetainedSignatureIndexV1 {
+    fn _layout_v1<'py>(&self, py: Python<'py>) -> PyResult<PyRetainedSignatureLayoutV1> {
+        let (root_table_sha256, effective_root_table_sha256) =
+            self.storage.retained_signature_binding_v1();
+        let referenced = PyTuple::new(py, self.index.referenced_counts().iter().copied())?.unbind();
+        let nonannotation =
+            PyTuple::new(py, self.index.nonannotation_counts().iter().copied())?.unbind();
+        let declarations =
+            PyTuple::new(py, self.index.declaration_counts().iter().copied())?.unbind();
+        let counters = self.index.counters();
+        let observed = PyDict::new(py);
+        for (name, value) in [
+            ("structural_root_rows", counters.structural_root_rows),
+            ("entity_rows", counters.entity_rows),
+            ("referenced_links", counters.referenced_links),
+            ("nonannotation_links", counters.nonannotation_links),
+            ("declaration_links", counters.declaration_links),
+            ("retained_buffer_bytes", counters.retained_buffer_bytes),
+            ("peak_owned_bytes", counters.peak_owned_bytes),
+            ("canonical_work", counters.canonical_work),
+            (
+                "complete_root_encode_calls",
+                counters.complete_root_encode_calls,
+            ),
+        ] {
+            observed.set_item(name, value)?;
+        }
+        Ok((
+            PyBytes::new(py, root_table_sha256).unbind(),
+            PyBytes::new(py, effective_root_table_sha256).unbind(),
+            referenced,
+            nonannotation,
+            declarations,
+            observed.unbind(),
+        ))
+    }
+}
+
+/// Count retained signature contributions without encoding complete roots or
+/// crossing the scalar ontology iterators.
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, cancel=None))]
+fn _retained_signature_index_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<NativeRetainedSignatureIndexV1> {
+    if !scope.get_type().is(py.get_type::<PyString>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "retained signature scope must be an exact str",
+        ));
+    }
+    let scope: String = scope.extract()?;
+    let selected_scope = encoded_selection(&scope, document_ordinal)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let limits = crate::limits_from_python(config)?;
+    let cancellation = crate::cancellation_or_default(cancel);
+    let storage = handle.encoded_storage_v2(py)?;
+    drop(handle);
+    let owner = Arc::clone(&storage);
+    let index = crate::run_detached(py, move |interrupt| {
+        storage.retained_signature_index(
+            selected_scope,
+            document_ordinal,
+            &limits,
+            cancellation,
+            Some(interrupt),
+        )
+    })?;
+    Ok(NativeRetainedSignatureIndexV1 {
+        storage: owner,
+        index,
+    })
 }
 
 /// Private O(1) owner for the identity/import/diagnostic readiness metadata
