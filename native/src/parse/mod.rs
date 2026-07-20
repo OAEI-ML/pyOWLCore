@@ -50,6 +50,7 @@ pub(crate) struct ParsedDocument {
     pub(crate) extensions: Vec<SpannedNode>,
     pub(crate) prefixes: Vec<(String, String)>,
     pub(crate) decoded_codepoints: u64,
+    pub(crate) has_language_tags: bool,
 }
 
 pub(crate) struct RetainedParseOutcome {
@@ -207,6 +208,7 @@ pub(crate) fn parse_retained(
     interrupt: Option<InterruptSlot>,
     input_bytes: usize,
     collect_provenance: bool,
+    preserve_source_map: bool,
     record_unresolved: bool,
     require_empty_imports: bool,
 ) -> NativeResult<RetainedParseOutcome> {
@@ -219,6 +221,7 @@ pub(crate) fn parse_retained(
             count > limits.value(LimitKey::MaxDiagnostics) / 2
         });
     let requires_full_result = retained::contains_anonymous(&parsed, &limits)?
+        || (preserve_source_map && parsed.has_language_tags)
         || import_diagnostics_exceed_publication_limit
         || (require_empty_imports && !parsed.imports.is_empty());
     let encode_started = Instant::now();
@@ -228,7 +231,8 @@ pub(crate) fn parse_retained(
         (encoded, None, rows)
     } else {
         parsed.validate(session)?;
-        let (encoded, metadata, rows) = retained::build_seed(parsed, collect_provenance)?;
+        let (encoded, metadata, rows) =
+            retained::build_seed(parsed, collect_provenance, preserve_source_map)?;
         session.finish()?;
         (encoded, Some(metadata), rows)
     };

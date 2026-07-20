@@ -183,6 +183,7 @@ class PythonParser:
             backend=selected_backend,
             retain_native_storage=retain_native_storage,
             collect_provenance=selected_options.collect_provenance,
+            preserve_source_map=selected_options.preserve_source_map,
             record_unresolved=(
                 selected_options.imports is ImportPolicy.RECORD_UNRESOLVED
             ),
@@ -463,6 +464,7 @@ def _parse_payload(
     backend: str,
     retain_native_storage: bool,
     collect_provenance: bool,
+    preserve_source_map: bool,
     record_unresolved: bool,
     require_empty_imports: bool,
 ) -> _ParsedPayloadResult:
@@ -484,6 +486,7 @@ def _parse_payload(
                         cancellation_token=cancellation_token,
                         allow_swrl=allow_swrl,
                         collect_provenance=collect_provenance,
+                        preserve_source_map=preserve_source_map,
                         record_unresolved=record_unresolved,
                         require_empty_imports=require_empty_imports,
                     )

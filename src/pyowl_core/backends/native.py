@@ -162,6 +162,7 @@ class _Extension(Protocol):
         data: object,
         config: object,
         collect_provenance: bool,
+        preserve_source_map: bool,
         record_unresolved: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
@@ -405,6 +406,7 @@ def _parse_functional_retained_v2(
     limits: ParseLimits | None = None,
     allow_swrl: bool = False,
     collect_provenance: bool = True,
+    preserve_source_map: bool = False,
     record_unresolved: bool = False,
     require_empty_imports: bool = False,
     cancellation_token: CancellationToken | None = None,
@@ -431,6 +433,8 @@ def _parse_functional_retained_v2(
         raise TypeError("allow_swrl must be bool")
     if not isinstance(collect_provenance, bool):
         raise TypeError("collect_provenance must be bool")
+    if not isinstance(preserve_source_map, bool):
+        raise TypeError("preserve_source_map must be bool")
     if not isinstance(record_unresolved, bool):
         raise TypeError("record_unresolved must be bool")
     if not isinstance(require_empty_imports, bool):
@@ -453,6 +457,7 @@ def _parse_functional_retained_v2(
                 request,
                 config,
                 collect_provenance,
+                preserve_source_map,
                 record_unresolved,
                 require_empty_imports,
                 cancel,

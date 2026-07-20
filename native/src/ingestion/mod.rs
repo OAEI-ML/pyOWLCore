@@ -298,6 +298,7 @@ mod tests {
             b"manifest",
             "document-key",
             true,
+            false,
             &limits,
             Cancellation::with_duration(None),
             None,

@@ -779,6 +779,12 @@ pub(crate) struct TypedRdfReportRowsV2 {
     pub(crate) diagnostics: Vec<Vec<u8>>,
 }
 
+#[derive(Debug)]
+pub(crate) struct TypedSourceMapRowsV2 {
+    pub(crate) entries: Vec<Vec<u8>>,
+    pub(crate) prefixes: Vec<Vec<u8>>,
+}
+
 impl PublicationStorageV2 {
     pub(super) const fn attestation(&self) -> &NativeSnapshotAttestationV2 {
         &self.attestation
@@ -1095,7 +1101,7 @@ impl PublicationStorageV2 {
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
     ) -> NativeResult<Arc<Self>> {
-        Self::from_typed_structural_parts(attestation, typed_structural, None, None, 0)
+        Self::from_typed_structural_parts(attestation, typed_structural, None, None, None, 0)
     }
 
     pub(super) fn from_typed_structural_with_origins(
@@ -1123,6 +1129,7 @@ impl PublicationStorageV2 {
             typed_structural,
             origin_rows,
             None,
+            None,
             parser_bytes,
         )
     }
@@ -1131,6 +1138,7 @@ impl PublicationStorageV2 {
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
         origin_rows: Option<Vec<Vec<u8>>>,
+        source_map: Option<TypedSourceMapRowsV2>,
         rdf_report: Option<TypedRdfReportRowsV2>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
@@ -1138,6 +1146,7 @@ impl PublicationStorageV2 {
             attestation,
             typed_structural,
             origin_rows,
+            source_map,
             rdf_report,
             parser_bytes,
         )
@@ -1147,6 +1156,7 @@ impl PublicationStorageV2 {
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
         origin_rows: Option<Vec<Vec<u8>>>,
+        source_map: Option<TypedSourceMapRowsV2>,
         rdf_report: Option<TypedRdfReportRowsV2>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
@@ -1175,6 +1185,7 @@ impl PublicationStorageV2 {
                     .map_err(|_| NativeError::limit("typed V2 origin row exceeds u64"))?,
             ))
         })?;
+        let retained_source = retain_source_tables_v2(source_map)?;
         let retained_rdf = retain_rdf_tables_v2(rdf_report)?;
         let structural_counts = typed_structural.structural_counts()?;
         if attestation.document_count != typed_structural.document_count()
@@ -1182,6 +1193,7 @@ impl PublicationStorageV2 {
                 != typed_structural
                     .maximum_row_bytes()
                     .max(origin_maximum)
+                    .max(retained_source.maximum_row_bytes)
                     .max(retained_rdf.maximum_row_bytes)
             || attestation.ontology_annotation_count != structural_counts.ontology_annotations
             || attestation.stored_axiom_count != structural_counts.stored_axioms
@@ -1192,10 +1204,12 @@ impl PublicationStorageV2 {
                 "typed V2 structural owner diverges from its attestation",
             ));
         }
-        let expected_capability_bits =
-            7 | if retains_origins { 16 } else { 0 } | if retained_rdf.present { 32 } else { 0 };
+        let expected_capability_bits = 7
+            | if retained_source.present { 8 } else { 0 }
+            | if retains_origins { 16 } else { 0 }
+            | if retained_rdf.present { 32 } else { 0 };
         if attestation.capability_bits != expected_capability_bits
-            || attestation.source_map_entry_count != 0
+            || attestation.source_map_entry_count != retained_source.row_counts[0]
             || attestation.origin_entry_count != origin_count
             || attestation.rdf_mapping_report_count != u64::from(retained_rdf.present)
             || attestation.owl2_dl_report_summary.is_some()
@@ -1207,9 +1221,9 @@ impl PublicationStorageV2 {
                 "typed V2 owner attests unsupported auxiliary collections",
             ));
         }
-        if retains_origins && attestation.document_count != 1 {
+        if (retains_origins || retained_source.present) && attestation.document_count != 1 {
             return Err(NativeError::protocol(
-                "typed V2 origin attachment currently requires one document",
+                "typed V2 auxiliary attachment currently requires one document",
             ));
         }
         if parser_bytes != 0 && parser_bytes != attestation.total_source_bytes {
@@ -1221,6 +1235,9 @@ impl PublicationStorageV2 {
         let mut initial = typed_initial_counters(&typed_structural, &attestation)?;
         initial[PARSER_BYTES] = parser_bytes;
         let mut retained_origins = retain_origin_tables_v2(origins)?;
+        retained_origins
+            .effective_tables
+            .extend(retained_source.effective_tables);
         retained_origins
             .effective_tables
             .extend(retained_rdf.effective_tables);
@@ -1253,6 +1270,34 @@ impl PublicationStorageV2 {
             {
                 return Err(NativeError::limit(
                     "typed V2 origin attachment exceeds max_memory_bytes",
+                ));
+            }
+            validate_retained_total(&initial)?;
+        }
+        if retained_source.present {
+            initial[RETAINED_ROW_FIRST + 3] = retained_source.row_counts[0];
+            initial[RETAINED_ROW_FIRST + 4] = retained_source.row_counts[1];
+            initial[RETAINED_SOURCE_BYTES] = retained_source.payload_bytes;
+            initial[RETAINED_METADATA_BYTES] = checked_add(
+                initial[RETAINED_METADATA_BYTES],
+                retained_source.metadata_bytes,
+            )?;
+            let retained_delta = checked_add(
+                retained_source.payload_bytes,
+                retained_source.metadata_bytes,
+            )?;
+            initial[RETAINED_OWNER_BYTES] =
+                checked_add(initial[RETAINED_OWNER_BYTES], retained_delta)?;
+            initial[PEAK_BUILDER_BYTES] =
+                initial[PEAK_BUILDER_BYTES].max(initial[RETAINED_OWNER_BYTES]);
+            initial[PEAK_FREEZE_BYTES] =
+                initial[PEAK_FREEZE_BYTES].max(initial[RETAINED_OWNER_BYTES]);
+            if typed_structural
+                .max_memory_bytes()
+                .is_some_and(|maximum| initial[RETAINED_OWNER_BYTES] > maximum)
+            {
+                return Err(NativeError::limit(
+                    "typed V2 source-map attachment exceeds max_memory_bytes",
                 ));
             }
             validate_retained_total(&initial)?;
@@ -1568,6 +1613,91 @@ impl PublicationStorageV2 {
             .finish(attestation_value)
             .map_err(native_error_to_python)
     }
+}
+
+#[derive(Debug, Default)]
+struct RetainedSourceTablesV2 {
+    effective_tables: Vec<FacadeTableV2>,
+    row_counts: [u64; 2],
+    payload_bytes: u64,
+    metadata_bytes: u64,
+    maximum_row_bytes: u64,
+    present: bool,
+}
+
+fn retain_source_tables_v2(
+    source_map: Option<TypedSourceMapRowsV2>,
+) -> NativeResult<RetainedSourceTablesV2> {
+    let Some(source_map) = source_map else {
+        return Ok(RetainedSourceTablesV2 {
+            maximum_row_bytes: 1,
+            ..RetainedSourceTablesV2::default()
+        });
+    };
+    if source_map.entries.windows(2).any(|pair| {
+        let left_occurrence = pair[0]
+            .get(32..40)
+            .and_then(|value| value.try_into().ok())
+            .map(u64::from_le_bytes);
+        let right_occurrence = pair[1]
+            .get(32..40)
+            .and_then(|value| value.try_into().ok())
+            .map(u64::from_le_bytes);
+        pair[0].get(..32) > pair[1].get(..32)
+            || (pair[0].get(..32) == pair[1].get(..32) && left_occurrence >= right_occurrence)
+    }) || source_map.entries.iter().any(|row| row.len() < 43)
+    {
+        return Err(NativeError::protocol(
+            "typed V2 retained source-map rows are malformed or unordered",
+        ));
+    }
+    let collections = [
+        (CollectionV2::SourceMapEntries, source_map.entries),
+        (CollectionV2::SourceMapPrefixes, source_map.prefixes),
+    ];
+    let mut result = RetainedSourceTablesV2 {
+        maximum_row_bytes: 1,
+        present: true,
+        ..RetainedSourceTablesV2::default()
+    };
+    result
+        .effective_tables
+        .try_reserve_exact(collections.len())
+        .map_err(|_| NativeError::limit("typed V2 source-map table allocation failed"))?;
+    result.metadata_bytes = checked_add(
+        result.metadata_bytes,
+        u64::try_from(
+            result
+                .effective_tables
+                .capacity()
+                .checked_mul(size_of::<FacadeTableV2>())
+                .ok_or_else(|| NativeError::limit("typed V2 source-map table size overflow"))?,
+        )
+        .map_err(|_| NativeError::limit("typed V2 source-map table size exceeds u64"))?,
+    )?;
+    for (offset, (collection, rows)) in collections.into_iter().enumerate() {
+        result.row_counts[offset] = u64::try_from(rows.len())
+            .map_err(|_| NativeError::limit("typed V2 source-map row count exceeds u64"))?;
+        if rows.is_empty() {
+            continue;
+        }
+        let retained = retain_auxiliary_rows_v2(rows, "typed V2 source-map")?;
+        result.payload_bytes = checked_add(result.payload_bytes, retained.payload_bytes)?;
+        result.metadata_bytes = checked_add(result.metadata_bytes, retained.metadata_bytes)?;
+        result.maximum_row_bytes = result.maximum_row_bytes.max(retained.maximum_row_bytes);
+        result.effective_tables.push(FacadeTableV2 {
+            coordinate: CoordinateV2 {
+                collection,
+                scope: ScopeV2::Document,
+                document_ordinal: Some(0),
+                signature_kind: SignatureKindV2::All,
+                include_builtins: true,
+            },
+            rows: retained.rows,
+            source_identity: 0,
+        });
+    }
+    Ok(result)
 }
 
 #[derive(Debug, Default)]
@@ -3587,6 +3717,55 @@ mod tests {
     }
 
     #[test]
+    fn typed_structural_owner_retains_lazy_source_map_rows() {
+        let (typed, canonical) = typed_structural_owner();
+        let mut entry = vec![0x42; 32];
+        entry.extend_from_slice(&0_u64.to_le_bytes());
+        entry.push(0);
+        entry.extend_from_slice(&0_u16.to_le_bytes());
+        let mut prefix = 0_u32.to_le_bytes().to_vec();
+        prefix.extend_from_slice(&3_u32.to_le_bytes());
+        prefix.extend_from_slice(b"urn");
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.capability_bits |= 8;
+        attestation.source_map_entry_count = 1;
+        attestation.max_facade_row_bytes =
+            canonical.len().max(entry.len()).max(prefix.len()) as u64;
+        let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
+            attestation,
+            typed,
+            None,
+            Some(TypedSourceMapRowsV2 {
+                entries: vec![entry.clone()],
+                prefixes: vec![prefix.clone()],
+            }),
+            None,
+            0,
+        )
+        .expect("typed publication with source map");
+
+        let entries = storage.rows(
+            coordinate(CollectionV2::SourceMapEntries, ScopeV2::Document, Some(0)),
+            true,
+        );
+        let prefixes = storage.rows(
+            coordinate(CollectionV2::SourceMapPrefixes, ScopeV2::Document, Some(0)),
+            true,
+        );
+        assert_eq!(entries[0].as_slice(), entry);
+        assert_eq!(prefixes[0].as_slice(), prefix);
+        let counters = storage.counters.snapshot();
+        assert_eq!(counters[RETAINED_ROW_FIRST + 3], 1);
+        assert_eq!(counters[RETAINED_ROW_FIRST + 4], 1);
+        assert_eq!(
+            counters[RETAINED_SOURCE_BYTES],
+            (entry.len() + prefix.len()) as u64
+        );
+        assert!(counters[RETAINED_METADATA_BYTES] > 0);
+        validate_retained_total(&counters).expect("source-map owner counters");
+    }
+
+    #[test]
     fn typed_structural_owner_retains_lazy_rdf_report_rows() {
         let (typed, canonical) = typed_structural_owner();
         let mut header = vec![1];
@@ -3599,6 +3778,7 @@ mod tests {
         let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
             attestation,
             typed,
+            None,
             None,
             Some(TypedRdfReportRowsV2 {
                 header: header.clone(),

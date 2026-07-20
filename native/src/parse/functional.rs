@@ -357,6 +357,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn parse(mut self) -> NativeResult<ParsedDocument> {
+        let has_language_tags = self.tokens.iter().any(|token| token.kind == Kind::Language);
         while self.word("Prefix") {
             self.parse_prefix()?;
         }
@@ -424,6 +425,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             extensions,
             prefixes: self.prefixes.into_iter().collect(),
             decoded_codepoints: self.decoded_codepoints,
+            has_language_tags,
         })
     }
 

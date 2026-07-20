@@ -16,7 +16,7 @@ use crate::model::{
 };
 use crate::publication::{
     TypedFacadeCollectionV2, TypedFacadeScopeV2, TypedFacadeStorageV2, TypedRdfReportRowsV2,
-    AUXILIARY_CODEC_SCHEMA_SHA256_V2,
+    TypedSourceMapRowsV2, AUXILIARY_CODEC_SCHEMA_SHA256_V2,
 };
 
 use super::{ParsedDocument, Span, SpannedNode};
@@ -25,7 +25,7 @@ pub(crate) const RETAINED_SEED_MAGIC_V2: &[u8; 8] = b"PYNFRS2\0";
 pub(crate) const RETAINED_RDFXML_SEED_MAGIC_V2: &[u8; 8] = b"PYNRRS2\0";
 pub(crate) const RETAINED_PREPARED_MAGIC_V2: &[u8; 8] = b"PYNFPP2\0";
 const RETAINED_SEED_SCHEMA_V2: u16 = 1;
-const RETAINED_PREPARED_SCHEMA_V2: u16 = 2;
+const RETAINED_PREPARED_SCHEMA_V2: u16 = 3;
 
 const DOCUMENT_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:document-fingerprint:v1\0";
 const STRUCTURAL_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:snapshot-structural:v1\0";
@@ -43,6 +43,7 @@ const EFFECTIVE_DOCUMENT_ROOT_TABLE_DOMAIN_V2: &[u8] =
 const FINGERPRINT_INPUTS_MANIFEST_DOMAIN_V2: &[u8] =
     b"pyowl-core:native-fingerprint-inputs-manifest:v2";
 const SOURCE_MANIFEST_DOMAIN_V2: &[u8] = b"pyowl-core:native-source-manifest:v2";
+const DOCUMENT_SOURCE_TABLE_DOMAIN_V2: &[u8] = b"pyowl-core:native-document-source-table:v2";
 const PROVENANCE_MANIFEST_DOMAIN_V2: &[u8] = b"pyowl-core:native-provenance-manifest:v2";
 const DOCUMENT_ORIGIN_TABLE_DOMAIN_V2: &[u8] = b"pyowl-core:native-document-origin-table:v2";
 const EFFECTIVE_ORIGIN_MANIFEST_DOMAIN_V2: &[u8] =
@@ -72,6 +73,7 @@ pub(crate) struct RetainedParseMetadataV2 {
     pub(crate) occurrence_count: u64,
     pub(crate) root_counts: [u64; 3],
     occurrences: Vec<RetainedOccurrenceV2>,
+    source_prefixes: Option<Vec<(String, String)>>,
     rdf_total_triples: Option<u64>,
 }
 
@@ -105,6 +107,7 @@ pub(crate) struct PreparedRetainedPublicationV2 {
     pub(crate) record_inventories: [RecordInventoryEvidenceV1; 4],
     pub(crate) root_count: u64,
     pub(crate) node_count: u64,
+    pub(crate) source_map: Option<TypedSourceMapRowsV2>,
     pub(crate) origin_rows: Option<Vec<Vec<u8>>>,
     pub(crate) rdf_report: Option<PreparedRetainedRdfReportV2>,
     pub(crate) max_facade_row_bytes: u64,
@@ -168,6 +171,16 @@ impl PreparedRetainedPublicationV2 {
             u64::try_from(rows.len())
                 .map_err(|_| NativeError::limit("native retained origin count exceeds u64"))
         })?;
+        let source_map_entries = self.source_map.as_ref().map_or(Ok(0_u64), |source| {
+            u64::try_from(source.entries.len())
+                .map_err(|_| NativeError::limit("native retained source-map count exceeds u64"))
+        })?;
+        let source_prefixes = self.source_map.as_ref().map_or(Ok(0_u64), |source| {
+            u64::try_from(source.prefixes.len())
+                .map_err(|_| NativeError::limit("native retained source-prefix count exceeds u64"))
+        })?;
+        append_u64(&mut output, source_map_entries)?;
+        append_u64(&mut output, source_prefixes)?;
         append_u64(&mut output, origin_rows)?;
         append_u64(&mut output, self.max_facade_row_bytes)?;
         append_u64(&mut output, self.canonical_rows_encoded)?;
@@ -204,10 +217,40 @@ impl PreparedRetainedPublicationV2 {
 
 impl RetainedParseMetadataV2 {
     pub(crate) fn retained_bytes(&self) -> NativeResult<usize> {
-        self.occurrences
+        let occurrences = self
+            .occurrences
             .capacity()
             .checked_mul(size_of::<RetainedOccurrenceV2>())
-            .ok_or_else(|| NativeError::limit("native retained parser metadata overflow"))
+            .ok_or_else(|| NativeError::limit("native retained parser metadata overflow"))?;
+        self.source_prefixes
+            .as_ref()
+            .map_or(Ok(occurrences), |rows| {
+                rows.iter().try_fold(
+                    occurrences
+                        .checked_add(
+                            rows.capacity()
+                                .checked_mul(size_of::<(String, String)>())
+                                .ok_or_else(|| {
+                                    NativeError::limit(
+                                        "native retained source-prefix metadata overflow",
+                                    )
+                                })?,
+                        )
+                        .ok_or_else(|| {
+                            NativeError::limit("native retained source-prefix metadata overflow")
+                        })?,
+                    |total, (prefix, iri)| {
+                        total
+                            .checked_add(prefix.capacity())
+                            .and_then(|value| value.checked_add(iri.capacity()))
+                            .ok_or_else(|| {
+                                NativeError::limit(
+                                    "native retained source-prefix metadata overflow",
+                                )
+                            })
+                    },
+                )
+            })
     }
 }
 
@@ -294,6 +337,7 @@ pub(crate) fn build_rdfxml_seed(
             occurrence_count,
             root_counts,
             occurrences,
+            source_prefixes: None,
             rdf_total_triples: Some(total_triples),
         },
     ))
@@ -330,9 +374,14 @@ pub(crate) fn contains_anonymous(parsed: &ParsedDocument, limits: &Limits) -> Na
 pub(crate) fn build_seed(
     parsed: ParsedDocument,
     collect_provenance: bool,
+    preserve_source_map: bool,
 ) -> NativeResult<RetainedSeedV2> {
     let occurrence_count = total_occurrences(&parsed)?;
-    let occurrences = retained_occurrences(&parsed, occurrence_count, collect_provenance)?;
+    let occurrences = retained_occurrences(
+        &parsed,
+        occurrence_count,
+        collect_provenance || preserve_source_map,
+    )?;
     let ParsedDocument {
         ontology_iri,
         version_iri,
@@ -340,8 +389,9 @@ pub(crate) fn build_seed(
         annotations,
         axioms,
         extensions,
-        prefixes: _,
+        prefixes,
         decoded_codepoints,
+        has_language_tags: _,
     } = parsed;
     let raw_import_count = imports.len();
     imports.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
@@ -413,6 +463,7 @@ pub(crate) fn build_seed(
             occurrence_count,
             root_counts,
             occurrences,
+            source_prefixes: preserve_source_map.then_some(prefixes),
             rdf_total_triples: None,
         },
         rows,
@@ -426,6 +477,7 @@ pub(crate) fn prepare_publication(
     manifest: &[u8],
     document_key: &str,
     collect_provenance: bool,
+    preserve_source_map: bool,
     limits: &Limits,
     cancellation: Cancellation,
     interrupt: Option<InterruptSlot>,
@@ -445,20 +497,31 @@ pub(crate) fn prepare_publication(
             "native retained publication metadata diverges from its arena",
         ));
     }
-    if collect_provenance {
+    let captures_occurrences = collect_provenance || preserve_source_map;
+    if captures_occurrences {
         if u64::try_from(metadata.occurrences.len()).ok() != Some(metadata.occurrence_count) {
             return Err(NativeError::protocol(
-                "native retained provenance occurrences are incomplete",
+                "native retained auxiliary occurrences are incomplete",
             ));
         }
-        if metadata.occurrence_count > limits.max_origin_entries {
+        if collect_provenance && metadata.occurrence_count > limits.max_origin_entries {
             return Err(NativeError::limit(
                 "native retained publication exceeds max_origin_entries",
             ));
         }
+        if preserve_source_map && metadata.occurrence_count > limits.max_source_map_entries {
+            return Err(NativeError::limit(
+                "native retained publication exceeds max_source_map_entries",
+            ));
+        }
     } else if !metadata.occurrences.is_empty() {
         return Err(NativeError::protocol(
-            "native retained provenance was prepared while disabled",
+            "native retained auxiliary occurrences were prepared while disabled",
+        ));
+    }
+    if metadata.source_prefixes.is_some() != preserve_source_map {
+        return Err(NativeError::protocol(
+            "native retained source-map metadata diverges from publication options",
         ));
     }
     let storage_counters = storage.counters()?;
@@ -716,6 +779,11 @@ pub(crate) fn prepare_publication(
         digest: signature_inventory_evidence.digest,
     };
 
+    let source_map = if preserve_source_map {
+        Some(encode_source_map_rows(metadata, limits, &cancellation)?)
+    } else {
+        None
+    };
     let (origin_rows, origin_bytes_retained) = if collect_provenance {
         let rows = encode_origin_rows(metadata, document_key, limits, &cancellation)?;
         let bytes = rows
@@ -733,7 +801,7 @@ pub(crate) fn prepare_publication(
         .rdf_total_triples
         .map(|total| prepare_conformant_rdf_report(document_key, total))
         .transpose()?;
-    let source_manifest_sha256 = source_manifest_digest(document_key)?;
+    let source_manifest_sha256 = source_manifest_digest(document_key, source_map.as_ref())?;
     let provenance_manifest_sha256 = provenance_manifest_digest(
         document_key,
         origin_rows.is_some(),
@@ -760,6 +828,15 @@ pub(crate) fn prepare_publication(
     let rdf_max = rdf_report
         .as_ref()
         .map_or(1_u64, |report| report.rows.header.len() as u64);
+    let source_max = source_map.as_ref().map_or(1_u64, |source| {
+        source
+            .entries
+            .iter()
+            .chain(&source.prefixes)
+            .map(Vec::len)
+            .max()
+            .unwrap_or(1) as u64
+    });
     cancellation.checkpoint()?;
     Ok(PreparedRetainedPublicationV2 {
         document_fingerprint: metadata.document_fingerprint,
@@ -777,9 +854,14 @@ pub(crate) fn prepare_publication(
         record_inventories,
         root_count,
         node_count,
+        source_map,
         origin_rows,
         rdf_report,
-        max_facade_row_bytes: storage.maximum_row_bytes().max(origin_max).max(rdf_max),
+        max_facade_row_bytes: storage
+            .maximum_row_bytes()
+            .max(source_max)
+            .max(origin_max)
+            .max(rdf_max),
         canonical_rows_encoded,
         canonical_bytes_encoded,
         fingerprint_temporary_bytes,
@@ -955,6 +1037,115 @@ fn encode_origin_rows(
     Ok(rows)
 }
 
+fn encode_source_map_rows(
+    metadata: &RetainedParseMetadataV2,
+    limits: &Limits,
+    cancellation: &Cancellation,
+) -> NativeResult<TypedSourceMapRowsV2> {
+    let mut keyed = Vec::new();
+    keyed
+        .try_reserve_exact(metadata.occurrences.len())
+        .map_err(|_| NativeError::limit("native source-map table allocation failed"))?;
+    for (occurrence, value) in metadata.occurrences.iter().enumerate() {
+        cancellation.checkpoint()?;
+        let occurrence = u64::try_from(occurrence)
+            .map_err(|_| NativeError::limit("native source-map occurrence exceeds u64"))?;
+        let row = encode_source_map_row(value.digest, occurrence, value.span)?;
+        if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
+            return Err(NativeError::limit(
+                "native retained source-map row exceeds max_wire_bytes",
+            ));
+        }
+        keyed.push((value.digest, occurrence, row));
+    }
+    keyed.sort_unstable_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(keyed.len())
+        .map_err(|_| NativeError::limit("native source-map row allocation failed"))?;
+    entries.extend(keyed.into_iter().map(|(_digest, _occurrence, row)| row));
+
+    let selected_prefixes = metadata.source_prefixes.as_deref().ok_or_else(|| {
+        NativeError::protocol("native retained source-map prefixes are unavailable")
+    })?;
+    let mut prefixes = Vec::new();
+    prefixes
+        .try_reserve_exact(selected_prefixes.len())
+        .map_err(|_| NativeError::limit("native source-prefix row allocation failed"))?;
+    let mut previous: Option<&[u8]> = None;
+    for (prefix, iri) in selected_prefixes {
+        cancellation.checkpoint()?;
+        if previous.is_some_and(|value| value >= prefix.as_bytes()) {
+            return Err(NativeError::protocol(
+                "native retained source prefixes are not canonical",
+            ));
+        }
+        previous = Some(prefix.as_bytes());
+        let row = encode_source_prefix_row(prefix, iri)?;
+        if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
+            return Err(NativeError::limit(
+                "native retained source-prefix row exceeds max_wire_bytes",
+            ));
+        }
+        prefixes.push(row);
+    }
+    Ok(TypedSourceMapRowsV2 { entries, prefixes })
+}
+
+fn encode_source_map_row(
+    digest: [u8; 32],
+    occurrence: u64,
+    span: Option<Span>,
+) -> NativeResult<Vec<u8>> {
+    let size = 32_usize
+        .checked_add(8 + 1 + usize::from(span.is_some()) * 4 * 8 + 2)
+        .ok_or_else(|| NativeError::limit("native source-map row size overflow"))?;
+    let mut row = Vec::new();
+    row.try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native source-map row allocation failed"))?;
+    row.extend_from_slice(&digest);
+    row.extend_from_slice(&occurrence.to_le_bytes());
+    encode_source_span(span, &mut row);
+    row.extend_from_slice(&0_u16.to_le_bytes());
+    Ok(row)
+}
+
+fn encode_source_prefix_row(prefix: &str, iri: &str) -> NativeResult<Vec<u8>> {
+    let prefix_len = u32::try_from(prefix.len())
+        .map_err(|_| NativeError::limit("native source prefix exceeds u32"))?;
+    let iri_len = u32::try_from(iri.len())
+        .map_err(|_| NativeError::limit("native source prefix IRI exceeds u32"))?;
+    let size = 8_usize
+        .checked_add(prefix.len())
+        .and_then(|value| value.checked_add(iri.len()))
+        .ok_or_else(|| NativeError::limit("native source-prefix row size overflow"))?;
+    let mut row = Vec::new();
+    row.try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native source-prefix row allocation failed"))?;
+    row.extend_from_slice(&prefix_len.to_le_bytes());
+    row.extend_from_slice(prefix.as_bytes());
+    row.extend_from_slice(&iri_len.to_le_bytes());
+    row.extend_from_slice(iri.as_bytes());
+    Ok(row)
+}
+
+fn encode_source_span(span: Option<Span>, row: &mut Vec<u8>) {
+    match span {
+        Some(span) => {
+            row.push(0x8f);
+            for coordinate in [span.byte_start, span.byte_end, span.line, span.column] {
+                row.extend_from_slice(&coordinate.to_le_bytes());
+            }
+        }
+        None => row.push(0),
+    }
+}
+
 fn encode_origin_row(
     digest: [u8; 32],
     document_key: &str,
@@ -1033,12 +1224,36 @@ fn fingerprint_inputs_digest(
     Ok(hasher.finish().digest)
 }
 
-fn source_manifest_digest(document_key: &str) -> NativeResult<[u8; 32]> {
+fn source_manifest_digest(
+    document_key: &str,
+    source_map: Option<&TypedSourceMapRowsV2>,
+) -> NativeResult<[u8; 32]> {
     let mut hasher = MeasuredSha256::domain(SOURCE_MANIFEST_DOMAIN_V2)?;
     hasher.update(&AUXILIARY_CODEC_SCHEMA_SHA256_V2)?;
     hasher.u64_le(1)?;
     hasher.text64(document_key)?;
-    hasher.update(&[0])?;
+    let Some(source_map) = source_map else {
+        hasher.update(&[0])?;
+        return Ok(hasher.finish().digest);
+    };
+    let entry_count = u64::try_from(source_map.entries.len())
+        .map_err(|_| NativeError::limit("native source-map count exceeds u64"))?;
+    let prefix_count = u64::try_from(source_map.prefixes.len())
+        .map_err(|_| NativeError::limit("native source-prefix count exceeds u64"))?;
+    let mut document = MeasuredSha256::domain(DOCUMENT_SOURCE_TABLE_DOMAIN_V2)?;
+    document.text64(document_key)?;
+    document.u64_le(entry_count)?;
+    for row in &source_map.entries {
+        document.frame64(row)?;
+    }
+    document.u64_le(prefix_count)?;
+    for row in &source_map.prefixes {
+        document.frame64(row)?;
+    }
+    hasher.update(&[1])?;
+    hasher.u64_le(entry_count)?;
+    hasher.u64_le(prefix_count)?;
+    hasher.update(&document.finish().digest)?;
     Ok(hasher.finish().digest)
 }
 

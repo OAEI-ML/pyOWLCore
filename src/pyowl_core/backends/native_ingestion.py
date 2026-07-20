@@ -612,6 +612,8 @@ class _PreparedRetainedPublicationV2:
     ]
     root_count: int
     node_count: int
+    source_map_rows_retained: int
+    source_prefix_rows_retained: int
     origin_rows_retained: int
     max_facade_row_bytes: int
     canonical_rows_encoded: int
@@ -769,6 +771,7 @@ def _decode_prepared_retained_publication_v2(
     encoded: bytes,
     *,
     collect_provenance: bool,
+    preserve_source_map: bool,
     expect_rdf_report: bool = False,
 ) -> _PreparedRetainedPublicationV2:
     reader = native._ResultReader(encoded)
@@ -777,7 +780,7 @@ def _decode_prepared_retained_publication_v2(
     flags = _read_u16_v2(reader)
     if (
         magic != native._RETAINED_FUNCTIONAL_PREPARED_MAGIC_V2
-        or schema != 2
+        or schema != 3
         or flags != int(expect_rdf_report)
     ):
         raise BackendProtocolError(
@@ -816,6 +819,8 @@ def _decode_prepared_retained_publication_v2(
     )
     root_count = reader.u64()
     node_count = reader.u64()
+    source_map_rows = reader.u64()
+    source_prefix_rows = reader.u64()
     origin_rows = reader.u64()
     max_row = reader.u64()
     canonical_rows = reader.u64()
@@ -859,6 +864,13 @@ def _decode_prepared_retained_publication_v2(
             "native retained publication summary has inconsistent provenance counters",
             code="NATIVE_PARSE_MODEL",
         )
+    if (not preserve_source_map and (source_map_rows != 0 or source_prefix_rows != 0)) or (
+        preserve_source_map and source_prefix_rows == 0
+    ):
+        raise BackendProtocolError(
+            "native retained publication summary has inconsistent source-map counters",
+            code="NATIVE_PARSE_MODEL",
+        )
     if rdf_report is not None and (
         not rdf_report.conformant
         or rdf_report.consumed_triples != rdf_report.total_triples
@@ -879,6 +891,8 @@ def _decode_prepared_retained_publication_v2(
         inventories,
         root_count,
         node_count,
+        source_map_rows,
+        source_prefix_rows,
         origin_rows,
         max_row,
         canonical_rows,
@@ -1048,7 +1062,7 @@ def _publish_retained_snapshot_v2(
         raise TypeError("retained parser publication received invalid source metadata")
     if (
         options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
-        or options.preserve_source_map
+        or (options.preserve_source_map and expected_format != "functional")
         or options.validate_owl2_dl
         or detection.format.value != expected_format
     ):
@@ -1145,13 +1159,14 @@ def _publish_retained_snapshot_v2(
             code="NATIVE_INGESTION_REGISTRATION",
         )
     with native._relay(extension, options.limits, cancellation_token) as cancel:
-        prepared_encoded = native._call(
+        prepared_encoded = native._call_parse_value(
             extension,
             lambda: prepare(
                 parsed_native_storage,
                 manifest.canonical_bytes(),
                 document_key,
                 options.collect_provenance,
+                options.preserve_source_map,
                 cancel,
             ),
         )
@@ -1163,9 +1178,20 @@ def _publish_retained_snapshot_v2(
     prepared = _decode_prepared_retained_publication_v2(
         prepared_encoded,
         collect_provenance=options.collect_provenance,
+        preserve_source_map=options.preserve_source_map,
         expect_rdf_report=rdf_total_triples is not None,
     )
     options.limits.enforce("max_origin_entries", prepared.origin_rows_retained)
+    options.limits.enforce(
+        "max_source_map_entries", prepared.source_map_rows_retained
+    )
+    if prepared.source_map_rows_retained != (
+        seed.structural_occurrence_rows_scanned if options.preserve_source_map else 0
+    ):
+        raise BackendProtocolError(
+            "native retained source-map count diverges from parser metadata",
+            code="NATIVE_PARSE_MODEL",
+        )
     if prepared.fingerprints[0] != seed.document_fingerprint:
         raise BackendProtocolError(
             "native retained document fingerprint summaries diverge",
@@ -1244,7 +1270,7 @@ def _publish_retained_snapshot_v2(
             ontology_annotation_count=seed.rows[0],
             axiom_count=seed.rows[1],
             extension_count=seed.rows[2],
-            source_map_entry_count=0,
+            source_map_entry_count=prepared.source_map_rows_retained,
             origin_entry_count=prepared.origin_rows_retained,
             rdf_mapping_conformant=rdf_conformant,
             rdf_mapping_report_sha256=rdf_digest,
@@ -1279,6 +1305,7 @@ def _publish_retained_snapshot_v2(
     )
     capability_bits = (
         7
+        | (8 if options.preserve_source_map else 0)
         | (16 if options.collect_provenance else 0)
         | (32 if retained_rdf is not None else 0)
     )
@@ -1318,7 +1345,7 @@ def _publish_retained_snapshot_v2(
                 effective_axiom_count=seed.rows[1],
                 effective_extension_count=seed.rows[2],
                 effective_origin_count=prepared.origin_rows_retained,
-                raw_source_prefix_count=0,
+                raw_source_prefix_count=prepared.source_prefix_rows_retained,
                 rdf_unconsumed_triple_count=(
                     0
                     if retained_rdf is None

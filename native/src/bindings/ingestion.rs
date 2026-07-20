@@ -164,10 +164,12 @@ fn _parse_rdfxml_retained_v2<'py>(
 /// metadata and fingerprint evidence; canonical ontology rows remain solely
 /// in the native component owner.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
     source,
     config,
     collect_provenance,
+    preserve_source_map,
     record_unresolved,
     require_empty_imports,
     cancel=None
@@ -177,6 +179,7 @@ fn _parse_functional_retained_v2<'py>(
     source: &Bound<'py, PyAny>,
     config: &Bound<'py, PyAny>,
     collect_provenance: bool,
+    preserve_source_map: bool,
     record_unresolved: bool,
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
@@ -204,6 +207,7 @@ fn _parse_functional_retained_v2<'py>(
             Some(interrupt),
             input_size,
             collect_provenance,
+            preserve_source_map,
             record_unresolved,
             require_empty_imports,
         )?;
@@ -239,13 +243,21 @@ fn _parse_functional_retained_v2<'py>(
 /// Prepare exact fingerprints, content manifests, and native-owned provenance
 /// without exporting canonical rows or preimages to Python.
 #[pyfunction]
-#[pyo3(signature = (parsed, manifest, document_key, collect_provenance, cancel=None))]
+#[pyo3(signature = (
+    parsed,
+    manifest,
+    document_key,
+    collect_provenance,
+    preserve_source_map,
+    cancel=None
+))]
 fn _prepare_parsed_structural_snapshot_v2<'py>(
     py: Python<'py>,
     mut parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
     manifest: &Bound<'py, PyBytes>,
     document_key: String,
     collect_provenance: bool,
+    preserve_source_map: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<Py<PyBytes>> {
     if parsed.prepared.is_some() {
@@ -282,6 +294,7 @@ fn _prepare_parsed_structural_snapshot_v2<'py>(
             &owned_manifest,
             &document_key,
             collect_provenance,
+            preserve_source_map,
             &limits,
             cancellation,
             Some(interrupt),
@@ -331,11 +344,13 @@ fn _finalize_parsed_structural_snapshot_v2<'py>(
     })?;
     parsed.prepared_summary = None;
     validate_prepared_attestation(py, &prepared, attestation)?;
+    let source_map = prepared.source_map;
     let rdf_report = prepared.rdf_report.map(|report| report.rows);
     crate::publication::typed_structural_handle_v2(
         attestation,
         storage,
         prepared.origin_rows,
+        source_map,
         rdf_report,
         parser_bytes,
     )
@@ -386,7 +401,15 @@ fn validate_prepared_attestation(
             ))
         })
     })?;
+    let source_entries = prepared.source_map.as_ref().map_or(Ok(0_u64), |source| {
+        u64::try_from(source.entries.len()).map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native retained source-map count exceeds u64",
+            ))
+        })
+    })?;
     let capability_bits = 7_u64
+        | if prepared.source_map.is_some() { 8 } else { 0 }
         | if prepared.origin_rows.is_some() {
             16
         } else {
@@ -398,6 +421,10 @@ fn validate_prepared_attestation(
         .extract::<String>()?
         != prepared.document_key.as_ref()
         || attestation.getattr("document_count")?.extract::<u64>()? != 1
+        || attestation
+            .getattr("source_map_entry_count")?
+            .extract::<u64>()?
+            != source_entries
         || attestation
             .getattr("origin_entry_count")?
             .extract::<u64>()?
@@ -458,6 +485,7 @@ fn _retain_structural_snapshot_v2<'py>(
         attestation,
         storage,
         Some(retained_origins),
+        None,
         None,
         0,
     )

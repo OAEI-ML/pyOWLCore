@@ -25,7 +25,7 @@ from pyowl_core import (
     load_snapshot,
 )
 from pyowl_core.backends import native, native_handoff_v2
-from pyowl_core.exceptions import BackendProtocolError
+from pyowl_core.exceptions import BackendProtocolError, ResourceLimitError
 from pyowl_core.model import canonical_bytes
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
 from tests.native.foundation._support import NativeTestExtension, load_extension
@@ -415,6 +415,102 @@ def test_anonymous_re_scope_uses_the_authoritative_model_fallback(
     assert calls == 1
 
 
+def test_functional_source_map_stays_in_parser_owned_storage_until_access(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    source = (
+        b"Prefix(ex:=<urn:retained-source:>) Ontology(<urn:retained-source> "
+        b"Declaration(Class(ex:C)) Declaration(Class(ex:C)) "
+        b"SubClassOf(ex:C <http://www.w3.org/2002/07/owl#Thing>))"
+    )
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            collect_provenance=False,
+            preserve_source_map=True,
+        )
+
+    reference = load_snapshot(source, options=options(BackendPreference.PYTHON))
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("eligible source-map load crossed the complete model decoder")
+
+    monkeypatch.setattr(native, "_decode_parsed_functional", unexpected)
+    selected = load_snapshot(source, options=options(BackendPreference.NATIVE))
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    before_native = cast(Any, raw_owner)._publication_counters_v2()
+    before_python = cast(Any, selected)._native_python_counters()
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.root.source_map is not None
+    assert reference.root.source_map is not None
+    assert handle.attestation.capability_bits == 15
+    assert before_native.retained_source_map_rows == 3
+    assert before_native.retained_source_prefix_rows == 5
+    assert before_native.retained_source_bytes > 0
+    assert before_native.source_map_rows_emitted == 0
+    assert before_native.source_prefix_rows_emitted == 0
+    assert before_python.auxiliary_rows_decoded == 0
+
+    assert selected.root.source_map == reference.root.source_map
+    after_native = cast(Any, raw_owner)._publication_counters_v2()
+    after_python = cast(Any, selected)._native_python_counters()
+    assert after_native.source_map_rows_emitted > before_native.source_map_rows_emitted
+    assert after_native.source_prefix_rows_emitted > before_native.source_prefix_rows_emitted
+    assert after_python.auxiliary_rows_decoded > before_python.auxiliary_rows_decoded
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_language_tagged_source_map_uses_exact_complete_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = b'Ontology(<urn:retained-language> AnnotationAssertion(<urn:p> <urn:s> "hi"@EN))'
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=False,
+        preserve_source_map=True,
+    )
+    reference = load_snapshot(
+        source,
+        options=replace(options, backend=BackendPreference.PYTHON),
+    )
+    decode = native._decode_parsed_functional
+    calls = 0
+
+    def counted(data: bytes, limits: object) -> object:
+        nonlocal calls
+        calls += 1
+        return decode(data, cast(Any, limits))
+
+    monkeypatch.setattr(native, "_decode_parsed_functional", counted)
+    selected = load_snapshot(source, options=options)
+
+    assert type(selected).__name__ == "OntologySnapshot"
+    assert selected.capabilities.backend == "python"
+    assert selected.root.source_map == reference.root.source_map
+    assert calls == 1
+
+
+def test_native_source_map_limit_fails_before_publication() -> None:
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=False,
+        preserve_source_map=True,
+        limits=replace(ParseLimits(), max_source_map_entries=2),
+    )
+    with pytest.raises(ResourceLimitError):
+        load_snapshot(SOURCE, options=options)
+
+
 def test_parser_built_storage_deduplicates_roots_but_preserves_origin_occurrences(
     extension: NativeTestExtension,
 ) -> None:
@@ -678,24 +774,29 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
 
     monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", unexpected)
 
-    for options in (
-        LoadOptions(
+    source_mapped = load_snapshot(
+        SOURCE,
+        options=LoadOptions(
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.IGNORE,
             backend=BackendPreference.NATIVE,
             preserve_source_map=True,
             collect_provenance=True,
         ),
-        LoadOptions(
+    )
+    assert source_mapped.capabilities.backend == "native"
+
+    ineligible = load_snapshot(
+        SOURCE,
+        options=LoadOptions(
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.IGNORE,
             backend=BackendPreference.NATIVE,
             collect_provenance=True,
             validate_owl2_dl=True,
         ),
-    ):
-        ineligible = load_snapshot(SOURCE, options=options)
-        assert ineligible.capabilities.backend == "python"
+    )
+    assert ineligible.capabilities.backend == "python"
 
     anonymous = load_snapshot(
         b"Ontology(<urn:retained-anonymous> ClassAssertion(<urn:C> _:person))",

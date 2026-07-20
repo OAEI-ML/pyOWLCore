@@ -165,6 +165,7 @@ def _parse_functional_retained_v2(
     source: object,
     config: object,
     collect_provenance: bool,
+    preserve_source_map: bool,
     record_unresolved: bool,
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
@@ -183,6 +184,7 @@ def _prepare_parsed_structural_snapshot_v2(
     manifest: bytes,
     document_key: str,
     collect_provenance: bool,
+    preserve_source_map: bool,
     cancel: _Cancellation | None = None,
 ) -> bytes: ...
 def _finalize_parsed_structural_snapshot_v2(
