@@ -8,14 +8,14 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 #[cfg(feature = "test-hooks")]
-use pyo3::types::{PyAny, PyBytes, PyDict, PyString};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyMemoryView, PySlice, PyString};
 
 #[cfg(any(test, feature = "test-hooks"))]
 use crate::error::{NativeError, NativeResult};
 #[cfg(any(test, feature = "test-hooks"))]
 use crate::publication::TypedFacadeScopeV2;
 #[cfg(feature = "test-hooks")]
-use crate::publication::{NativeDocumentHandle, NativeSnapshotHandle};
+use crate::publication::{NativeDocumentHandle, NativeSnapshotHandle, PublicationStorageV2};
 
 #[cfg(any(test, feature = "test-hooks"))]
 mod generated {
@@ -79,17 +79,15 @@ fn _encoded_structural_document_columns_v1<'py>(
     let document_ordinal = handle.document_ordinal();
     let storage = handle.encoded_storage_v2(py)?;
     drop(handle);
-    let columns = crate::run_detached(py, move |interrupt| {
-        storage.encoded_structural_columns(
-            TypedFacadeScopeV2::Document,
-            Some(document_ordinal),
-            true,
-            &limits,
-            cancellation,
-            Some(interrupt),
-        )
-    })?;
-    encoded_columns_to_python(py, &columns)
+    encoded_columns_to_python(
+        py,
+        storage.as_ref(),
+        TypedFacadeScopeV2::Document,
+        Some(document_ordinal),
+        true,
+        &limits,
+        cancellation,
+    )
 }
 
 /// Exercise the direct retained-column path through an open V2 snapshot
@@ -118,17 +116,15 @@ fn _encoded_structural_columns_v1<'py>(
     let cancellation = crate::cancellation_or_default(cancel);
     let storage = handle.encoded_storage_v2(py)?;
     drop(handle);
-    let columns = crate::run_detached(py, move |interrupt| {
-        storage.encoded_structural_columns(
-            selected_scope,
-            document_ordinal,
-            false,
-            &limits,
-            cancellation,
-            Some(interrupt),
-        )
-    })?;
-    encoded_columns_to_python(py, &columns)
+    encoded_columns_to_python(
+        py,
+        storage.as_ref(),
+        selected_scope,
+        document_ordinal,
+        false,
+        &limits,
+        cancellation,
+    )
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -147,13 +143,56 @@ fn encoded_selection(
 #[cfg(feature = "test-hooks")]
 fn encoded_columns_to_python(
     py: Python<'_>,
-    columns: &crate::model::EncodedStructuralColumnsV1,
+    storage: &PublicationStorageV2,
+    scope: TypedFacadeScopeV2,
+    document_ordinal: Option<u64>,
+    raw_document_owner: bool,
+    limits: &crate::limits::Limits,
+    cancellation: crate::cancel::Cancellation,
 ) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
+    let prepared = crate::run_detached(py, move |interrupt| {
+        storage.prepare_encoded_structural_columns(
+            scope,
+            document_ordinal,
+            raw_document_owner,
+            limits,
+            cancellation,
+            Some(interrupt),
+        )
+    })?;
+    let layout = prepared.layout();
+    let total_bytes = layout.total_bytes();
+    isize::try_from(total_bytes).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native encoded-column Python owner exceeds Py_ssize_t",
+        ))
+    })?;
+    let backing = PyBytes::new_with(py, total_bytes, |output| {
+        py.detach(|| crate::contain(|| prepared.write_into(output)))
+            .map_err(crate::python_error)
+    })?;
+    let owner_view = PyMemoryView::from(backing.as_any())?;
     let buffers = PyDict::new(py);
-    for (name, payload) in columns.buffers().named() {
-        buffers.set_item(name, PyBytes::new(py, payload))?;
+    for (name, start, length) in layout.named_ranges() {
+        let stop = start.checked_add(length).ok_or_else(|| {
+            crate::python_error(NativeError::limit(
+                "native encoded-column Python range overflow",
+            ))
+        })?;
+        let start = isize::try_from(start).map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native encoded-column Python range exceeds Py_ssize_t",
+            ))
+        })?;
+        let stop = isize::try_from(stop).map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native encoded-column Python range exceeds Py_ssize_t",
+            ))
+        })?;
+        let view = owner_view.get_item(PySlice::new(py, start, stop, 1))?;
+        buffers.set_item(name, view)?;
     }
-    let counters = columns.counters();
+    let counters = prepared.counters();
     let observed = PyDict::new(py);
     for (name, value) in [
         ("root_rows", counters.root_rows),
@@ -175,13 +214,15 @@ fn encoded_columns_to_python(
             "complete_root_encode_calls",
             counters.complete_root_encode_calls,
         ),
-        // The pre-advertisement PyO3 observation bridge freezes each Rust
-        // buffer into Python bytes. Keep that copy visible and distinct from
-        // construction counters until the owning buffer surface replaces it.
-        ("python_bridge_copy_bytes", counters.retained_buffer_bytes),
+        // All eleven observations are read-only memoryview slices over the
+        // one Python bytes allocation filled directly by Rust.
+        ("python_bridge_copy_bytes", 0),
     ] {
         observed.set_item(name, value)?;
     }
+    storage
+        .record_encoded_view_success()
+        .map_err(crate::python_error)?;
     Ok((buffers.unbind(), observed.unbind()))
 }
 

@@ -20,7 +20,7 @@ use crate::cancel::{Cancellation, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
 use crate::index::RetainedAxiomTypeIndexV1;
 use crate::limits::Limits;
-use crate::model::EncodedStructuralColumnsV1;
+use crate::model::{EncodedStructuralColumnsV1, PreparedEncodedStructuralColumnsV1};
 
 use super::records::Digest;
 use super::{
@@ -960,19 +960,45 @@ impl PublicationStorageV2 {
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
     ) -> NativeResult<EncodedStructuralColumnsV1> {
+        let columns = self
+            .prepare_encoded_structural_columns(
+                scope,
+                document_ordinal,
+                raw_document_owner,
+                limits,
+                cancellation,
+                interrupt,
+            )?
+            .into_columns()?;
+        self.record_encoded_view_success()?;
+        Ok(columns)
+    }
+
+    pub(crate) fn prepare_encoded_structural_columns(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'_>> {
         let typed = self.typed_structural.as_deref().ok_or_else(|| {
             NativeError::protocol("native V2 publication has no typed structural owner")
         })?;
-        let columns = typed.encoded_structural_columns(
+        typed.prepare_encoded_structural_columns(
             scope,
             document_ordinal,
             raw_document_owner,
             limits,
             cancellation,
             interrupt,
-        )?;
+        )
+    }
+
+    pub(crate) fn record_encoded_view_success(&self) -> NativeResult<()> {
         self.counters.add_pairs(&[(ENCODED_VIEW_REQUESTS, 1)])?;
-        Ok(columns)
+        Ok(())
     }
 
     pub(crate) fn retained_axiom_type_index(

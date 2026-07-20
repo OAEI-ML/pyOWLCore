@@ -16,6 +16,8 @@ use std::sync::Arc;
 use crate::error::{NativeError, NativeResult};
 use crate::model::{validate_iri, Category};
 
+#[cfg(feature = "test-hooks")]
+pub(crate) use facade_v2::PublicationStorageV2;
 #[allow(unused_imports)]
 pub(crate) use handle::{register_native_handle_types, NativeDocumentHandle, NativeSnapshotHandle};
 #[allow(unused_imports)]

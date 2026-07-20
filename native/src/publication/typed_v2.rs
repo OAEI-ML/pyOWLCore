@@ -13,9 +13,10 @@ use crate::error::{NativeError, NativeResult};
 use crate::index::{build_retained_axiom_type_index_v1, RetainedAxiomTypeIndexV1};
 use crate::limits::{LimitKey, Limits};
 use crate::model::{
-    build_encoded_structural_columns_from_tables_v1, scan_canonical, structural_digest_v1,
+    prepare_encoded_structural_columns_from_tables_v1, scan_canonical, structural_digest_v1,
     Category, ComponentCounters, ComponentId, EncodedRootKindV1, EncodedRootTableV1,
-    EncodedStructuralColumnsV1, NativeComponentArena, NativeComponentDigestIndex, ScanBudget,
+    EncodedStructuralColumnsV1, NativeComponentArena, NativeComponentDigestIndex,
+    PreparedEncodedStructuralColumnsV1, ScanBudget,
 };
 
 const MAX_TYPED_FACADE_TABLES_V2: usize = 100_000;
@@ -633,6 +634,29 @@ impl TypedFacadeStorageV2 {
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
     ) -> NativeResult<EncodedStructuralColumnsV1> {
+        self.prepare_encoded_structural_columns(
+            scope,
+            document_ordinal,
+            raw_document_owner,
+            limits,
+            cancellation,
+            interrupt,
+        )?
+        .into_columns()
+    }
+
+    /// Prepare an exact direct-fill layout over the retained root tables. The
+    /// returned plan borrows this owner and can fill one caller-provided byte
+    /// arena without first materializing per-column Rust buffers.
+    pub(crate) fn prepare_encoded_structural_columns(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'_>> {
         let annotations = self.structural_roots(
             TypedFacadeCollectionV2::OntologyAnnotations,
             scope,
@@ -656,7 +680,7 @@ impl TypedFacadeStorageV2 {
             EncodedRootTableV1::new(EncodedRootKindV1::Axiom, axioms),
             EncodedRootTableV1::new(EncodedRootKindV1::Extension, extensions),
         ];
-        build_encoded_structural_columns_from_tables_v1(
+        prepare_encoded_structural_columns_from_tables_v1(
             &self.arena,
             &tables,
             limits,
