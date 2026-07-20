@@ -277,6 +277,25 @@ mod tests {
         assert!(outcome.phases.result_encode_ns > 0);
         assert!(outcome.phases.arena_construction_ns > 0);
         assert!(outcome.phases.freeze_ns > 0);
+        let prepared = crate::parse::prepare_retained_publication_v2(
+            &outcome.storage,
+            &outcome.metadata,
+            b"manifest",
+            "document-key",
+            false,
+            &limits,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect("prepared RDF/XML publication");
+        let report = prepared.rdf_report.expect("retained RDF report");
+        assert!(report.conformant);
+        assert_eq!(report.consumed_triples, 2);
+        assert_eq!(report.total_triples, 2);
+        assert_eq!(report.rows.header.len(), 17);
+        assert!(report.rows.unconsumed_triples.is_empty());
+        assert!(report.rows.rule_ids.is_empty());
+        assert!(report.rows.diagnostics.is_empty());
     }
 
     #[test]

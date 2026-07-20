@@ -15,7 +15,7 @@ use crate::model::{
     canonical_contains_tag, canonical_field_count, structural_digest_v1, ScanBudget,
 };
 use crate::publication::{
-    TypedFacadeCollectionV2, TypedFacadeScopeV2, TypedFacadeStorageV2,
+    TypedFacadeCollectionV2, TypedFacadeScopeV2, TypedFacadeStorageV2, TypedRdfReportRowsV2,
     AUXILIARY_CODEC_SCHEMA_SHA256_V2,
 };
 
@@ -51,6 +51,7 @@ const EFFECTIVE_DOCUMENT_ORIGIN_TABLE_DOMAIN_V2: &[u8] =
     b"pyowl-core:native-effective-document-origin-table:v2";
 const EFFECTIVE_CLOSURE_ORIGIN_TABLE_DOMAIN_V2: &[u8] =
     b"pyowl-core:native-effective-closure-origin-table:v2";
+const RDF_MAPPING_REPORT_DOMAIN_V2: &[u8] = b"pyowl-core:native-rdf-mapping-report:v2";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FingerprintEvidenceV2 {
@@ -71,6 +72,7 @@ pub(crate) struct RetainedParseMetadataV2 {
     pub(crate) occurrence_count: u64,
     pub(crate) root_counts: [u64; 3],
     occurrences: Vec<RetainedOccurrenceV2>,
+    rdf_total_triples: Option<u64>,
 }
 
 type RetainedSeedV2 = (Vec<u8>, RetainedParseMetadataV2, [Vec<Vec<u8>>; 3]);
@@ -104,12 +106,23 @@ pub(crate) struct PreparedRetainedPublicationV2 {
     pub(crate) root_count: u64,
     pub(crate) node_count: u64,
     pub(crate) origin_rows: Option<Vec<Vec<u8>>>,
+    pub(crate) rdf_report: Option<PreparedRetainedRdfReportV2>,
     pub(crate) max_facade_row_bytes: u64,
     pub(crate) canonical_rows_encoded: u64,
     pub(crate) canonical_bytes_encoded: u64,
     pub(crate) fingerprint_temporary_bytes: u64,
     pub(crate) origin_bytes_retained: u64,
     pub(crate) document_key: Box<str>,
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedRetainedRdfReportV2 {
+    pub(crate) rows: TypedRdfReportRowsV2,
+    pub(crate) conformant: bool,
+    pub(crate) consumed_triples: u64,
+    pub(crate) total_triples: u64,
+    pub(crate) digest: [u8; 32],
+    pub(crate) retained_bytes: u64,
 }
 
 impl PreparedRetainedPublicationV2 {
@@ -120,7 +133,10 @@ impl PreparedRetainedPublicationV2 {
             .map_err(|_| NativeError::limit("native retained summary allocation failed"))?;
         append(&mut output, RETAINED_PREPARED_MAGIC_V2)?;
         append(&mut output, &RETAINED_PREPARED_SCHEMA_V2.to_le_bytes())?;
-        append(&mut output, &0_u16.to_le_bytes())?;
+        append(
+            &mut output,
+            &u16::from(self.rdf_report.is_some()).to_le_bytes(),
+        )?;
         for evidence in [
             self.document_fingerprint,
             self.structural_fingerprint,
@@ -159,6 +175,29 @@ impl PreparedRetainedPublicationV2 {
         append_u64(&mut output, self.fingerprint_temporary_bytes)?;
         append_u64(&mut output, self.origin_bytes_retained)?;
         append_u64(&mut output, prepare_ns)?;
+        if let Some(report) = &self.rdf_report {
+            append(&mut output, &[u8::from(report.conformant)])?;
+            append_u64(&mut output, report.consumed_triples)?;
+            append_u64(&mut output, report.total_triples)?;
+            append_u64(
+                &mut output,
+                u64::try_from(report.rows.unconsumed_triples.len()).map_err(|_| {
+                    NativeError::limit("native RDF unconsumed row count exceeds u64")
+                })?,
+            )?;
+            append_u64(
+                &mut output,
+                u64::try_from(report.rows.rule_ids.len())
+                    .map_err(|_| NativeError::limit("native RDF rule count exceeds u64"))?,
+            )?;
+            append_u64(
+                &mut output,
+                u64::try_from(report.rows.diagnostics.len())
+                    .map_err(|_| NativeError::limit("native RDF diagnostic count exceeds u64"))?,
+            )?;
+            append(&mut output, &report.digest)?;
+            append_u64(&mut output, report.retained_bytes)?;
+        }
         Ok(output)
     }
 }
@@ -253,6 +292,7 @@ pub(crate) fn build_rdfxml_seed(
             occurrence_count,
             root_counts,
             occurrences: Vec::new(),
+            rdf_total_triples: Some(total_triples),
         },
     ))
 }
@@ -371,6 +411,7 @@ pub(crate) fn build_seed(
             occurrence_count,
             root_counts,
             occurrences,
+            rdf_total_triples: None,
         },
         rows,
     ))
@@ -400,6 +441,11 @@ pub(crate) fn prepare_publication(
     {
         return Err(NativeError::protocol(
             "native retained publication metadata diverges from its arena",
+        ));
+    }
+    if collect_provenance && metadata.rdf_total_triples.is_some() {
+        return Err(NativeError::protocol(
+            "native retained RDF/XML provenance is not implemented",
         ));
     }
     if collect_provenance {
@@ -686,9 +732,17 @@ pub(crate) fn prepare_publication(
         (None, 0)
     };
     let selected_origins = origin_rows.as_deref().unwrap_or_default();
+    let rdf_report = metadata
+        .rdf_total_triples
+        .map(|total| prepare_conformant_rdf_report(document_key, total))
+        .transpose()?;
     let source_manifest_sha256 = source_manifest_digest(document_key)?;
-    let provenance_manifest_sha256 =
-        provenance_manifest_digest(document_key, origin_rows.is_some(), selected_origins)?;
+    let provenance_manifest_sha256 = provenance_manifest_digest(
+        document_key,
+        origin_rows.is_some(),
+        selected_origins,
+        rdf_report.as_ref(),
+    )?;
     let effective_origin_manifest_sha256 =
         effective_origin_manifest_digest(document_key, selected_origins)?;
     let fingerprint_inputs_sha256 = fingerprint_inputs_digest(
@@ -706,6 +760,9 @@ pub(crate) fn prepare_publication(
             ),
         )
     })?;
+    let rdf_max = rdf_report
+        .as_ref()
+        .map_or(1_u64, |report| report.rows.header.len() as u64);
     cancellation.checkpoint()?;
     Ok(PreparedRetainedPublicationV2 {
         document_fingerprint: metadata.document_fingerprint,
@@ -724,7 +781,8 @@ pub(crate) fn prepare_publication(
         root_count,
         node_count,
         origin_rows,
-        max_facade_row_bytes: storage.maximum_row_bytes().max(origin_max),
+        rdf_report,
+        max_facade_row_bytes: storage.maximum_row_bytes().max(origin_max).max(rdf_max),
         canonical_rows_encoded,
         canonical_bytes_encoded,
         fingerprint_temporary_bytes,
@@ -961,6 +1019,7 @@ fn provenance_manifest_digest(
     document_key: &str,
     present: bool,
     origins: &[Vec<u8>],
+    rdf_report: Option<&PreparedRetainedRdfReportV2>,
 ) -> NativeResult<[u8; 32]> {
     let mut hasher = MeasuredSha256::domain(PROVENANCE_MANIFEST_DOMAIN_V2)?;
     hasher.update(&AUXILIARY_CODEC_SCHEMA_SHA256_V2)?;
@@ -981,9 +1040,61 @@ fn provenance_manifest_digest(
     } else {
         hasher.update(&[0])?;
     }
-    // The guarded retained Functional path never carries an RDF mapping report.
-    hasher.update(&[0])?;
+    if let Some(report) = rdf_report {
+        hasher.update(&[1])?;
+        hasher.u64_le(
+            u64::try_from(report.rows.unconsumed_triples.len())
+                .map_err(|_| NativeError::limit("native RDF unconsumed count exceeds u64"))?,
+        )?;
+        hasher.u64_le(
+            u64::try_from(report.rows.rule_ids.len())
+                .map_err(|_| NativeError::limit("native RDF rule count exceeds u64"))?,
+        )?;
+        hasher.u64_le(
+            u64::try_from(report.rows.diagnostics.len())
+                .map_err(|_| NativeError::limit("native RDF diagnostic count exceeds u64"))?,
+        )?;
+        hasher.update(&report.digest)?;
+    } else {
+        hasher.update(&[0])?;
+    }
     Ok(hasher.finish().digest)
+}
+
+fn prepare_conformant_rdf_report(
+    document_key: &str,
+    total_triples: u64,
+) -> NativeResult<PreparedRetainedRdfReportV2> {
+    let mut header = Vec::new();
+    header
+        .try_reserve_exact(17)
+        .map_err(|_| NativeError::limit("native RDF report header allocation failed"))?;
+    header.push(1);
+    header.extend_from_slice(&total_triples.to_le_bytes());
+    header.extend_from_slice(&total_triples.to_le_bytes());
+
+    let mut report = MeasuredSha256::domain(RDF_MAPPING_REPORT_DOMAIN_V2)?;
+    report.text64(document_key)?;
+    report.frame64(&header)?;
+    report.u64_le(0)?;
+    report.u64_le(0)?;
+    report.u64_le(0)?;
+    let digest = report.finish().digest;
+    let retained_bytes = u64::try_from(header.capacity())
+        .map_err(|_| NativeError::limit("native RDF report header size exceeds u64"))?;
+    Ok(PreparedRetainedRdfReportV2 {
+        rows: TypedRdfReportRowsV2 {
+            header,
+            unconsumed_triples: Vec::new(),
+            rule_ids: Vec::new(),
+            diagnostics: Vec::new(),
+        },
+        conformant: true,
+        consumed_triples: total_triples,
+        total_triples,
+        digest,
+        retained_bytes,
+    })
 }
 
 fn effective_origin_manifest_digest(

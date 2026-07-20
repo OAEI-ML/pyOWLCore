@@ -323,10 +323,12 @@ fn _finalize_parsed_structural_snapshot_v2<'py>(
     })?;
     parsed.prepared_summary = None;
     validate_prepared_attestation(py, &prepared, attestation)?;
+    let rdf_report = prepared.rdf_report.map(|report| report.rows);
     crate::publication::typed_structural_handle_v2(
         attestation,
         storage,
         prepared.origin_rows,
+        rdf_report,
         parser_bytes,
     )
 }
@@ -376,11 +378,13 @@ fn validate_prepared_attestation(
             ))
         })
     })?;
-    let capability_bits = if prepared.origin_rows.is_some() {
-        23_u64
-    } else {
-        7_u64
-    };
+    let capability_bits = 7_u64
+        | if prepared.origin_rows.is_some() {
+            16
+        } else {
+            0
+        }
+        | if prepared.rdf_report.is_some() { 32 } else { 0 };
     if attestation
         .getattr("root_document_key")?
         .extract::<String>()?
@@ -390,6 +394,10 @@ fn validate_prepared_attestation(
             .getattr("origin_entry_count")?
             .extract::<u64>()?
             != origins
+        || attestation
+            .getattr("rdf_mapping_report_count")?
+            .extract::<u64>()?
+            != u64::from(prepared.rdf_report.is_some())
         || attestation.getattr("capability_bits")?.extract::<u64>()? != capability_bits
         || attestation
             .getattr("max_facade_row_bytes")?
@@ -438,7 +446,13 @@ fn _retain_structural_snapshot_v2<'py>(
         }
         Ok((builder.freeze(&[vec![0]], &[0])?, owned_origins))
     })?;
-    crate::publication::typed_structural_handle_v2(attestation, storage, Some(retained_origins), 0)
+    crate::publication::typed_structural_handle_v2(
+        attestation,
+        storage,
+        Some(retained_origins),
+        None,
+        0,
+    )
 }
 
 type OwnedStructuralDocument = [Vec<Vec<u8>>; 3];

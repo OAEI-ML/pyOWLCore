@@ -922,10 +922,30 @@ def _call_parse_value(extension: _Extension, operation: Callable[[], object]) ->
             raise OperationCancelledError(message, code=code) from error
         if code in {"NATIVE_DEADLINE", "NATIVE_WIRE_LIMIT"}:
             raise ResourceLimitError(message, code=code) from error
-        if code in {"NATIVE_FORMAT_ENCODING", "NATIVE_FORMAT_SYNTAX"}:
-            raise OntologySyntaxError(message, code=code) from error
-        if code == "NATIVE_EXTENSION_DISABLED":
-            raise UnsupportedSyntaxError(message, code=code) from error
+        if code in {
+            "NATIVE_FORMAT_ENCODING",
+            "NATIVE_FORMAT_SYNTAX",
+            "NATIVE_RDFXML_INVALID_BASE_IRI",
+            "NATIVE_RDFXML_IRI_REFERENCE",
+            "NATIVE_RDFXML_RELATIVE_IRI_NO_BASE",
+            "NATIVE_RDFXML_SYNTAX",
+            "NATIVE_XML_FORBIDDEN_CONSTRUCT",
+        }:
+            raise OntologySyntaxError(message, code=code.removeprefix("NATIVE_")) from error
+        if code in {
+            "NATIVE_EXTENSION_DISABLED",
+            "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
+            "NATIVE_RDF_AXIOM_REIFICATION",
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+            "NATIVE_RDF_MAPPING_TYPE",
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            "NATIVE_RDF_ONTOLOGY_HEADER",
+        }:
+            raise UnsupportedSyntaxError(
+                message,
+                code=code.removeprefix("NATIVE_"),
+            ) from error
         if code == "NATIVE_CAPABILITY_UNAVAILABLE":
             raise BackendUnavailableError(message, code=code) from error
         raise BackendProtocolError(message, code=code) from error

@@ -582,6 +582,12 @@ class _RetainedFunctionalSeedV2:
 
 
 @dataclass(frozen=True, slots=True)
+class _RetainedRdfXmlSeedV2:
+    structural: _RetainedFunctionalSeedV2
+    total_triples: int
+
+
+@dataclass(frozen=True, slots=True)
 class _RetainedRecordInventoryV1:
     count: int
     canonical_bytes: int
@@ -613,6 +619,19 @@ class _PreparedRetainedPublicationV2:
     fingerprint_temporary_bytes: int
     origin_bytes_retained: int
     prepare_seconds: float
+    rdf_report: _PreparedRetainedRdfReportV2 | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedRetainedRdfReportV2:
+    conformant: bool
+    consumed_triples: int
+    total_triples: int
+    unconsumed_triple_count: int
+    rule_count: int
+    diagnostic_count: int
+    digest: bytes
+    retained_bytes: int
 
 
 def _read_u16_v2(reader: native._ResultReader) -> int:
@@ -718,16 +737,49 @@ def _decode_retained_functional_seed_v2(
     )
 
 
+def _decode_retained_rdfxml_seed_v2(
+    encoded: bytes,
+    limits: ParseLimits,
+) -> _RetainedRdfXmlSeedV2:
+    if (
+        len(encoded) < 20
+        or encoded[:8] != native._RETAINED_RDFXML_SEED_MAGIC_V2
+        or int.from_bytes(encoded[8:10], "little") != 1
+        or int.from_bytes(encoded[10:12], "little") != 0
+    ):
+        raise BackendProtocolError(
+            "native retained RDF/XML seed has incompatible metadata",
+            code="NATIVE_PARSE_VERSION",
+        )
+    total_triples = int.from_bytes(encoded[-8:], "little")
+    limits.enforce("max_triples", total_triples)
+    structural = _decode_retained_functional_seed_v2(
+        native._RETAINED_FUNCTIONAL_SEED_MAGIC_V2 + encoded[8:-8],
+        limits,
+    )
+    if structural.structural_occurrence_rows_scanned != sum(structural.rows):
+        raise BackendProtocolError(
+            "native retained RDF/XML structural counters diverge",
+            code="NATIVE_PARSE_MODEL",
+        )
+    return _RetainedRdfXmlSeedV2(structural, total_triples)
+
+
 def _decode_prepared_retained_publication_v2(
     encoded: bytes,
     *,
     collect_provenance: bool,
+    expect_rdf_report: bool = False,
 ) -> _PreparedRetainedPublicationV2:
     reader = native._ResultReader(encoded)
     magic = reader.take(8)
     schema = _read_u16_v2(reader)
     flags = _read_u16_v2(reader)
-    if magic != native._RETAINED_FUNCTIONAL_PREPARED_MAGIC_V2 or schema != 2 or flags != 0:
+    if (
+        magic != native._RETAINED_FUNCTIONAL_PREPARED_MAGIC_V2
+        or schema != 2
+        or flags != int(expect_rdf_report)
+    ):
         raise BackendProtocolError(
             "native retained publication summary has incompatible metadata",
             code="NATIVE_PARSE_VERSION",
@@ -771,6 +823,24 @@ def _decode_prepared_retained_publication_v2(
     fingerprint_temporary_bytes = reader.u64()
     origin_bytes = reader.u64()
     prepare_ns = reader.u64()
+    rdf_report = None
+    if expect_rdf_report:
+        conformant_raw = reader.u8()
+        if conformant_raw not in {0, 1}:
+            raise BackendProtocolError(
+                "native retained RDF report has an invalid conformance flag",
+                code="NATIVE_RDF_REPORT",
+            )
+        rdf_report = _PreparedRetainedRdfReportV2(
+            bool(conformant_raw),
+            reader.u64(),
+            reader.u64(),
+            reader.u64(),
+            reader.u64(),
+            reader.u64(),
+            reader.take(32),
+            reader.u64(),
+        )
     reader.finish()
     if any(item.preimage_byte_length == 0 for item in fingerprints) or max_row == 0:
         raise BackendProtocolError(
@@ -789,6 +859,20 @@ def _decode_prepared_retained_publication_v2(
             "native retained publication summary has inconsistent provenance counters",
             code="NATIVE_PARSE_MODEL",
         )
+    if rdf_report is not None and (
+        not rdf_report.conformant
+        or rdf_report.consumed_triples != rdf_report.total_triples
+        or rdf_report.unconsumed_triple_count != 0
+        or rdf_report.rule_count != 0
+        or rdf_report.diagnostic_count != 0
+        or len(rdf_report.digest) != 32
+        or rdf_report.retained_bytes != 17
+        or max_row < 17
+    ):
+        raise BackendProtocolError(
+            "native retained RDF report summary is inconsistent",
+            code="NATIVE_RDF_REPORT",
+        )
     return _PreparedRetainedPublicationV2(
         fingerprints,
         content,
@@ -802,6 +886,7 @@ def _decode_prepared_retained_publication_v2(
         fingerprint_temporary_bytes,
         origin_bytes,
         prepare_ns / 1_000_000_000,
+        rdf_report,
     )
 
 
@@ -821,6 +906,94 @@ def publish_retained_functional_snapshot_v2(
     root_parse_started: float,
 ) -> OntologySnapshot:
     """Publish one parser-owned Functional load from bounded native evidence."""
+
+    seed = _decode_retained_functional_seed_v2(summary, options.limits)
+    extension = native.require("parse-functional-v1")
+    return _publish_retained_snapshot_v2(
+        summary,
+        seed=seed,
+        rdf_total_triples=None,
+        expected_format="functional",
+        extension=extension,
+        parsed_native_storage=parsed_native_storage,
+        phase_timings=phase_timings,
+        payload=payload,
+        detection=detection,
+        document_iri=document_iri,
+        media_type=media_type,
+        options=options,
+        resolver=resolver,
+        cancellation_token=cancellation_token,
+        load_started=load_started,
+        root_parse_started=root_parse_started,
+    )
+
+
+def publish_retained_rdfxml_snapshot_v2(
+    summary: bytes,
+    *,
+    parsed_native_storage: object,
+    phase_timings: tuple[tuple[str, float], ...],
+    payload: SourcePayload,
+    detection: FormatDetection,
+    document_iri: IRI | None,
+    media_type: str | None,
+    options: LoadOptions,
+    resolver: ImportResolver | None,
+    cancellation_token: CancellationToken | None,
+    load_started: float,
+    root_parse_started: float,
+) -> OntologySnapshot:
+    """Publish one privately selected RDF/XML retained-owner checkpoint."""
+
+    decoded = _decode_retained_rdfxml_seed_v2(summary, options.limits)
+    runtime = native._runtime()
+    extension = runtime.extension
+    if not runtime.probe.available or extension is None:
+        raise BackendProtocolError(
+            "retained RDF/XML parser storage outlived its compatible extension",
+            code="NATIVE_INGESTION_REGISTRATION",
+        )
+    return _publish_retained_snapshot_v2(
+        summary,
+        seed=decoded.structural,
+        rdf_total_triples=decoded.total_triples,
+        expected_format="rdfxml",
+        extension=extension,
+        parsed_native_storage=parsed_native_storage,
+        phase_timings=phase_timings,
+        payload=payload,
+        detection=detection,
+        document_iri=document_iri,
+        media_type=media_type,
+        options=options,
+        resolver=resolver,
+        cancellation_token=cancellation_token,
+        load_started=load_started,
+        root_parse_started=root_parse_started,
+    )
+
+
+def _publish_retained_snapshot_v2(
+    summary: bytes,
+    *,
+    seed: _RetainedFunctionalSeedV2,
+    rdf_total_triples: int | None,
+    expected_format: str,
+    extension: native._Extension,
+    parsed_native_storage: object,
+    phase_timings: tuple[tuple[str, float], ...],
+    payload: SourcePayload,
+    detection: FormatDetection,
+    document_iri: IRI | None,
+    media_type: str | None,
+    options: LoadOptions,
+    resolver: ImportResolver | None,
+    cancellation_token: CancellationToken | None,
+    load_started: float,
+    root_parse_started: float,
+) -> OntologySnapshot:
+    """Publish one guarded parser-owned load from bounded native evidence."""
 
     from pyowl_core.backends.native_handoff import (
         NativeDocumentPublicationV1,
@@ -842,7 +1015,7 @@ def publish_retained_functional_snapshot_v2(
         native_diagnostic_reference_kinds_v2,
         native_snapshot_publication_attestation_v2,
     )
-    from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy, LoadOptions
+    from pyowl_core.config import BackendPreference, ImportPolicy, LoadOptions
     from pyowl_core.diagnostics import Diagnostic
     from pyowl_core.document import Fingerprint, OntologyID
     from pyowl_core.document.imports import (
@@ -877,16 +1050,16 @@ def publish_retained_functional_snapshot_v2(
         options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
         or options.preserve_source_map
         or options.validate_owl2_dl
-        or detection.format is not DocumentFormat.FUNCTIONAL
+        or detection.format.value != expected_format
+        or (rdf_total_triples is not None and options.collect_provenance)
     ):
-        raise AssertionError("retained Functional publication was invoked for an ineligible load")
-    seed = _decode_retained_functional_seed_v2(summary, options.limits)
+        raise AssertionError("retained publication was invoked for an ineligible load")
     if seed.imports and (
         options.imports in {ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT}
         or (options.imports is ImportPolicy.RECORD_UNRESOLVED and resolver is not None)
     ):
         raise AssertionError(
-            "retained Functional publication cannot bypass resolver-backed imports"
+            "retained publication cannot bypass resolver-backed imports"
         )
     if cancellation_token is not None:
         cancellation_token.check()
@@ -966,7 +1139,6 @@ def publish_retained_functional_snapshot_v2(
         edges,
     )
 
-    extension = native.require("parse-functional-v1")
     prepare = getattr(extension, "_prepare_parsed_structural_snapshot_v2", None)
     if not callable(prepare):
         raise BackendProtocolError(
@@ -992,12 +1164,21 @@ def publish_retained_functional_snapshot_v2(
     prepared = _decode_prepared_retained_publication_v2(
         prepared_encoded,
         collect_provenance=options.collect_provenance,
+        expect_rdf_report=rdf_total_triples is not None,
     )
     options.limits.enforce("max_origin_entries", prepared.origin_rows_retained)
     if prepared.fingerprints[0] != seed.document_fingerprint:
         raise BackendProtocolError(
             "native retained document fingerprint summaries diverge",
             code="NATIVE_PARSE_MODEL",
+        )
+    if rdf_total_triples is not None and (
+        prepared.rdf_report is None
+        or prepared.rdf_report.total_triples != rdf_total_triples
+    ):
+        raise BackendProtocolError(
+            "native retained RDF report diverges from parser metadata",
+            code="NATIVE_RDF_REPORT",
         )
     fingerprints = tuple(
         Fingerprint("sha256", 1, item.digest) for item in prepared.fingerprints
@@ -1048,6 +1229,10 @@ def publish_retained_functional_snapshot_v2(
             code="NATIVE_PARSE_MODEL",
         )
 
+    retained_rdf = prepared.rdf_report
+    rdf_conformant = None if retained_rdf is None else retained_rdf.conformant
+    rdf_digest = None if retained_rdf is None else retained_rdf.digest
+
     documents = (
         NativeDocumentPublicationV1(
             document_key=document_key,
@@ -1062,8 +1247,8 @@ def publish_retained_functional_snapshot_v2(
             extension_count=seed.rows[2],
             source_map_entry_count=0,
             origin_entry_count=prepared.origin_rows_retained,
-            rdf_mapping_conformant=None,
-            rdf_mapping_report_sha256=None,
+            rdf_mapping_conformant=rdf_conformant,
+            rdf_mapping_report_sha256=rdf_digest,
         ),
     )
     timings = {
@@ -1093,7 +1278,11 @@ def publish_retained_functional_snapshot_v2(
         owl2_dl_conforms=None,
         owl2_dl_report_sha256=None,
     )
-    capability_bits = 7 | (16 if options.collect_provenance else 0)
+    capability_bits = (
+        7
+        | (16 if options.collect_provenance else 0)
+        | (32 if retained_rdf is not None else 0)
+    )
     import_manifest = freeze_native_import_manifest_publication_v1(manifest)
     sidecars = NativeDiagnosticReferenceSidecarsV2(
         snapshot=tuple(
@@ -1131,9 +1320,15 @@ def publish_retained_functional_snapshot_v2(
                 effective_extension_count=seed.rows[2],
                 effective_origin_count=prepared.origin_rows_retained,
                 raw_source_prefix_count=0,
-                rdf_unconsumed_triple_count=0,
-                rdf_rule_count=0,
-                rdf_diagnostic_count=0,
+                rdf_unconsumed_triple_count=(
+                    0
+                    if retained_rdf is None
+                    else retained_rdf.unconsumed_triple_count
+                ),
+                rdf_rule_count=0 if retained_rdf is None else retained_rdf.rule_count,
+                rdf_diagnostic_count=(
+                    0 if retained_rdf is None else retained_rdf.diagnostic_count
+                ),
             ),
         ),
         closure=NativeClosureFacadeCardinalitiesV2(

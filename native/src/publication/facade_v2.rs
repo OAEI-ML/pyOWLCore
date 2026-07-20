@@ -759,6 +759,14 @@ pub(crate) struct PublicationStorageV2 {
     counters: CounterStateV2,
 }
 
+#[derive(Debug)]
+pub(crate) struct TypedRdfReportRowsV2 {
+    pub(crate) header: Vec<u8>,
+    pub(crate) unconsumed_triples: Vec<Vec<u8>>,
+    pub(crate) rule_ids: Vec<Vec<u8>>,
+    pub(crate) diagnostics: Vec<Vec<u8>>,
+}
+
 impl PublicationStorageV2 {
     pub(super) const fn attestation(&self) -> &NativeSnapshotAttestationV2 {
         &self.attestation
@@ -1032,7 +1040,7 @@ impl PublicationStorageV2 {
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
     ) -> NativeResult<Arc<Self>> {
-        Self::from_typed_structural_parts(attestation, typed_structural, None, 0)
+        Self::from_typed_structural_parts(attestation, typed_structural, None, None, 0)
     }
 
     pub(super) fn from_typed_structural_with_origins(
@@ -1055,13 +1063,36 @@ impl PublicationStorageV2 {
         origin_rows: Option<Vec<Vec<u8>>>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
-        Self::from_typed_structural_parts(attestation, typed_structural, origin_rows, parser_bytes)
+        Self::from_typed_structural_parts(
+            attestation,
+            typed_structural,
+            origin_rows,
+            None,
+            parser_bytes,
+        )
+    }
+
+    pub(super) fn from_typed_structural_with_auxiliary(
+        attestation: NativeSnapshotAttestationV2,
+        typed_structural: TypedFacadeStorageV2,
+        origin_rows: Option<Vec<Vec<u8>>>,
+        rdf_report: Option<TypedRdfReportRowsV2>,
+        parser_bytes: u64,
+    ) -> NativeResult<Arc<Self>> {
+        Self::from_typed_structural_parts(
+            attestation,
+            typed_structural,
+            origin_rows,
+            rdf_report,
+            parser_bytes,
+        )
     }
 
     fn from_typed_structural_parts(
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
         origin_rows: Option<Vec<Vec<u8>>>,
+        rdf_report: Option<TypedRdfReportRowsV2>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
         if attestation.version != PUBLICATION_VERSION_V2
@@ -1089,10 +1120,14 @@ impl PublicationStorageV2 {
                     .map_err(|_| NativeError::limit("typed V2 origin row exceeds u64"))?,
             ))
         })?;
+        let retained_rdf = retain_rdf_tables_v2(rdf_report)?;
         let structural_counts = typed_structural.structural_counts()?;
         if attestation.document_count != typed_structural.document_count()
             || attestation.max_facade_row_bytes
-                != typed_structural.maximum_row_bytes().max(origin_maximum)
+                != typed_structural
+                    .maximum_row_bytes()
+                    .max(origin_maximum)
+                    .max(retained_rdf.maximum_row_bytes)
             || attestation.ontology_annotation_count != structural_counts.ontology_annotations
             || attestation.stored_axiom_count != structural_counts.stored_axioms
             || attestation.effective_axiom_count != structural_counts.effective_axioms
@@ -1102,11 +1137,12 @@ impl PublicationStorageV2 {
                 "typed V2 structural owner diverges from its attestation",
             ));
         }
-        let expected_capability_bits = if retains_origins { 7 | 16 } else { 7 };
+        let expected_capability_bits =
+            7 | if retains_origins { 16 } else { 0 } | if retained_rdf.present { 32 } else { 0 };
         if attestation.capability_bits != expected_capability_bits
             || attestation.source_map_entry_count != 0
             || attestation.origin_entry_count != origin_count
-            || attestation.rdf_mapping_report_count != 0
+            || attestation.rdf_mapping_report_count != u64::from(retained_rdf.present)
             || attestation.owl2_dl_report_summary.is_some()
             || attestation.owl2_dl_validated
             || attestation.owl2_dl_conforms.is_some()
@@ -1129,7 +1165,14 @@ impl PublicationStorageV2 {
         let typed_structural = Arc::new(typed_structural);
         let mut initial = typed_initial_counters(&typed_structural, &attestation)?;
         initial[PARSER_BYTES] = parser_bytes;
-        let retained_origins = retain_origin_tables_v2(origins)?;
+        let mut retained_origins = retain_origin_tables_v2(origins)?;
+        retained_origins
+            .effective_tables
+            .extend(retained_rdf.effective_tables);
+        retained_origins
+            .effective_tables
+            .sort_unstable_by_key(|table| table.coordinate);
+        reject_duplicate_coordinates(&retained_origins.effective_tables)?;
         if retains_origins {
             initial[RETAINED_ROW_FIRST + 5] = origin_count
                 .checked_mul(2)
@@ -1155,6 +1198,33 @@ impl PublicationStorageV2 {
             {
                 return Err(NativeError::limit(
                     "typed V2 origin attachment exceeds max_memory_bytes",
+                ));
+            }
+            validate_retained_total(&initial)?;
+        }
+        if retained_rdf.present {
+            for (offset, count) in retained_rdf.row_counts.into_iter().enumerate() {
+                initial[RETAINED_ROW_FIRST + 6 + offset] = count;
+            }
+            initial[RETAINED_RDF_BYTES] = retained_rdf.payload_bytes;
+            initial[RETAINED_METADATA_BYTES] = checked_add(
+                initial[RETAINED_METADATA_BYTES],
+                retained_rdf.metadata_bytes,
+            )?;
+            let retained_delta =
+                checked_add(retained_rdf.payload_bytes, retained_rdf.metadata_bytes)?;
+            initial[RETAINED_OWNER_BYTES] =
+                checked_add(initial[RETAINED_OWNER_BYTES], retained_delta)?;
+            initial[PEAK_BUILDER_BYTES] =
+                initial[PEAK_BUILDER_BYTES].max(initial[RETAINED_OWNER_BYTES]);
+            initial[PEAK_FREEZE_BYTES] =
+                initial[PEAK_FREEZE_BYTES].max(initial[RETAINED_OWNER_BYTES]);
+            if typed_structural
+                .max_memory_bytes()
+                .is_some_and(|maximum| initial[RETAINED_OWNER_BYTES] > maximum)
+            {
+                return Err(NativeError::limit(
+                    "typed V2 RDF report attachment exceeds max_memory_bytes",
                 ));
             }
             validate_retained_total(&initial)?;
@@ -1551,6 +1621,151 @@ fn retain_origin_tables_v2(rows: Vec<Vec<u8>>) -> NativeResult<RetainedOriginTab
         effective_tables,
         payload_bytes,
         metadata_bytes,
+    })
+}
+
+#[derive(Debug, Default)]
+struct RetainedRdfTablesV2 {
+    effective_tables: Vec<FacadeTableV2>,
+    row_counts: [u64; 4],
+    payload_bytes: u64,
+    metadata_bytes: u64,
+    maximum_row_bytes: u64,
+    present: bool,
+}
+
+fn retain_rdf_tables_v2(report: Option<TypedRdfReportRowsV2>) -> NativeResult<RetainedRdfTablesV2> {
+    let Some(report) = report else {
+        return Ok(RetainedRdfTablesV2 {
+            maximum_row_bytes: 1,
+            ..RetainedRdfTablesV2::default()
+        });
+    };
+    if report.header.len() != 17 || report.header[0] > 1 {
+        return Err(NativeError::protocol(
+            "typed V2 RDF report header is malformed",
+        ));
+    }
+    let consumed = u64::from_le_bytes(
+        report.header[1..9]
+            .try_into()
+            .map_err(|_| NativeError::protocol("typed V2 RDF consumed count is truncated"))?,
+    );
+    let total = u64::from_le_bytes(
+        report.header[9..17]
+            .try_into()
+            .map_err(|_| NativeError::protocol("typed V2 RDF total count is truncated"))?,
+    );
+    let conformant = report.header[0] == 1;
+    if consumed > total
+        || (conformant && consumed != total)
+        || (conformant && !report.unconsumed_triples.is_empty())
+    {
+        return Err(NativeError::protocol(
+            "typed V2 RDF report counts or conformance diverge",
+        ));
+    }
+
+    let collections = [
+        (CollectionV2::RdfReportHeader, vec![report.header]),
+        (
+            CollectionV2::RdfUnconsumedTriples,
+            report.unconsumed_triples,
+        ),
+        (CollectionV2::RdfRuleIds, report.rule_ids),
+        (CollectionV2::RdfDiagnostics, report.diagnostics),
+    ];
+    let mut result = RetainedRdfTablesV2 {
+        maximum_row_bytes: 1,
+        present: true,
+        ..RetainedRdfTablesV2::default()
+    };
+    result
+        .effective_tables
+        .try_reserve_exact(collections.len())
+        .map_err(|_| NativeError::limit("typed V2 RDF table allocation failed"))?;
+    result.metadata_bytes = checked_add(
+        result.metadata_bytes,
+        u64::try_from(
+            result
+                .effective_tables
+                .capacity()
+                .checked_mul(size_of::<FacadeTableV2>())
+                .ok_or_else(|| NativeError::limit("typed V2 RDF table size overflow"))?,
+        )
+        .map_err(|_| NativeError::limit("typed V2 RDF table size exceeds u64"))?,
+    )?;
+    for (offset, (collection, rows)) in collections.into_iter().enumerate() {
+        result.row_counts[offset] = u64::try_from(rows.len())
+            .map_err(|_| NativeError::limit("typed V2 RDF row count exceeds u64"))?;
+        if rows.is_empty() {
+            continue;
+        }
+        let retained = retain_auxiliary_rows_v2(rows, "typed V2 RDF")?;
+        result.payload_bytes = checked_add(result.payload_bytes, retained.payload_bytes)?;
+        result.metadata_bytes = checked_add(result.metadata_bytes, retained.metadata_bytes)?;
+        result.maximum_row_bytes = result.maximum_row_bytes.max(retained.maximum_row_bytes);
+        result.effective_tables.push(FacadeTableV2 {
+            coordinate: CoordinateV2 {
+                collection,
+                scope: ScopeV2::Document,
+                document_ordinal: Some(0),
+                signature_kind: SignatureKindV2::All,
+                include_builtins: true,
+            },
+            rows: retained.rows,
+            source_identity: 0,
+        });
+    }
+    Ok(result)
+}
+
+struct RetainedAuxiliaryRowsV2 {
+    rows: Vec<Arc<Vec<u8>>>,
+    payload_bytes: u64,
+    metadata_bytes: u64,
+    maximum_row_bytes: u64,
+}
+
+fn retain_auxiliary_rows_v2(
+    rows: Vec<Vec<u8>>,
+    label: &'static str,
+) -> NativeResult<RetainedAuxiliaryRowsV2> {
+    let mut retained = Vec::new();
+    retained
+        .try_reserve_exact(rows.len())
+        .map_err(|_| NativeError::limit(label))?;
+    let mut payload_bytes = 0_u64;
+    let mut metadata_bytes = u64::try_from(
+        retained
+            .capacity()
+            .checked_mul(size_of::<Arc<Vec<u8>>>())
+            .ok_or_else(|| NativeError::limit(label))?,
+    )
+    .map_err(|_| NativeError::limit(label))?;
+    let mut maximum_row_bytes = 1_u64;
+    for row in rows {
+        if row.is_empty() {
+            return Err(NativeError::protocol("typed V2 RDF auxiliary row is empty"));
+        }
+        let payload = u64::try_from(row.len()).map_err(|_| NativeError::limit(label))?;
+        let allocation = u64::try_from(arc_vec_allocation_bytes(row.capacity())?)
+            .map_err(|_| NativeError::limit(label))?;
+        payload_bytes = checked_add(payload_bytes, payload)?;
+        metadata_bytes = checked_add(
+            metadata_bytes,
+            allocation.checked_sub(payload).ok_or_else(|| {
+                NativeError::protocol("typed V2 RDF allocation accounting underflow")
+            })?,
+        )?;
+        maximum_row_bytes = maximum_row_bytes.max(payload);
+        retained.push(Arc::new(row));
+    }
+    Ok(RetainedAuxiliaryRowsV2 {
+        rows: retained,
+        payload_bytes,
+        metadata_bytes,
+        maximum_row_bytes,
     })
 }
 
@@ -3296,6 +3511,43 @@ mod tests {
         assert_eq!(counters[RETAINED_ORIGIN_BYTES], origin.len() as u64);
         assert!(counters[RETAINED_METADATA_BYTES] > 0);
         validate_retained_total(&counters).expect("origin owner counters");
+    }
+
+    #[test]
+    fn typed_structural_owner_retains_lazy_rdf_report_rows() {
+        let (typed, canonical) = typed_structural_owner();
+        let mut header = vec![1];
+        header.extend_from_slice(&3_u64.to_le_bytes());
+        header.extend_from_slice(&3_u64.to_le_bytes());
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.capability_bits |= 32;
+        attestation.rdf_mapping_report_count = 1;
+        attestation.max_facade_row_bytes = canonical.len().max(header.len()) as u64;
+        let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
+            attestation,
+            typed,
+            None,
+            Some(TypedRdfReportRowsV2 {
+                header: header.clone(),
+                unconsumed_triples: Vec::new(),
+                rule_ids: Vec::new(),
+                diagnostics: Vec::new(),
+            }),
+            0,
+        )
+        .expect("typed publication with RDF report");
+
+        let rows = storage.rows(
+            coordinate(CollectionV2::RdfReportHeader, ScopeV2::Document, Some(0)),
+            false,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].as_slice(), header);
+        let counters = storage.counters.snapshot();
+        assert_eq!(counters[RETAINED_ROW_FIRST + 6], 1);
+        assert_eq!(counters[RETAINED_RDF_BYTES], header.len() as u64);
+        assert!(counters[RETAINED_METADATA_BYTES] > 0);
+        validate_retained_total(&counters).expect("RDF owner counters");
     }
 
     #[test]
