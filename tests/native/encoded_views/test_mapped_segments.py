@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,6 +24,8 @@ def test_mapped_composite_reads_anonymous_lineage_from_columns_without_materiali
     second_path.write_bytes(pyowl_core.encode_snapshot(second_source))
     first = pyowl_core.open_snapshot(first_path, mmap=True, verify=True)
     second = pyowl_core.open_snapshot(second_path, mmap=True, verify=True)
+    assert isinstance(first, pyowl_core.MappedOntologySnapshot)
+    assert isinstance(second, pyowl_core.MappedOntologySnapshot)
     composite = pyowl_core.compose_views(first, second, roles=("left", "right"))
     expected = scalar_root_bytes(
         pyowl_core.compose_views(first_source, second_source, roles=("left", "right"))
@@ -39,3 +42,10 @@ def test_mapped_composite_reads_anonymous_lineage_from_columns_without_materiali
     assert decoded.proof.referenced_buffer_copy_bytes == 0
     assert any(cast(Any, value).owner is first for value in decoded.proof.retained_views)
     assert any(cast(Any, value).owner is second for value in decoded.proof.retained_views)
+
+    del decoded, encoded, composite
+    gc.collect()
+    first.close()
+    second.close()
+    assert first.closed
+    assert second.closed
