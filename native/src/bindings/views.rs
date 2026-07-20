@@ -4,6 +4,8 @@
 //! functions/classes and feature names here without editing the shared module
 //! registry or the ingestion module.
 
+use std::sync::Arc;
+
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyDict, PyMemoryView, PyModule, PySlice, PyString, PyTuple};
 
@@ -49,18 +51,80 @@ pub(super) const FEATURES: &[&str] = &[];
 
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
     _module.add_class::<NativeRetainedAxiomTypeIndexV1>()?;
+    _module.add_class::<NativeRetainedOntologyIdentityIndexV1>()?;
     _module.add_function(wrap_pyfunction!(_encoded_structural_columns_v1, _module)?)?;
     _module.add_function(wrap_pyfunction!(
         _encoded_structural_document_columns_v1,
         _module
     )?)?;
     _module.add_function(wrap_pyfunction!(_retained_axiom_type_index_v1, _module)?)?;
+    _module.add_function(wrap_pyfunction!(
+        _retained_ontology_identity_index_v1,
+        _module
+    )?)?;
     #[cfg(feature = "test-hooks")]
     {
         _module.add_function(wrap_pyfunction!(_encoded_view_schema_v1, _module)?)?;
         _module.add_function(wrap_pyfunction!(_encoded_structural_fixture_v1, _module)?)?;
     }
     Ok(())
+}
+
+/// Private O(1) owner for the identity/import/diagnostic readiness metadata
+/// attested by the exact retained publication. No successor capability is
+/// advertised until the installed-path matrix closes.
+#[pyclass(
+    module = "pyowl_core._native",
+    frozen,
+    name = "_NativeRetainedOntologyIdentityIndexV1",
+    skip_from_py_object
+)]
+struct NativeRetainedOntologyIdentityIndexV1 {
+    storage: Arc<crate::publication::PublicationStorageV2>,
+}
+
+type PyRetainedOntologyIdentityLayoutV1 = (
+    Py<PyString>,
+    Py<PyBytes>,
+    Py<PyBytes>,
+    Py<PyBytes>,
+    Py<PyDict>,
+);
+
+#[pymethods]
+impl NativeRetainedOntologyIdentityIndexV1 {
+    fn _layout_v1<'py>(&self, py: Python<'py>) -> PyResult<PyRetainedOntologyIdentityLayoutV1> {
+        let contract = self.storage.retained_ontology_identity_contract_v1();
+        let counters = PyDict::new(py);
+        for (name, value) in [
+            ("document_count", contract.document_count),
+            ("import_edge_count", contract.import_edge_count),
+            ("diagnostic_count", contract.diagnostic_count),
+            ("retained_owner_bytes", contract.retained_owner_bytes),
+            ("complete_root_encode_calls", 0),
+        ] {
+            counters.set_item(name, value)?;
+        }
+        Ok((
+            PyString::new(py, contract.root_document_key).unbind(),
+            PyBytes::new(py, contract.metadata_manifest_sha256).unbind(),
+            PyBytes::new(py, contract.diagnostics_manifest_sha256).unbind(),
+            PyBytes::new(py, contract.report_sha256).unbind(),
+            counters.unbind(),
+        ))
+    }
+}
+
+/// Retain the exact publication storage used by the public ontology identity
+/// index without traversing or encoding structural roots.
+#[pyfunction]
+fn _retained_ontology_identity_index_v1(
+    py: Python<'_>,
+    handle: PyRef<'_, NativeSnapshotHandle>,
+) -> PyResult<NativeRetainedOntologyIdentityIndexV1> {
+    let storage = handle.encoded_storage_v2(py)?;
+    drop(handle);
+    Ok(NativeRetainedOntologyIdentityIndexV1 { storage })
 }
 
 /// Private owner for constructor postings built directly over retained arena

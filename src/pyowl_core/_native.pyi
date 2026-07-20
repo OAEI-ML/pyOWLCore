@@ -69,6 +69,11 @@ class _NativeRetainedAxiomTypeIndexV1:
         dict[str, int],
     ]: ...
 
+class _NativeRetainedOntologyIdentityIndexV1:
+    def _layout_v1(
+        self,
+    ) -> tuple[str, bytes, bytes, bytes, dict[str, int]]: ...
+
 def version() -> tuple[str, int]: ...
 def self_test() -> None: ...
 def validate_canonical(
@@ -116,6 +121,9 @@ def _retained_axiom_type_index_v1(
     config: object,
     cancel: _Cancellation | None = None,
 ) -> _NativeRetainedAxiomTypeIndexV1: ...
+def _retained_ontology_identity_index_v1(
+    handle: _NativeSnapshotHandle,
+) -> _NativeRetainedOntologyIdentityIndexV1: ...
 def _retain_structural_snapshot_v2(
     documents: object,
     origins: object,

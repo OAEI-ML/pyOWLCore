@@ -37,6 +37,7 @@ class OntologyIdentityIndex:
         metadata: _OntologyIdentityMetadata,
         sources: tuple[OntologyIdentityIndex, ...],
         report: ViewBuildReport,
+        native_owner: object | None = None,
     ) -> None:
         self._ontology = ontology
         self._metadata = metadata
@@ -47,6 +48,7 @@ class OntologyIdentityIndex:
         self.loader_diagnostics_digest = metadata.loader_diagnostics_digest
         self.is_complete = metadata.is_complete
         self.report = report
+        self._native_owner = native_owner
 
     @classmethod
     def _build(
@@ -131,6 +133,13 @@ class OntologyIdentityIndex:
         metadata = metadata_method(cancellation_token=cancellation_token)
         if not isinstance(metadata, _OntologyIdentityMetadata):
             raise TypeError("ontology identity metadata provider returned an invalid value")
+        native_owner = None
+        if getattr(ontology, "_native_snapshot_state", None) is not None:
+            from pyowl_core.backends.native import (
+                _retained_ontology_identity_index_owner_v1,
+            )
+
+            native_owner = _retained_ontology_identity_index_owner_v1(ontology)
         for document in metadata.documents:
             budget.add("document_identities", bytes_=_identity_size(document))
         return cls(
@@ -138,6 +147,7 @@ class OntologyIdentityIndex:
             metadata,
             (),
             build_report(cls, ViewBuildStrategy.FULL_BUILD, budget, started),
+            native_owner,
         )
 
 

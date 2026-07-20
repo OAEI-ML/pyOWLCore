@@ -93,6 +93,12 @@ class _NativeRetainedAxiomTypeIndex(Protocol):
     ]: ...
 
 
+class _NativeRetainedOntologyIdentityIndex(Protocol):
+    def _layout_v1(
+        self,
+    ) -> tuple[str, bytes, bytes, bytes, dict[str, int]]: ...
+
+
 class _Extension(Protocol):
     ABI_VERSION: int
     MODEL_SCHEMA_VERSION: int
@@ -737,6 +743,121 @@ def _retained_axiom_partition_v1(
         counters["canonical_work"],
         counters["complete_root_encode_calls"],
     )
+
+
+def _retained_ontology_identity_index_owner_v1(
+    ontology: OntologyView,
+) -> _NativeRetainedOntologyIdentityIndex | None:
+    """Retain attested identity/import/diagnostic metadata without root work."""
+
+    state = getattr(ontology, "_native_snapshot_state", None)
+    owner_state = getattr(state, "owner", None)
+    handle = getattr(owner_state, "handle", None)
+    if handle is None:
+        return None
+    try:
+        raw_owner = object.__getattribute__(handle, "_owner_v2")
+    except AttributeError:
+        return None
+    try:
+        extension = cast(_Extension, importlib.import_module(type(raw_owner).__module__))
+    except (ImportError, ValueError):
+        return None
+    raw_operation = getattr(extension, "_retained_ontology_identity_index_v1", None)
+    owner_type = getattr(extension, "_NativeRetainedOntologyIdentityIndexV1", None)
+    attestation_method = getattr(handle, "_attestation_v2", None)
+    if (
+        not callable(raw_operation)
+        or not isinstance(owner_type, type)
+        or not callable(attestation_method)
+    ):
+        return None
+    attestation = attestation_method()
+    expected_root = getattr(attestation, "root_document_key", None)
+    expected_metadata = getattr(attestation, "metadata_manifest_sha256", None)
+    expected_diagnostics = getattr(attestation, "diagnostics_manifest_sha256", None)
+    expected_report = getattr(attestation, "report_sha256", None)
+    expected_counts = {
+        "document_count": getattr(attestation, "document_count", None),
+        "import_edge_count": getattr(attestation, "import_edge_count", None),
+        "diagnostic_count": getattr(attestation, "diagnostic_count", None),
+    }
+    if (
+        type(expected_root) is not str
+        or not expected_root
+        or any(type(value) is not bytes or len(value) != 32 for value in (
+            expected_metadata,
+            expected_diagnostics,
+            expected_report,
+        ))
+        or any(type(value) is not int or value < 0 for value in expected_counts.values())
+    ):
+        raise BackendProtocolError(
+            "native retained identity attestation is invalid",
+            code="NATIVE_INDEX_RESULT",
+        )
+    operation = cast(Callable[[object], object], raw_operation)
+    raw_index = _call_index_value(extension, lambda: operation(raw_owner))
+    if type(raw_index) is not owner_type:
+        raise BackendProtocolError(
+            "native retained identity index returned an invalid owner",
+            code="NATIVE_INDEX_RESULT",
+        )
+    layout = cast(_NativeRetainedOntologyIdentityIndex, raw_index)._layout_v1()
+    if type(layout) is not tuple or len(layout) != 5:
+        raise BackendProtocolError(
+            "native retained identity index returned invalid framing",
+            code="NATIVE_INDEX_RESULT",
+        )
+    root_document_key, metadata_digest, diagnostic_digest, report_digest, counters = layout
+    expected_counter_names = {
+        "document_count",
+        "import_edge_count",
+        "diagnostic_count",
+        "retained_owner_bytes",
+        "complete_root_encode_calls",
+    }
+    if (
+        type(root_document_key) is not str
+        or not root_document_key
+        or any(type(value) is not bytes or len(value) != 32 for value in (
+            metadata_digest,
+            diagnostic_digest,
+            report_digest,
+        ))
+        or type(counters) is not dict
+        or set(counters) != expected_counter_names
+        or any(type(value) is not int or value < 0 for value in counters.values())
+    ):
+        raise BackendProtocolError(
+            "native retained identity index returned invalid metadata",
+            code="NATIVE_INDEX_RESULT",
+        )
+    manifest = getattr(ontology, "import_manifest", None)
+    manifest_documents = getattr(manifest, "documents", None)
+    manifest_edges = getattr(manifest, "edges", None)
+    public_root = getattr(ontology, "root_document_key", None)
+    if (
+        root_document_key != expected_root
+        or root_document_key != public_root
+        or metadata_digest != expected_metadata
+        or diagnostic_digest != expected_diagnostics
+        or report_digest != expected_report
+        or counters["document_count"] != expected_counts["document_count"]
+        or counters["import_edge_count"] != expected_counts["import_edge_count"]
+        or counters["diagnostic_count"] != expected_counts["diagnostic_count"]
+        or type(manifest_documents) is not tuple
+        or type(manifest_edges) is not tuple
+        or counters["document_count"] != len(manifest_documents)
+        or counters["import_edge_count"] != len(manifest_edges)
+        or counters["retained_owner_bytes"] == 0
+        or counters["complete_root_encode_calls"] != 0
+    ):
+        raise BackendProtocolError(
+            "native retained identity index diverges from its publication",
+            code="NATIVE_INDEX_RESULT",
+        )
+    return cast(_NativeRetainedOntologyIdentityIndex, raw_index)
 
 
 def encode_snapshot(

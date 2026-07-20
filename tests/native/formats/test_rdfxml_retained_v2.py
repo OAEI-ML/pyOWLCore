@@ -398,6 +398,7 @@ def test_private_record_unresolved_policy_matches_python_without_resolver() -> N
 
 def test_private_rdfxml_identity_wire_and_mmap_owners_avoid_scalar_materialization(
     tmp_path: Path,
+    extension: NativeTestExtension,
 ) -> None:
     def options(backend: BackendPreference) -> LoadOptions:
         return LoadOptions(
@@ -434,6 +435,15 @@ def test_private_rdfxml_identity_wire_and_mmap_owners_avoid_scalar_materializati
         == reference_identity.loader_diagnostics_digest
     )
     assert selected_identity.is_complete is reference_identity.is_complete is False
+    identity_owner = cast(Any, selected_identity)._native_owner
+    assert (
+        type(identity_owner)
+        is cast(Any, extension)._NativeRetainedOntologyIdentityIndexV1
+    )
+    *_identity_layout, identity_counters = identity_owner._layout_v1()
+    assert identity_counters["document_count"] == 1
+    assert identity_counters["import_edge_count"] == 1
+    assert identity_counters["complete_root_encode_calls"] == 0
     assert after_identity_owner == before_owner
     assert after_identity_python == before_python
 

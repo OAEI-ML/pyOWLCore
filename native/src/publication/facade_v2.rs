@@ -759,6 +759,18 @@ pub(crate) struct PublicationStorageV2 {
     counters: CounterStateV2,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RetainedOntologyIdentityContractV1<'a> {
+    pub(crate) root_document_key: &'a str,
+    pub(crate) metadata_manifest_sha256: &'a Digest,
+    pub(crate) diagnostics_manifest_sha256: &'a Digest,
+    pub(crate) report_sha256: &'a Digest,
+    pub(crate) document_count: u64,
+    pub(crate) import_edge_count: u64,
+    pub(crate) diagnostic_count: u64,
+    pub(crate) retained_owner_bytes: u64,
+}
+
 #[derive(Debug)]
 pub(crate) struct TypedRdfReportRowsV2 {
     pub(crate) header: Vec<u8>,
@@ -774,6 +786,21 @@ impl PublicationStorageV2 {
 
     pub(super) const fn document_count(&self) -> u64 {
         self.attestation.document_count
+    }
+
+    pub(crate) fn retained_ontology_identity_contract_v1(
+        &self,
+    ) -> RetainedOntologyIdentityContractV1<'_> {
+        RetainedOntologyIdentityContractV1 {
+            root_document_key: &self.attestation.root_document_key,
+            metadata_manifest_sha256: &self.attestation.metadata_manifest_sha256,
+            diagnostics_manifest_sha256: &self.attestation.diagnostics_manifest_sha256,
+            report_sha256: &self.attestation.report_sha256,
+            document_count: self.attestation.document_count,
+            import_edge_count: self.attestation.import_edge_count,
+            diagnostic_count: self.attestation.diagnostic_count,
+            retained_owner_bytes: self.counters.snapshot()[RETAINED_OWNER_BYTES],
+        }
     }
 
     pub(super) fn bump_close(&self, transitioned: bool) -> PyResult<()> {
@@ -3446,6 +3473,24 @@ mod tests {
         }
         .typed()
         .is_none());
+    }
+
+    #[test]
+    fn retained_identity_contract_borrows_attested_metadata_without_root_work() {
+        let storage = PublicationStorageV2::fixture_for_tests();
+        let before = storage.counters.snapshot();
+
+        let contract = storage.retained_ontology_identity_contract_v1();
+
+        assert_eq!(contract.root_document_key, "d1:test");
+        assert_eq!(contract.metadata_manifest_sha256, &[1; 32]);
+        assert_eq!(contract.diagnostics_manifest_sha256, &[8; 32]);
+        assert_eq!(contract.report_sha256, &[12; 32]);
+        assert_eq!(contract.document_count, 1);
+        assert_eq!(contract.import_edge_count, 0);
+        assert_eq!(contract.diagnostic_count, 0);
+        assert_eq!(contract.retained_owner_bytes, 0);
+        assert_eq!(storage.counters.snapshot(), before);
     }
 
     #[test]
