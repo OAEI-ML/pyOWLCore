@@ -56,6 +56,13 @@ class AxiomCategory(str, Enum):
     ANNOTATION = "annotation"
 
 
+_NATIVE_CATEGORY_CODES = {
+    AxiomCategory.DECLARATION: 1,
+    AxiomCategory.LOGICAL: 2,
+    AxiomCategory.ANNOTATION: 3,
+}
+
+
 CATEGORY_TYPES: FrozenMap[AxiomCategory, tuple[type[AxiomNode], ...]] = FrozenMap(
     {
         AxiomCategory.DECLARATION: DECLARATION_AXIOM_TYPES,
@@ -395,6 +402,23 @@ class AxiomTypeIndex:
         return sum(1 for _ in self.iter(axiom_type))
 
     def count_category(self, category: AxiomCategory | str | object) -> int:
+        selected = _category(category)
+        if (
+            self._native_partition is not None
+            and not self._postings
+            and not self._sources
+            and not self._additions
+            and not self._removals
+        ):
+            code = _NATIVE_CATEGORY_CODES[selected]
+            try:
+                group = self._native_partition.category_codes.index(code)
+            except ValueError:
+                return 0
+            return (
+                self._native_partition.category_offsets[group + 1]
+                - self._native_partition.category_offsets[group]
+            )
         return sum(1 for _ in self.iter_category(category))
 
     def tuple(self, axiom_type: type[A], *, limit: int | None = None) -> tuple[A, ...]:

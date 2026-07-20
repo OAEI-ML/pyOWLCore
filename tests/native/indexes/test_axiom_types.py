@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import struct
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -26,8 +27,13 @@ from pyowl_core import (
 from pyowl_core.backends import native
 from pyowl_core.cancellation import CancellationSource
 from pyowl_core.exceptions import BackendProtocolError, OperationCancelledError, ResourceLimitError
-from pyowl_core.index import AxiomTypeIndex, ViewBuildStrategy
-from pyowl_core.model import AXIOM_TYPES
+from pyowl_core.index import AxiomCategory, AxiomTypeIndex, ViewBuildStrategy
+from pyowl_core.model import (
+    ANNOTATION_AXIOM_TYPES,
+    AXIOM_TYPES,
+    DECLARATION_AXIOM_TYPES,
+    LOGICAL_AXIOM_TYPES,
+)
 from tests.native.foundation._support import NativeTestExtension, load_extension
 
 
@@ -166,6 +172,61 @@ def test_retained_owner_protocol_failure_does_not_fall_back(
     ):
         snapshot.view(AxiomTypeIndex)
     assert raised.value.code == "NATIVE_INDEX_RESULT"
+
+
+def test_retained_category_counts_use_only_native_layout_metadata() -> None:
+    source = (
+        b"Ontology(<urn:category-counts> "
+        b"Declaration(Class(<urn:category-counts:A>)) "
+        b"SubClassOf(<urn:category-counts:A> <urn:category-counts:B>) "
+        b"AnnotationAssertion(<urn:category-counts:p> <urn:category-counts:A> "
+        b'"value"))'
+    )
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+        )
+    reference = load_snapshot(source, options=options(BackendPreference.PYTHON)).view(
+        AxiomTypeIndex
+    )
+    snapshot = cast(
+        Any,
+        load_snapshot(source, options=options(BackendPreference.NATIVE)),
+    )
+    selected = snapshot.view(AxiomTypeIndex)
+    owner = cast(Any, selected)._native_owner
+    before_python = snapshot._native_python_counters()
+
+    expected_types = {
+        AxiomCategory.DECLARATION: DECLARATION_AXIOM_TYPES,
+        AxiomCategory.LOGICAL: LOGICAL_AXIOM_TYPES,
+        AxiomCategory.ANNOTATION: ANNOTATION_AXIOM_TYPES,
+    }
+    for category, constructors in expected_types.items():
+        expected = sum(reference.count(constructor) for constructor in constructors)
+        assert selected.count_category(category) == expected
+        assert selected.count_category(category.value) == expected
+
+    after_python = snapshot._native_python_counters()
+    assert after_python.model_rows_materialized == before_python.model_rows_materialized
+    assert owner._layout_v1()[-1]["complete_root_encode_calls"] == 0
+
+
+def test_retained_postings_support_concurrent_reads_after_snapshot_close() -> None:
+    reference = _snapshot("concurrent-owner", BackendPreference.PYTHON).view(AxiomTypeIndex)
+    snapshot = cast(Any, _snapshot("concurrent-owner", BackendPreference.NATIVE))
+    selected = snapshot.view(AxiomTypeIndex)
+    owner = cast(Any, selected)._native_owner
+    expected = _rows(reference)
+
+    snapshot.close()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = tuple(executor.map(lambda _ordinal: _rows(selected), range(16)))
+
+    assert all(rows == expected for rows in results)
+    assert owner._layout_v1()[-1]["complete_root_encode_calls"] == 16 * len(expected)
 
 
 def test_auto_keeps_small_index_builds_on_python() -> None:
