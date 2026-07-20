@@ -126,6 +126,19 @@ class PythonParser:
             )
         forced = explicit or selected_options.format
         iri = _coerce_iri(document_iri)
+        preselected_backend: str | None = None
+        if selected_options.backend is BackendPreference.NATIVE and forced is not None:
+            # An explicitly formatted forced-native request has enough
+            # information to prove capability before opening or reading the
+            # source. This keeps unsupported formats outside acquisition and
+            # prevents a private/incomplete parser from becoming a fallback.
+            from pyowl_core.backends.dispatch import select_backend
+
+            preselected_backend = select_backend(
+                selected_options.backend,
+                capability=f"parse-{forced.value}-v1",
+                operation=f"{forced.value} document parse",
+            ).backend
         payload = acquire_source(
             source,
             format=forced,
@@ -142,11 +155,15 @@ class PythonParser:
             media_type=media_type,
             extension=payload.extension,
         )
-        selected_backend = "python"
-        if selected_options.backend is not BackendPreference.PYTHON and not (
-            selected_options.backend is BackendPreference.AUTO
-            and detection.format is DocumentFormat.FUNCTIONAL
-            and len(payload.data) < _NATIVE_AUTO_MIN_SOURCE_BYTES
+        selected_backend = preselected_backend or "python"
+        if (
+            preselected_backend is None
+            and selected_options.backend is not BackendPreference.PYTHON
+            and not (
+                selected_options.backend is BackendPreference.AUTO
+                and detection.format is DocumentFormat.FUNCTIONAL
+                and len(payload.data) < _NATIVE_AUTO_MIN_SOURCE_BYTES
+            )
         ):
             from pyowl_core.backends.dispatch import select_backend
 
