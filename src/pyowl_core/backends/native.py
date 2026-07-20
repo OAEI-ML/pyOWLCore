@@ -12,7 +12,7 @@ import sysconfig
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.exceptions import (
@@ -150,6 +150,7 @@ class _CachedRuntime:
 
 _probe_lock = threading.Lock()
 _cached_runtime: _CachedRuntime | None = None
+T = TypeVar("T")
 
 
 def _after_fork_child() -> None:
@@ -630,7 +631,7 @@ def _relay(
     return _Relay(extension, limits, token)
 
 
-def _call(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
+def _call(extension: _Extension, operation: Callable[[], T]) -> T:
     try:
         return operation()
     except (MemoryError, KeyboardInterrupt, SystemExit):

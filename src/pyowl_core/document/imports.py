@@ -521,6 +521,13 @@ class SnapshotLoader:
             acquisition_cache_hits=counters["acquisition_cache_hits"],
             document_cache_hits=counters["document_cache_hits"],
         )
+        if selected.backend is BackendPreference.NATIVE:
+            from pyowl_core.backends.native_ingestion import retain_forced_native_snapshot_v2
+
+            snapshot = retain_forced_native_snapshot_v2(
+                snapshot,
+                cancellation_token=cancellation_token,
+            )
         for diagnostic in diagnostics:
             warnings.warn(diagnostic.message, UnresolvedImportWarning, stacklevel=3)
         return snapshot

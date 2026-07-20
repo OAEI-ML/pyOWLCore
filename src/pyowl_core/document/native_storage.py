@@ -1075,7 +1075,9 @@ def _validation_issue(
     value: object,
     expected: type[NativeOWL2DLIssueRowV2] | type[NativeOWL2DLStructuralIssueRowV2],
 ) -> ValidationIssue:
-    if type(value) is not expected:
+    if type(value) is not expected or not isinstance(
+        value, (NativeOWL2DLIssueRowV2, NativeOWL2DLStructuralIssueRowV2)
+    ):
         raise BackendProtocolError(
             "native OWL 2 DL issue collection has the wrong row type",
             code="NATIVE_OWL2_DL_REPORT",

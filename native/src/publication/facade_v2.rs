@@ -2504,7 +2504,7 @@ impl NativeSnapshotAttestationV2 {
     }
 
     #[cfg(feature = "test-hooks")]
-    fn from_python(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+    pub(super) fn from_python(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let selected = Self {
             version: value.getattr("version")?.extract()?,
             ledger_sha256: digest_attr(value, "ledger_sha256")?,

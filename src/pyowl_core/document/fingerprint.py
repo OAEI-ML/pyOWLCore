@@ -138,6 +138,31 @@ def snapshot_structural_fingerprint(
     return Fingerprint("sha256", 1, hasher.digest())
 
 
+def snapshot_structural_fingerprint_bytes(
+    manifest: ImportManifest,
+    documents: Iterable[
+        tuple[
+            str,
+            Iterable[Annotation],
+            Iterable[AxiomNode],
+            Iterable[StructuralNode],
+        ]
+    ],
+) -> bytes:
+    """Return the authoritative snapshot-structural fingerprint preimage."""
+
+    pieces = [
+        b"pyowl-core:snapshot-structural:v1\x00",
+        _frame(manifest.canonical_bytes()),
+    ]
+    for key, annotation_values, axioms, extensions in documents:
+        pieces.append(_frame(key.encode("ascii")))
+        pieces.extend(_collection_parts(annotation_values))
+        pieces.extend(_collection_parts(axioms))
+        pieces.extend(_collection_parts(extensions))
+    return b"".join(pieces)
+
+
 def effective_structural_fingerprint(
     context: StructuralContext,
     annotations: Iterable[Annotation],
@@ -184,6 +209,30 @@ def logical_fingerprint(
     return Fingerprint("sha256", 1, hashlib.sha256(b"".join(pieces)).digest())
 
 
+def logical_fingerprint_bytes(
+    axioms: Iterable[AxiomNode], extensions: Iterable[StructuralNode]
+) -> bytes:
+    """Return the authoritative annotation-free logical fingerprint preimage."""
+
+    logical = {
+        canonical_bytes(without_axiom_annotations(item))
+        for item in axioms
+        if isinstance(item, LOGICAL_AXIOM_TYPES)
+    }
+    extension_values = tuple(
+        sorted({canonical_bytes(without_annotations(item)) for item in extensions})
+    )
+    pieces = [
+        b"pyowl-core:snapshot-logical:v1\x00",
+        b"datatype-policy:owl2-v1\x00",
+        encode_varint(len(logical)),
+    ]
+    pieces.extend(_frame(item) for item in sorted(logical))
+    pieces.append(encode_varint(len(extension_values)))
+    pieces.extend(b"E" + _frame(item) for item in extension_values)
+    return b"".join(pieces)
+
+
 def signature_fingerprint(
     values: Iterable[Entity], *, include_builtins: bool = True
 ) -> Fingerprint:
@@ -199,6 +248,23 @@ def signature_fingerprint(
     ]
     pieces.extend(_frame(item) for item in members)
     return Fingerprint("sha256", 1, hashlib.sha256(b"".join(pieces)).digest())
+
+
+def signature_fingerprint_bytes(
+    values: Iterable[Entity], *, include_builtins: bool = True
+) -> bytes:
+    """Return the authoritative effective-signature fingerprint preimage."""
+
+    if not isinstance(include_builtins, bool):
+        raise TypeError("include_builtins must be bool")
+    members = sorted({canonical_bytes(item) for item in values})
+    pieces = [
+        b"pyowl-core:snapshot-signature:v1\x00",
+        bytes((int(include_builtins),)),
+        encode_varint(len(members)),
+    ]
+    pieces.extend(_frame(item) for item in members)
+    return b"".join(pieces)
 
 
 def without_axiom_annotations(value: AxiomNode) -> AxiomNode:
@@ -253,8 +319,11 @@ __all__ = [
     "effective_structural_fingerprint",
     "fingerprint_bytes",
     "logical_fingerprint",
+    "logical_fingerprint_bytes",
     "signature_fingerprint",
+    "signature_fingerprint_bytes",
     "snapshot_structural_fingerprint",
+    "snapshot_structural_fingerprint_bytes",
     "without_annotations",
     "without_axiom_annotations",
 ]

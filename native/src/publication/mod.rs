@@ -51,6 +51,17 @@ pub(crate) fn encoded_fixture_handle_v2() -> NativeResult<NativeSnapshotHandle> 
 }
 
 #[cfg(feature = "test-hooks")]
+pub(crate) fn typed_structural_handle_v2(
+    attestation: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    storage: TypedFacadeStorageV2,
+) -> pyo3::PyResult<NativeSnapshotHandle> {
+    let attestation = facade_v2::NativeSnapshotAttestationV2::from_python(attestation)?;
+    let publication = facade_v2::PublicationStorageV2::from_typed_structural(attestation, storage)
+        .map_err(crate::python_error)?;
+    Ok(NativeSnapshotHandle::from_storage_v2(publication))
+}
+
+#[cfg(feature = "test-hooks")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fixture_handle_v2(
     py: pyo3::Python<'_>,
