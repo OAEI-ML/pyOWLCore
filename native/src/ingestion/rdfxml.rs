@@ -2821,9 +2821,13 @@ fn map_property_chains<'view, 'graph>(
         if consumed[index] || triple.predicate != OWL_PROPERTY_CHAIN_AXIOM {
             continue;
         }
-        let ListResource::Iri(super_property) = triple.subject else {
-            continue;
-        };
+        let DecodedPropertyExpression {
+            node: super_property,
+            consumed: super_consumed,
+        } = expressions.decode_object_property_term(
+            ClassTerm::from_resource(triple.subject).as_term(),
+            session,
+        )?;
         let DecodedPropertyCollection {
             properties,
             consumed: collection_consumed,
@@ -2843,11 +2847,12 @@ fn map_property_chains<'view, 'graph>(
             70,
             [
                 Field::Node(chain),
-                Field::Node(named_entity("object_property", super_property, session)?),
+                Field::Node(super_property),
                 Field::Set(annotations),
             ],
             session,
         )?;
+        consume_collection_indexes(super_consumed, consumed, session)?;
         consume_collection_indexes(collection_consumed, consumed, session)?;
         consumed[index] = true;
         reifications.claim(source_triple, source_triples)?;
@@ -7459,12 +7464,33 @@ mod tests {
             );
         }
 
-        let blank_super = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><owl:propertyChainAxiom rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:q\"/></owl:propertyChainAxiom></rdf:Description></rdf:RDF>"
+        let inverse_super = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><owl:inverseOf rdf:resource=\"urn:super\"/><owl:propertyChainAxiom rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:q\"/></owl:propertyChainAxiom></rdf:Description></rdf:RDF>"
         );
+        let inverse_document = mapped(inverse_super.as_bytes(), None).expect("inverse chain super");
+        let inverse_super = Node::build(10, vec![Field::Node(property("urn:super"))])
+            .expect("inverse super-property expression");
+        let inverse_chain = Node::build(
+            11,
+            vec![Field::Sequence(vec![property("urn:p"), property("urn:q")])],
+        )
+        .expect("inverse super-property chain");
+        let inverse_expected = Node::build(
+            70,
+            vec![
+                Field::Node(inverse_chain),
+                Field::Node(inverse_super),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("inverse super-property axiom");
+        assert!(inverse_document
+            .axioms
+            .iter()
+            .any(|value| value == inverse_expected.as_bytes()));
         assert_eq!(
-            mapped(blank_super.as_bytes(), None).unwrap_err().code,
-            "NATIVE_RDF_MAPPING_INCOMPLETE",
+            inverse_document.mapping.total_triples,
+            inverse_document.mapping.consumed_triples,
         );
     }
 
