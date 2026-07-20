@@ -1051,7 +1051,9 @@ mod tests {
         let mut builder =
             TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
                 .expect("builder");
-        assert!(builder.add_document(&[a.clone()], &[], &[]).is_err());
+        assert!(builder
+            .add_document(std::slice::from_ref(&a), &[], &[])
+            .is_err());
         assert!(builder
             .add_document(&[], std::slice::from_ref(&a), &[])
             .is_err());
