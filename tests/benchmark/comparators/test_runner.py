@@ -343,6 +343,71 @@ def test_committed_shared_host_smoke_is_self_bound_historical_evidence() -> None
     assert completion["paired_randomization_implemented"] is False
 
 
+def test_committed_py_horned_smoke_attests_real_persistent_lifecycle() -> None:
+    evidence_path = (
+        ROOT
+        / "reports"
+        / "performance"
+        / "redesign-baseline"
+        / "shared-host-py-horned-smoke.json"
+    )
+    evidence = cast(dict[str, Any], json.loads(evidence_path.read_text(encoding="utf-8")))
+
+    assert evidence["schema"] == "pyowl-core/comparator-baseline/v1"
+    assert evidence["comparator_manifest_sha256"] == (
+        "733b00ed35e671d29a326f67a4184f243c458e5211b08f5f348f0ae6f5a1eb3d"
+    )
+    source_identity = cast(dict[str, Any], evidence["source_identity"])
+    source_inputs = cast(list[dict[str, Any]], source_identity["inputs"])
+    inputs_by_path = {cast(str, value["path"]): value for value in source_inputs}
+    assert (
+        inputs_by_path["benchmarks/comparators/comparators.toml"]["sha256"]
+        == evidence["comparator_manifest_sha256"]
+    )
+    environment = cast(dict[str, Any], evidence["environment"])
+    assert environment["git_commit"] == "3dc46424a70d72cf34f73a2284087ab6ec4e3819"
+    assert environment["git_dirty"] is False
+    assert evidence["contract_valid"] is True
+    assert evidence["execution_errors"] == []
+    assert evidence["comparative_complete"] is False
+
+    lanes = cast(list[dict[str, Any]], evidence["lanes"])
+    assert len(lanes) == 8
+    assert {cast(str, row["lane"]) for row in lanes} == {
+        "pyowl-python-common",
+        "py-horned-common",
+    }
+    assert all(
+        row["status"] == "ok" and len(cast(list[object], row["samples"])) == 3
+        for row in lanes
+    )
+    assertions = cast(list[dict[str, Any]], evidence["equality_assertions"])
+    assert len(assertions) == 12
+    assert all(row["passed"] is True for row in assertions)
+
+    lifecycles = cast(list[dict[str, Any]], evidence["persistent_runner_lifecycles"])
+    assert len(lifecycles) == 1
+    lifecycle = lifecycles[0]
+    assert lifecycle["lane"] == "py-horned-common"
+    assert lifecycle["status"] == "pass"
+    assert lifecycle["request_count"] == lifecycle["response_count"] == 8
+    assert lifecycle["unique_ontology_instance_count"] == 8
+    assert lifecycle["shutdown"] == "clean-exit"
+    assert lifecycle["stderr_bytes"] == 0
+    handshake = cast(dict[str, Any], lifecycle["handshake"])
+    artifact = cast(dict[str, Any], handshake["artifact"])
+    assert artifact["artifact_sha256"] == (
+        "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d"
+    )
+    assert artifact["runner_sha256"] == (
+        "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b"
+    )
+    completion = cast(dict[str, Any], evidence["completion_requirements"])
+    assert completion["file_lane_implemented"] is True
+    assert completion["paired_randomization_implemented"] is True
+    assert completion["passed"] is False
+
+
 def _measured_schedule(report: Mapping[str, Any]) -> tuple[tuple[str, ...], ...]:
     rows = cast(Sequence[Mapping[str, Any]], report["lanes"])
     by_block: dict[int, list[tuple[int, str]]] = {}

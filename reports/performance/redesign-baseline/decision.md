@@ -197,19 +197,18 @@ artifacts do not demonstrate a retained native document/snapshot, lazy
 ontology-sized scalar materialization, direct encoded structural columns, or a
 lazy mapped native handle.
 
-The executable scaffold validates the comparator manifest and runs one tiny
-generated Functional Syntax input through the core Python common-contract
-adapter in fresh- and steady-process resident-byte modes. Contract tests also
-exercise the prepared-file modes with a path-independent source-bound document
-IRI and equal common-contract digest. The committed smoke exercises the four
-fingerprint preimage checks, structural/identity/
-provenance/diagnostic inventories, raw-sample recording, and post-timer
-equality fence. Every non-Python lane in that historical report is `not-run`,
-the reference-machine record remains `pending`, and `comparative_complete` is
-false. The manifest has since gained one complete external runner pin for
-py-horned; that does not retroactively change the smoke. An intentional partial
-invocation succeeds only with the explicit `--allow-partial` opt-in; the
-default CLI exit remains fail-closed.
+The executable scaffold validates the comparator manifest. The historical
+`shared-host-smoke.json` runs one tiny generated Functional Syntax input through
+the core Python common-contract adapter in fresh- and steady-process resident-
+byte modes. The newer `shared-host-py-horned-smoke.json` binds the exact
+py-horned artifact and runner to a clean commit and exercises three paired
+repetitions across fresh/steady and resident/file modes. All 12 selected
+common-contract assertions pass, and its one persistent child serves eight
+requests with eight fresh ontology identities, empty stderr, and clean
+shutdown. Both reports remain development-only: the reference-machine record
+is `pending`, the corpus is tiny, and `comparative_complete` is false. An
+intentional partial invocation succeeds only with the explicit
+`--allow-partial` opt-in; the default CLI exit remains fail-closed.
 
 Existing generated-large and biomedical profiles remain historical evidence;
 they were not produced by this successor comparative matrix. No numeric
@@ -227,8 +226,9 @@ The following are recorded as **not-run**, not passes:
   complete and SHA-256 bound; the other four remain `pending` and non-runnable;
 - external steady-process evidence: the authenticated, framed, bounded
   one-process-per-lane lifecycle, equal warm-ups, and cleanup barriers are
-  implemented and contract-tested. Py-horned development runs exercise it, but
-  approved-machine representative lifecycle evidence remains unrecorded;
+  implemented and contract-tested. The committed py-horned development smoke
+  exercises it exactly, but approved-machine representative lifecycle evidence
+  remains unrecorded;
 - installed retained-native-wheel/bulk lane: the scaffold refuses a
   source-tree/native build and no isolated delivered-wheel run is recorded;
 - Horned engine inputs: raw and common-contract lanes share the exact

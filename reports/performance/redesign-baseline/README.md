@@ -1,7 +1,17 @@
 # Native-redesign comparator baseline
 
-Status: executable manifest/core-Python smoke scaffold implemented;
-approved-machine comparative evidence remains open.
+Status: executable manifest, core-Python smoke, and pinned py-horned lifecycle
+smoke implemented; approved-machine comparative evidence remains open.
+
+`shared-host-py-horned-smoke.json` is the current development-only external
+runner checkpoint. It is bound to clean commit `3dc4642`, the exact py-horned
+1.4.0 sdist SHA-256, and the exact runner SHA-256. Three paired repetitions in
+each fresh/steady and resident/file combination produce 12 passing
+common-contract assertions. Its persistent child completes eight requests with
+eight distinct ontology identities, empty stderr, and clean shutdown. The
+reference machine is unapproved, the selected corpus is tiny, and no installed-
+wheel numerator is present, so the configured ratio gates correctly remain
+failed.
 
 The committed `shared-host-smoke.json` exercises one pinned 1,450-byte generated
 Functional Syntax input through the core Python common-contract lane, once in a
