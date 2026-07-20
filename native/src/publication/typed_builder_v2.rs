@@ -1,0 +1,1087 @@
+//! Typed builder-to-publication seam for retained V2 structural storage.
+//!
+//! Syntax owners contribute canonical document rows once. Import reachability
+//! is expressed as document ordinals, and freeze derives effective document,
+//! closure, raw-owner, and signature tables from the single component arena.
+
+use std::collections::HashSet;
+use std::mem::size_of;
+
+use crate::cancel::{Cancellation, Guard, InterruptSlot};
+use crate::error::{NativeError, NativeResult};
+use crate::limits::{LimitKey, Limits};
+use crate::model::{
+    scan_canonical, Category, ComponentFieldRef, ComponentId, NativeComponentArena,
+    NativeComponentBuilder, PendingComponentId, ScanBudget,
+};
+
+use super::{
+    TypedFacadeCollectionV2, TypedFacadeCoordinateV2, TypedFacadeScopeV2,
+    TypedFacadeSignatureKindV2, TypedFacadeStorageV2, TypedFacadeTableV2,
+};
+
+const STRUCTURAL_COLLECTIONS: [TypedFacadeCollectionV2; 3] = [
+    TypedFacadeCollectionV2::OntologyAnnotations,
+    TypedFacadeCollectionV2::Axioms,
+    TypedFacadeCollectionV2::Extensions,
+];
+const STRUCTURAL_CATEGORIES: [Category; 3] =
+    [Category::Annotation, Category::Axiom, Category::Swrl];
+const SIGNATURE_KINDS: [TypedFacadeSignatureKindV2; 7] = [
+    TypedFacadeSignatureKindV2::All,
+    TypedFacadeSignatureKindV2::Class,
+    TypedFacadeSignatureKindV2::Datatype,
+    TypedFacadeSignatureKindV2::ObjectProperty,
+    TypedFacadeSignatureKindV2::DataProperty,
+    TypedFacadeSignatureKindV2::AnnotationProperty,
+    TypedFacadeSignatureKindV2::NamedIndividual,
+];
+
+#[derive(Debug, Default)]
+struct PendingDocumentV2 {
+    roots: [Vec<PendingComponentId>; 3],
+}
+
+#[derive(Debug, Default)]
+struct ResolvedDocumentV2 {
+    roots: [Vec<ComponentId>; 3],
+}
+
+#[derive(Debug)]
+struct EffectiveScopeV2 {
+    scope: TypedFacadeScopeV2,
+    document_ordinal: Option<u64>,
+    roots: [Vec<ComponentId>; 3],
+}
+
+#[derive(Debug)]
+pub(crate) struct TypedFacadeBuilderV2 {
+    components: NativeComponentBuilder,
+    documents: Vec<PendingDocumentV2>,
+    limits: Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    base_external_bytes: usize,
+    poisoned: bool,
+}
+
+impl TypedFacadeBuilderV2 {
+    pub(crate) fn new(
+        limits: Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+        external_bytes: usize,
+    ) -> NativeResult<Self> {
+        let components = NativeComponentBuilder::with_control(
+            &limits,
+            cancellation.clone(),
+            interrupt.clone(),
+            external_bytes,
+        )?;
+        Ok(Self {
+            components,
+            documents: Vec::new(),
+            limits,
+            cancellation,
+            interrupt,
+            base_external_bytes: external_bytes,
+            poisoned: false,
+        })
+    }
+
+    pub(crate) fn add_document(
+        &mut self,
+        ontology_annotations: &[Vec<u8>],
+        axioms: &[Vec<u8>],
+        extensions: &[Vec<u8>],
+    ) -> NativeResult<u64> {
+        if self.poisoned {
+            return Err(NativeError::protocol(
+                "typed V2 builder is poisoned after a failed mutation",
+            ));
+        }
+        let result = self.add_document_inner(ontology_annotations, axioms, extensions);
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
+    }
+
+    fn add_document_inner(
+        &mut self,
+        ontology_annotations: &[Vec<u8>],
+        axioms: &[Vec<u8>],
+        extensions: &[Vec<u8>],
+    ) -> NativeResult<u64> {
+        self.cancellation.checkpoint()?;
+        let following = self
+            .documents
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("typed V2 document count overflow"))?;
+        if u64::try_from(following).map_or(true, |count| count > self.limits.max_documents) {
+            return Err(NativeError::limit("typed V2 builder exceeds max_documents"));
+        }
+        check_input_count(
+            ontology_annotations.len(),
+            self.limits.max_annotations,
+            "typed V2 document exceeds max_annotations",
+        )?;
+        check_input_count(
+            axioms.len(),
+            self.limits.max_axioms,
+            "typed V2 document exceeds max_axioms",
+        )?;
+        validate_input_rows(ontology_annotations, Category::Annotation, &self.limits)?;
+        validate_input_rows(axioms, Category::Axiom, &self.limits)?;
+        validate_input_rows(extensions, Category::Swrl, &self.limits)?;
+
+        let mut staged_bytes = 0_usize;
+        let annotations =
+            self.intern_rows(ontology_annotations, Category::Annotation, staged_bytes)?;
+        staged_bytes = pending_bytes(&annotations)?;
+        let axioms = self.intern_rows(axioms, Category::Axiom, staged_bytes)?;
+        staged_bytes = staged_bytes
+            .checked_add(pending_bytes(&axioms)?)
+            .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
+        let extensions = self.intern_rows(extensions, Category::Swrl, staged_bytes)?;
+        staged_bytes = staged_bytes
+            .checked_add(pending_bytes(&extensions)?)
+            .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
+
+        self.preflight_document_capacity(staged_bytes)?;
+        self.documents
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("typed V2 document table allocation failed"))?;
+        self.documents.push(PendingDocumentV2 {
+            roots: [annotations, axioms, extensions],
+        });
+        self.refresh_component_external(0)?;
+        u64::try_from(following - 1)
+            .map_err(|_| NativeError::limit("typed V2 document ordinal exceeds u64"))
+    }
+
+    pub(crate) fn freeze(
+        mut self,
+        effective_documents: &[Vec<u64>],
+        closure_documents: &[u64],
+    ) -> NativeResult<TypedFacadeStorageV2> {
+        if self.poisoned {
+            return Err(NativeError::protocol(
+                "cannot freeze a poisoned typed V2 builder",
+            ));
+        }
+        validate_reachability(effective_documents, closure_documents, self.documents.len())?;
+        self.cancellation.checkpoint()?;
+        self.refresh_component_external(0)?;
+        let frozen = self.components.freeze()?;
+        let mut resolve_guard = match self.interrupt.as_ref() {
+            Some(slot) => Guard::with_interrupt(
+                self.cancellation.clone(),
+                self.limits.deadline,
+                self.limits.cancellation_stride,
+                slot.clone(),
+            ),
+            None => Guard::new(
+                self.cancellation.clone(),
+                self.limits.deadline,
+                self.limits.cancellation_stride,
+            ),
+        };
+        let mut resolve_work = 0_u64;
+        let mut resolved = Vec::new();
+        resolved
+            .try_reserve_exact(self.documents.len())
+            .map_err(|_| NativeError::limit("typed V2 resolved document allocation failed"))?;
+        for document in self.documents.drain(..) {
+            self.cancellation.checkpoint()?;
+            resolved.push(ResolvedDocumentV2 {
+                roots: [
+                    resolve_roots(
+                        &frozen,
+                        document.roots[0].as_slice(),
+                        &mut resolve_guard,
+                        &mut resolve_work,
+                        &self.limits,
+                    )?,
+                    resolve_roots(
+                        &frozen,
+                        document.roots[1].as_slice(),
+                        &mut resolve_guard,
+                        &mut resolve_work,
+                        &self.limits,
+                    )?,
+                    resolve_roots(
+                        &frozen,
+                        document.roots[2].as_slice(),
+                        &mut resolve_guard,
+                        &mut resolve_work,
+                        &self.limits,
+                    )?,
+                ],
+            });
+        }
+        resolve_guard.check(resolve_work, true)?;
+        let arena = frozen.into_arena();
+
+        let mut scopes = Vec::new();
+        scopes
+            .try_reserve_exact(effective_documents.len().saturating_add(1))
+            .map_err(|_| NativeError::limit("typed V2 effective scope allocation failed"))?;
+        for (ordinal, reachable) in effective_documents.iter().enumerate() {
+            self.cancellation.checkpoint()?;
+            scopes.push(EffectiveScopeV2 {
+                scope: TypedFacadeScopeV2::Document,
+                document_ordinal: Some(
+                    u64::try_from(ordinal)
+                        .map_err(|_| NativeError::limit("typed V2 document ordinal exceeds u64"))?,
+                ),
+                roots: union_document_roots(
+                    &arena,
+                    &resolved,
+                    reachable,
+                    &self.limits,
+                    self.cancellation.clone(),
+                    self.interrupt.clone(),
+                    self.base_external_bytes,
+                )?,
+            });
+        }
+        scopes.push(EffectiveScopeV2 {
+            scope: TypedFacadeScopeV2::Closure,
+            document_ordinal: None,
+            roots: union_document_roots(
+                &arena,
+                &resolved,
+                closure_documents,
+                &self.limits,
+                self.cancellation.clone(),
+                self.interrupt.clone(),
+                self.base_external_bytes,
+            )?,
+        });
+
+        let mut effective_tables = Vec::new();
+        for scope in &scopes {
+            let entities = collect_signature(
+                &arena,
+                scope.roots.iter().map(Vec::as_slice),
+                &self.limits,
+                self.cancellation.clone(),
+                self.interrupt.clone(),
+                self.base_external_bytes,
+            )?;
+            append_signature_tables(&arena, scope, &entities, &mut effective_tables)?;
+        }
+
+        let mut raw_document_tables = Vec::new();
+        for (ordinal, document) in resolved.into_iter().enumerate() {
+            for (index, (collection, roots)) in STRUCTURAL_COLLECTIONS
+                .into_iter()
+                .zip(document.roots)
+                .enumerate()
+            {
+                if roots != scopes[ordinal].roots[index] {
+                    push_table(
+                        &mut raw_document_tables,
+                        TypedFacadeTableV2::new(
+                            TypedFacadeCoordinateV2::document(
+                                collection,
+                                u64::try_from(ordinal).map_err(|_| {
+                                    NativeError::limit("typed V2 document ordinal exceeds u64")
+                                })?,
+                            ),
+                            roots,
+                        ),
+                    )?;
+                }
+            }
+        }
+        let document_count = scopes.len().saturating_sub(1);
+        for scope in scopes {
+            for (collection, roots) in STRUCTURAL_COLLECTIONS.into_iter().zip(scope.roots) {
+                if !roots.is_empty() {
+                    push_table(
+                        &mut effective_tables,
+                        TypedFacadeTableV2::new(
+                            structural_coordinate(scope.scope, scope.document_ordinal, collection)?,
+                            roots,
+                        ),
+                    )?;
+                }
+            }
+        }
+        self.cancellation.checkpoint()?;
+        TypedFacadeStorageV2::freeze_with_external(
+            arena,
+            effective_tables,
+            raw_document_tables,
+            u64::try_from(document_count)
+                .map_err(|_| NativeError::limit("typed V2 document count exceeds u64"))?,
+            self.limits,
+            self.cancellation,
+            self.interrupt,
+            self.base_external_bytes,
+        )
+    }
+
+    fn intern_rows(
+        &mut self,
+        rows: &[Vec<u8>],
+        expected: Category,
+        prior_staged_bytes: usize,
+    ) -> NativeResult<Vec<PendingComponentId>> {
+        let mut output = Vec::new();
+        let predicted = rows
+            .len()
+            .checked_mul(size_of::<PendingComponentId>())
+            .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
+        self.refresh_component_external(
+            prior_staged_bytes
+                .checked_add(predicted)
+                .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?,
+        )?;
+        output
+            .try_reserve_exact(rows.len())
+            .map_err(|_| NativeError::limit("typed V2 pending root allocation failed"))?;
+        self.refresh_component_external(
+            prior_staged_bytes
+                .checked_add(pending_bytes(&output)?)
+                .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?,
+        )?;
+        for row in rows {
+            self.cancellation.checkpoint()?;
+            let identifier = self.components.intern_canonical(row)?;
+            output.push(identifier);
+        }
+        if !STRUCTURAL_CATEGORIES.contains(&expected) {
+            return Err(NativeError::protocol(
+                "typed V2 builder received an unsupported root category",
+            ));
+        }
+        Ok(output)
+    }
+
+    fn preflight_document_capacity(&mut self, staged_bytes: usize) -> NativeResult<()> {
+        let predicted_capacity = self.documents.capacity().max(
+            self.documents
+                .len()
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("typed V2 document capacity overflow"))?,
+        );
+        let predicted_documents = predicted_capacity
+            .checked_mul(size_of::<PendingDocumentV2>())
+            .ok_or_else(|| NativeError::limit("typed V2 document metadata size overflow"))?;
+        let existing_roots = pending_document_root_bytes(&self.documents)?;
+        let external = self
+            .base_external_bytes
+            .checked_add(predicted_documents)
+            .and_then(|value| value.checked_add(existing_roots))
+            .and_then(|value| value.checked_add(staged_bytes))
+            .ok_or_else(|| NativeError::limit("typed V2 external memory size overflow"))?;
+        self.components.set_external_bytes(external)
+    }
+
+    fn refresh_component_external(&mut self, staged_bytes: usize) -> NativeResult<()> {
+        let documents = self
+            .documents
+            .capacity()
+            .checked_mul(size_of::<PendingDocumentV2>())
+            .ok_or_else(|| NativeError::limit("typed V2 document metadata size overflow"))?;
+        let external = self
+            .base_external_bytes
+            .checked_add(documents)
+            .and_then(|value| value.checked_add(pending_document_root_bytes(&self.documents).ok()?))
+            .and_then(|value| value.checked_add(staged_bytes))
+            .ok_or_else(|| NativeError::limit("typed V2 external memory size overflow"))?;
+        self.components.set_external_bytes(external)
+    }
+}
+
+fn resolve_roots(
+    frozen: &crate::model::FrozenComponentBuild,
+    pending: &[PendingComponentId],
+    guard: &mut Guard,
+    work: &mut u64,
+    limits: &Limits,
+) -> NativeResult<Vec<ComponentId>> {
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(pending.len())
+        .map_err(|_| NativeError::limit("typed V2 resolved root allocation failed"))?;
+    for identifier in pending {
+        *work = work
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("typed V2 root resolution work overflow"))?;
+        if *work > limits.max_canonical_work {
+            return Err(NativeError::limit(
+                "typed V2 root resolution exceeds max_canonical_work",
+            ));
+        }
+        guard.check(*work, false)?;
+        result.push(frozen.resolve(*identifier)?);
+    }
+    Ok(result)
+}
+
+fn union_document_roots(
+    arena: &NativeComponentArena,
+    documents: &[ResolvedDocumentV2],
+    ordinals: &[u64],
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    external_bytes: usize,
+) -> NativeResult<[Vec<ComponentId>; 3]> {
+    let mut result: [Vec<ComponentId>; 3] = Default::default();
+    for (index, expected) in STRUCTURAL_CATEGORIES.into_iter().enumerate() {
+        let count = ordinals.iter().try_fold(0_usize, |total, ordinal| {
+            let selected = documents
+                .get(usize::try_from(*ordinal).map_err(|_| {
+                    NativeError::protocol("typed V2 reachability ordinal exceeds usize")
+                })?)
+                .ok_or_else(|| NativeError::protocol("typed V2 reachability ordinal is invalid"))?;
+            total
+                .checked_add(selected.roots[index].len())
+                .ok_or_else(|| NativeError::limit("typed V2 effective root count overflow"))
+        })?;
+        if u64::try_from(count).map_or(true, |value| value > limits.value(LimitKey::MaxIndexRows)) {
+            return Err(NativeError::limit(
+                "typed V2 effective roots exceed max_index_rows",
+            ));
+        }
+        result[index]
+            .try_reserve_exact(count)
+            .map_err(|_| NativeError::limit("typed V2 effective root allocation failed"))?;
+        for ordinal in ordinals {
+            let selected = &documents[usize::try_from(*ordinal).map_err(|_| {
+                NativeError::protocol("typed V2 reachability ordinal exceeds usize")
+            })?];
+            result[index].extend_from_slice(&selected.roots[index]);
+        }
+        arena.sort_deduplicate_ids(
+            &mut result[index],
+            expected,
+            limits,
+            cancellation.clone(),
+            interrupt.clone(),
+            external_bytes,
+        )?;
+    }
+    Ok(result)
+}
+
+fn collect_signature<'a>(
+    arena: &NativeComponentArena,
+    roots: impl Iterator<Item = &'a [ComponentId]>,
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    external_bytes: usize,
+) -> NativeResult<Vec<ComponentId>> {
+    let sort_cancellation = cancellation.clone();
+    let mut guard = match interrupt.as_ref() {
+        Some(slot) => Guard::with_interrupt(
+            cancellation,
+            limits.deadline,
+            limits.cancellation_stride,
+            slot.clone(),
+        ),
+        None => Guard::new(cancellation, limits.deadline, limits.cancellation_stride),
+    };
+    let mut visited = HashSet::new();
+    let mut entities = HashSet::new();
+    let mut stack = Vec::new();
+    let mut work = 0_u64;
+    for roots in roots {
+        for root in roots {
+            reserve_hash_item(&mut visited)?;
+            if !visited.insert(*root) {
+                continue;
+            }
+            stack
+                .try_reserve(1)
+                .map_err(|_| NativeError::limit("typed V2 signature stack allocation failed"))?;
+            stack.push(*root);
+            while let Some(identifier) = stack.pop() {
+                signature_step(&mut guard, &mut work, limits)?;
+                if arena.category(identifier)? == Category::Entity {
+                    reserve_hash_item(&mut entities)?;
+                    entities.insert(identifier);
+                    continue;
+                }
+                let record = arena.record(identifier)?;
+                for field_index in 0..record.field_count() {
+                    collect_field_nodes(
+                        record.field(field_index)?,
+                        &mut stack,
+                        &mut visited,
+                        &mut guard,
+                        &mut work,
+                        limits,
+                    )?;
+                }
+            }
+        }
+    }
+    guard.check(work, true)?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(entities.len())
+        .map_err(|_| NativeError::limit("typed V2 signature allocation failed"))?;
+    result.extend(entities);
+    arena.sort_deduplicate_ids(
+        &mut result,
+        Category::Entity,
+        limits,
+        sort_cancellation,
+        interrupt,
+        external_bytes,
+    )?;
+    Ok(result)
+}
+
+fn collect_field_nodes(
+    field: ComponentFieldRef<'_>,
+    stack: &mut Vec<ComponentId>,
+    visited: &mut HashSet<ComponentId>,
+    guard: &mut Guard,
+    work: &mut u64,
+    limits: &Limits,
+) -> NativeResult<()> {
+    signature_step(guard, work, limits)?;
+    match field {
+        ComponentFieldRef::Node(identifier) => {
+            reserve_hash_item(visited)?;
+            if visited.insert(identifier) {
+                stack.try_reserve(1).map_err(|_| {
+                    NativeError::limit("typed V2 signature stack allocation failed")
+                })?;
+                stack.push(identifier);
+            }
+        }
+        ComponentFieldRef::CanonicalSet(sequence)
+        | ComponentFieldRef::OrderedSequence(sequence) => {
+            for index in 0..sequence.len() {
+                collect_field_nodes(sequence.item(index)?, stack, visited, guard, work, limits)?;
+            }
+        }
+        ComponentFieldRef::None
+        | ComponentFieldRef::Text(_)
+        | ComponentFieldRef::Bytes(_)
+        | ComponentFieldRef::NonnegativeIntegerVarint(_)
+        | ComponentFieldRef::Enum(_) => {}
+    }
+    Ok(())
+}
+
+fn signature_step(guard: &mut Guard, work: &mut u64, limits: &Limits) -> NativeResult<()> {
+    *work = work
+        .checked_add(1)
+        .ok_or_else(|| NativeError::limit("typed V2 signature work overflow"))?;
+    if *work > limits.max_canonical_work {
+        return Err(NativeError::limit(
+            "typed V2 signature exceeds max_canonical_work",
+        ));
+    }
+    guard.check(*work, false)
+}
+
+fn append_signature_tables(
+    arena: &NativeComponentArena,
+    scope: &EffectiveScopeV2,
+    entities: &[ComponentId],
+    tables: &mut Vec<TypedFacadeTableV2>,
+) -> NativeResult<()> {
+    for include_builtins in [false, true] {
+        for signature_kind in SIGNATURE_KINDS {
+            let selected_count = entities.iter().try_fold(0_usize, |count, identifier| {
+                let descriptor = entity_descriptor(arena, *identifier)?;
+                if (signature_kind == TypedFacadeSignatureKindV2::All
+                    || descriptor.kind == signature_kind)
+                    && (include_builtins || !is_builtin(descriptor))
+                {
+                    count
+                        .checked_add(1)
+                        .ok_or_else(|| NativeError::limit("typed V2 signature count overflow"))
+                } else {
+                    Ok(count)
+                }
+            })?;
+            let mut selected = Vec::new();
+            selected
+                .try_reserve_exact(selected_count)
+                .map_err(|_| NativeError::limit("typed V2 signature table allocation failed"))?;
+            for identifier in entities {
+                let descriptor = entity_descriptor(arena, *identifier)?;
+                if (signature_kind == TypedFacadeSignatureKindV2::All
+                    || descriptor.kind == signature_kind)
+                    && (include_builtins || !is_builtin(descriptor))
+                {
+                    selected.push(*identifier);
+                }
+            }
+            if !selected.is_empty() {
+                push_table(
+                    tables,
+                    TypedFacadeTableV2::new(
+                        TypedFacadeCoordinateV2 {
+                            collection: TypedFacadeCollectionV2::Signature,
+                            scope: scope.scope,
+                            document_ordinal: scope.document_ordinal,
+                            signature_kind,
+                            include_builtins,
+                        },
+                        selected,
+                    ),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct EntityDescriptor<'a> {
+    kind: TypedFacadeSignatureKindV2,
+    iri: &'a str,
+}
+
+fn entity_descriptor(
+    arena: &NativeComponentArena,
+    identifier: ComponentId,
+) -> NativeResult<EntityDescriptor<'_>> {
+    let entity = arena.record(identifier)?;
+    if entity.tag() != 2 || entity.field_count() != 2 {
+        return Err(NativeError::protocol(
+            "typed V2 signature contains a malformed entity",
+        ));
+    }
+    let ComponentFieldRef::Enum(kind) = entity.field(0)? else {
+        return Err(NativeError::protocol(
+            "typed V2 signature entity kind is malformed",
+        ));
+    };
+    let ComponentFieldRef::Node(iri_identifier) = entity.field(1)? else {
+        return Err(NativeError::protocol(
+            "typed V2 signature entity IRI is malformed",
+        ));
+    };
+    let iri = arena.record(iri_identifier)?;
+    if iri.tag() != 1 || iri.field_count() != 1 {
+        return Err(NativeError::protocol(
+            "typed V2 signature entity IRI is malformed",
+        ));
+    }
+    let ComponentFieldRef::Text(iri) = iri.field(0)? else {
+        return Err(NativeError::protocol(
+            "typed V2 signature entity IRI is malformed",
+        ));
+    };
+    let kind = match kind {
+        b"class" => TypedFacadeSignatureKindV2::Class,
+        b"datatype" => TypedFacadeSignatureKindV2::Datatype,
+        b"object_property" => TypedFacadeSignatureKindV2::ObjectProperty,
+        b"data_property" => TypedFacadeSignatureKindV2::DataProperty,
+        b"annotation_property" => TypedFacadeSignatureKindV2::AnnotationProperty,
+        b"named_individual" => TypedFacadeSignatureKindV2::NamedIndividual,
+        _ => {
+            return Err(NativeError::protocol(
+                "typed V2 signature entity kind is unknown",
+            ));
+        }
+    };
+    Ok(EntityDescriptor {
+        kind,
+        iri: std::str::from_utf8(iri)
+            .map_err(|_| NativeError::protocol("typed V2 signature IRI is not UTF-8"))?,
+    })
+}
+
+fn is_builtin(descriptor: EntityDescriptor<'_>) -> bool {
+    match descriptor.kind {
+        TypedFacadeSignatureKindV2::Class => matches!(
+            descriptor.iri,
+            "http://www.w3.org/2002/07/owl#Thing" | "http://www.w3.org/2002/07/owl#Nothing"
+        ),
+        TypedFacadeSignatureKindV2::ObjectProperty => matches!(
+            descriptor.iri,
+            "http://www.w3.org/2002/07/owl#topObjectProperty"
+                | "http://www.w3.org/2002/07/owl#bottomObjectProperty"
+        ),
+        TypedFacadeSignatureKindV2::DataProperty => matches!(
+            descriptor.iri,
+            "http://www.w3.org/2002/07/owl#topDataProperty"
+                | "http://www.w3.org/2002/07/owl#bottomDataProperty"
+        ),
+        TypedFacadeSignatureKindV2::Datatype => {
+            matches!(
+                descriptor.iri,
+                "http://www.w3.org/2000/01/rdf-schema#Literal"
+                    | "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral"
+                    | "http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral"
+            ) || descriptor
+                .iri
+                .strip_prefix("http://www.w3.org/2001/XMLSchema#")
+                .is_some_and(is_xsd_builtin)
+        }
+        TypedFacadeSignatureKindV2::AnnotationProperty => matches!(
+            descriptor.iri,
+            "http://www.w3.org/2000/01/rdf-schema#label"
+                | "http://www.w3.org/2000/01/rdf-schema#comment"
+                | "http://www.w3.org/2000/01/rdf-schema#seeAlso"
+                | "http://www.w3.org/2000/01/rdf-schema#isDefinedBy"
+                | "http://www.w3.org/2002/07/owl#deprecated"
+                | "http://www.w3.org/2002/07/owl#versionInfo"
+                | "http://www.w3.org/2002/07/owl#priorVersion"
+                | "http://www.w3.org/2002/07/owl#backwardCompatibleWith"
+                | "http://www.w3.org/2002/07/owl#incompatibleWith"
+        ),
+        TypedFacadeSignatureKindV2::All | TypedFacadeSignatureKindV2::NamedIndividual => false,
+    }
+}
+
+fn is_xsd_builtin(local: &str) -> bool {
+    matches!(
+        local,
+        "anyURI"
+            | "base64Binary"
+            | "boolean"
+            | "byte"
+            | "dateTime"
+            | "dateTimeStamp"
+            | "decimal"
+            | "double"
+            | "float"
+            | "hexBinary"
+            | "int"
+            | "integer"
+            | "language"
+            | "long"
+            | "Name"
+            | "NCName"
+            | "negativeInteger"
+            | "NMTOKEN"
+            | "nonNegativeInteger"
+            | "nonPositiveInteger"
+            | "normalizedString"
+            | "positiveInteger"
+            | "short"
+            | "string"
+            | "token"
+            | "unsignedByte"
+            | "unsignedInt"
+            | "unsignedLong"
+            | "unsignedShort"
+    )
+}
+
+fn structural_coordinate(
+    scope: TypedFacadeScopeV2,
+    document_ordinal: Option<u64>,
+    collection: TypedFacadeCollectionV2,
+) -> NativeResult<TypedFacadeCoordinateV2> {
+    match (scope, document_ordinal) {
+        (TypedFacadeScopeV2::Document, Some(ordinal)) => {
+            Ok(TypedFacadeCoordinateV2::document(collection, ordinal))
+        }
+        (TypedFacadeScopeV2::Closure, None) => Ok(TypedFacadeCoordinateV2::closure(collection)),
+        _ => Err(NativeError::protocol(
+            "typed V2 effective scope coordinate is malformed",
+        )),
+    }
+}
+
+fn validate_reachability(
+    effective: &[Vec<u64>],
+    closure: &[u64],
+    document_count: usize,
+) -> NativeResult<()> {
+    if effective.len() != document_count || document_count == 0 {
+        return Err(NativeError::protocol(
+            "typed V2 reachability does not cover every document",
+        ));
+    }
+    for (ordinal, reachable) in effective.iter().enumerate() {
+        validate_ordinal_set(reachable, document_count)?;
+        let ordinal = u64::try_from(ordinal)
+            .map_err(|_| NativeError::limit("typed V2 document ordinal exceeds u64"))?;
+        if reachable.binary_search(&ordinal).is_err() {
+            return Err(NativeError::protocol(
+                "typed V2 effective document closure excludes its owner",
+            ));
+        }
+    }
+    validate_ordinal_set(closure, document_count)?;
+    if closure.is_empty() {
+        return Err(NativeError::protocol("typed V2 snapshot closure is empty"));
+    }
+    Ok(())
+}
+
+fn validate_ordinal_set(values: &[u64], document_count: usize) -> NativeResult<()> {
+    if values.windows(2).any(|pair| pair[0] >= pair[1])
+        || values
+            .iter()
+            .any(|value| usize::try_from(*value).map_or(true, |ordinal| ordinal >= document_count))
+    {
+        return Err(NativeError::protocol(
+            "typed V2 reachability ordinals are not ascending unique and in range",
+        ));
+    }
+    Ok(())
+}
+
+fn check_input_count(count: usize, maximum: u64, message: &'static str) -> NativeResult<()> {
+    if u64::try_from(count).map_or(true, |value| value > maximum) {
+        return Err(NativeError::limit(message));
+    }
+    Ok(())
+}
+
+fn validate_input_rows(rows: &[Vec<u8>], expected: Category, limits: &Limits) -> NativeResult<()> {
+    if rows
+        .windows(2)
+        .any(|pair| pair[0].as_slice() >= pair[1].as_slice())
+    {
+        return Err(NativeError::protocol(
+            "typed V2 input roots are not canonical ascending unique",
+        ));
+    }
+    for row in rows {
+        let mut scan = ScanBudget::from_limits(limits);
+        if scan_canonical(row, &mut scan)? != expected {
+            return Err(NativeError::protocol(
+                "typed V2 input root is in the wrong structural collection",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn pending_bytes(values: &Vec<PendingComponentId>) -> NativeResult<usize> {
+    values
+        .capacity()
+        .checked_mul(size_of::<PendingComponentId>())
+        .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))
+}
+
+fn pending_document_root_bytes(documents: &[PendingDocumentV2]) -> NativeResult<usize> {
+    documents.iter().try_fold(0_usize, |total, document| {
+        document.roots.iter().try_fold(total, |total, roots| {
+            total
+                .checked_add(pending_bytes(roots)?)
+                .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))
+        })
+    })
+}
+
+fn reserve_hash_item<T: Eq + std::hash::Hash>(values: &mut HashSet<T>) -> NativeResult<()> {
+    if values.len() == values.capacity() {
+        values
+            .try_reserve(1)
+            .map_err(|_| NativeError::limit("typed V2 signature set allocation failed"))?;
+    }
+    Ok(())
+}
+
+fn push_table(tables: &mut Vec<TypedFacadeTableV2>, table: TypedFacadeTableV2) -> NativeResult<()> {
+    tables
+        .try_reserve_exact(1)
+        .map_err(|_| NativeError::limit("typed V2 facade table allocation failed"))?;
+    tables.push(table);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::canonical::{entity, iri, Field, Node};
+    use crate::publication::TypedFacadePageRequestV2;
+
+    const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
+
+    fn entity_row(kind: &'static str, value: &str) -> Vec<u8> {
+        entity(kind, iri(value.to_owned()).expect("IRI"))
+            .expect("entity")
+            .as_bytes()
+            .to_vec()
+    }
+
+    fn declaration(kind: &'static str, value: &str) -> Vec<u8> {
+        Node::build(
+            60,
+            vec![
+                Field::Node(entity(kind, iri(value.to_owned()).expect("IRI")).expect("entity")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("declaration")
+        .as_bytes()
+        .to_vec()
+    }
+
+    fn sorted(mut rows: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+        rows.sort_unstable();
+        rows
+    }
+
+    fn two_document_owner() -> (TypedFacadeStorageV2, [Vec<Vec<u8>>; 2]) {
+        let documents = [
+            sorted(vec![
+                declaration("class", "urn:builder:A"),
+                declaration("class", OWL_THING),
+            ]),
+            sorted(vec![
+                declaration("class", "urn:builder:B"),
+                declaration("data_property", "urn:builder:p"),
+            ]),
+        ];
+        let limits = Limits::default();
+        let mut builder =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("typed builder");
+        for rows in &documents {
+            builder
+                .add_document(&[], rows, &[])
+                .expect("typed document");
+        }
+        let storage = builder
+            .freeze(&[vec![0, 1], vec![1]], &[0, 1])
+            .expect("typed freeze");
+        (storage, documents)
+    }
+
+    fn page(
+        storage: &TypedFacadeStorageV2,
+        coordinate: TypedFacadeCoordinateV2,
+        raw_document_owner: bool,
+    ) -> Vec<Vec<u8>> {
+        storage
+            .page(
+                TypedFacadePageRequestV2::new(
+                    coordinate,
+                    raw_document_owner,
+                    0,
+                    64,
+                    8 * 1024 * 1024,
+                ),
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("typed page")
+            .rows
+    }
+
+    #[test]
+    fn builder_derives_effective_raw_closure_and_signature_tables_from_one_arena() {
+        let (storage, documents) = two_document_owner();
+        let document_zero = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+        let document_one = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 1);
+        let closure = TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms);
+
+        let expected_closure = sorted(
+            documents
+                .iter()
+                .flat_map(|rows| rows.iter().cloned())
+                .collect(),
+        );
+        assert_eq!(page(&storage, document_zero, false), expected_closure);
+        assert_eq!(page(&storage, document_zero, true), documents[0]);
+        assert_eq!(page(&storage, document_one, false), documents[1]);
+        assert_eq!(page(&storage, document_one, true), documents[1]);
+        assert_eq!(page(&storage, closure, false), expected_closure);
+
+        let all_without_builtins = TypedFacadeCoordinateV2 {
+            collection: TypedFacadeCollectionV2::Signature,
+            scope: TypedFacadeScopeV2::Document,
+            document_ordinal: Some(0),
+            signature_kind: TypedFacadeSignatureKindV2::All,
+            include_builtins: false,
+        };
+        let classes_with_builtins = TypedFacadeCoordinateV2 {
+            signature_kind: TypedFacadeSignatureKindV2::Class,
+            include_builtins: true,
+            ..all_without_builtins
+        };
+        assert_eq!(
+            page(&storage, all_without_builtins, false),
+            sorted(vec![
+                entity_row("class", "urn:builder:A"),
+                entity_row("class", "urn:builder:B"),
+                entity_row("data_property", "urn:builder:p"),
+            ])
+        );
+        assert_eq!(
+            page(&storage, classes_with_builtins, false),
+            sorted(vec![
+                entity_row("class", "urn:builder:A"),
+                entity_row("class", "urn:builder:B"),
+                entity_row("class", OWL_THING),
+            ])
+        );
+
+        let observation = storage.observation_for_tests().expect("observation");
+        assert_eq!(observation.arena_fields, 1);
+        assert_eq!(observation.retained_canonical_byte_rows, 0);
+        let counters = storage.counters().expect("counters");
+        assert_eq!(counters.canonical_input_rows, 4);
+        assert_eq!(counters.publication_structural_rows_copied, 0);
+        assert_eq!(counters.publication_structural_bytes_copied, 0);
+    }
+
+    #[test]
+    fn builder_rejects_partition_order_and_reachability_drift() {
+        let a = declaration("class", "urn:builder:A");
+        let b = declaration("class", "urn:builder:B");
+        let mut reversed = sorted(vec![a.clone(), b.clone()]);
+        reversed.reverse();
+        let limits = Limits::default();
+        let mut builder =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("builder");
+        assert!(builder.add_document(&[], &reversed, &[]).is_err());
+        assert!(builder
+            .add_document(&[], std::slice::from_ref(&a), &[])
+            .is_err());
+        assert!(builder.freeze(&[vec![0]], &[0]).is_err());
+
+        let mut builder =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("builder");
+        assert!(builder.add_document(&[a.clone()], &[], &[]).is_err());
+        assert!(builder
+            .add_document(&[], std::slice::from_ref(&a), &[])
+            .is_err());
+
+        for (effective, closure) in [
+            (vec![vec![]], vec![0]),
+            (vec![vec![1]], vec![0]),
+            (vec![vec![0]], vec![]),
+        ] {
+            let mut builder =
+                TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                    .expect("builder");
+            builder
+                .add_document(&[], std::slice::from_ref(&a), &[])
+                .expect("document");
+            assert!(builder.freeze(&effective, &closure).is_err());
+        }
+    }
+
+    #[test]
+    fn builder_observes_cancellation_before_mutation() {
+        let mut builder = TypedFacadeBuilderV2::new(
+            Limits::default(),
+            Cancellation::with_duration(Some(Duration::ZERO)),
+            None,
+            0,
+        )
+        .expect("builder");
+        assert!(builder
+            .add_document(&[], &[declaration("class", "urn:builder:A")], &[])
+            .is_err());
+    }
+}

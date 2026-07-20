@@ -808,6 +808,134 @@ impl NativeComponentArena {
         Ok(component_category(self.validate_identifier(identifier)?))
     }
 
+    /// Return the canonical dense-table rank inside the identifier's category.
+    ///
+    /// Freeze orders every category by canonical component value.  Callers
+    /// that have already established one common category can therefore sort
+    /// identifiers without reconstructing canonical byte rows.
+    pub(crate) fn dense_rank_in_category(&self, identifier: ComponentId) -> NativeResult<u32> {
+        let identifier = self.validate_identifier(identifier)?;
+        Ok(dense_rank(identifier))
+    }
+
+    /// Canonicalize an identifier set known to belong to one model category.
+    /// Validation happens before mutation so a foreign or mixed-category input
+    /// fails without partially reordering the caller's roots.
+    pub(crate) fn sort_deduplicate_ids(
+        &self,
+        identifiers: &mut Vec<ComponentId>,
+        expected: Category,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+        external_bytes: usize,
+    ) -> NativeResult<()> {
+        for identifier in identifiers.iter().copied() {
+            if self.category(identifier)? != expected {
+                return Err(NativeError::protocol(
+                    "native component identifier set mixes model categories",
+                ));
+            }
+        }
+        if identifiers.len() < 2 {
+            return Ok(());
+        }
+        let root_bytes = identifiers
+            .capacity()
+            .checked_mul(size_of::<ComponentId>())
+            .ok_or_else(|| NativeError::limit("native component root workspace overflow"))?;
+        let live_external = external_bytes
+            .checked_add(root_bytes)
+            .ok_or_else(|| NativeError::limit("native component root workspace overflow"))?;
+        let mut work = ComponentWork::new(limits, cancellation, interrupt, live_external)?;
+        let sort_workspace = identifiers
+            .len()
+            .checked_mul(size_of::<usize>())
+            .and_then(|value| value.checked_mul(2))
+            .ok_or_else(|| NativeError::limit("native component sort workspace overflow"))?;
+        self.check_sort_workspace(live_external, sort_workspace, limits)?;
+        work.auxiliary_bytes = u64::try_from(sort_workspace)
+            .map_err(|_| NativeError::limit("native component sort workspace exceeds u64"))?;
+        let base_auxiliary = work.auxiliary_bytes;
+        let order = fallible_index_order(identifiers.len(), &mut work, |left, right, work| {
+            let left = self.encode_with_work(identifiers[left], work)?;
+            work.auxiliary_bytes = base_auxiliary
+                .checked_add(
+                    u64::try_from(left.capacity())
+                        .map_err(|_| NativeError::limit("native component sort row exceeds u64"))?,
+                )
+                .ok_or_else(|| NativeError::limit("native component sort workspace overflow"))?;
+            let right = self.encode_with_work(identifiers[right], work)?;
+            let ordering = left.cmp(&right);
+            work.auxiliary_bytes = base_auxiliary;
+            Ok(ordering)
+        })?;
+        let order_bytes = order
+            .capacity()
+            .checked_mul(size_of::<usize>())
+            .ok_or_else(|| NativeError::limit("native component sort order size overflow"))?;
+        let output_bytes = identifiers
+            .len()
+            .checked_mul(size_of::<ComponentId>())
+            .ok_or_else(|| NativeError::limit("native component sort output size overflow"))?;
+        self.check_sort_workspace(
+            live_external,
+            order_bytes
+                .checked_add(output_bytes)
+                .ok_or_else(|| NativeError::limit("native component sort workspace overflow"))?,
+            limits,
+        )?;
+        work.auxiliary_bytes = order_bytes
+            .checked_add(output_bytes)
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| NativeError::limit("native component sort workspace overflow"))?;
+        work.checkpoint(true)?;
+        work.allocation_checkpoint()?;
+        let mut ordered = Vec::new();
+        ordered
+            .try_reserve_exact(identifiers.len())
+            .map_err(|_| NativeError::limit("native component sort output allocation failed"))?;
+        for index in order {
+            ordered.push(identifiers[index]);
+            work.consume(1)?;
+        }
+        ordered.dedup();
+        *identifiers = ordered;
+        Ok(())
+    }
+
+    fn check_sort_workspace(
+        &self,
+        external_bytes: usize,
+        workspace_bytes: usize,
+        limits: &Limits,
+    ) -> NativeResult<()> {
+        let workspace_bytes = u64::try_from(workspace_bytes)
+            .map_err(|_| NativeError::limit("native component sort workspace exceeds u64"))?;
+        if workspace_bytes > limits.value(crate::limits::LimitKey::MaxTemporaryBytes) {
+            return Err(NativeError::limit(
+                "native component sort exceeds max_temporary_bytes",
+            ));
+        }
+        let external_bytes = u64::try_from(external_bytes)
+            .map_err(|_| NativeError::limit("native external allocation exceeds u64"))?;
+        let live = self
+            .counters
+            .retained_bytes
+            .checked_add(external_bytes)
+            .and_then(|value| value.checked_add(workspace_bytes))
+            .ok_or_else(|| NativeError::limit("native component sort memory overflow"))?;
+        if limits
+            .max_memory_bytes
+            .is_some_and(|maximum| live > maximum)
+        {
+            return Err(NativeError::limit(
+                "native component sort exceeds max_memory_bytes",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn tag(&self, identifier: ComponentId) -> NativeResult<u16> {
         Ok(self
             .tables
@@ -862,6 +990,22 @@ const fn component_category(identifier: LocalComponentId) -> Category {
         | LocalComponentId::ClassExpression(_) => Category::Term,
         LocalComponentId::Axiom(_) => Category::Axiom,
         LocalComponentId::Swrl(_) => Category::Swrl,
+    }
+}
+
+const fn dense_rank(identifier: LocalComponentId) -> u32 {
+    match identifier {
+        LocalComponentId::Iri(id)
+        | LocalComponentId::Entity(id)
+        | LocalComponentId::Anonymous(id)
+        | LocalComponentId::Literal(id)
+        | LocalComponentId::Annotation(id)
+        | LocalComponentId::PropertyExpression(id)
+        | LocalComponentId::FacetRestriction(id)
+        | LocalComponentId::DataRange(id)
+        | LocalComponentId::ClassExpression(id)
+        | LocalComponentId::Axiom(id)
+        | LocalComponentId::Swrl(id) => id.raw(),
     }
 }
 
@@ -1172,6 +1316,31 @@ impl NativeComponentBuilder {
             owner: self.owner,
             local: identifier,
         })
+    }
+
+    /// Update the live allocation owned by the caller while this builder is
+    /// active. This keeps root/index metadata that is assembled alongside the
+    /// component tables inside the same memory envelope.
+    pub(crate) fn set_external_bytes(&mut self, external_bytes: usize) -> NativeResult<()> {
+        let external_bytes = u64::try_from(external_bytes)
+            .map_err(|_| NativeError::limit("native external allocation exceeds u64"))?;
+        let peak = self
+            .accounted_bytes
+            .checked_add(self.transient_bytes)
+            .and_then(|value| value.checked_add(external_bytes))
+            .ok_or_else(|| NativeError::limit("native component memory accounting overflow"))?;
+        if self
+            .limits
+            .max_memory_bytes
+            .is_some_and(|maximum| peak > maximum)
+        {
+            return Err(NativeError::limit(
+                "native external allocation exceeds max_memory_bytes",
+            ));
+        }
+        self.work_mut()?.external_bytes = external_bytes;
+        self.counters.peak_builder_bytes = self.counters.peak_builder_bytes.max(peak);
+        Ok(())
     }
 
     pub(crate) fn freeze(mut self) -> NativeResult<FrozenComponentBuild> {

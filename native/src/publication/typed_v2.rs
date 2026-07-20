@@ -231,12 +231,35 @@ impl TypedFacadeStorageV2 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn freeze(
         arena: NativeComponentArena,
+        effective_tables: Vec<TypedFacadeTableV2>,
+        raw_document_tables: Vec<TypedFacadeTableV2>,
+        document_count: u64,
+        limits: Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> NativeResult<Self> {
+        Self::freeze_with_external(
+            arena,
+            effective_tables,
+            raw_document_tables,
+            document_count,
+            limits,
+            cancellation,
+            interrupt,
+            0,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn freeze_with_external(
+        arena: NativeComponentArena,
         mut effective_tables: Vec<TypedFacadeTableV2>,
         mut raw_document_tables: Vec<TypedFacadeTableV2>,
         document_count: u64,
         limits: Limits,
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
+        caller_external_bytes: usize,
     ) -> NativeResult<Self> {
         cancellation.checkpoint()?;
         if document_count > limits.max_documents {
@@ -269,9 +292,12 @@ impl TypedFacadeStorageV2 {
         let retained_root_bytes = root_allocation_bytes(&effective_tables, &raw_document_tables)?;
         let retained_metadata_bytes =
             metadata_allocation_bytes(effective_tables.capacity(), raw_document_tables.capacity())?;
-        let base_external = checked_add(retained_root_bytes, retained_metadata_bytes)?;
-        check_retained_limit(&arena, base_external, 0, &limits)?;
-        let base_external_usize = usize::try_from(base_external)
+        let retained_base_external = checked_add(retained_root_bytes, retained_metadata_bytes)?;
+        let caller_external = u64::try_from(caller_external_bytes)
+            .map_err(|_| NativeError::limit("typed V2 caller allocation exceeds u64"))?;
+        let live_base_external = checked_add(retained_base_external, caller_external)?;
+        check_retained_limit(&arena, live_base_external, 0, &limits)?;
+        let live_base_external_usize = usize::try_from(live_base_external)
             .map_err(|_| NativeError::limit("typed V2 retained metadata exceeds usize"))?;
 
         let mut maximum_row_bytes = 1_u64;
@@ -283,7 +309,7 @@ impl TypedFacadeStorageV2 {
                 &limits,
                 cancellation.clone(),
                 interrupt.clone(),
-                base_external_usize,
+                live_base_external_usize,
             )?;
             maximum_row_bytes = maximum_row_bytes.max(validation.maximum_row_bytes);
             peak_ordering_workspace_bytes =
@@ -295,7 +321,7 @@ impl TypedFacadeStorageV2 {
             if table.coordinate.collection != TypedFacadeCollectionV2::Axioms {
                 continue;
             }
-            let index_external = checked_add(base_external, retained_index_bytes)?;
+            let index_external = checked_add(live_base_external, retained_index_bytes)?;
             let index_external = usize::try_from(index_external)
                 .map_err(|_| NativeError::limit("typed V2 index workspace exceeds usize"))?;
             let index = NativeComponentDigestIndex::build_with_external(
@@ -313,11 +339,11 @@ impl TypedFacadeStorageV2 {
                     "typed V2 axiom indexes exceed max_index_bytes",
                 ));
             }
-            check_retained_limit(&arena, base_external, retained_index_bytes, &limits)?;
+            check_retained_limit(&arena, live_base_external, retained_index_bytes, &limits)?;
             table.axiom_index = Some(index);
         }
 
-        let external_retained = checked_add(base_external, retained_index_bytes)?;
+        let external_retained = checked_add(retained_base_external, retained_index_bytes)?;
         let external_retained_bytes = usize::try_from(external_retained)
             .map_err(|_| NativeError::limit("typed V2 retained owner exceeds usize"))?;
         let component = *arena.counters();
@@ -329,12 +355,17 @@ impl TypedFacadeStorageV2 {
             &limits,
             cancellation.clone(),
             interrupt,
-            external_retained_bytes,
+            external_retained_bytes
+                .checked_add(caller_external_bytes)
+                .ok_or_else(|| NativeError::limit("typed V2 canonical input memory overflow"))?,
         )?;
-        let publication_peak = checked_add(retained_owner_bytes, maximum_row_bytes)?;
+        let publication_peak = retained_owner_bytes
+            .checked_add(caller_external)
+            .and_then(|value| value.checked_add(maximum_row_bytes))
+            .ok_or_else(|| NativeError::limit("typed V2 publication memory peak overflow"))?;
         let ordering_peak = component
             .retained_bytes
-            .checked_add(base_external)
+            .checked_add(live_base_external)
             .and_then(|value| value.checked_add(peak_ordering_workspace_bytes))
             .ok_or_else(|| NativeError::limit("typed V2 ordering memory peak overflow"))?;
         let temporary_peak = publication_peak.max(ordering_peak);
@@ -1377,11 +1408,66 @@ mod tests {
         )
         .expect("baseline owner");
         let counters = baseline.counters().expect("baseline counters");
+        let baseline_owner_bytes = counters.retained_owner_bytes;
         let freeze_peak = counters
             .retained_owner_bytes
             .checked_add(baseline.maximum_row_bytes())
             .expect("freeze peak");
         drop(baseline);
+
+        let caller_external_bytes = 4_096_usize;
+        let external_baseline = TypedFacadeStorageV2::freeze_with_external(
+            arena.clone(),
+            vec![table(coordinate, roots.clone())],
+            Vec::new(),
+            1,
+            Limits::default(),
+            Cancellation::with_duration(None),
+            None,
+            caller_external_bytes,
+        )
+        .expect("external baseline");
+        let external_peak = external_baseline
+            .counters()
+            .expect("external counters")
+            .peak_freeze_live_bytes;
+        assert_eq!(
+            external_baseline
+                .counters()
+                .expect("external counters")
+                .retained_owner_bytes,
+            baseline_owner_bytes
+        );
+        drop(external_baseline);
+
+        let external_error = TypedFacadeStorageV2::freeze_with_external(
+            arena.clone(),
+            vec![table(coordinate, roots.clone())],
+            Vec::new(),
+            1,
+            limits_with_memory(external_peak - 1),
+            Cancellation::with_duration(None),
+            None,
+            caller_external_bytes,
+        )
+        .expect_err("caller-owned live bytes must be inside the freeze envelope");
+        assert_eq!(external_error.code, "NATIVE_WIRE_LIMIT");
+
+        let external_owner = TypedFacadeStorageV2::freeze_with_external(
+            arena.clone(),
+            vec![table(coordinate, roots.clone())],
+            Vec::new(),
+            1,
+            limits_with_memory(external_peak),
+            Cancellation::with_duration(None),
+            None,
+            caller_external_bytes,
+        )
+        .expect("exact caller-owned freeze peak");
+        let external_counters = external_owner.counters().expect("external counters");
+        assert_eq!(external_counters.retained_owner_bytes, baseline_owner_bytes);
+        assert_eq!(external_counters.peak_freeze_live_bytes, external_peak);
+        drop(external_owner);
 
         let freeze_error = TypedFacadeStorageV2::freeze(
             arena.clone(),

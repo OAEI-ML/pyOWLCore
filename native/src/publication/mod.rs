@@ -6,6 +6,7 @@ mod facade_v2;
 mod fixture;
 mod handle;
 mod records;
+mod typed_builder_v2;
 mod typed_v2;
 
 use std::collections::HashSet;
@@ -26,6 +27,8 @@ pub(crate) use records::{
     LoadOptionsV1, LoadReportV1, NativeSnapshotAttestationV1, OntologyIdV1, ParseLimitsV1,
     PositiveIntegerV1, PublicationCountersV1, PublicationDraftV1,
 };
+#[allow(unused_imports)]
+pub(crate) use typed_builder_v2::TypedFacadeBuilderV2;
 #[allow(unused_imports)]
 pub(crate) use typed_v2::{
     TypedFacadeCollectionV2, TypedFacadeCoordinateV2, TypedFacadeCounterSnapshotV2,
