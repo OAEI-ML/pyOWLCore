@@ -1349,9 +1349,11 @@ fn map_graph(
     )?;
     map_equivalent_class_components(
         &list_graph,
+        &triples,
         &mut consumed,
         &kinds,
         &mut expressions,
+        &mut axiom_annotations,
         &mut axioms,
         session,
     )?;
@@ -1360,13 +1362,16 @@ fn map_graph(
         &triples,
         &mut consumed,
         &kinds,
+        &mut axiom_annotations,
         &mut axioms,
         session,
     )?;
     map_same_individual_components(
         &list_graph,
+        &triples,
         &mut consumed,
         &mut expressions,
+        &mut axiom_annotations,
         &mut axioms,
         session,
     )?;
@@ -2299,12 +2304,41 @@ fn consume_collection_indexes(
     Ok(())
 }
 
+fn component_annotations(
+    indexes: &[usize],
+    triples: &[Triple],
+    reifications: &mut AxiomAnnotationLedger,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<Node>> {
+    let mut annotations = Vec::new();
+    for index in indexes {
+        session.step(1)?;
+        let triple = triples.get(*index).ok_or_else(|| {
+            NativeError::protocol("native RDF component edge index exceeds graph")
+        })?;
+        let edge_annotations = reifications.annotations_for(triple, triples, session)?;
+        for annotation in edge_annotations {
+            enforce_usize(
+                annotations.len().saturating_add(1),
+                session.limits().value(LimitKey::MaxAnnotations),
+                "native RDF component annotations exceed max_annotations",
+            )?;
+            reserve_vec_item(&mut annotations, session)?;
+            annotations.push(annotation);
+        }
+        reifications.claim(triple, triples)?;
+    }
+    canonical_set(annotations, 0, None)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn map_equivalent_class_components<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -2319,8 +2353,11 @@ fn map_equivalent_class_components<'view, 'graph>(
             continue;
         }
         let mut members = Vec::new();
+        let mut edge_indexes = Vec::new();
         add_class_member(&mut members, left, session)?;
         add_class_member(&mut members, right, session)?;
+        reserve_vec_item(&mut edge_indexes, session)?;
+        edge_indexes.push(start);
         consumed[start] = true;
         loop {
             let mut changed = false;
@@ -2338,6 +2375,8 @@ fn map_equivalent_class_components<'view, 'graph>(
                 if members.contains(&edge_left) || members.contains(&edge_right) {
                     add_class_member(&mut members, edge_left, session)?;
                     add_class_member(&mut members, edge_right, session)?;
+                    reserve_vec_item(&mut edge_indexes, session)?;
+                    edge_indexes.push(index);
                     consumed[index] = true;
                     changed = true;
                 }
@@ -2358,7 +2397,9 @@ fn map_equivalent_class_components<'view, 'graph>(
         }
         session.finish()?;
         let nodes = canonical_set(nodes, 2, None)?;
-        let axiom = build_node(62, [Field::Set(nodes), Field::Set(Vec::new())], session)?;
+        let annotations =
+            component_annotations(&edge_indexes, source_triples, reifications, session)?;
+        let axiom = build_node(62, [Field::Set(nodes), Field::Set(annotations)], session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -2607,6 +2648,7 @@ fn map_equivalent_property_components(
     triples: &[Triple],
     consumed: &mut [bool],
     kinds: &[KindRecord<'_>],
+    reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -2623,8 +2665,11 @@ fn map_equivalent_property_components(
             continue;
         }
         let mut members = Vec::new();
+        let mut edge_indexes = Vec::new();
         add_member(&mut members, left, session)?;
         add_member(&mut members, right, session)?;
+        reserve_vec_item(&mut edge_indexes, session)?;
+        edge_indexes.push(start);
         consumed[start] = true;
         loop {
             let mut changed = false;
@@ -2644,6 +2689,8 @@ fn map_equivalent_property_components(
                 if members.contains(&edge_left) || members.contains(&edge_right) {
                     add_member(&mut members, edge_left, session)?;
                     add_member(&mut members, edge_right, session)?;
+                    reserve_vec_item(&mut edge_indexes, session)?;
+                    edge_indexes.push(index);
                     consumed[index] = true;
                     changed = true;
                 }
@@ -2661,7 +2708,8 @@ fn map_equivalent_property_components(
             (71, "object_property")
         };
         let members = named_set(entity_kind, &members, session)?;
-        let axiom = build_node(tag, [Field::Set(members), Field::Set(Vec::new())], session)?;
+        let annotations = component_annotations(&edge_indexes, triples, reifications, session)?;
+        let axiom = build_node(tag, [Field::Set(members), Field::Set(annotations)], session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -2671,10 +2719,13 @@ fn equivalent_property_member_supported(value: &str, kinds: &[KindRecord<'_>]) -
     !has_kind(kinds, value, "annotation_property")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_same_individual_components<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -2686,8 +2737,11 @@ fn map_same_individual_components<'view, 'graph>(
             continue;
         };
         let mut members = Vec::new();
+        let mut edge_indexes = Vec::new();
         add_individual_member(&mut members, left, session)?;
         add_individual_member(&mut members, right, session)?;
+        reserve_vec_item(&mut edge_indexes, session)?;
+        edge_indexes.push(start);
         consumed[start] = true;
         loop {
             let mut changed = false;
@@ -2702,6 +2756,8 @@ fn map_same_individual_components<'view, 'graph>(
                 if members.contains(&edge_left) || members.contains(&edge_right) {
                     add_individual_member(&mut members, edge_left, session)?;
                     add_individual_member(&mut members, edge_right, session)?;
+                    reserve_vec_item(&mut edge_indexes, session)?;
+                    edge_indexes.push(index);
                     consumed[index] = true;
                     changed = true;
                 }
@@ -2717,7 +2773,9 @@ fn map_same_individual_components<'view, 'graph>(
         }
         session.finish()?;
         let nodes = canonical_set(nodes, 2, None)?;
-        let axiom = build_node(110, [Field::Set(nodes), Field::Set(Vec::new())], session)?;
+        let annotations =
+            component_annotations(&edge_indexes, source_triples, reifications, session)?;
+        let axiom = build_node(110, [Field::Set(nodes), Field::Set(annotations)], session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -5713,6 +5771,108 @@ mod tests {
         assert_eq!(
             mapped(structural.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
+    }
+
+    #[test]
+    fn component_axioms_merge_reified_edge_annotations() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:Class rdf:about=\"urn:A\"><owl:equivalentClass rdf:resource=\"urn:B\"/></owl:Class><owl:Class rdf:about=\"urn:B\"><owl:equivalentClass rdf:resource=\"urn:C\"/></owl:Class><owl:DatatypeProperty rdf:about=\"urn:d\"><owl:equivalentProperty rdf:resource=\"urn:e\"/></owl:DatatypeProperty><owl:DatatypeProperty rdf:about=\"urn:e\"/><rdf:Description rdf:about=\"urn:i\"><owl:sameAs rdf:resource=\"urn:j\"/></rdf:Description><rdf:Description rdf:about=\"urn:j\"><owl:sameAs rdf:resource=\"urn:k\"/></rdf:Description><owl:Axiom rdf:nodeID=\"class-one\"><owl:annotatedSource rdf:resource=\"urn:A\"/><owl:annotatedProperty rdf:resource=\"{OWL_EQUIVALENT_CLASS}\"/><owl:annotatedTarget rdf:resource=\"urn:B\"/><e:note rdf:resource=\"urn:class-one\"/></owl:Axiom><owl:Axiom rdf:nodeID=\"class-two\"><owl:annotatedSource rdf:resource=\"urn:B\"/><owl:annotatedProperty rdf:resource=\"{OWL_EQUIVALENT_CLASS}\"/><owl:annotatedTarget rdf:resource=\"urn:C\"/><e:note rdf:resource=\"urn:class-two\"/></owl:Axiom><owl:Axiom rdf:nodeID=\"property\"><owl:annotatedSource rdf:resource=\"urn:d\"/><owl:annotatedProperty rdf:resource=\"{OWL_EQUIVALENT_PROPERTY}\"/><owl:annotatedTarget rdf:resource=\"urn:e\"/><e:note rdf:resource=\"urn:property\"/></owl:Axiom><owl:Axiom rdf:nodeID=\"same-one\"><owl:annotatedSource rdf:resource=\"urn:i\"/><owl:annotatedProperty rdf:resource=\"{OWL_SAME_AS}\"/><owl:annotatedTarget rdf:resource=\"urn:j\"/><e:note rdf:resource=\"urn:same-one\"/></owl:Axiom><owl:Axiom rdf:nodeID=\"same-two\"><owl:annotatedSource rdf:resource=\"urn:j\"/><owl:annotatedProperty rdf:resource=\"{OWL_SAME_AS}\"/><owl:annotatedTarget rdf:resource=\"urn:k\"/><e:note rdf:resource=\"urn:same-two\"/></owl:Axiom></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("annotated components");
+        let property = |kind: &'static str, value: &str| {
+            entity(kind, iri(value.to_owned()).expect("entity IRI")).expect("entity")
+        };
+        let annotation = |value: &str| {
+            Node::build(
+                5,
+                vec![
+                    Field::Node(property("annotation_property", "urn:note")),
+                    Field::Node(iri(value.to_owned()).expect("annotation value")),
+                    Field::Set(Vec::new()),
+                ],
+            )
+            .expect("edge annotation")
+        };
+        let equivalent_classes = Node::build(
+            62,
+            vec![
+                Field::Set(
+                    canonical_set(
+                        vec![
+                            class_node("urn:A"),
+                            class_node("urn:B"),
+                            class_node("urn:C"),
+                        ],
+                        2,
+                        None,
+                    )
+                    .expect("equivalent classes"),
+                ),
+                Field::Set(
+                    canonical_set(
+                        vec![annotation("urn:class-one"), annotation("urn:class-two")],
+                        0,
+                        None,
+                    )
+                    .expect("class annotations"),
+                ),
+            ],
+        )
+        .expect("annotated equivalent classes");
+        let equivalent_data = Node::build(
+            91,
+            vec![
+                Field::Set(
+                    canonical_set(
+                        vec![
+                            property("data_property", "urn:d"),
+                            property("data_property", "urn:e"),
+                        ],
+                        2,
+                        None,
+                    )
+                    .expect("equivalent data properties"),
+                ),
+                Field::Set(vec![annotation("urn:property")]),
+            ],
+        )
+        .expect("annotated equivalent data properties");
+        let same = Node::build(
+            110,
+            vec![
+                Field::Set(
+                    canonical_set(
+                        vec![
+                            named_individual_node("urn:i"),
+                            named_individual_node("urn:j"),
+                            named_individual_node("urn:k"),
+                        ],
+                        2,
+                        None,
+                    )
+                    .expect("same individuals"),
+                ),
+                Field::Set(
+                    canonical_set(
+                        vec![annotation("urn:same-one"), annotation("urn:same-two")],
+                        0,
+                        None,
+                    )
+                    .expect("same annotations"),
+                ),
+            ],
+        )
+        .expect("annotated same individuals");
+        for expected in [equivalent_classes, equivalent_data, same] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
         );
     }
 
