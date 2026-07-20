@@ -4,8 +4,9 @@ Status: executable manifest, core-Python smoke, and pinned py-horned lifecycle
 smoke implemented; approved-machine comparative evidence remains open.
 
 `shared-host-py-horned-smoke.json` is the current development-only external
-runner checkpoint. It is bound to clean commit `3dc4642`, the exact py-horned
-1.4.0 sdist SHA-256, and the exact runner SHA-256. Three paired repetitions in
+runner checkpoint. It is bound to clean commit `3315c22`, the exact py-horned
+1.4.0 sdist SHA-256, the exact v2 runner SHA-256, its verified install
+provenance/RECORD feature, and three paired repetitions in
 each fresh/steady and resident/file combination produce 12 passing
 common-contract assertions. Its persistent child completes eight requests with
 eight distinct ontology identities, empty stderr, and clean shutdown. The

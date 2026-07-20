@@ -10,7 +10,7 @@ The checked-in evidence has two explicitly development-only artifacts.
 `shared-host-smoke.json` is the historical tiny Functional Syntax smoke of the
 core Python adapter; it predates the paired scheduler and executable ratio
 gates, so its older fields remain accurate. `shared-host-py-horned-smoke.json`
-binds the first complete external runner to clean commit `3dc4642`. Across
+binds the first complete external runner to clean commit `3315c22`. Across
 fresh/steady and resident/file modes, three paired repetitions per scenario
 produce 12 passing common-contract assertions. Its persistent process attests
 eight requests, eight distinct ontology instances, bounded empty stderr, and a

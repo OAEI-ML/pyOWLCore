@@ -1,6 +1,6 @@
 {
   "comparative_complete": false,
-  "comparator_manifest_sha256": "733b00ed35e671d29a326f67a4184f243c458e5211b08f5f348f0ae6f5a1eb3d",
+  "comparator_manifest_sha256": "a5c5599d50276a0a479db798f721ce2379ac72bbb6ae7c7a6516ee8ff6dc2985",
   "completion_requirements": {
     "all_scenarios_succeeded": false,
     "contracts_match": false,
@@ -441,13 +441,13 @@
   ],
   "corpus_manifest_sha256": "1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928",
   "environment": {
-    "captured_utc": "2026-07-20T18:57:32.102804+00:00",
+    "captured_utc": "2026-07-20T19:07:18.755646+00:00",
     "comparison_key": "a32e35c085c5a7cde43f06ef760f9fed56c22eb9ba4e601e911ef01a72e65da6",
     "cpu": {
       "logical_count": 12,
       "model": null
     },
-    "git_commit": "3dc46424a70d72cf34f73a2284087ab6ec4e3819",
+    "git_commit": "3315c2276123f0c228e476412363f41a9c6dd21d",
     "git_dirty": false,
     "memory": {
       "physical_bytes": 34359738368
@@ -845,20 +845,20 @@
           "input_mode": "resident-bytes",
           "lane": "pyowl-python-common",
           "metrics": {
-            "common_adapter_ns": 3653389,
+            "common_adapter_ns": 2969717,
             "core_report_seconds": {
-              "load_seconds": 0.005612828012090176
+              "load_seconds": 0.009681056020781398
             },
-            "cpu_ns": 11021000,
-            "load_ns": 7499852,
-            "python_allocated_blocks_increment": 942,
+            "cpu_ns": 14091000,
+            "load_ns": 12169282,
+            "python_allocated_blocks_increment": 943,
             "python_gc_objects_increment": 410,
-            "rss_peak_after_bytes": 34623488,
-            "rss_peak_before_bytes": 34246656,
-            "rss_peak_increment_bytes": 376832,
-            "startup_to_ready_ns": 701920309,
+            "rss_peak_after_bytes": 34574336,
+            "rss_peak_before_bytes": 34263040,
+            "rss_peak_increment_bytes": 311296,
+            "startup_to_ready_ns": 958733025,
             "temporary_bytes": 0,
-            "wall_ns": 11155989
+            "wall_ns": 15140866
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 0,
@@ -875,12 +875,12 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 501062
+            "validation_ns": 477019
           },
           "transport_metrics": {
             "request_bytes": 3972,
             "stderr_bytes": 0,
-            "stdout_bytes": 8326
+            "stdout_bytes": 8327
           }
         },
         {
@@ -907,20 +907,20 @@
           "input_mode": "resident-bytes",
           "lane": "pyowl-python-common",
           "metrics": {
-            "common_adapter_ns": 3533676,
+            "common_adapter_ns": 3060886,
             "core_report_seconds": {
-              "load_seconds": 0.005639198992867023
+              "load_seconds": 0.006551311002112925
             },
-            "cpu_ns": 10830000,
-            "load_ns": 7448147,
+            "cpu_ns": 11365000,
+            "load_ns": 8457789,
             "python_allocated_blocks_increment": 941,
             "python_gc_objects_increment": 410,
-            "rss_peak_after_bytes": 34070528,
-            "rss_peak_before_bytes": 33812480,
-            "rss_peak_increment_bytes": 258048,
-            "startup_to_ready_ns": 696621298,
+            "rss_peak_after_bytes": 34418688,
+            "rss_peak_before_bytes": 34209792,
+            "rss_peak_increment_bytes": 208896,
+            "startup_to_ready_ns": 850891901,
             "temporary_bytes": 0,
-            "wall_ns": 10983720
+            "wall_ns": 11520173
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 1,
@@ -937,7 +937,7 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 582979
+            "validation_ns": 474840
           },
           "transport_metrics": {
             "request_bytes": 3972,
@@ -969,20 +969,20 @@
           "input_mode": "resident-bytes",
           "lane": "pyowl-python-common",
           "metrics": {
-            "common_adapter_ns": 2853696,
+            "common_adapter_ns": 2944980,
             "core_report_seconds": {
-              "load_seconds": 0.005678474000887945
+              "load_seconds": 0.0055639600032009184
             },
-            "cpu_ns": 10351000,
-            "load_ns": 7499255,
-            "python_allocated_blocks_increment": 937,
+            "cpu_ns": 10478000,
+            "load_ns": 7543594,
+            "python_allocated_blocks_increment": 940,
             "python_gc_objects_increment": 410,
-            "rss_peak_after_bytes": 33484800,
-            "rss_peak_before_bytes": 33361920,
-            "rss_peak_increment_bytes": 122880,
-            "startup_to_ready_ns": 655866322,
+            "rss_peak_after_bytes": 34390016,
+            "rss_peak_before_bytes": 34103296,
+            "rss_peak_increment_bytes": 286720,
+            "startup_to_ready_ns": 786272919,
             "temporary_bytes": 0,
-            "wall_ns": 10354509
+            "wall_ns": 10490439
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 2,
@@ -999,12 +999,12 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 463529
+            "validation_ns": 484521
           },
           "transport_metrics": {
             "request_bytes": 3972,
             "stderr_bytes": 0,
-            "stdout_bytes": 8326
+            "stdout_bytes": 8327
           }
         }
       ],
@@ -1288,12 +1288,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -1305,20 +1306,20 @@
           "input_mode": "resident-bytes",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 8265654,
-            "cpu_ns": 8513000,
-            "load_ns": 392760,
+            "common_adapter_ns": 9503830,
+            "cpu_ns": 9625000,
+            "load_ns": 399666,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 7797634,
-              "contract_validation": 468020,
-              "horned_load": 392760
+              "common_contract": 8981948,
+              "contract_validation": 521882,
+              "horned_load": 399666
             },
-            "rss_peak_after_bytes": 38051840,
-            "rss_peak_before_bytes": 37343232,
-            "rss_peak_increment_bytes": 708608,
+            "rss_peak_after_bytes": 47173632,
+            "rss_peak_before_bytes": 46473216,
+            "rss_peak_increment_bytes": 700416,
             "temporary_bytes": 0,
-            "wall_ns": 8658927
+            "wall_ns": 9904318
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 0,
@@ -1335,14 +1336,14 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 468020
+            "validation_ns": 521882
           },
           "transport_metrics": {
-            "parent_cpu_ns": 10400000,
-            "parent_wall_ns": 700954525,
-            "request_bytes": 4151,
+            "parent_cpu_ns": 17532000,
+            "parent_wall_ns": 963570089,
+            "request_bytes": 4179,
             "stderr_bytes": 0,
-            "stdout_bytes": 8418
+            "stdout_bytes": 8446
           }
         },
         {
@@ -1352,12 +1353,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -1369,20 +1371,20 @@
           "input_mode": "resident-bytes",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 9656423,
-            "cpu_ns": 9901000,
-            "load_ns": 424586,
+            "common_adapter_ns": 7754083,
+            "cpu_ns": 8143000,
+            "load_ns": 403850,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 9163317,
-              "contract_validation": 493106,
-              "horned_load": 424586
+              "common_contract": 7281508,
+              "contract_validation": 472575,
+              "horned_load": 403850
             },
-            "rss_peak_after_bytes": 38334464,
-            "rss_peak_before_bytes": 37609472,
-            "rss_peak_increment_bytes": 724992,
+            "rss_peak_after_bytes": 46329856,
+            "rss_peak_before_bytes": 45637632,
+            "rss_peak_increment_bytes": 692224,
             "temporary_bytes": 0,
-            "wall_ns": 10081760
+            "wall_ns": 8158531
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 1,
@@ -1399,14 +1401,14 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 493106
+            "validation_ns": 472575
           },
           "transport_metrics": {
-            "parent_cpu_ns": 9837000,
-            "parent_wall_ns": 725389259,
-            "request_bytes": 4151,
+            "parent_cpu_ns": 12686000,
+            "parent_wall_ns": 874836414,
+            "request_bytes": 4179,
             "stderr_bytes": 0,
-            "stdout_bytes": 8419
+            "stdout_bytes": 8446
           }
         },
         {
@@ -1416,12 +1418,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -1433,20 +1436,20 @@
           "input_mode": "resident-bytes",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 7514576,
-            "cpu_ns": 7901000,
-            "load_ns": 390340,
+            "common_adapter_ns": 8407686,
+            "cpu_ns": 8738000,
+            "load_ns": 405152,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 7056886,
-              "contract_validation": 457690,
-              "horned_load": 390340
+              "common_contract": 7934421,
+              "contract_validation": 473265,
+              "horned_load": 405152
             },
-            "rss_peak_after_bytes": 38428672,
-            "rss_peak_before_bytes": 37711872,
-            "rss_peak_increment_bytes": 716800,
+            "rss_peak_after_bytes": 46014464,
+            "rss_peak_before_bytes": 45314048,
+            "rss_peak_increment_bytes": 700416,
             "temporary_bytes": 0,
-            "wall_ns": 7905514
+            "wall_ns": 8813449
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 2,
@@ -1463,14 +1466,14 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 457690
+            "validation_ns": 473265
           },
           "transport_metrics": {
-            "parent_cpu_ns": 10956000,
-            "parent_wall_ns": 707049977,
-            "request_bytes": 4151,
+            "parent_cpu_ns": 11696000,
+            "parent_wall_ns": 858464478,
+            "request_bytes": 4179,
             "stderr_bytes": 0,
-            "stdout_bytes": 8418
+            "stdout_bytes": 8446
           }
         }
       ],
@@ -1771,131 +1774,131 @@
           "input_mode": "resident-bytes",
           "lane": "pyowl-python-common",
           "metrics": {
-            "common_adapter_ns": 3053644,
+            "common_adapter_ns": 3088022,
             "core_report_seconds": {
-              "load_seconds": 0.0056515570031479
+              "load_seconds": 0.00623861700296402
             },
-            "cpu_ns": 10627000,
-            "load_ns": 7617584,
-            "python_allocated_blocks_increment": 709,
-            "python_gc_objects_increment": 284,
-            "rss_peak_after_bytes": 61149184,
-            "rss_peak_before_bytes": 61149184,
-            "rss_peak_increment_bytes": 0,
-            "temporary_bytes": 0,
-            "wall_ns": 10673083
-          },
-          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
-          "paired_block": 0,
-          "paired_block_size": 2,
-          "process_mode": "steady-process",
-          "raw_inventory": null,
-          "reason": null,
-          "schedule_seed": 314159,
-          "schema": "pyowl-core/comparator-adapter-result/v1",
-          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
-          "status": "ok",
-          "timed_validation": {
-            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
-            "full_contract_validation": true,
-            "inside_timed_envelope": true,
-            "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 482729
-          }
-        },
-        {
-          "artifact": {
-            "allocator": "CPython platform allocator",
-            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
-            "artifact_sha256": null,
-            "features": [
-              "complete-python-backend",
-              "common-contract-v1"
-            ],
-            "pin_state": "runtime-captured",
-            "revision": "exact Git revision and dirty state captured in every report",
-            "runner_revision": null,
-            "runner_sha256": null,
-            "thread_ceiling": 1,
-            "version": "0.1.0.dev0"
-          },
-          "boundary": "common-contract-ready",
-          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
-          "corpus_id": "generated-tiny-functional",
-          "implementation": "pyowl-core-python",
-          "implementation_order": 1,
-          "input_mode": "resident-bytes",
-          "lane": "pyowl-python-common",
-          "metrics": {
-            "common_adapter_ns": 2962823,
-            "core_report_seconds": {
-              "load_seconds": 0.005193396005779505
-            },
-            "cpu_ns": 9909000,
-            "load_ns": 6947997,
-            "python_allocated_blocks_increment": 708,
-            "python_gc_objects_increment": 284,
-            "rss_peak_after_bytes": 61149184,
-            "rss_peak_before_bytes": 61149184,
-            "rss_peak_increment_bytes": 0,
-            "temporary_bytes": 0,
-            "wall_ns": 9912341
-          },
-          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
-          "paired_block": 1,
-          "paired_block_size": 2,
-          "process_mode": "steady-process",
-          "raw_inventory": null,
-          "reason": null,
-          "schedule_seed": 314159,
-          "schema": "pyowl-core/comparator-adapter-result/v1",
-          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
-          "status": "ok",
-          "timed_validation": {
-            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
-            "full_contract_validation": true,
-            "inside_timed_envelope": true,
-            "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 487956
-          }
-        },
-        {
-          "artifact": {
-            "allocator": "CPython platform allocator",
-            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
-            "artifact_sha256": null,
-            "features": [
-              "complete-python-backend",
-              "common-contract-v1"
-            ],
-            "pin_state": "runtime-captured",
-            "revision": "exact Git revision and dirty state captured in every report",
-            "runner_revision": null,
-            "runner_sha256": null,
-            "thread_ceiling": 1,
-            "version": "0.1.0.dev0"
-          },
-          "boundary": "common-contract-ready",
-          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
-          "corpus_id": "generated-tiny-functional",
-          "implementation": "pyowl-core-python",
-          "implementation_order": 0,
-          "input_mode": "resident-bytes",
-          "lane": "pyowl-python-common",
-          "metrics": {
-            "common_adapter_ns": 2868110,
-            "core_report_seconds": {
-              "load_seconds": 0.0050147319852840155
-            },
-            "cpu_ns": 9782000,
-            "load_ns": 6937198,
+            "cpu_ns": 10756000,
+            "load_ns": 7931415,
             "python_allocated_blocks_increment": 710,
             "python_gc_objects_increment": 284,
-            "rss_peak_after_bytes": 61149184,
-            "rss_peak_before_bytes": 61149184,
+            "rss_peak_after_bytes": 63385600,
+            "rss_peak_before_bytes": 63361024,
+            "rss_peak_increment_bytes": 24576,
+            "temporary_bytes": 0,
+            "wall_ns": 11020754
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 0,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 314159,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 462913
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 1,
+          "input_mode": "resident-bytes",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 3406124,
+            "core_report_seconds": {
+              "load_seconds": 0.008900748012820259
+            },
+            "cpu_ns": 14834000,
+            "load_ns": 11861716,
+            "python_allocated_blocks_increment": 709,
+            "python_gc_objects_increment": 284,
+            "rss_peak_after_bytes": 63823872,
+            "rss_peak_before_bytes": 63385600,
+            "rss_peak_increment_bytes": 438272,
+            "temporary_bytes": 0,
+            "wall_ns": 15269110
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 1,
+          "paired_block_size": 2,
+          "process_mode": "steady-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 314159,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 454873
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "CPython platform allocator",
+            "artifact": "installed pyowl-core pure wheel or exact workspace revision",
+            "artifact_sha256": null,
+            "features": [
+              "complete-python-backend",
+              "common-contract-v1"
+            ],
+            "pin_state": "runtime-captured",
+            "revision": "exact Git revision and dirty state captured in every report",
+            "runner_revision": null,
+            "runner_sha256": null,
+            "thread_ceiling": 1,
+            "version": "0.1.0.dev0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "pyowl-core-python",
+          "implementation_order": 0,
+          "input_mode": "resident-bytes",
+          "lane": "pyowl-python-common",
+          "metrics": {
+            "common_adapter_ns": 3812896,
+            "core_report_seconds": {
+              "load_seconds": 0.006424723018426448
+            },
+            "cpu_ns": 11652000,
+            "load_ns": 8129724,
+            "python_allocated_blocks_increment": 710,
+            "python_gc_objects_increment": 284,
+            "rss_peak_after_bytes": 63823872,
+            "rss_peak_before_bytes": 63823872,
             "rss_peak_increment_bytes": 0,
             "temporary_bytes": 0,
-            "wall_ns": 9806402
+            "wall_ns": 11943563
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 2,
@@ -1912,7 +1915,7 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 456729
+            "validation_ns": 824234
           }
         }
       ],
@@ -2196,12 +2199,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -2213,20 +2217,20 @@
           "input_mode": "resident-bytes",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 7636140,
-            "cpu_ns": 7784000,
-            "load_ns": 171780,
+            "common_adapter_ns": 8062213,
+            "cpu_ns": 8173000,
+            "load_ns": 180824,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 7180797,
-              "contract_validation": 455343,
-              "horned_load": 171780
+              "common_contract": 7611967,
+              "contract_validation": 450246,
+              "horned_load": 180824
             },
-            "rss_peak_after_bytes": 38350848,
-            "rss_peak_before_bytes": 38330368,
-            "rss_peak_increment_bytes": 20480,
+            "rss_peak_after_bytes": 44883968,
+            "rss_peak_before_bytes": 44859392,
+            "rss_peak_increment_bytes": 24576,
             "temporary_bytes": 0,
-            "wall_ns": 7808609
+            "wall_ns": 8243647
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 0,
@@ -2243,18 +2247,18 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 455343
+            "validation_ns": 450246
           },
           "transport_metrics": {
-            "ontology_instance_id": "614a02dcabfc57c760b8bc67cb1df8bfb8024e19394bf2ba338937c011873e0c",
-            "parent_cpu_ns": 459000,
-            "parent_wall_ns": 9831637,
+            "ontology_instance_id": "7649703f287224641e66ee9ac579afc43e6d87d62c222f583044df1a245a7f81",
+            "parent_cpu_ns": 342000,
+            "parent_wall_ns": 10361611,
             "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
-            "persistent_runner_pid": 51235,
+            "persistent_runner_pid": 58231,
             "persistent_sequence": 1,
-            "request_bytes": 4294,
+            "request_bytes": 4322,
             "stderr_bytes": 0,
-            "stdout_bytes": 8650
+            "stdout_bytes": 8678
           }
         },
         {
@@ -2264,12 +2268,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -2281,20 +2286,20 @@
           "input_mode": "resident-bytes",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 7671652,
-            "cpu_ns": 7827000,
-            "load_ns": 180783,
+            "common_adapter_ns": 10168536,
+            "cpu_ns": 10149000,
+            "load_ns": 490887,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 7230132,
-              "contract_validation": 441520,
-              "horned_load": 180783
+              "common_contract": 9310025,
+              "contract_validation": 858511,
+              "horned_load": 490887
             },
-            "rss_peak_after_bytes": 38469632,
-            "rss_peak_before_bytes": 38461440,
-            "rss_peak_increment_bytes": 8192,
+            "rss_peak_after_bytes": 45027328,
+            "rss_peak_before_bytes": 45002752,
+            "rss_peak_increment_bytes": 24576,
             "temporary_bytes": 0,
-            "wall_ns": 7852987
+            "wall_ns": 10660127
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 1,
@@ -2311,18 +2316,18 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 441520
+            "validation_ns": 858511
           },
           "transport_metrics": {
-            "ontology_instance_id": "df6ca3ff931d79996365e809b5283de2dee0a689d6938df56e598ff1dd1b0d41",
+            "ontology_instance_id": "b66b08b48935e10d3ce035536622e4b2c534ee2152d0c74854d9267a30a64c77",
             "parent_cpu_ns": 320000,
-            "parent_wall_ns": 9723260,
+            "parent_wall_ns": 13175261,
             "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
-            "persistent_runner_pid": 51235,
+            "persistent_runner_pid": 58231,
             "persistent_sequence": 2,
-            "request_bytes": 4294,
+            "request_bytes": 4322,
             "stderr_bytes": 0,
-            "stdout_bytes": 8649
+            "stdout_bytes": 8681
           }
         },
         {
@@ -2332,12 +2337,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -2349,20 +2355,20 @@
           "input_mode": "resident-bytes",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 7833350,
-            "cpu_ns": 7992000,
-            "load_ns": 174517,
+            "common_adapter_ns": 7858007,
+            "cpu_ns": 7930000,
+            "load_ns": 167198,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 7388288,
-              "contract_validation": 445062,
-              "horned_load": 174517
+              "common_contract": 7139521,
+              "contract_validation": 718486,
+              "horned_load": 167198
             },
-            "rss_peak_after_bytes": 38596608,
-            "rss_peak_before_bytes": 38576128,
-            "rss_peak_increment_bytes": 20480,
+            "rss_peak_after_bytes": 45096960,
+            "rss_peak_before_bytes": 45084672,
+            "rss_peak_increment_bytes": 12288,
             "temporary_bytes": 0,
-            "wall_ns": 8008365
+            "wall_ns": 8025777
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 2,
@@ -2379,18 +2385,18 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 445062
+            "validation_ns": 718486
           },
           "transport_metrics": {
-            "ontology_instance_id": "daa620e3ee205c18113f333f6d5f56ac3305b0bcfb614af27bbb70335f33b6c7",
-            "parent_cpu_ns": 313000,
-            "parent_wall_ns": 9832206,
+            "ontology_instance_id": "97bb7a27b288ed20ed73c7a7ed3ba057f5afc1b22e4967c62abe769c3b1db288",
+            "parent_cpu_ns": 365000,
+            "parent_wall_ns": 10166426,
             "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
-            "persistent_runner_pid": 51235,
+            "persistent_runner_pid": 58231,
             "persistent_sequence": 3,
-            "request_bytes": 4294,
+            "request_bytes": 4322,
             "stderr_bytes": 0,
-            "stdout_bytes": 8650
+            "stdout_bytes": 8678
           }
         }
       ],
@@ -2691,20 +2697,20 @@
           "input_mode": "file",
           "lane": "pyowl-python-common",
           "metrics": {
-            "common_adapter_ns": 2750259,
+            "common_adapter_ns": 3796339,
             "core_report_seconds": {
-              "load_seconds": 0.005778907012427226
+              "load_seconds": 0.009586117987055331
             },
-            "cpu_ns": 10109000,
-            "load_ns": 7369481,
-            "python_allocated_blocks_increment": 946,
+            "cpu_ns": 14730000,
+            "load_ns": 11482647,
+            "python_allocated_blocks_increment": 940,
             "python_gc_objects_increment": 409,
-            "rss_peak_after_bytes": 33714176,
-            "rss_peak_before_bytes": 33513472,
-            "rss_peak_increment_bytes": 200704,
-            "startup_to_ready_ns": 643941165,
+            "rss_peak_after_bytes": 34193408,
+            "rss_peak_before_bytes": 33865728,
+            "rss_peak_increment_bytes": 327680,
+            "startup_to_ready_ns": 817394515,
             "temporary_bytes": 1450,
-            "wall_ns": 10121347
+            "wall_ns": 15281004
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 0,
@@ -2721,12 +2727,12 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 452544
+            "validation_ns": 657302
           },
           "transport_metrics": {
             "request_bytes": 3962,
             "stderr_bytes": 0,
-            "stdout_bytes": 8319
+            "stdout_bytes": 8320
           }
         },
         {
@@ -2753,20 +2759,20 @@
           "input_mode": "file",
           "lane": "pyowl-python-common",
           "metrics": {
-            "common_adapter_ns": 5229652,
+            "common_adapter_ns": 5652335,
             "core_report_seconds": {
-              "load_seconds": 0.005794126976979896
+              "load_seconds": 0.013809447991661727
             },
-            "cpu_ns": 13340000,
-            "load_ns": 8461184,
-            "python_allocated_blocks_increment": 940,
+            "cpu_ns": 19556000,
+            "load_ns": 17693906,
+            "python_allocated_blocks_increment": 947,
             "python_gc_objects_increment": 409,
-            "rss_peak_after_bytes": 33955840,
-            "rss_peak_before_bytes": 33488896,
-            "rss_peak_increment_bytes": 466944,
-            "startup_to_ready_ns": 711972296,
+            "rss_peak_after_bytes": 34725888,
+            "rss_peak_before_bytes": 34193408,
+            "rss_peak_increment_bytes": 532480,
+            "startup_to_ready_ns": 937449661,
             "temporary_bytes": 1450,
-            "wall_ns": 13693914
+            "wall_ns": 23349823
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 1,
@@ -2783,12 +2789,12 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 649914
+            "validation_ns": 876859
           },
           "transport_metrics": {
             "request_bytes": 3962,
             "stderr_bytes": 0,
-            "stdout_bytes": 8319
+            "stdout_bytes": 8320
           }
         },
         {
@@ -2815,20 +2821,20 @@
           "input_mode": "file",
           "lane": "pyowl-python-common",
           "metrics": {
-            "common_adapter_ns": 2905988,
+            "common_adapter_ns": 3788244,
             "core_report_seconds": {
-              "load_seconds": 0.005810153001220897
+              "load_seconds": 0.0094989110075403
             },
-            "cpu_ns": 10514000,
-            "load_ns": 7626593,
-            "python_allocated_blocks_increment": 940,
+            "cpu_ns": 16523000,
+            "load_ns": 12959373,
+            "python_allocated_blocks_increment": 947,
             "python_gc_objects_increment": 409,
-            "rss_peak_after_bytes": 34136064,
-            "rss_peak_before_bytes": 34000896,
-            "rss_peak_increment_bytes": 135168,
-            "startup_to_ready_ns": 862950676,
+            "rss_peak_after_bytes": 35225600,
+            "rss_peak_before_bytes": 34717696,
+            "rss_peak_increment_bytes": 507904,
+            "startup_to_ready_ns": 1041024617,
             "temporary_bytes": 1450,
-            "wall_ns": 10534321
+            "wall_ns": 16750062
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 2,
@@ -2845,12 +2851,12 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 566759
+            "validation_ns": 662850
           },
           "transport_metrics": {
             "request_bytes": 3962,
             "stderr_bytes": 0,
-            "stdout_bytes": 8319
+            "stdout_bytes": 8318
           }
         }
       ],
@@ -3134,12 +3140,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -3151,84 +3158,85 @@
           "input_mode": "file",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 8008733,
-            "cpu_ns": 8512000,
-            "load_ns": 499625,
+            "common_adapter_ns": 12262202,
+            "cpu_ns": 12545000,
+            "load_ns": 515746,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 7556927,
-              "contract_validation": 451806,
-              "horned_load": 499625
+              "common_contract": 11372266,
+              "contract_validation": 889936,
+              "horned_load": 515746
             },
-            "rss_peak_after_bytes": 37355520,
-            "rss_peak_before_bytes": 36618240,
-            "rss_peak_increment_bytes": 737280,
-            "temporary_bytes": 1450,
-            "wall_ns": 8509074
-          },
-          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
-          "paired_block": 0,
-          "paired_block_size": 2,
-          "process_mode": "fresh-process",
-          "raw_inventory": null,
-          "reason": null,
-          "schedule_seed": 314159,
-          "schema": "pyowl-core/comparator-adapter-result/v1",
-          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
-          "status": "ok",
-          "timed_validation": {
-            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
-            "full_contract_validation": true,
-            "inside_timed_envelope": true,
-            "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 451806
-          },
-          "transport_metrics": {
-            "parent_cpu_ns": 9374000,
-            "parent_wall_ns": 659271643,
-            "request_bytes": 4141,
-            "stderr_bytes": 0,
-            "stdout_bytes": 8411
-          }
-        },
-        {
-          "artifact": {
-            "allocator": "Rust system allocator and CPython platform allocator",
-            "artifact": "PyPI sdist py_horned_owl-1.4.0.tar.gz",
-            "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
-            "features": [
-              "abi3-wrapper",
-              "independent-common-contract-v1"
-            ],
-            "pin_state": "complete",
-            "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
-            "thread_ceiling": 1,
-            "version": "1.4.0"
-          },
-          "boundary": "common-contract-ready",
-          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
-          "corpus_id": "generated-tiny-functional",
-          "implementation": "py-horned-owl",
-          "implementation_order": 0,
-          "input_mode": "file",
-          "lane": "py-horned-common",
-          "metrics": {
-            "common_adapter_ns": 7955338,
-            "cpu_ns": 8425000,
-            "load_ns": 514107,
-            "object_count": 16,
-            "phase_ns": {
-              "common_contract": 7490964,
-              "contract_validation": 464374,
-              "horned_load": 514107
-            },
-            "rss_peak_after_bytes": 37494784,
-            "rss_peak_before_bytes": 36782080,
+            "rss_peak_after_bytes": 47730688,
+            "rss_peak_before_bytes": 47017984,
             "rss_peak_increment_bytes": 712704,
             "temporary_bytes": 1450,
-            "wall_ns": 8470107
+            "wall_ns": 12778969
+          },
+          "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
+          "paired_block": 0,
+          "paired_block_size": 2,
+          "process_mode": "fresh-process",
+          "raw_inventory": null,
+          "reason": null,
+          "schedule_seed": 314159,
+          "schema": "pyowl-core/comparator-adapter-result/v1",
+          "source_sha256": "a189e7c629ae6298cf22f5f8a2fa36d414b340c7c8a621ae9747b6b575e61e2a",
+          "status": "ok",
+          "timed_validation": {
+            "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+            "full_contract_validation": true,
+            "inside_timed_envelope": true,
+            "schema": "pyowl-core/comparator-timed-validation/v1",
+            "validation_ns": 889936
+          },
+          "transport_metrics": {
+            "parent_cpu_ns": 13578000,
+            "parent_wall_ns": 1086286570,
+            "request_bytes": 4169,
+            "stderr_bytes": 0,
+            "stdout_bytes": 8443
+          }
+        },
+        {
+          "artifact": {
+            "allocator": "Rust system allocator and CPython platform allocator",
+            "artifact": "PyPI sdist py_horned_owl-1.4.0.tar.gz",
+            "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
+            "features": [
+              "abi3-wrapper",
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
+            ],
+            "pin_state": "complete",
+            "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
+            "thread_ceiling": 1,
+            "version": "1.4.0"
+          },
+          "boundary": "common-contract-ready",
+          "contract_sha256": "85a8fb3eed3ecd3d637b080f7816840abb0af59c34540f2f2ce22832ff92f1d8",
+          "corpus_id": "generated-tiny-functional",
+          "implementation": "py-horned-owl",
+          "implementation_order": 0,
+          "input_mode": "file",
+          "lane": "py-horned-common",
+          "metrics": {
+            "common_adapter_ns": 10733433,
+            "cpu_ns": 10936000,
+            "load_ns": 501081,
+            "object_count": 16,
+            "phase_ns": {
+              "common_contract": 10102264,
+              "contract_validation": 631169,
+              "horned_load": 501081
+            },
+            "rss_peak_after_bytes": 44732416,
+            "rss_peak_before_bytes": 44023808,
+            "rss_peak_increment_bytes": 708608,
+            "temporary_bytes": 1450,
+            "wall_ns": 11235499
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 1,
@@ -3245,14 +3253,14 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 464374
+            "validation_ns": 631169
           },
           "transport_metrics": {
-            "parent_cpu_ns": 9478000,
-            "parent_wall_ns": 673668986,
-            "request_bytes": 4141,
+            "parent_cpu_ns": 12581000,
+            "parent_wall_ns": 861775254,
+            "request_bytes": 4169,
             "stderr_bytes": 0,
-            "stdout_bytes": 8411
+            "stdout_bytes": 8443
           }
         },
         {
@@ -3262,12 +3270,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -3279,20 +3288,20 @@
           "input_mode": "file",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 7951839,
-            "cpu_ns": 8395000,
-            "load_ns": 507172,
+            "common_adapter_ns": 14226601,
+            "cpu_ns": 14619000,
+            "load_ns": 564641,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 7454872,
-              "contract_validation": 496967,
-              "horned_load": 507172
+              "common_contract": 13395716,
+              "contract_validation": 830885,
+              "horned_load": 564641
             },
-            "rss_peak_after_bytes": 37617664,
-            "rss_peak_before_bytes": 36900864,
-            "rss_peak_increment_bytes": 716800,
+            "rss_peak_after_bytes": 47104000,
+            "rss_peak_before_bytes": 46399488,
+            "rss_peak_increment_bytes": 704512,
             "temporary_bytes": 1450,
-            "wall_ns": 8459932
+            "wall_ns": 14792000
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 2,
@@ -3309,14 +3318,14 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 496967
+            "validation_ns": 830885
           },
           "transport_metrics": {
-            "parent_cpu_ns": 10209000,
-            "parent_wall_ns": 673468019,
-            "request_bytes": 4141,
+            "parent_cpu_ns": 14748000,
+            "parent_wall_ns": 1182746913,
+            "request_bytes": 4169,
             "stderr_bytes": 0,
-            "stdout_bytes": 8411
+            "stdout_bytes": 8443
           }
         }
       ],
@@ -3617,19 +3626,19 @@
           "input_mode": "file",
           "lane": "pyowl-python-common",
           "metrics": {
-            "common_adapter_ns": 2696970,
+            "common_adapter_ns": 5552752,
             "core_report_seconds": {
-              "load_seconds": 0.004869139986112714
+              "load_seconds": 0.005262516991933808
             },
-            "cpu_ns": 9068000,
-            "load_ns": 6369126,
+            "cpu_ns": 12683000,
+            "load_ns": 7375669,
             "python_allocated_blocks_increment": 713,
             "python_gc_objects_increment": 284,
-            "rss_peak_after_bytes": 61587456,
-            "rss_peak_before_bytes": 61308928,
-            "rss_peak_increment_bytes": 278528,
+            "rss_peak_after_bytes": 64188416,
+            "rss_peak_before_bytes": 64159744,
+            "rss_peak_increment_bytes": 28672,
             "temporary_bytes": 1450,
-            "wall_ns": 9067575
+            "wall_ns": 12929871
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 0,
@@ -3646,7 +3655,7 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 438360
+            "validation_ns": 893734
           }
         },
         {
@@ -3673,19 +3682,19 @@
           "input_mode": "file",
           "lane": "pyowl-python-common",
           "metrics": {
-            "common_adapter_ns": 2637574,
+            "common_adapter_ns": 5467278,
             "core_report_seconds": {
-              "load_seconds": 0.005063499993411824
+              "load_seconds": 0.008464298996841535
             },
-            "cpu_ns": 9121000,
-            "load_ns": 6594118,
-            "python_allocated_blocks_increment": 711,
+            "cpu_ns": 16660000,
+            "load_ns": 11256247,
+            "python_allocated_blocks_increment": 713,
             "python_gc_objects_increment": 284,
-            "rss_peak_after_bytes": 61923328,
-            "rss_peak_before_bytes": 61595648,
-            "rss_peak_increment_bytes": 327680,
+            "rss_peak_after_bytes": 64200704,
+            "rss_peak_before_bytes": 64196608,
+            "rss_peak_increment_bytes": 4096,
             "temporary_bytes": 1450,
-            "wall_ns": 9233151
+            "wall_ns": 16724950
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 1,
@@ -3702,7 +3711,7 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 435395
+            "validation_ns": 749663
           }
         },
         {
@@ -3729,19 +3738,19 @@
           "input_mode": "file",
           "lane": "pyowl-python-common",
           "metrics": {
-            "common_adapter_ns": 2673904,
+            "common_adapter_ns": 4430425,
             "core_report_seconds": {
-              "load_seconds": 0.004529897996690124
+              "load_seconds": 0.005685949989128858
             },
-            "cpu_ns": 8686000,
-            "load_ns": 6006362,
-            "python_allocated_blocks_increment": 712,
+            "cpu_ns": 12253000,
+            "load_ns": 8160184,
+            "python_allocated_blocks_increment": 713,
             "python_gc_objects_increment": 284,
-            "rss_peak_after_bytes": 61923328,
-            "rss_peak_before_bytes": 61923328,
+            "rss_peak_after_bytes": 64217088,
+            "rss_peak_before_bytes": 64217088,
             "rss_peak_increment_bytes": 0,
             "temporary_bytes": 1450,
-            "wall_ns": 8681223
+            "wall_ns": 12591879
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 2,
@@ -3758,7 +3767,7 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 437941
+            "validation_ns": 694684
           }
         }
       ],
@@ -4042,12 +4051,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -4059,20 +4069,20 @@
           "input_mode": "file",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 6930246,
-            "cpu_ns": 7203000,
-            "load_ns": 272901,
+            "common_adapter_ns": 13649819,
+            "cpu_ns": 10000000,
+            "load_ns": 360906,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 6427745,
-              "contract_validation": 502501,
-              "horned_load": 272901
+              "common_contract": 13093184,
+              "contract_validation": 556635,
+              "horned_load": 360906
             },
-            "rss_peak_after_bytes": 38879232,
-            "rss_peak_before_bytes": 38858752,
-            "rss_peak_increment_bytes": 20480,
+            "rss_peak_after_bytes": 45334528,
+            "rss_peak_before_bytes": 45318144,
+            "rss_peak_increment_bytes": 16384,
             "temporary_bytes": 1450,
-            "wall_ns": 7203725
+            "wall_ns": 14011475
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 0,
@@ -4089,18 +4099,18 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 502501
+            "validation_ns": 556635
           },
           "transport_metrics": {
-            "ontology_instance_id": "eb932a7e29901645524cbc0fa3a8368be2ec2e691cf8a100ea559c2cc68bb3e0",
-            "parent_cpu_ns": 305000,
-            "parent_wall_ns": 10252150,
+            "ontology_instance_id": "b95ca06ac46d7735800ad88dc6f486b88c3a19abfb1debd192379becdef71fe7",
+            "parent_cpu_ns": 607000,
+            "parent_wall_ns": 18594671,
             "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
-            "persistent_runner_pid": 51235,
+            "persistent_runner_pid": 58231,
             "persistent_sequence": 5,
-            "request_bytes": 4284,
+            "request_bytes": 4312,
             "stderr_bytes": 0,
-            "stdout_bytes": 8643
+            "stdout_bytes": 8675
           }
         },
         {
@@ -4110,12 +4120,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -4127,20 +4138,20 @@
           "input_mode": "file",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 7350229,
-            "cpu_ns": 7444000,
-            "load_ns": 239615,
+            "common_adapter_ns": 11834822,
+            "cpu_ns": 11810000,
+            "load_ns": 287173,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 6920409,
-              "contract_validation": 429820,
-              "horned_load": 239615
+              "common_contract": 11118391,
+              "contract_validation": 716431,
+              "horned_load": 287173
             },
-            "rss_peak_after_bytes": 38998016,
-            "rss_peak_before_bytes": 38985728,
-            "rss_peak_increment_bytes": 12288,
+            "rss_peak_after_bytes": 45465600,
+            "rss_peak_before_bytes": 45445120,
+            "rss_peak_increment_bytes": 20480,
             "temporary_bytes": 1450,
-            "wall_ns": 7590291
+            "wall_ns": 12122723
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 1,
@@ -4157,18 +4168,18 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 429820
+            "validation_ns": 716431
           },
           "transport_metrics": {
-            "ontology_instance_id": "c8dc976efcbcf0620ef271a6917964da1375226255e79acd28b33954f443900c",
-            "parent_cpu_ns": 271000,
-            "parent_wall_ns": 10233446,
+            "ontology_instance_id": "ea09c6bf8dcb1f438b16c45b392ae753ded1555319cdcc75ef5d3ec5b099d661",
+            "parent_cpu_ns": 653000,
+            "parent_wall_ns": 17109126,
             "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
-            "persistent_runner_pid": 51235,
+            "persistent_runner_pid": 58231,
             "persistent_sequence": 6,
-            "request_bytes": 4284,
+            "request_bytes": 4312,
             "stderr_bytes": 0,
-            "stdout_bytes": 8643
+            "stdout_bytes": 8675
           }
         },
         {
@@ -4178,12 +4189,13 @@
             "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
             "features": [
               "abi3-wrapper",
-              "independent-common-contract-v1"
+              "independent-common-contract-v1",
+              "verified-sdist-install-v1"
             ],
             "pin_state": "complete",
             "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-            "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-            "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+            "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+            "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
             "thread_ceiling": 1,
             "version": "1.4.0"
           },
@@ -4195,20 +4207,20 @@
           "input_mode": "file",
           "lane": "py-horned-common",
           "metrics": {
-            "common_adapter_ns": 6916833,
-            "cpu_ns": 7137000,
-            "load_ns": 232079,
+            "common_adapter_ns": 11294030,
+            "cpu_ns": 11320000,
+            "load_ns": 319899,
             "object_count": 16,
             "phase_ns": {
-              "common_contract": 6483381,
-              "contract_validation": 433452,
-              "horned_load": 232079
+              "common_contract": 10437894,
+              "contract_validation": 856136,
+              "horned_load": 319899
             },
-            "rss_peak_after_bytes": 39120896,
-            "rss_peak_before_bytes": 39104512,
-            "rss_peak_increment_bytes": 16384,
+            "rss_peak_after_bytes": 45494272,
+            "rss_peak_before_bytes": 45486080,
+            "rss_peak_increment_bytes": 8192,
             "temporary_bytes": 1450,
-            "wall_ns": 7149340
+            "wall_ns": 11614951
           },
           "options_sha256": "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c",
           "paired_block": 2,
@@ -4225,18 +4237,18 @@
             "full_contract_validation": true,
             "inside_timed_envelope": true,
             "schema": "pyowl-core/comparator-timed-validation/v1",
-            "validation_ns": 433452
+            "validation_ns": 856136
           },
           "transport_metrics": {
-            "ontology_instance_id": "349e8b2fbfb8e29ca4375ffcae2b5150be1001f539a51650060b647987491d65",
-            "parent_cpu_ns": 402000,
-            "parent_wall_ns": 9947183,
+            "ontology_instance_id": "4d1d02e90ddf1e19e300e9e65b975f5e72f06e8bf67933e070d427abd0e46912",
+            "parent_cpu_ns": 470000,
+            "parent_wall_ns": 16119140,
             "persistent_protocol": "pyowl-core/comparator-persistent-runner/v1",
-            "persistent_runner_pid": 51235,
+            "persistent_runner_pid": 58231,
             "persistent_sequence": 7,
-            "request_bytes": 4284,
+            "request_bytes": 4312,
             "stderr_bytes": 0,
-            "stdout_bytes": 8643
+            "stdout_bytes": 8674
           }
         }
       ],
@@ -4285,12 +4297,13 @@
           "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
           "features": [
             "abi3-wrapper",
-            "independent-common-contract-v1"
+            "independent-common-contract-v1",
+            "verified-sdist-install-v1"
           ],
           "pin_state": "complete",
           "revision": "PyPI py-horned-owl 1.4.0 (2026-02-11)",
-          "runner_revision": "pyowl-core-py-horned-common-runner-v1",
-          "runner_sha256": "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b",
+          "runner_revision": "pyowl-core-py-horned-common-runner-v2",
+          "runner_sha256": "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012",
           "thread_ceiling": 1,
           "version": "1.4.0"
         },
@@ -4298,22 +4311,22 @@
         "fresh_ontology_per_request": true,
         "implementation": "py-horned-owl",
         "lane": "py-horned-common",
-        "pid": 51235,
+        "pid": 58231,
         "protocol": "pyowl-core/comparator-persistent-runner/v1",
         "request_schema": "pyowl-core/comparator-adapter-request/v2",
         "result_schema": "pyowl-core/comparator-adapter-result/v1",
         "schema": "pyowl-core/comparator-persistent-handshake/v1"
       },
       "lane": "py-horned-common",
-      "owner_pid": 51209,
+      "owner_pid": 58210,
       "protocol": "pyowl-core/comparator-persistent-runner/v1",
       "reason": null,
       "request_count": 8,
       "response_count": 8,
-      "runner_pid": 51235,
+      "runner_pid": 58231,
       "schema": "pyowl-core/comparator-persistent-lifecycle/v1",
       "shutdown": "clean-exit",
-      "startup_ns": 1292343822,
+      "startup_ns": 1700868129,
       "status": "pass",
       "stderr_bytes": 0,
       "unique_ontology_instance_count": 8
@@ -4721,13 +4734,13 @@
   "schema": "pyowl-core/comparator-baseline/v1",
   "source_identity": {
     "domain": "pyowl-core:comparator-runtime-source:v1",
-    "input_bytes": 3800499,
+    "input_bytes": 3801381,
     "input_count": 164,
     "inputs": [
       {
-        "bytes": 12098,
+        "bytes": 12127,
         "path": "benchmarks/comparators/comparators.toml",
-        "sha256": "733b00ed35e671d29a326f67a4184f243c458e5211b08f5f348f0ae6f5a1eb3d"
+        "sha256": "a5c5599d50276a0a479db798f721ce2379ac72bbb6ae7c7a6516ee8ff6dc2985"
       },
       {
         "bytes": 8339,
@@ -5065,9 +5078,9 @@
         "sha256": "f10175cf92cab39561fe2a632b3deea34b2a5154df565454f9a6c053e060d5f8"
       },
       {
-        "bytes": 21914,
+        "bytes": 22767,
         "path": "src/pyowl_core/backends/python/parser.py",
-        "sha256": "05aa2fd6be7bb660eb5337c682680a08f40e6c7db56ad3d17cbf89700ce037b7"
+        "sha256": "0f7bba5a33be67f5f758d6017a3b9a55aa962149edb90e4f91c45534bd8939e1"
       },
       {
         "bytes": 3044,
@@ -5547,6 +5560,6 @@
     ],
     "preimage_format": "UTF-8 domain, one NUL byte, then compact canonical JSON of path/bytes/sha256 rows sorted by path",
     "schema": "pyowl-core/comparator-runtime-source/v1",
-    "sha256": "c8965973fbfd82ef4ae053336e5f5dd7bd7f35ecaf3768eb0e8c5f550608c8c6"
+    "sha256": "c9e89d87a8e9e74d2496aef88027495c41a86df2e8619394f38799d5fac06786"
   }
 }

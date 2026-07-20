@@ -355,7 +355,7 @@ def test_committed_py_horned_smoke_attests_real_persistent_lifecycle() -> None:
 
     assert evidence["schema"] == "pyowl-core/comparator-baseline/v1"
     assert evidence["comparator_manifest_sha256"] == (
-        "733b00ed35e671d29a326f67a4184f243c458e5211b08f5f348f0ae6f5a1eb3d"
+        "a5c5599d50276a0a479db798f721ce2379ac72bbb6ae7c7a6516ee8ff6dc2985"
     )
     source_identity = cast(dict[str, Any], evidence["source_identity"])
     source_inputs = cast(list[dict[str, Any]], source_identity["inputs"])
@@ -365,7 +365,7 @@ def test_committed_py_horned_smoke_attests_real_persistent_lifecycle() -> None:
         == evidence["comparator_manifest_sha256"]
     )
     environment = cast(dict[str, Any], evidence["environment"])
-    assert environment["git_commit"] == "3dc46424a70d72cf34f73a2284087ab6ec4e3819"
+    assert environment["git_commit"] == "3315c2276123f0c228e476412363f41a9c6dd21d"
     assert environment["git_dirty"] is False
     assert evidence["contract_valid"] is True
     assert evidence["execution_errors"] == []
@@ -396,11 +396,17 @@ def test_committed_py_horned_smoke_attests_real_persistent_lifecycle() -> None:
     assert lifecycle["stderr_bytes"] == 0
     handshake = cast(dict[str, Any], lifecycle["handshake"])
     artifact = cast(dict[str, Any], handshake["artifact"])
+    assert artifact["runner_revision"] == "pyowl-core-py-horned-common-runner-v2"
+    assert artifact["features"] == [
+        "abi3-wrapper",
+        "independent-common-contract-v1",
+        "verified-sdist-install-v1",
+    ]
     assert artifact["artifact_sha256"] == (
         "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d"
     )
     assert artifact["runner_sha256"] == (
-        "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b"
+        "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012"
     )
     completion = cast(dict[str, Any], evidence["completion_requirements"])
     assert completion["file_lane_implemented"] is True
