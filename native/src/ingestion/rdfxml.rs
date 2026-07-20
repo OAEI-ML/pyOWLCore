@@ -2901,6 +2901,75 @@ mod tests {
     }
 
     #[test]
+    fn complement_and_object_enumeration_map_in_axiom_class_positions() {
+        let complement_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><rdf:Description><owl:complementOf rdf:resource=\"urn:B\"/></rdf:Description></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let complement = mapped(complement_source.as_bytes(), None).expect("object complement");
+        let complement_expression =
+            Node::build(32, vec![Field::Node(class_node("urn:B"))]).expect("complement node");
+        let expected_subclass = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(complement_expression),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(complement
+            .axioms
+            .iter()
+            .any(|value| value == expected_subclass.as_bytes()),);
+        assert_eq!(
+            complement.mapping.total_triples,
+            complement.mapping.consumed_triples,
+        );
+
+        let one_of_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:about=\"urn:x\"><rdf:type><rdf:Description><owl:oneOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:i\"/><rdf:Description rdf:nodeID=\"anonymous\"/></owl:oneOf></rdf:Description></rdf:type></rdf:Description></rdf:RDF>"
+        );
+        let one_of = mapped(one_of_source.as_bytes(), None).expect("object enumeration");
+        let individuals = canonical_set(
+            vec![
+                entity(
+                    "named_individual",
+                    iri("urn:i".to_owned()).expect("individual IRI"),
+                )
+                .expect("named individual"),
+                crate::canonical::anonymous("anonymous").expect("anonymous individual"),
+            ],
+            1,
+            None,
+        )
+        .expect("individual set");
+        let enumeration = Node::build(33, vec![Field::Set(individuals)]).expect("one-of node");
+        let expected_assertion = Node::build(
+            112,
+            vec![
+                Field::Node(enumeration),
+                Field::Node(
+                    entity(
+                        "named_individual",
+                        iri("urn:x".to_owned()).expect("individual IRI"),
+                    )
+                    .expect("named individual"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("class assertion");
+        assert!(one_of
+            .axioms
+            .iter()
+            .any(|value| value == expected_assertion.as_bytes()),);
+        assert_eq!(
+            one_of.mapping.total_triples,
+            one_of.mapping.consumed_triples
+        );
+    }
+
+    #[test]
     fn malformed_collection_reached_through_class_mapping_fails_closed() {
         let cyclic = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf rdf:nodeID=\"e\"/></rdf:Description><rdf:Description rdf:nodeID=\"e\"><owl:intersectionOf rdf:nodeID=\"h\"/></rdf:Description><rdf:Description rdf:nodeID=\"h\"><rdf:first rdf:resource=\"urn:B\"/><rdf:rest rdf:nodeID=\"h\"/></rdf:Description></rdf:RDF>"

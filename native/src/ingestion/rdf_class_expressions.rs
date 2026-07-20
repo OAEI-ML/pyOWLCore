@@ -1,6 +1,6 @@
 //! Bounded reverse mapping for RDF boolean class expressions.
 
-use crate::canonical::{canonical_set, entity, iri, Field, Node};
+use crate::canonical::{anonymous, canonical_set, entity, iri, Field, Node};
 use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
 use crate::session::Session;
@@ -8,8 +8,14 @@ use crate::session::Session;
 use super::rdf_lists::{RdfListDecoder, RdfResource, RdfTerm, RdfTriple, RDF_TYPE};
 
 const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
+const OWL_COMPLEMENT_OF: &str = "http://www.w3.org/2002/07/owl#complementOf";
 const OWL_INTERSECTION_OF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
+const OWL_ONE_OF: &str = "http://www.w3.org/2002/07/owl#oneOf";
 const OWL_UNION_OF: &str = "http://www.w3.org/2002/07/owl#unionOf";
+
+const ROLE_EXPRESSION: u8 = 1;
+const ROLE_LIST: u8 = 2;
+const ROLE_INDIVIDUAL: u8 = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedClassExpression {
@@ -23,6 +29,30 @@ pub(crate) struct RdfClassExpressionDecoder<'graph, 'data> {
     triples: &'graph [RdfTriple<'data>],
     lists: RdfListDecoder<'graph, 'data>,
     active: Vec<&'data str>,
+    blank_roles: Vec<BlankRole<'data>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BlankRole<'data> {
+    label: &'data str,
+    roles: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClassConstructor {
+    Boolean { index: usize, tag: u64 },
+    Complement { index: usize },
+    OneOf { index: usize },
+}
+
+impl ClassConstructor {
+    const fn index(self) -> usize {
+        match self {
+            Self::Boolean { index, .. } | Self::Complement { index } | Self::OneOf { index } => {
+                index
+            }
+        }
+    }
 }
 
 impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
@@ -31,6 +61,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             triples,
             lists: RdfListDecoder::new(triples),
             active: Vec::new(),
+            blank_roles: Vec::new(),
         }
     }
 
@@ -68,6 +99,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         consumed: &mut Vec<usize>,
         session: &mut Session<'_>,
     ) -> NativeResult<Node> {
+        self.claim_blank(value, ROLE_EXPRESSION, session)?;
         session.step(usize_as_u64(
             self.active.len(),
             "native RDF class-expression cycle work exceeds u64",
@@ -89,43 +121,79 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         }
         reserve_item(&mut self.active, session)?;
         self.active.push(value);
-        let result = self.decode_boolean(value, consumed, session);
+        let result = self.decode_constructor(value, consumed, session);
         self.active.pop();
         result
     }
 
-    fn decode_boolean(
+    fn decode_constructor(
         &mut self,
         subject: &'data str,
         consumed: &mut Vec<usize>,
         session: &mut Session<'_>,
     ) -> NativeResult<Node> {
+        let complement = self.unique_edge(subject, OWL_COMPLEMENT_OF, session)?;
         let intersection = self.unique_edge(subject, OWL_INTERSECTION_OF, session)?;
+        let one_of = self.unique_edge(subject, OWL_ONE_OF, session)?;
         let union = self.unique_edge(subject, OWL_UNION_OF, session)?;
-        let (constructor, tag) = match (intersection, union) {
-            (Some(index), None) => (index, 30),
-            (None, Some(index)) => (index, 31),
-            (Some(_), Some(_)) => {
-                return Err(unsupported(
-                    "native RDF blank node has conflicting class constructors",
-                ));
-            }
-            (None, None) => {
-                return Err(unsupported(
-                    "native RDF blank node is not a recognized class expression",
-                ));
-            }
+        let constructor_count = usize::from(complement.is_some())
+            .checked_add(usize::from(intersection.is_some()))
+            .and_then(|value| value.checked_add(usize::from(one_of.is_some())))
+            .and_then(|value| value.checked_add(usize::from(union.is_some())))
+            .ok_or_else(|| NativeError::limit("native RDF constructor count overflow"))?;
+        if constructor_count != 1 {
+            return Err(unsupported(if constructor_count == 0 {
+                "native RDF blank node is not a recognized class expression"
+            } else {
+                "native RDF blank node has conflicting class constructors"
+            }));
+        }
+        let constructor = if let Some(index) = intersection {
+            ClassConstructor::Boolean { index, tag: 30 }
+        } else if let Some(index) = union {
+            ClassConstructor::Boolean { index, tag: 31 }
+        } else if let Some(index) = complement {
+            ClassConstructor::Complement { index }
+        } else if let Some(index) = one_of {
+            ClassConstructor::OneOf { index }
+        } else {
+            return Err(NativeError::protocol(
+                "native RDF constructor ledger is empty",
+            ));
         };
 
-        push_index(consumed, constructor, session)?;
+        push_index(consumed, constructor.index(), session)?;
         self.consume_class_markers(subject, consumed, session)?;
-        let head = self.triples[constructor].object;
+        let target = self.triples[constructor.index()].object;
+        match constructor {
+            ClassConstructor::Boolean { tag, .. } => {
+                self.decode_boolean(target, tag, consumed, session)
+            }
+            ClassConstructor::Complement { .. } => {
+                let operand = self.decode_into(target, consumed, session)?;
+                let fields = reserved_fields([Field::Node(operand)], session)?;
+                Node::build(32, fields)
+            }
+            ClassConstructor::OneOf { .. } => self.decode_one_of(target, consumed, session),
+        }
+    }
+
+    fn decode_boolean(
+        &mut self,
+        head: RdfTerm<'data>,
+        tag: u64,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
         let decoded = self.lists.decode(head, session)?;
         let raw_length = decoded.items.len();
         if raw_length < 2 {
             return Err(unsupported(
                 "native RDF boolean class expression has fewer than two operands",
             ));
+        }
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
         }
         for index in decoded.consumed {
             push_index(consumed, index, session)?;
@@ -150,6 +218,82 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         let node = Node::build(tag, fields)?;
         session.finish()?;
         Ok(node)
+    }
+
+    fn decode_one_of(
+        &mut self,
+        head: RdfTerm<'data>,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        let decoded = self.lists.decode(head, session)?;
+        if decoded.items.is_empty() {
+            return Err(unsupported(
+                "native RDF object enumeration has no individuals",
+            ));
+        }
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        for index in decoded.consumed {
+            push_index(consumed, index, session)?;
+        }
+        let mut individuals = reserved_vec(decoded.items.len(), session)?;
+        for item in decoded.items {
+            individuals.push(self.decode_individual(item, session)?);
+        }
+        session.step(usize_as_u64(
+            individuals.len(),
+            "native RDF individual-set work exceeds u64",
+        )?)?;
+        let individuals = canonical_set(individuals, 1, None)?;
+        let fields = reserved_fields([Field::Set(individuals)], session)?;
+        Node::build(33, fields)
+    }
+
+    fn decode_individual(
+        &mut self,
+        value: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        match value {
+            RdfTerm::Iri(value) => named_individual(value, session),
+            RdfTerm::Blank(value) => {
+                self.claim_blank(value, ROLE_INDIVIDUAL, session)?;
+                session.reserve_bytes(value.len())?;
+                anonymous(value)
+            }
+            RdfTerm::Literal(_) => Err(unsupported(
+                "native RDF object enumeration item must be a resource",
+            )),
+        }
+    }
+
+    fn claim_blank(
+        &mut self,
+        label: &'data str,
+        role: u8,
+        session: &mut Session<'_>,
+    ) -> NativeResult<()> {
+        session.step(usize_as_u64(
+            self.blank_roles.len(),
+            "native RDF blank-role work exceeds u64",
+        )?)?;
+        if let Some(record) = self
+            .blank_roles
+            .iter_mut()
+            .find(|record| record.label == label)
+        {
+            let roles = record.roles | role;
+            if roles & ROLE_INDIVIDUAL != 0 && roles != ROLE_INDIVIDUAL {
+                return Err(unsupported("native RDF blank node has ambiguous roles"));
+            }
+            record.roles = roles;
+            return Ok(());
+        }
+        reserve_item(&mut self.blank_roles, session)?;
+        self.blank_roles.push(BlankRole { label, roles: role });
+        Ok(())
     }
 
     fn unique_edge(
@@ -193,10 +337,18 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
 }
 
 fn named_class(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
+    named_entity("class", value, session)
+}
+
+fn named_individual(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
+    named_entity("named_individual", value, session)
+}
+
+fn named_entity(kind: &'static str, value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
     super::check_iri(
         value,
         session,
-        "native RDF class-expression IRI exceeds max_iri_bytes",
+        "native RDF expression IRI exceeds max_iri_bytes",
     )?;
     session.reserve_bytes(value.len())?;
     let mut owned = String::new();
@@ -204,7 +356,7 @@ fn named_class(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
         .try_reserve_exact(value.len())
         .map_err(|_| NativeError::limit("native RDF class IRI allocation failed"))?;
     owned.push_str(value);
-    entity("class", iri(owned)?)
+    entity(kind, iri(owned)?)
 }
 
 fn push_index(
@@ -335,6 +487,43 @@ mod tests {
     }
 
     #[test]
+    fn complement_and_one_of_match_canonical_constructor_tags() {
+        let complement_graph = [edge("e", OWL_COMPLEMENT_OF, iri_term("urn:a"))];
+        let complement =
+            decode(&complement_graph, blank_term("e")).expect("object complement expression");
+        let expected_complement = Node::build(
+            32,
+            vec![Field::Node(
+                entity("class", iri("urn:a".to_owned()).unwrap()).unwrap(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(complement.node.as_bytes(), expected_complement.as_bytes());
+        assert_eq!(complement.consumed, [0]);
+
+        let one_of_graph = [
+            edge("e", OWL_ONE_OF, blank_term("h")),
+            edge("h", RDF_FIRST, iri_term("urn:i")),
+            edge("h", RDF_REST, blank_term("t")),
+            edge("t", RDF_FIRST, blank_term("anonymous")),
+            edge("t", RDF_REST, iri_term(RDF_NIL)),
+        ];
+        let one_of = decode(&one_of_graph, blank_term("e")).expect("object enumeration");
+        let individuals = canonical_set(
+            vec![
+                entity("named_individual", iri("urn:i".to_owned()).unwrap()).unwrap(),
+                anonymous("anonymous").unwrap(),
+            ],
+            1,
+            None,
+        )
+        .unwrap();
+        let expected_one_of = Node::build(33, vec![Field::Set(individuals)]).unwrap();
+        assert_eq!(one_of.node.as_bytes(), expected_one_of.as_bytes());
+        assert_eq!(one_of.consumed, [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
     fn constructor_conflicts_expression_cycles_and_literals_fail_closed() {
         let conflict = [
             edge("e", OWL_INTERSECTION_OF, iri_term(RDF_NIL)),
@@ -347,9 +536,17 @@ mod tests {
             edge("t", RDF_FIRST, iri_term("urn:a")),
             edge("t", RDF_REST, iri_term(RDF_NIL)),
         ];
+        let complement_literal = [edge("e", OWL_COMPLEMENT_OF, RdfTerm::Literal("bad"))];
+        let ambiguous_individual = [
+            edge("e", OWL_ONE_OF, blank_term("h")),
+            edge("h", RDF_FIRST, blank_term("e")),
+            edge("h", RDF_REST, iri_term(RDF_NIL)),
+        ];
         for (graph, value) in [
             (conflict.as_slice(), blank_term("e")),
             (cycle.as_slice(), blank_term("e")),
+            (complement_literal.as_slice(), blank_term("e")),
+            (ambiguous_individual.as_slice(), blank_term("e")),
             (&[][..], RdfTerm::Literal("not-a-class")),
         ] {
             assert_eq!(

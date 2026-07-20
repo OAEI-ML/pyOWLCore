@@ -33,6 +33,9 @@ pub(crate) struct RdfTriple<'graph> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedRdfList<'graph> {
     pub(crate) items: Vec<RdfTerm<'graph>>,
+    /// Blank labels traversed from head to tail, used by semantic mappers to
+    /// enforce compatible blank-node roles.
+    pub(crate) cells: Vec<&'graph str>,
     /// Indices of the exact `rdf:first`, `rdf:rest`, and optional
     /// `rdf:type rdf:List` triples owned by this collection.
     pub(crate) consumed: Vec<usize>,
@@ -71,6 +74,7 @@ impl<'graph, 'data> RdfListDecoder<'graph, 'data> {
             RdfTerm::Iri(RDF_NIL) => {
                 return Ok(DecodedRdfList {
                     items: Vec::new(),
+                    cells: Vec::new(),
                     consumed: Vec::new(),
                 });
             }
@@ -136,7 +140,11 @@ impl<'graph, 'data> RdfListDecoder<'graph, 'data> {
         self.owners.extend(pending_owners);
         consumed.sort_unstable();
         consumed.dedup();
-        Ok(DecodedRdfList { items, consumed })
+        Ok(DecodedRdfList {
+            items,
+            cells: visited,
+            consumed,
+        })
     }
 
     fn claim(
