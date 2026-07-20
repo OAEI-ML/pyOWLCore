@@ -144,3 +144,9 @@ def _publication_fixture_v2(
     raw_document_collections: Mapping[tuple[object, ...], Sequence[bytes]] | None = None,
     max_retained_bytes: int = 67_108_864,
 ) -> _NativeSnapshotHandle: ...
+def _unique_axiom_publication_fixture_v2(
+    attestation: NativeSnapshotAttestationV2,
+    row_count: int,
+    *,
+    max_retained_bytes: int = 1_073_741_824,
+) -> _NativeSnapshotHandle: ...

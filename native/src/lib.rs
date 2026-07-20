@@ -459,6 +459,37 @@ fn _publication_fixture_v2(
 
 #[cfg(feature = "test-hooks")]
 #[pyfunction]
+#[pyo3(signature = (attestation, row_count, *, max_retained_bytes=None))]
+fn _unique_axiom_publication_fixture_v2(
+    attestation: &Bound<'_, PyAny>,
+    row_count: &Bound<'_, PyAny>,
+    max_retained_bytes: Option<&Bound<'_, PyAny>>,
+) -> PyResult<publication::NativeSnapshotHandle> {
+    if !row_count
+        .get_type()
+        .is(row_count.py().get_type::<pyo3::types::PyInt>())
+    {
+        return Err(PyTypeError::new_err("row_count must be an exact int"));
+    }
+    let row_count: u64 = row_count.extract()?;
+    let max_retained_bytes = if let Some(value) = max_retained_bytes {
+        if !value
+            .get_type()
+            .is(value.py().get_type::<pyo3::types::PyInt>())
+        {
+            return Err(PyTypeError::new_err(
+                "max_retained_bytes must be an exact int",
+            ));
+        }
+        value.extract()?
+    } else {
+        1_073_741_824
+    };
+    publication::unique_axiom_fixture_handle_v2(attestation, row_count, max_retained_bytes)
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
 #[pyo3(signature = (canonical, config, cancel=None))]
 fn _component_roundtrip_v1<'py>(
     py: Python<'py>,
@@ -594,6 +625,11 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(_publication_fixture_v1, module)?)?;
     #[cfg(feature = "test-hooks")]
     module.add_function(wrap_pyfunction!(_publication_fixture_v2, module)?)?;
+    #[cfg(feature = "test-hooks")]
+    module.add_function(wrap_pyfunction!(
+        _unique_axiom_publication_fixture_v2,
+        module
+    )?)?;
     #[cfg(feature = "test-hooks")]
     module.add_function(wrap_pyfunction!(_component_roundtrip_v1, module)?)?;
     module.add_function(wrap_pyfunction!(parse_document, module)?)?;

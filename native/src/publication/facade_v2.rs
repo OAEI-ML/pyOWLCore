@@ -1189,6 +1189,53 @@ impl PublicationStorageV2 {
         Self::from_typed_structural(attestation, typed)
     }
 
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn unique_axiom_fixture_for_tests(
+        attestation: &Bound<'_, PyAny>,
+        row_count: u64,
+        max_retained_bytes: u64,
+    ) -> PyResult<Arc<Self>> {
+        let handoff = attestation.py().import(HANDOFF_MODULE)?;
+        require_exact_type(&handoff, "NativeSnapshotAttestationV2", attestation)?;
+        let validated_attestation = reconstruct_attestation(&handoff, attestation)?;
+        let attestation = NativeSnapshotAttestationV2::from_python(&validated_attestation)?;
+        if row_count == 0
+            || attestation.document_count != 1
+            || attestation.ontology_annotation_count != 0
+            || attestation.stored_axiom_count != row_count
+            || attestation.effective_axiom_count != row_count
+            || attestation.extension_count != 0
+            || attestation.source_map_entry_count != 0
+            || attestation.origin_entry_count != 0
+            || attestation.rdf_mapping_report_count != 0
+            || attestation.capability_bits != 7
+            || attestation.owl2_dl_report_summary.is_some()
+            || attestation.owl2_dl_validated
+            || attestation.owl2_dl_conforms.is_some()
+            || attestation.owl2_dl_report_sha256.is_some()
+        {
+            return Err(PyValueError::new_err(
+                "unique-axiom fixture metadata diverges from its structural rows",
+            ));
+        }
+        let maximum_row =
+            generated_declaration_row(row_count - 1).map_err(native_error_to_python)?;
+        if attestation.max_facade_row_bytes
+            != u64::try_from(maximum_row.len())
+                .map_err(|_| PyMemoryError::new_err("generated row size exceeds u64"))?
+        {
+            return Err(PyValueError::new_err(
+                "unique-axiom fixture row bound diverges from its attestation",
+            ));
+        }
+        let mut builder =
+            StorageBuilderV2::new(max_retained_bytes).map_err(native_error_to_python)?;
+        builder
+            .add_generated_unique_axiom_tables(row_count)
+            .map_err(native_error_to_python)?;
+        builder.finish(attestation).map_err(native_error_to_python)
+    }
+
     #[cfg(test)]
     pub(super) fn fixture_for_tests() -> Arc<Self> {
         Self::fixture_for_tests_with_document_count(1)
@@ -2033,6 +2080,51 @@ impl StorageBuilderV2 {
         self.budget.claim(retained)
     }
 
+    #[cfg(feature = "test-hooks")]
+    fn add_generated_unique_axiom_tables(&mut self, row_count: u64) -> NativeResult<()> {
+        let count = usize::try_from(row_count)
+            .map_err(|_| NativeError::limit("generated axiom count exceeds usize"))?;
+        self.reserve_table_capacity(false, 2)?;
+        let mut document_rows = Vec::new();
+        document_rows
+            .try_reserve_exact(count)
+            .map_err(|_| NativeError::limit("generated document root allocation failed"))?;
+        self.claim_row_capacity(document_rows.capacity())?;
+        for index in 0..row_count {
+            let row = generated_declaration_row(index)?;
+            document_rows.push(self.intern(&row, CollectionV2::Axioms)?);
+        }
+        let mut closure_rows = Vec::new();
+        closure_rows
+            .try_reserve_exact(count)
+            .map_err(|_| NativeError::limit("generated closure root allocation failed"))?;
+        self.claim_row_capacity(closure_rows.capacity())?;
+        closure_rows.extend(document_rows.iter().cloned());
+        self.effective_tables.push(FacadeTableV2 {
+            coordinate: CoordinateV2 {
+                collection: CollectionV2::Axioms,
+                scope: ScopeV2::Document,
+                document_ordinal: Some(0),
+                signature_kind: SignatureKindV2::All,
+                include_builtins: true,
+            },
+            rows: document_rows,
+            source_identity: 1,
+        });
+        self.effective_tables.push(FacadeTableV2 {
+            coordinate: CoordinateV2 {
+                collection: CollectionV2::Axioms,
+                scope: ScopeV2::Closure,
+                document_ordinal: None,
+                signature_kind: SignatureKindV2::All,
+                include_builtins: true,
+            },
+            rows: closure_rows,
+            source_identity: 2,
+        });
+        Ok(())
+    }
+
     #[cfg(any(test, feature = "test-hooks"))]
     fn add_derived_table(&mut self, coordinate: CoordinateV2, rows: &[&[u8]]) -> NativeResult<()> {
         if let Some(index) = self
@@ -2282,6 +2374,36 @@ impl StorageBuilderV2 {
             counters: CounterStateV2::new(initial),
         }))
     }
+}
+
+#[cfg(feature = "test-hooks")]
+fn generated_declaration_row(index: u64) -> NativeResult<Vec<u8>> {
+    use crate::canonical::encode_frame;
+
+    let iri_text = format!("urn:wp15:axiom:{index:020}");
+    let mut iri = Vec::new();
+    iri.try_reserve_exact(2 + 10 + iri_text.len())
+        .map_err(|_| NativeError::limit("generated IRI allocation failed"))?;
+    iri.extend([1, 2]);
+    encode_frame(iri_text.as_bytes(), &mut iri)?;
+
+    let mut entity = Vec::new();
+    entity
+        .try_reserve_exact(2 + 1 + 5 + 1 + 10 + iri.len())
+        .map_err(|_| NativeError::limit("generated entity allocation failed"))?;
+    entity.extend([2, 5]);
+    encode_frame(b"class", &mut entity)?;
+    entity.push(1);
+    encode_frame(&iri, &mut entity)?;
+
+    let mut declaration = Vec::new();
+    declaration
+        .try_reserve_exact(2 + 10 + entity.len() + 2)
+        .map_err(|_| NativeError::limit("generated declaration allocation failed"))?;
+    declaration.extend([60, 1]);
+    encode_frame(&entity, &mut declaration)?;
+    declaration.extend([6, 0]);
+    Ok(declaration)
 }
 
 fn is_canonical_input_table(table: &FacadeTableV2) -> bool {

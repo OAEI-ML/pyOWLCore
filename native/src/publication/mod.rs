@@ -104,6 +104,20 @@ pub(crate) fn fixture_handle_v2(
     Ok(NativeSnapshotHandle::from_storage_v2(storage))
 }
 
+#[cfg(feature = "test-hooks")]
+pub(crate) fn unique_axiom_fixture_handle_v2(
+    attestation: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    row_count: u64,
+    max_retained_bytes: u64,
+) -> pyo3::PyResult<NativeSnapshotHandle> {
+    let storage = facade_v2::PublicationStorageV2::unique_axiom_fixture_for_tests(
+        attestation,
+        row_count,
+        max_retained_bytes,
+    )?;
+    Ok(NativeSnapshotHandle::from_storage_v2(storage))
+}
+
 const MAX_DIAGNOSTIC_DETAILS: usize = 64;
 const MAX_DIAGNOSTIC_IMPORT_CHAIN: usize = 128;
 const MAX_DIAGNOSTICS_PER_SEQUENCE: usize = 10_000;
