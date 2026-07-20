@@ -6,10 +6,11 @@ use crate::limits::LimitKey;
 use crate::model::{scan_canonical, Category, ScanBudget};
 use crate::session::Session;
 
-use super::rdf_lists::{RdfListDecoder, RdfResource, RdfTerm, RdfTriple, RDF_TYPE};
+use super::rdf_lists::{RdfListDecoder, RdfResource, RdfTerm, RdfTriple, RDF_FIRST, RDF_TYPE};
 
 const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
 const OWL_COMPLEMENT_OF: &str = "http://www.w3.org/2002/07/owl#complementOf";
+const OWL_DATATYPE_COMPLEMENT_OF: &str = "http://www.w3.org/2002/07/owl#datatypeComplementOf";
 const OWL_INTERSECTION_OF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
 const OWL_ONE_OF: &str = "http://www.w3.org/2002/07/owl#oneOf";
 const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
@@ -26,10 +27,13 @@ const OWL_MAX_QUALIFIED_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#maxQu
 const OWL_QUALIFIED_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#qualifiedCardinality";
 const OWL_ON_CLASS: &str = "http://www.w3.org/2002/07/owl#onClass";
 const OWL_ON_DATA_RANGE: &str = "http://www.w3.org/2002/07/owl#onDataRange";
+const OWL_ON_DATATYPE: &str = "http://www.w3.org/2002/07/owl#onDatatype";
 const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
 const OWL_UNION_OF: &str = "http://www.w3.org/2002/07/owl#unionOf";
+const OWL_WITH_RESTRICTIONS: &str = "http://www.w3.org/2002/07/owl#withRestrictions";
 const RDF_PLAIN_LITERAL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral";
 const RDFS_LITERAL: &str = "http://www.w3.org/2000/01/rdf-schema#Literal";
+const RDFS_DATATYPE: &str = "http://www.w3.org/2000/01/rdf-schema#Datatype";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 const ROLE_EXPRESSION: u8 = 1;
@@ -48,6 +52,7 @@ pub(crate) struct RdfClassExpressionDecoder<'graph, 'data> {
     triples: &'graph [RdfTriple<'data>],
     lists: RdfListDecoder<'graph, 'data>,
     active: Vec<&'data str>,
+    active_data: Vec<&'data str>,
     blank_roles: Vec<BlankRole<'data>>,
     data_properties: Vec<&'data str>,
     datatypes: Vec<&'data str>,
@@ -94,6 +99,14 @@ enum RestrictionOperator {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DataRangeConstructor {
+    Boolean { index: usize, tag: u64 },
+    Complement { index: usize },
+    OneOf { index: usize },
+    DatatypeRestriction,
+}
+
 impl ClassConstructor {
     const fn index(self) -> usize {
         match self {
@@ -111,6 +124,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             triples,
             lists: RdfListDecoder::new(triples),
             active: Vec::new(),
+            active_data: Vec::new(),
             blank_roles: Vec::new(),
             data_properties: Vec::new(),
             datatypes: Vec::new(),
@@ -187,17 +201,209 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
     fn decode_data_range(
         &mut self,
         value: RdfTerm<'data>,
+        consumed: &mut Vec<usize>,
         session: &mut Session<'_>,
     ) -> NativeResult<Node> {
+        session.finish()?;
         match value {
             RdfTerm::Iri(value) => named_entity("datatype", value, session),
-            RdfTerm::Blank(_) => Err(unsupported(
-                "native bounded RDF data restriction requires a named datatype filler",
-            )),
+            RdfTerm::Blank(value) => self.decode_data_blank(value, consumed, session),
             RdfTerm::Literal(_) => Err(unsupported(
                 "native RDF data restriction filler cannot be a literal",
             )),
         }
+    }
+
+    fn decode_data_blank(
+        &mut self,
+        value: &'data str,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        self.claim_blank(value, ROLE_EXPRESSION, session)?;
+        let active_length = self
+            .active
+            .len()
+            .checked_add(self.active_data.len())
+            .ok_or_else(|| NativeError::limit("native RDF data-range cycle work overflow"))?;
+        session.step(usize_as_u64(
+            active_length,
+            "native RDF data-range cycle work exceeds u64",
+        )?)?;
+        if self.active.contains(&value) || self.active_data.contains(&value) {
+            return Err(unsupported("native cyclic RDF structural expression"));
+        }
+        let next_depth = active_length
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native RDF expression depth overflow"))?;
+        if usize_as_u64(next_depth, "native RDF expression depth exceeds u64")?
+            > session.limits().value(LimitKey::MaxNestingDepth)
+        {
+            return Err(NativeError::limit(
+                "native RDF expression exceeds max_nesting_depth",
+            ));
+        }
+        reserve_item(&mut self.active_data, session)?;
+        self.active_data.push(value);
+        let result = self.decode_data_constructor(value, consumed, session);
+        self.active_data.pop();
+        result
+    }
+
+    fn decode_data_constructor(
+        &mut self,
+        subject: &'data str,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        let intersection = self.unique_edge(subject, OWL_INTERSECTION_OF, session)?;
+        let union = self.unique_edge(subject, OWL_UNION_OF, session)?;
+        let complement = self.unique_edge(subject, OWL_DATATYPE_COMPLEMENT_OF, session)?;
+        let one_of = self.unique_edge(subject, OWL_ONE_OF, session)?;
+        let on_datatype = self.unique_edge(subject, OWL_ON_DATATYPE, session)?;
+        let with_restrictions = self.unique_edge(subject, OWL_WITH_RESTRICTIONS, session)?;
+        let marker = self.unique_marker(subject, RDFS_DATATYPE, session)?;
+        let datatype_restriction = on_datatype.is_some() || with_restrictions.is_some();
+        let constructor_count = [
+            intersection.is_some(),
+            union.is_some(),
+            complement.is_some(),
+            one_of.is_some(),
+            datatype_restriction,
+        ]
+        .into_iter()
+        .filter(|value| *value)
+        .count();
+        if constructor_count != 1 {
+            return Err(unsupported(if constructor_count == 0 {
+                "native RDF blank node is not a recognized data range"
+            } else {
+                "native RDF blank node has conflicting data-range constructors"
+            }));
+        }
+        let constructor = if let Some(index) = intersection {
+            DataRangeConstructor::Boolean { index, tag: 21 }
+        } else if let Some(index) = union {
+            DataRangeConstructor::Boolean { index, tag: 22 }
+        } else if let Some(index) = complement {
+            DataRangeConstructor::Complement { index }
+        } else if let Some(index) = one_of {
+            DataRangeConstructor::OneOf { index }
+        } else {
+            DataRangeConstructor::DatatypeRestriction
+        };
+        if matches!(constructor, DataRangeConstructor::DatatypeRestriction) {
+            return Err(unsupported(
+                "native bounded RDF datatype restrictions are not mapped",
+            ));
+        }
+        if let Some(marker) = marker {
+            push_index(consumed, marker, session)?;
+        }
+        let index = match constructor {
+            DataRangeConstructor::Boolean { index, .. }
+            | DataRangeConstructor::Complement { index }
+            | DataRangeConstructor::OneOf { index } => index,
+            DataRangeConstructor::DatatypeRestriction => {
+                return Err(NativeError::protocol(
+                    "native RDF data-range constructor ledger is empty",
+                ));
+            }
+        };
+        push_index(consumed, index, session)?;
+        let target = self.triples[index].object;
+        match constructor {
+            DataRangeConstructor::Boolean { tag, .. } => {
+                self.decode_data_boolean(target, tag, consumed, session)
+            }
+            DataRangeConstructor::Complement { .. } => {
+                let operand = self.decode_data_range(target, consumed, session)?;
+                let fields = reserved_fields([Field::Node(operand)], session)?;
+                Node::build(23, fields)
+            }
+            DataRangeConstructor::OneOf { .. } => {
+                self.decode_data_one_of(target, consumed, session)
+            }
+            DataRangeConstructor::DatatypeRestriction => Err(NativeError::protocol(
+                "native RDF data-range constructor ledger is empty",
+            )),
+        }
+    }
+
+    fn decode_data_boolean(
+        &mut self,
+        head: RdfTerm<'data>,
+        tag: u64,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        let decoded = self.lists.decode(head, session)?;
+        if decoded.items.len() < 2 {
+            return Err(unsupported(
+                "native RDF boolean data range has fewer than two operands",
+            ));
+        }
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        for index in decoded.consumed {
+            push_index(consumed, index, session)?;
+        }
+        let mut operands = reserved_vec(decoded.items.len(), session)?;
+        for item in decoded.items {
+            operands.push(self.decode_data_range(item, consumed, session)?);
+        }
+        session.step(usize_as_u64(
+            operands.len(),
+            "native RDF canonical-set work exceeds u64",
+        )?)?;
+        let mut operands = canonical_set(operands, 1, Some(tag))?;
+        if operands.len() == 1 {
+            return operands
+                .pop()
+                .ok_or_else(|| NativeError::protocol("native RDF data-range ledger is empty"));
+        }
+        let fields = reserved_fields([Field::Set(operands)], session)?;
+        Node::build(tag, fields)
+    }
+
+    fn decode_data_one_of(
+        &mut self,
+        head: RdfTerm<'data>,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        let decoded = self.lists.decode(head, session)?;
+        if decoded.items.is_empty() || decoded.items.len() != decoded.cells.len() {
+            return Err(unsupported(
+                "native RDF data enumeration has no literal values",
+            ));
+        }
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        for index in decoded.consumed {
+            push_index(consumed, index, session)?;
+        }
+        let mut values = reserved_vec(decoded.items.len(), session)?;
+        for (cell, item) in decoded.cells.into_iter().zip(decoded.items) {
+            if !matches!(item, RdfTerm::Literal(_)) {
+                return Err(unsupported(
+                    "native RDF data enumeration item must be a literal",
+                ));
+            }
+            let first = self
+                .unique_edge(cell, RDF_FIRST, session)?
+                .ok_or_else(|| NativeError::protocol("native RDF list item ledger is empty"))?;
+            values.push(self.decode_literal(first, session)?);
+        }
+        session.step(usize_as_u64(
+            values.len(),
+            "native RDF literal-set work exceeds u64",
+        )?)?;
+        let values = canonical_set(values, 1, None)?;
+        let fields = reserved_fields([Field::Set(values)], session)?;
+        Node::build(24, fields)
     }
 
     fn restriction_uses_data_range(
@@ -217,10 +423,23 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             self.datatypes.len(),
             "native RDF datatype-kind work exceeds u64",
         )?)?;
-        Ok(matches!(
-            filler,
-            RdfTerm::Iri(value) if self.datatypes.contains(&value)
-        ))
+        match filler {
+            RdfTerm::Iri(value) => Ok(self.datatypes.contains(&value)),
+            RdfTerm::Blank(value) => {
+                for triple in self.triples {
+                    session.step(1)?;
+                    if triple.subject == RdfResource::Blank(value)
+                        && (triple.predicate == OWL_ON_DATATYPE
+                            || (triple.predicate == RDF_TYPE
+                                && triple.object == RdfTerm::Iri(RDFS_DATATYPE)))
+                    {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            RdfTerm::Literal(_) => Ok(false),
+        }
     }
 
     fn decode_into(
@@ -513,7 +732,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                     let property = named_entity("data_property", property_iri, session)?;
                     let mut properties = reserved_vec(1, session)?;
                     properties.push(property);
-                    let filler = self.decode_data_range(filler_term, session)?;
+                    let filler = self.decode_data_range(filler_term, consumed, session)?;
                     let fields = reserved_fields(
                         [Field::Sequence(properties), Field::Node(filler)],
                         session,
@@ -625,7 +844,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         }
         let (property, filler, tag) = if data_cardinality {
             let filler = if let Some(value) = filler_term {
-                self.decode_data_range(value, session)?
+                self.decode_data_range(value, consumed, session)?
             } else {
                 named_entity("datatype", RDFS_LITERAL, session)?
             };
@@ -1036,6 +1255,29 @@ mod tests {
         decoder.decode_term(value, &mut session)
     }
 
+    fn decode_data(
+        graph: &[RdfTriple<'static>],
+        value: RdfTerm<'static>,
+        literals: &[(usize, Option<&'static str>, Option<&'static str>)],
+    ) -> NativeResult<DecodedClassExpression> {
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0)?;
+        let mut decoder = RdfClassExpressionDecoder::new(graph);
+        for (index, datatype, language) in literals {
+            decoder.register_literal(*index, *datatype, *language, &mut session)?;
+        }
+        let mut consumed = Vec::new();
+        let node = decoder.decode_data_range(value, &mut consumed, &mut session)?;
+        consumed.sort_unstable();
+        consumed.dedup();
+        Ok(DecodedClassExpression { node, consumed })
+    }
+
     #[test]
     fn intersection_and_union_match_canonical_constructor_tags() {
         for (predicate, tag) in [(OWL_INTERSECTION_OF, 30), (OWL_UNION_OF, 31)] {
@@ -1108,6 +1350,125 @@ mod tests {
         let expected_one_of = Node::build(33, vec![Field::Set(individuals)]).unwrap();
         assert_eq!(one_of.node.as_bytes(), expected_one_of.as_bytes());
         assert_eq!(one_of.consumed, [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn boolean_and_complement_data_ranges_match_canonical_tags() {
+        for (predicate, tag) in [(OWL_INTERSECTION_OF, 21), (OWL_UNION_OF, 22)] {
+            let graph = [
+                edge("e", RDF_TYPE, iri_term(RDFS_DATATYPE)),
+                edge("e", predicate, blank_term("h")),
+                edge("h", RDF_FIRST, iri_term("urn:B")),
+                edge("h", RDF_REST, blank_term("t")),
+                edge("t", RDF_FIRST, iri_term("urn:A")),
+                edge("t", RDF_REST, iri_term(RDF_NIL)),
+            ];
+            let decoded = decode_data(&graph, blank_term("e"), &[]).expect("boolean data range");
+            let values = canonical_set(
+                vec![
+                    entity("datatype", iri("urn:A".to_owned()).unwrap()).unwrap(),
+                    entity("datatype", iri("urn:B".to_owned()).unwrap()).unwrap(),
+                ],
+                2,
+                Some(tag),
+            )
+            .unwrap();
+            let expected = Node::build(tag, vec![Field::Set(values)]).unwrap();
+            assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+            assert_eq!(decoded.consumed, [0, 1, 2, 3, 4, 5]);
+        }
+
+        let complement_graph = [
+            edge("e", RDF_TYPE, iri_term(RDFS_DATATYPE)),
+            edge("e", OWL_DATATYPE_COMPLEMENT_OF, iri_term("urn:A")),
+        ];
+        let complement =
+            decode_data(&complement_graph, blank_term("e"), &[]).expect("data complement");
+        let expected = Node::build(
+            23,
+            vec![Field::Node(
+                entity("datatype", iri("urn:A".to_owned()).unwrap()).unwrap(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(complement.node.as_bytes(), expected.as_bytes());
+        assert_eq!(complement.consumed, [0, 1]);
+    }
+
+    #[test]
+    fn data_enumeration_preserves_each_list_literal_identity() {
+        let graph = [
+            edge("e", RDF_TYPE, iri_term(RDFS_DATATYPE)),
+            edge("e", OWL_ONE_OF, blank_term("h")),
+            edge("h", RDF_FIRST, RdfTerm::Literal("007")),
+            edge("h", RDF_REST, blank_term("t")),
+            edge("t", RDF_FIRST, RdfTerm::Literal("colour")),
+            edge("t", RDF_REST, iri_term(RDF_NIL)),
+        ];
+        let decoded = decode_data(
+            &graph,
+            blank_term("e"),
+            &[
+                (2, Some("http://www.w3.org/2001/XMLSchema#integer"), None),
+                (4, None, Some("EN-gb")),
+            ],
+        )
+        .expect("data enumeration");
+        let values = canonical_set(
+            vec![
+                literal(
+                    "007".to_owned(),
+                    entity(
+                        "datatype",
+                        iri("http://www.w3.org/2001/XMLSchema#integer".to_owned()).unwrap(),
+                    )
+                    .unwrap(),
+                    None,
+                )
+                .unwrap(),
+                literal(
+                    "colour".to_owned(),
+                    entity("datatype", iri(RDF_PLAIN_LITERAL.to_owned()).unwrap()).unwrap(),
+                    Some("en-gb".to_owned()),
+                )
+                .unwrap(),
+            ],
+            1,
+            None,
+        )
+        .unwrap();
+        let expected = Node::build(24, vec![Field::Set(values)]).unwrap();
+        assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+        assert_eq!(decoded.consumed, [0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn conflicting_cyclic_and_wrong_typed_data_ranges_fail_closed() {
+        let conflict = [
+            edge("e", OWL_INTERSECTION_OF, iri_term(RDF_NIL)),
+            edge("e", OWL_ONE_OF, iri_term(RDF_NIL)),
+        ];
+        let cycle = [edge("e", OWL_DATATYPE_COMPLEMENT_OF, blank_term("e"))];
+        let resource_enumeration = [
+            edge("e", OWL_ONE_OF, blank_term("h")),
+            edge("h", RDF_FIRST, iri_term("urn:not-a-literal")),
+            edge("h", RDF_REST, iri_term(RDF_NIL)),
+        ];
+        let datatype_restriction = [
+            edge("e", OWL_ON_DATATYPE, iri_term("urn:Datatype")),
+            edge("e", OWL_WITH_RESTRICTIONS, iri_term(RDF_NIL)),
+        ];
+        for graph in [
+            conflict.as_slice(),
+            cycle.as_slice(),
+            resource_enumeration.as_slice(),
+            datatype_restriction.as_slice(),
+        ] {
+            assert_eq!(
+                decode_data(graph, blank_term("e"), &[]).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
+        }
     }
 
     #[test]
@@ -1399,6 +1760,41 @@ mod tests {
         .unwrap();
         assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
         assert_eq!(decoded.consumed, [0, 1, 2]);
+
+        let structural_graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:inferred-data")),
+            edge("e", OWL_ALL_VALUES_FROM, blank_term("range")),
+            edge("range", RDF_TYPE, iri_term(RDFS_DATATYPE)),
+            edge(
+                "range",
+                OWL_DATATYPE_COMPLEMENT_OF,
+                iri_term("urn:Datatype"),
+            ),
+        ];
+        let decoded = decode(&structural_graph, blank_term("e"))
+            .expect("structural datatype-filler restriction");
+        let complement = Node::build(
+            23,
+            vec![Field::Node(
+                entity("datatype", iri("urn:Datatype".to_owned()).unwrap()).unwrap(),
+            )],
+        )
+        .unwrap();
+        let expected = Node::build(
+            42,
+            vec![
+                Field::Sequence(vec![entity(
+                    "data_property",
+                    iri("urn:inferred-data".to_owned()).unwrap(),
+                )
+                .unwrap()]),
+                Field::Node(complement),
+            ],
+        )
+        .unwrap();
+        assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+        assert_eq!(decoded.consumed, [0, 1, 2, 3, 4]);
     }
 
     #[test]

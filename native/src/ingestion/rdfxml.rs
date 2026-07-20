@@ -3068,6 +3068,116 @@ mod tests {
     }
 
     #[test]
+    fn structural_data_ranges_map_inside_restrictions() {
+        let union_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:DatatypeProperty rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:someValuesFrom><rdfs:Datatype><owl:unionOf rdf:parseType=\"Collection\"><rdfs:Datatype rdf:about=\"urn:B\"/><rdfs:Datatype rdf:about=\"urn:C\"/></owl:unionOf></rdfs:Datatype></owl:someValuesFrom></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let union = mapped(union_source.as_bytes(), None).expect("boolean data range");
+        let ranges = canonical_set(
+            vec![
+                entity("datatype", iri("urn:B".to_owned()).expect("datatype IRI"))
+                    .expect("datatype"),
+                entity("datatype", iri("urn:C".to_owned()).expect("datatype IRI"))
+                    .expect("datatype"),
+            ],
+            2,
+            Some(22),
+        )
+        .expect("data ranges");
+        let data_range = Node::build(22, vec![Field::Set(ranges)]).expect("data union");
+        let restriction = Node::build(
+            41,
+            vec![
+                Field::Sequence(vec![entity(
+                    "data_property",
+                    iri("urn:p".to_owned()).expect("property IRI"),
+                )
+                .expect("data property")]),
+                Field::Node(data_range),
+            ],
+        )
+        .expect("data restriction");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(union
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(union.mapping.total_triples, union.mapping.consumed_triples);
+
+        let one_of_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:DatatypeProperty rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:allValuesFrom rdf:nodeID=\"e\"/></owl:Restriction></rdfs:subClassOf></rdf:Description><rdfs:Datatype rdf:nodeID=\"e\"><owl:oneOf rdf:nodeID=\"h\"/></rdfs:Datatype><rdf:Description rdf:nodeID=\"h\"><rdf:first rdf:datatype=\"http://www.w3.org/2001/XMLSchema#integer\">007</rdf:first><rdf:rest rdf:nodeID=\"t\"/></rdf:Description><rdf:Description rdf:nodeID=\"t\"><rdf:first xml:lang=\"EN-gb\">colour</rdf:first><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
+        );
+        let one_of = mapped(one_of_source.as_bytes(), None).expect("data enumeration");
+        let values = canonical_set(
+            vec![
+                literal(
+                    "007".to_owned(),
+                    entity(
+                        "datatype",
+                        iri("http://www.w3.org/2001/XMLSchema#integer".to_owned())
+                            .expect("datatype IRI"),
+                    )
+                    .expect("datatype"),
+                    None,
+                )
+                .expect("typed literal"),
+                literal(
+                    "colour".to_owned(),
+                    entity(
+                        "datatype",
+                        iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral".to_owned())
+                            .expect("datatype IRI"),
+                    )
+                    .expect("datatype"),
+                    Some("en-gb".to_owned()),
+                )
+                .expect("language literal"),
+            ],
+            1,
+            None,
+        )
+        .expect("literal set");
+        let data_range = Node::build(24, vec![Field::Set(values)]).expect("data enumeration");
+        let restriction = Node::build(
+            42,
+            vec![
+                Field::Sequence(vec![entity(
+                    "data_property",
+                    iri("urn:p".to_owned()).expect("property IRI"),
+                )
+                .expect("data property")]),
+                Field::Node(data_range),
+            ],
+        )
+        .expect("data restriction");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(one_of
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            one_of.mapping.total_triples,
+            one_of.mapping.consumed_triples
+        );
+    }
+
+    #[test]
     fn object_value_and_self_restrictions_map_exactly() {
         let has_value_source = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:hasValue rdf:resource=\"urn:i\"/></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
