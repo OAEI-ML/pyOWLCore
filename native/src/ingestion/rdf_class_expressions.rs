@@ -6,7 +6,9 @@ use crate::limits::LimitKey;
 use crate::model::{scan_canonical, Category, ScanBudget};
 use crate::session::Session;
 
-use super::rdf_lists::{RdfListDecoder, RdfResource, RdfTerm, RdfTriple, RDF_FIRST, RDF_TYPE};
+use super::rdf_lists::{
+    DecodedRdfList, RdfListDecoder, RdfResource, RdfTerm, RdfTriple, RDF_FIRST, RDF_TYPE,
+};
 
 const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
 const OWL_COMPLEMENT_OF: &str = "http://www.w3.org/2002/07/owl#complementOf";
@@ -1112,6 +1114,18 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             individuals,
             consumed: decoded.consumed,
         })
+    }
+
+    pub(crate) fn decode_raw_collection(
+        &mut self,
+        head: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<DecodedRdfList<'data>> {
+        let decoded = self.lists.decode(head, session)?;
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        Ok(decoded)
     }
 
     pub(crate) fn decode_class_collection(

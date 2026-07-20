@@ -23,6 +23,7 @@ const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const OWL: &str = "http://www.w3.org/2002/07/owl#";
 const XML: &str = "http://www.w3.org/XML/1998/namespace";
 const XINCLUDE: &str = "http://www.w3.org/2001/XInclude";
+const SWRL: &str = "http://www.w3.org/2003/11/swrl#";
 
 const RDF_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#RDF";
 const RDF_DESCRIPTION: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Description";
@@ -66,6 +67,25 @@ const OWL_ANNOTATED_SOURCE: &str = "http://www.w3.org/2002/07/owl#annotatedSourc
 const OWL_ANNOTATED_PROPERTY: &str = "http://www.w3.org/2002/07/owl#annotatedProperty";
 const OWL_ANNOTATED_TARGET: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
+const SWRL_IMP: &str = "http://www.w3.org/2003/11/swrl#Imp";
+const SWRL_BODY: &str = "http://www.w3.org/2003/11/swrl#body";
+const SWRL_HEAD: &str = "http://www.w3.org/2003/11/swrl#head";
+const SWRL_VARIABLE: &str = "http://www.w3.org/2003/11/swrl#Variable";
+const SWRL_CLASS_ATOM: &str = "http://www.w3.org/2003/11/swrl#ClassAtom";
+const SWRL_DATA_RANGE_ATOM: &str = "http://www.w3.org/2003/11/swrl#DataRangeAtom";
+const SWRL_INDIVIDUAL_PROPERTY_ATOM: &str = "http://www.w3.org/2003/11/swrl#IndividualPropertyAtom";
+const SWRL_DATAVALUED_PROPERTY_ATOM: &str = "http://www.w3.org/2003/11/swrl#DatavaluedPropertyAtom";
+const SWRL_BUILTIN_ATOM: &str = "http://www.w3.org/2003/11/swrl#BuiltinAtom";
+const SWRL_SAME_INDIVIDUAL_ATOM: &str = "http://www.w3.org/2003/11/swrl#SameIndividualAtom";
+const SWRL_DIFFERENT_INDIVIDUALS_ATOM: &str =
+    "http://www.w3.org/2003/11/swrl#DifferentIndividualsAtom";
+const SWRL_CLASS_PREDICATE: &str = "http://www.w3.org/2003/11/swrl#classPredicate";
+const SWRL_DATA_RANGE: &str = "http://www.w3.org/2003/11/swrl#dataRange";
+const SWRL_PROPERTY_PREDICATE: &str = "http://www.w3.org/2003/11/swrl#propertyPredicate";
+const SWRL_ARGUMENT_1: &str = "http://www.w3.org/2003/11/swrl#argument1";
+const SWRL_ARGUMENT_2: &str = "http://www.w3.org/2003/11/swrl#argument2";
+const SWRL_BUILTIN: &str = "http://www.w3.org/2003/11/swrl#builtin";
+const SWRL_ARGUMENTS: &str = "http://www.w3.org/2003/11/swrl#arguments";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Span {
@@ -1213,6 +1233,7 @@ fn map_graph(
     imports.dedup();
 
     let mut axioms = Vec::new();
+    let mut extensions = Vec::new();
     let list_graph = list_graph_view(&triples, session)?;
     let mut expressions = RdfClassExpressionDecoder::new(&list_graph);
     for kind in &kinds {
@@ -1281,6 +1302,15 @@ fn map_graph(
         &mut expressions,
         &mut axiom_annotations,
         &mut ontology_annotations,
+        session,
+    )?;
+    map_swrl_rules(
+        &list_graph,
+        &triples,
+        &mut consumed,
+        &mut expressions,
+        &mut axiom_annotations,
+        &mut extensions,
         session,
     )?;
     map_negative_property_assertions(
@@ -1430,6 +1460,8 @@ fn map_graph(
     axioms.dedup();
     ontology_annotations.sort_unstable();
     ontology_annotations.dedup();
+    extensions.sort_unstable();
+    extensions.dedup();
     enforce_usize(
         ontology_annotations.len(),
         session.limits().value(LimitKey::MaxAnnotations),
@@ -1451,7 +1483,7 @@ fn map_graph(
         imports,
         ontology_annotations,
         axioms,
-        extensions: Vec::new(),
+        extensions,
         source_sha256: [0; 32],
         byte_length: 0,
         decoded_codepoints,
@@ -1464,6 +1496,7 @@ fn map_graph(
                 "OWL2-RDF-REVERSE-DECLARATION",
                 "OWL2-RDF-REVERSE-NAMED-AXIOM",
                 "OWL2-RDF-REVERSE-BOOLEAN-CLASS-EXPRESSION",
+                "SWRL-RDF-REVERSE-RULE",
             ],
         },
     })
@@ -1711,6 +1744,570 @@ fn map_ontology_annotations<'view, 'graph>(
         consumed[index] = true;
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SwrlAtomKind {
+    Class,
+    DataRange,
+    ObjectProperty,
+    DataProperty,
+    Builtin,
+    SameIndividual,
+    DifferentIndividuals,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_swrl_rules<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
+    extensions: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (type_index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[type_index]
+            || triple.predicate != RDF_TYPE
+            || triple.object != ListTerm::Iri(SWRL_IMP)
+        {
+            continue;
+        }
+        let (_body_index, body_head) = required_metadata_edge(
+            triples,
+            triple.subject,
+            SWRL_BODY,
+            "native SWRL rule has no body list",
+            "native SWRL rule has more than one body list",
+            session,
+        )?;
+        let (_head_index, head_head) = required_metadata_edge(
+            triples,
+            triple.subject,
+            SWRL_HEAD,
+            "native SWRL rule has no head list",
+            "native SWRL rule has more than one head list",
+            session,
+        )?;
+        let body = expressions.decode_raw_collection(body_head, session)?;
+        let head = expressions.decode_raw_collection(head_head, session)?;
+        let body_atoms =
+            decode_swrl_atom_set(&body.items, triples, consumed, expressions, session)?;
+        let head_atoms =
+            decode_swrl_atom_set(&head.items, triples, consumed, expressions, session)?;
+        enforce_usize(
+            body_atoms.len().max(head_atoms.len()),
+            session.limits().value(LimitKey::MaxRuleAtoms),
+            "native SWRL rule exceeds max_rule_atoms",
+        )?;
+        let annotations = annotations_on_structural_node(
+            triple.subject,
+            &[RDF_TYPE, SWRL_BODY, SWRL_HEAD],
+            triples,
+            source_triples,
+            expressions,
+            reifications,
+            session,
+        )?;
+        let rule = build_node(
+            148,
+            [
+                Field::Set(body_atoms),
+                Field::Set(head_atoms),
+                Field::Set(annotations),
+            ],
+            session,
+        )?;
+        consume_collection_indexes(body.consumed, consumed, session)?;
+        consume_collection_indexes(head.consumed, consumed, session)?;
+        consume_subject_indexes(triple.subject, triples, consumed, session)?;
+        push_extension(rule, extensions, session)?;
+    }
+    Ok(())
+}
+
+fn decode_swrl_atom_set<'view, 'graph>(
+    values: &[ListTerm<'graph>],
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<Node>> {
+    let mut atoms = reserved_vec(values.len(), session)?;
+    for value in values {
+        atoms.push(decode_swrl_atom(
+            *value,
+            triples,
+            consumed,
+            expressions,
+            session,
+        )?);
+    }
+    canonical_set(atoms, 0, None)
+}
+
+fn decode_swrl_atom<'view, 'graph>(
+    value: ListTerm<'graph>,
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    let subject = list_term_resource(value).ok_or_else(rdf_mapping_type)?;
+    let (_, atom_type) = required_metadata_edge(
+        triples,
+        subject,
+        RDF_TYPE,
+        "native SWRL atom has no rdf:type",
+        "native SWRL atom has more than one rdf:type",
+        session,
+    )?;
+    let kind = match atom_type {
+        ListTerm::Iri(SWRL_CLASS_ATOM) => SwrlAtomKind::Class,
+        ListTerm::Iri(SWRL_DATA_RANGE_ATOM) => SwrlAtomKind::DataRange,
+        ListTerm::Iri(SWRL_INDIVIDUAL_PROPERTY_ATOM) => SwrlAtomKind::ObjectProperty,
+        ListTerm::Iri(SWRL_DATAVALUED_PROPERTY_ATOM) => SwrlAtomKind::DataProperty,
+        ListTerm::Iri(SWRL_BUILTIN_ATOM) => SwrlAtomKind::Builtin,
+        ListTerm::Iri(SWRL_SAME_INDIVIDUAL_ATOM) => SwrlAtomKind::SameIndividual,
+        ListTerm::Iri(SWRL_DIFFERENT_INDIVIDUALS_ATOM) => SwrlAtomKind::DifferentIndividuals,
+        ListTerm::Iri(_) | ListTerm::Blank(_) | ListTerm::Literal(_) => {
+            return Err(rdf_mapping_type())
+        }
+    };
+    let node = match kind {
+        SwrlAtomKind::Class => {
+            ensure_subject_predicates(
+                subject,
+                &[RDF_TYPE, SWRL_CLASS_PREDICATE, SWRL_ARGUMENT_1],
+                triples,
+                session,
+            )?;
+            let (_, predicate) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_CLASS_PREDICATE,
+                "native SWRL class atom has no class predicate",
+                "native SWRL class atom has more than one class predicate",
+                session,
+            )?;
+            let (_argument_index, argument) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_ARGUMENT_1,
+                "native SWRL class atom has no argument",
+                "native SWRL class atom has more than one argument",
+                session,
+            )?;
+            build_node(
+                141,
+                [
+                    Field::Node(decode_class_expression(
+                        expressions,
+                        predicate,
+                        consumed,
+                        session,
+                    )?),
+                    Field::Node(decode_swrl_individual_argument(
+                        argument,
+                        triples,
+                        consumed,
+                        expressions,
+                        session,
+                    )?),
+                ],
+                session,
+            )?
+        }
+        SwrlAtomKind::DataRange => {
+            ensure_subject_predicates(
+                subject,
+                &[RDF_TYPE, SWRL_DATA_RANGE, SWRL_ARGUMENT_1],
+                triples,
+                session,
+            )?;
+            let (_, predicate) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_DATA_RANGE,
+                "native SWRL data-range atom has no predicate",
+                "native SWRL data-range atom has more than one predicate",
+                session,
+            )?;
+            let (argument_index, argument) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_ARGUMENT_1,
+                "native SWRL data-range atom has no argument",
+                "native SWRL data-range atom has more than one argument",
+                session,
+            )?;
+            let DecodedDataRange {
+                node: predicate,
+                consumed: predicate_consumed,
+            } = expressions.decode_data_term(predicate, session)?;
+            consume_collection_indexes(predicate_consumed, consumed, session)?;
+            build_node(
+                142,
+                [
+                    Field::Node(predicate),
+                    Field::Node(decode_swrl_data_argument(
+                        argument_index,
+                        argument,
+                        triples,
+                        consumed,
+                        expressions,
+                        session,
+                    )?),
+                ],
+                session,
+            )?
+        }
+        SwrlAtomKind::ObjectProperty => {
+            ensure_subject_predicates(
+                subject,
+                &[
+                    RDF_TYPE,
+                    SWRL_PROPERTY_PREDICATE,
+                    SWRL_ARGUMENT_1,
+                    SWRL_ARGUMENT_2,
+                ],
+                triples,
+                session,
+            )?;
+            let (_, predicate) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_PROPERTY_PREDICATE,
+                "native SWRL object-property atom has no predicate",
+                "native SWRL object-property atom has more than one predicate",
+                session,
+            )?;
+            let (_, first) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_ARGUMENT_1,
+                "native SWRL object-property atom has no first argument",
+                "native SWRL object-property atom has more than one first argument",
+                session,
+            )?;
+            let (_, second) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_ARGUMENT_2,
+                "native SWRL object-property atom has no second argument",
+                "native SWRL object-property atom has more than one second argument",
+                session,
+            )?;
+            let DecodedPropertyExpression {
+                node: predicate,
+                consumed: predicate_consumed,
+            } = expressions.decode_object_property_term(predicate, session)?;
+            consume_collection_indexes(predicate_consumed, consumed, session)?;
+            build_node(
+                143,
+                [
+                    Field::Node(predicate),
+                    Field::Node(decode_swrl_individual_argument(
+                        first,
+                        triples,
+                        consumed,
+                        expressions,
+                        session,
+                    )?),
+                    Field::Node(decode_swrl_individual_argument(
+                        second,
+                        triples,
+                        consumed,
+                        expressions,
+                        session,
+                    )?),
+                ],
+                session,
+            )?
+        }
+        SwrlAtomKind::DataProperty => {
+            ensure_subject_predicates(
+                subject,
+                &[
+                    RDF_TYPE,
+                    SWRL_PROPERTY_PREDICATE,
+                    SWRL_ARGUMENT_1,
+                    SWRL_ARGUMENT_2,
+                ],
+                triples,
+                session,
+            )?;
+            let (_, predicate) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_PROPERTY_PREDICATE,
+                "native SWRL data-property atom has no predicate",
+                "native SWRL data-property atom has more than one predicate",
+                session,
+            )?;
+            let ListTerm::Iri(predicate) = predicate else {
+                return Err(rdf_mapping_type());
+            };
+            let (_, first) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_ARGUMENT_1,
+                "native SWRL data-property atom has no first argument",
+                "native SWRL data-property atom has more than one first argument",
+                session,
+            )?;
+            let (second_index, second) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_ARGUMENT_2,
+                "native SWRL data-property atom has no second argument",
+                "native SWRL data-property atom has more than one second argument",
+                session,
+            )?;
+            build_node(
+                144,
+                [
+                    Field::Node(named_entity("data_property", predicate, session)?),
+                    Field::Node(decode_swrl_individual_argument(
+                        first,
+                        triples,
+                        consumed,
+                        expressions,
+                        session,
+                    )?),
+                    Field::Node(decode_swrl_data_argument(
+                        second_index,
+                        second,
+                        triples,
+                        consumed,
+                        expressions,
+                        session,
+                    )?),
+                ],
+                session,
+            )?
+        }
+        SwrlAtomKind::Builtin => {
+            ensure_subject_predicates(
+                subject,
+                &[RDF_TYPE, SWRL_BUILTIN, SWRL_ARGUMENTS],
+                triples,
+                session,
+            )?;
+            let (_, predicate) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_BUILTIN,
+                "native SWRL builtin atom has no predicate",
+                "native SWRL builtin atom has more than one predicate",
+                session,
+            )?;
+            let ListTerm::Iri(predicate) = predicate else {
+                return Err(rdf_mapping_type());
+            };
+            let (_, arguments_head) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_ARGUMENTS,
+                "native SWRL builtin atom has no arguments list",
+                "native SWRL builtin atom has more than one arguments list",
+                session,
+            )?;
+            let arguments = expressions.decode_raw_collection(arguments_head, session)?;
+            let mut nodes = reserved_vec(arguments.items.len(), session)?;
+            for (position, argument) in arguments.items.iter().enumerate() {
+                let cell = arguments.cells.get(position).ok_or_else(|| {
+                    NativeError::protocol("native SWRL argument list cell ledger is incomplete")
+                })?;
+                let argument_index = rdf_list_first_index(cell, triples, session)?;
+                nodes.push(decode_swrl_data_argument(
+                    argument_index,
+                    *argument,
+                    triples,
+                    consumed,
+                    expressions,
+                    session,
+                )?);
+            }
+            consume_collection_indexes(arguments.consumed, consumed, session)?;
+            build_node(
+                145,
+                [
+                    Field::Node(iri_node(predicate, session)?),
+                    Field::Sequence(nodes),
+                ],
+                session,
+            )?
+        }
+        SwrlAtomKind::SameIndividual | SwrlAtomKind::DifferentIndividuals => {
+            ensure_subject_predicates(
+                subject,
+                &[RDF_TYPE, SWRL_ARGUMENT_1, SWRL_ARGUMENT_2],
+                triples,
+                session,
+            )?;
+            let (_, first) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_ARGUMENT_1,
+                "native SWRL individual atom has no first argument",
+                "native SWRL individual atom has more than one first argument",
+                session,
+            )?;
+            let (_, second) = required_metadata_edge(
+                triples,
+                subject,
+                SWRL_ARGUMENT_2,
+                "native SWRL individual atom has no second argument",
+                "native SWRL individual atom has more than one second argument",
+                session,
+            )?;
+            let tag = if kind == SwrlAtomKind::SameIndividual {
+                146
+            } else {
+                147
+            };
+            build_node(
+                tag,
+                [
+                    Field::Node(decode_swrl_individual_argument(
+                        first,
+                        triples,
+                        consumed,
+                        expressions,
+                        session,
+                    )?),
+                    Field::Node(decode_swrl_individual_argument(
+                        second,
+                        triples,
+                        consumed,
+                        expressions,
+                        session,
+                    )?),
+                ],
+                session,
+            )?
+        }
+    };
+    consume_subject_indexes(subject, triples, consumed, session)?;
+    Ok(node)
+}
+
+fn decode_swrl_individual_argument<'view, 'graph>(
+    value: ListTerm<'graph>,
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    if let Some(variable) = decode_swrl_variable(value, triples, consumed, session)? {
+        return Ok(variable);
+    }
+    expressions.decode_individual(value, session)
+}
+
+fn decode_swrl_data_argument<'view, 'graph>(
+    triple_index: usize,
+    value: ListTerm<'graph>,
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    if let Some(variable) = decode_swrl_variable(value, triples, consumed, session)? {
+        return Ok(variable);
+    }
+    if !matches!(value, ListTerm::Literal(_)) {
+        return Err(rdf_mapping_type());
+    }
+    expressions.decode_literal(triple_index, session)
+}
+
+fn decode_swrl_variable<'graph>(
+    value: ListTerm<'graph>,
+    triples: &[ListTriple<'graph>],
+    consumed: &mut [bool],
+    session: &mut Session<'_>,
+) -> NativeResult<Option<Node>> {
+    let resource = match value {
+        ListTerm::Iri(value) => ListResource::Iri(value),
+        ListTerm::Blank(value) => ListResource::Blank(value),
+        ListTerm::Literal(_) => return Ok(None),
+    };
+    let mut type_indexes = Vec::new();
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if triple.subject == resource
+            && triple.predicate == RDF_TYPE
+            && triple.object == ListTerm::Iri(SWRL_VARIABLE)
+        {
+            reserve_vec_item(&mut type_indexes, session)?;
+            type_indexes.push(index);
+        }
+    }
+    if type_indexes.is_empty() {
+        return Ok(None);
+    }
+    let ListResource::Iri(value) = resource else {
+        return Err(rdf_mapping_type());
+    };
+    for index in type_indexes {
+        let entry = consumed.get_mut(index).ok_or_else(|| {
+            NativeError::protocol("native SWRL variable type index exceeds graph")
+        })?;
+        *entry = true;
+    }
+    Ok(Some(build_node(
+        140,
+        [Field::Node(iri_node(value, session)?)],
+        session,
+    )?))
+}
+
+fn list_term_resource(value: ListTerm<'_>) -> Option<ListResource<'_>> {
+    match value {
+        ListTerm::Iri(value) => Some(ListResource::Iri(value)),
+        ListTerm::Blank(value) => Some(ListResource::Blank(value)),
+        ListTerm::Literal(_) => None,
+    }
+}
+
+fn ensure_subject_predicates<'graph>(
+    subject: ListResource<'graph>,
+    allowed: &[&str],
+    triples: &[ListTriple<'graph>],
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for triple in triples {
+        session.step(1)?;
+        if triple.subject == subject && !allowed.contains(&triple.predicate) {
+            return Err(mapping_incomplete());
+        }
+    }
+    Ok(())
+}
+
+fn rdf_list_first_index(
+    cell: &str,
+    triples: &[ListTriple<'_>],
+    session: &mut Session<'_>,
+) -> NativeResult<usize> {
+    let mut selected = None;
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if triple.subject == ListResource::Blank(cell)
+            && triple.predicate == RDF_FIRST
+            && selected.replace(index).is_some()
+        {
+            return Err(rdf_mapping_cardinality(
+                "native SWRL argument list has more than one rdf:first edge",
+            ));
+        }
+    }
+    selected
+        .ok_or_else(|| rdf_mapping_cardinality("native SWRL argument list has no rdf:first edge"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3587,6 +4184,9 @@ fn is_annotation_property(value: &str, kinds: &[KindRecord<'_>]) -> bool {
 }
 
 fn is_assertion_structural_predicate(value: &str) -> bool {
+    if value.starts_with(SWRL) {
+        return true;
+    }
     if matches!(
         value,
         RDF_TYPE
@@ -3893,6 +4493,22 @@ fn push_axiom(
     encoded.extend_from_slice(axiom.as_bytes());
     reserve_vec_item(axioms, session)?;
     axioms.push(encoded);
+    Ok(())
+}
+
+fn push_extension(
+    extension: Node,
+    extensions: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session.reserve_bytes(extension.as_bytes().len())?;
+    let mut encoded = Vec::new();
+    encoded
+        .try_reserve_exact(extension.as_bytes().len())
+        .map_err(|_| NativeError::limit("native RDF extension allocation failed"))?;
+    encoded.extend_from_slice(extension.as_bytes());
+    reserve_vec_item(extensions, session)?;
+    extensions.push(encoded);
     Ok(())
 }
 
@@ -7295,6 +7911,177 @@ mod tests {
         assert_eq!(
             document.mapping.total_triples,
             document.mapping.consumed_triples,
+        );
+    }
+
+    #[test]
+    fn swrl_rules_map_all_atom_kinds_to_extensions() {
+        let xsd_integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:swrl=\"{SWRL}\" xmlns:e=\"urn:\"><swrl:Variable rdf:about=\"urn:x\"/><swrl:Variable rdf:about=\"urn:y\"/><swrl:Imp rdf:nodeID=\"rule\"><swrl:body rdf:parseType=\"Collection\"><swrl:ClassAtom><swrl:classPredicate rdf:resource=\"urn:C\"/><swrl:argument1 rdf:resource=\"urn:x\"/></swrl:ClassAtom><swrl:DataRangeAtom><swrl:dataRange rdf:resource=\"urn:D\"/><swrl:argument1 rdf:resource=\"urn:y\"/></swrl:DataRangeAtom><swrl:IndividualPropertyAtom><swrl:propertyPredicate><rdf:Description><owl:inverseOf rdf:resource=\"urn:p\"/></rdf:Description></swrl:propertyPredicate><swrl:argument1 rdf:resource=\"urn:x\"/><swrl:argument2 rdf:resource=\"urn:i\"/></swrl:IndividualPropertyAtom><swrl:DatavaluedPropertyAtom><swrl:propertyPredicate rdf:resource=\"urn:d\"/><swrl:argument1 rdf:resource=\"urn:x\"/><swrl:argument2 rdf:datatype=\"{xsd_integer}\">007</swrl:argument2></swrl:DatavaluedPropertyAtom><swrl:BuiltinAtom><swrl:builtin rdf:resource=\"urn:lessThan\"/><swrl:arguments rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:x\"/><rdf:Description rdf:about=\"urn:y\"/></swrl:arguments></swrl:BuiltinAtom><swrl:SameIndividualAtom><swrl:argument1 rdf:resource=\"urn:x\"/><swrl:argument2 rdf:resource=\"urn:i\"/></swrl:SameIndividualAtom></swrl:body><swrl:head rdf:parseType=\"Collection\"><swrl:DifferentIndividualsAtom><swrl:argument1 rdf:resource=\"urn:x\"/><swrl:argument2 rdf:resource=\"urn:j\"/></swrl:DifferentIndividualsAtom></swrl:head><e:note rdf:resource=\"urn:value\"/></swrl:Imp></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("SWRL rule");
+        let variable = |value: &str| {
+            Node::build(
+                140,
+                vec![Field::Node(iri(value.to_owned()).expect("variable IRI"))],
+            )
+            .expect("SWRL variable")
+        };
+        let class_atom = Node::build(
+            141,
+            vec![
+                Field::Node(class_node("urn:C")),
+                Field::Node(variable("urn:x")),
+            ],
+        )
+        .expect("class atom");
+        let data_range_atom = Node::build(
+            142,
+            vec![
+                Field::Node(
+                    entity("datatype", iri("urn:D".to_owned()).expect("datatype IRI"))
+                        .expect("datatype"),
+                ),
+                Field::Node(variable("urn:y")),
+            ],
+        )
+        .expect("data-range atom");
+        let inverse = Node::build(
+            10,
+            vec![Field::Node(
+                entity(
+                    "object_property",
+                    iri("urn:p".to_owned()).expect("property IRI"),
+                )
+                .expect("object property"),
+            )],
+        )
+        .expect("inverse property");
+        let object_atom = Node::build(
+            143,
+            vec![
+                Field::Node(inverse),
+                Field::Node(variable("urn:x")),
+                Field::Node(named_individual_node("urn:i")),
+            ],
+        )
+        .expect("object-property atom");
+        let data_atom = Node::build(
+            144,
+            vec![
+                Field::Node(
+                    entity(
+                        "data_property",
+                        iri("urn:d".to_owned()).expect("property IRI"),
+                    )
+                    .expect("data property"),
+                ),
+                Field::Node(variable("urn:x")),
+                Field::Node(
+                    literal(
+                        "007".to_owned(),
+                        entity(
+                            "datatype",
+                            iri(xsd_integer.to_owned()).expect("datatype IRI"),
+                        )
+                        .expect("datatype"),
+                        None,
+                    )
+                    .expect("data argument"),
+                ),
+            ],
+        )
+        .expect("data-property atom");
+        let builtin = Node::build(
+            145,
+            vec![
+                Field::Node(iri("urn:lessThan".to_owned()).expect("builtin IRI")),
+                Field::Sequence(vec![variable("urn:x"), variable("urn:y")]),
+            ],
+        )
+        .expect("builtin atom");
+        let same = Node::build(
+            146,
+            vec![
+                Field::Node(variable("urn:x")),
+                Field::Node(named_individual_node("urn:i")),
+            ],
+        )
+        .expect("same-individual atom");
+        let different = Node::build(
+            147,
+            vec![
+                Field::Node(variable("urn:x")),
+                Field::Node(named_individual_node("urn:j")),
+            ],
+        )
+        .expect("different-individuals atom");
+        let annotation = Node::build(
+            5,
+            vec![
+                Field::Node(
+                    entity(
+                        "annotation_property",
+                        iri("urn:note".to_owned()).expect("annotation property IRI"),
+                    )
+                    .expect("annotation property"),
+                ),
+                Field::Node(iri("urn:value".to_owned()).expect("annotation value")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("rule annotation");
+        let rule = Node::build(
+            148,
+            vec![
+                Field::Set(
+                    canonical_set(
+                        vec![
+                            class_atom,
+                            data_range_atom,
+                            object_atom,
+                            data_atom,
+                            builtin,
+                            same,
+                        ],
+                        0,
+                        None,
+                    )
+                    .expect("rule body"),
+                ),
+                Field::Set(vec![different]),
+                Field::Set(vec![annotation]),
+            ],
+        )
+        .expect("SWRL rule");
+        assert!(document.axioms.is_empty());
+        assert_eq!(document.extensions, [rule.as_bytes().to_vec()]);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let missing_head = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:swrl=\"{SWRL}\"><swrl:Imp><swrl:body rdf:resource=\"{RDF_NIL}\"/></swrl:Imp></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(missing_head.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+        let malformed_atom = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:swrl=\"{SWRL}\" xmlns:e=\"urn:\"><swrl:Imp><swrl:body rdf:parseType=\"Collection\"><swrl:ClassAtom><swrl:classPredicate rdf:resource=\"urn:C\"/><swrl:argument1 rdf:resource=\"urn:i\"/><e:extra rdf:resource=\"urn:x\"/></swrl:ClassAtom></swrl:body><swrl:head rdf:resource=\"{RDF_NIL}\"/></swrl:Imp></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(malformed_atom.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
+        let blank_variable = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:swrl=\"{SWRL}\"><swrl:Variable rdf:nodeID=\"x\"/><swrl:Imp><swrl:body rdf:parseType=\"Collection\"><swrl:ClassAtom><swrl:classPredicate rdf:resource=\"urn:C\"/><swrl:argument1 rdf:nodeID=\"x\"/></swrl:ClassAtom></swrl:body><swrl:head rdf:resource=\"{RDF_NIL}\"/></swrl:Imp></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(blank_variable.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_TYPE",
         );
     }
 
