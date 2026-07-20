@@ -17,6 +17,9 @@ from tools.benchmark.native_redesign.release_decision import (
     main,
 )
 
+ROOT = Path(__file__).parents[3]
+CHECKPOINT = ROOT / "reports" / "performance" / "native-redesign" / "checkpoint-evidence.json"
+
 
 def test_complete_exact_evidence_enables_both_decisions() -> None:
     result = evaluate_release_decision(_evidence())
@@ -155,6 +158,18 @@ def test_loader_and_cli_emit_deterministic_fail_closed_decision(
 
     assert observed == expected
     assert observed["core_release_eligible"] is False
+
+
+def test_checked_in_checkpoint_is_truthfully_fail_closed() -> None:
+    result = load_release_evidence(CHECKPOINT)
+    core = cast(dict[str, object], result["core"])
+    workspace = cast(dict[str, object], result["workspace"])
+
+    assert result["core_release_eligible"] is False
+    assert result["workspace_optimization_complete"] is False
+    assert core["passed_gate_count"] == 0
+    assert workspace["passed_consumer_count"] == 0
+    assert workspace["not_run_consumers"] == sorted(REQUIRED_WORKSPACE_CONSUMERS)
 
 
 def _evidence() -> dict[str, object]:

@@ -1,0 +1,108 @@
+{
+  "schema": "pyowl-core.native-redesign-release-evidence/1",
+  "core_revision": "c7d32af9839587e0001fcff9236bebf2715a6065",
+  "core_gates": [
+    {
+      "id": "semantic-differential-conformance",
+      "status": "not-run",
+      "reason": "the complete retained-native format, constructor, W3C, corpus, and differential matrix is not implemented",
+      "evidence": ["reports/workpackages/WP16.md"]
+    },
+    {
+      "id": "security-resource-determinism",
+      "status": "not-run",
+      "reason": "the retained path has no complete sanitizer, fuzz, allocation-failure, and supported-platform lifecycle matrix",
+      "evidence": ["reports/security/control-matrix.json", "reports/workpackages/WP17.md"]
+    },
+    {
+      "id": "retained-storage-no-eager-expansion",
+      "status": "fail",
+      "reason": "the eligible Functional path still reconstructs a complete proportional Python parser result and model",
+      "evidence": ["reports/workpackages/WP16.md"]
+    },
+    {
+      "id": "encoded-view-installed-integration",
+      "status": "not-run",
+      "reason": "schema 1 is frozen but unadvertised and the complete installed-wheel consumer fence has not run",
+      "evidence": ["reports/workpackages/WP17.md", "schemas/version-decision-v1.toml"]
+    },
+    {
+      "id": "direct-decoded-mmap-overlay-composite-parity",
+      "status": "not-run",
+      "reason": "source-tree component tests pass, but the required installed format-by-view cross-product is incomplete",
+      "evidence": ["reports/workpackages/WP17.md"]
+    },
+    {
+      "id": "pure-and-native-artifact-matrix",
+      "status": "not-run",
+      "reason": "no clean supported-Python and supported-platform pure/native artifact matrix exists for the redesign",
+      "evidence": ["reports/workpackages/WP12.md"]
+    },
+    {
+      "id": "horned-direct-common-contract",
+      "status": "not-run",
+      "reason": "the independently pinned direct Rust and Horned common-contract runners remain unavailable",
+      "evidence": ["reports/workpackages/WP14.md", "benchmarks/comparators/comparators.toml"]
+    },
+    {
+      "id": "horned-wheel-common-contract",
+      "status": "not-run",
+      "reason": "the installed-wheel versus py-horned common-contract comparison has no runnable pinned evidence",
+      "evidence": ["reports/workpackages/WP14.md", "benchmarks/comparators/comparators.toml"]
+    },
+    {
+      "id": "version-schema-consistency",
+      "status": "not-run",
+      "reason": "the WP17 schema decision is frozen, but capability promotion and the WP18 package release decision are not eligible",
+      "evidence": ["schemas/version-decision-v1.toml", "reports/workpackages/WP17.md"]
+    },
+    {
+      "id": "artifact-license-sbom-java-audit",
+      "status": "not-run",
+      "reason": "source and pure-artifact exclusion evidence is partial; native linkage, SBOM, license, name, and release artifact gates remain open",
+      "evidence": ["reports/performance/redesign-baseline/dependency-audit-shared-host.json", "reports/workpackages/WP14.md"]
+    }
+  ],
+  "workspace_consumers": [
+    {
+      "id": "exact-om",
+      "role": "compatibility-consumer",
+      "status": "not-run",
+      "revision": "fe4614198eef968aa0c537d1f257b0990f31b918",
+      "reason": "the strict encoded evidence protocol exists, but required native compiler capabilities remain unadvertised",
+      "evidence": ["Exact-OM/reports/workpackages/WP-N.md"]
+    },
+    {
+      "id": "oaei-bioml-eval",
+      "role": "compatibility-consumer",
+      "status": "not-run",
+      "revision": "2f91a3ada3dcc8830c472e9e0dc5cd0aa6d321b0",
+      "reason": "the evaluation performance protocol exists, but no advertised encoded reasoner path passes it",
+      "evidence": ["OAEI-Bio-ML-eval/reports/encoded-reasoner-compatibility.md"]
+    },
+    {
+      "id": "projector",
+      "role": "encoded-native-compiler",
+      "status": "not-run",
+      "revision": "e3286fae566c89fd2f59f22ca96417b620d8f495",
+      "reason": "the complete public counter ledger exists, but the production native structural compiler is incomplete and unadvertised",
+      "evidence": ["pyOwl2Vec-Star-projector/reports/p7/encoded-native-compiler.md"]
+    },
+    {
+      "id": "pyelk",
+      "role": "encoded-native-compiler",
+      "status": "not-run",
+      "revision": "0831dc2b28eb07035fbb256e6d8dfd044c757ad3",
+      "reason": "the hidden compiler path passes local parity, but complete core negotiation, corpus, installed-artifact, and performance gates remain open",
+      "evidence": ["pyELK/reports/workpackages/WP14.md"]
+    },
+    {
+      "id": "pyhermit",
+      "role": "encoded-native-compiler",
+      "status": "not-run",
+      "revision": "bcf8ed655c69e231d8aadcf9418835297b5d8c45",
+      "reason": "the encoded compiler is still closing structural constructor coverage and remains unadvertised",
+      "evidence": ["pyHermiT/specs/workpackages/WP18-native-structural-compiler.md"]
+    }
+  ]
+}
