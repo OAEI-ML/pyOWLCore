@@ -896,10 +896,10 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                         return Err(xml_syntax());
                     }
                 } else {
-                    let datatype = match datatype {
-                        Some(value) => Some(value),
-                        None if language.is_none() => Some(owned_text(XSD_STRING, self.session)?),
-                        None => None,
+                    let (datatype, language) = match (datatype, language) {
+                        (Some(value), _) => (Some(value), None),
+                        (None, Some(value)) => (None, Some(value)),
+                        (None, None) => (Some(owned_text(XSD_STRING, self.session)?), None),
                     };
                     self.add(Triple {
                         subject,
@@ -1227,6 +1227,19 @@ fn map_graph(
             "data_property" => expressions.register_data_property(kind.iri, session)?,
             "datatype" => expressions.register_datatype(kind.iri, session)?,
             _ => {}
+        }
+    }
+    for (index, triple) in triples.iter().enumerate() {
+        if let Term::Literal {
+            datatype, language, ..
+        } = &triple.object
+        {
+            expressions.register_literal(
+                index,
+                datatype.as_deref(),
+                language.as_deref(),
+                session,
+            )?;
         }
     }
     map_equivalent_class_components(
@@ -2607,6 +2620,7 @@ fn rdf_mapping_type() -> NativeError {
 mod tests {
     use super::*;
     use crate::cancel::{Cancellation, Guard};
+    use crate::canonical::literal;
     use crate::limits::Limits;
     use std::time::Duration;
 
@@ -3134,6 +3148,167 @@ mod tests {
         let invalid_self = has_self_source.replace(">TrUe<", ">false<");
         assert_eq!(
             mapped(invalid_self.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+    }
+
+    #[test]
+    fn data_value_restrictions_preserve_literal_identity() {
+        let typed_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:hasValue rdf:datatype=\"http://www.w3.org/2001/XMLSchema#integer\">007</owl:hasValue></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let typed = mapped(typed_source.as_bytes(), None).expect("typed data value restriction");
+        let value = literal(
+            "007".to_owned(),
+            entity(
+                "datatype",
+                iri("http://www.w3.org/2001/XMLSchema#integer".to_owned()).expect("datatype IRI"),
+            )
+            .expect("datatype"),
+            None,
+        )
+        .expect("typed literal");
+        let restriction = Node::build(
+            43,
+            vec![
+                Field::Node(
+                    entity(
+                        "data_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("data property"),
+                ),
+                Field::Node(value),
+            ],
+        )
+        .expect("data value node");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(typed
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(typed.mapping.total_triples, typed.mapping.consumed_triples);
+        let inherited_language = typed_source.replacen("<rdf:RDF ", "<rdf:RDF xml:lang=\"fr\" ", 1);
+        let inherited_language = mapped(inherited_language.as_bytes(), None)
+            .expect("explicit datatype overrides inherited language");
+        assert!(inherited_language
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+
+        let language_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:hasValue xml:lang=\"EN-gb\">colour</owl:hasValue></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let language =
+            mapped(language_source.as_bytes(), None).expect("language data value restriction");
+        let value = literal(
+            "colour".to_owned(),
+            entity(
+                "datatype",
+                iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral".to_owned())
+                    .expect("datatype IRI"),
+            )
+            .expect("datatype"),
+            Some("en-gb".to_owned()),
+        )
+        .expect("language literal");
+        let restriction = Node::build(
+            43,
+            vec![
+                Field::Node(
+                    entity(
+                        "data_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("data property"),
+                ),
+                Field::Node(value),
+            ],
+        )
+        .expect("data value node");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(language
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            language.mapping.total_triples,
+            language.mapping.consumed_triples,
+        );
+
+        let plain_source = typed_source
+            .replace(
+                "http://www.w3.org/2001/XMLSchema#integer",
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral",
+            )
+            .replace(">007<", ">legacy@<");
+        let plain = mapped(plain_source.as_bytes(), None).expect("legacy plain literal");
+        let value = literal(
+            "legacy".to_owned(),
+            entity(
+                "datatype",
+                iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral".to_owned())
+                    .expect("datatype IRI"),
+            )
+            .expect("datatype"),
+            None,
+        )
+        .expect("plain literal");
+        let restriction = Node::build(
+            43,
+            vec![
+                Field::Node(
+                    entity(
+                        "data_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("data property"),
+                ),
+                Field::Node(value),
+            ],
+        )
+        .expect("data value node");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(plain
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+
+        let invalid_language = language_source.replace("EN-gb", "not_valid");
+        assert_eq!(
+            mapped(invalid_language.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+        let invalid_datatype = typed_source.replace(
+            "http://www.w3.org/2001/XMLSchema#integer",
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+        );
+        assert_eq!(
+            mapped(invalid_datatype.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_UNSUPPORTED",
         );
     }

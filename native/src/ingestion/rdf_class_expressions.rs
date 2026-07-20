@@ -1,8 +1,9 @@
 //! Bounded reverse mapping for RDF boolean class expressions.
 
-use crate::canonical::{anonymous, canonical_set, entity, iri, Field, Node};
+use crate::canonical::{anonymous, canonical_set, entity, iri, literal, Field, Node};
 use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
+use crate::model::{scan_canonical, Category, ScanBudget};
 use crate::session::Session;
 
 use super::rdf_lists::{RdfListDecoder, RdfResource, RdfTerm, RdfTriple, RDF_TYPE};
@@ -27,7 +28,9 @@ const OWL_ON_CLASS: &str = "http://www.w3.org/2002/07/owl#onClass";
 const OWL_ON_DATA_RANGE: &str = "http://www.w3.org/2002/07/owl#onDataRange";
 const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
 const OWL_UNION_OF: &str = "http://www.w3.org/2002/07/owl#unionOf";
+const RDF_PLAIN_LITERAL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral";
 const RDFS_LITERAL: &str = "http://www.w3.org/2000/01/rdf-schema#Literal";
+const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 const ROLE_EXPRESSION: u8 = 1;
 const ROLE_LIST: u8 = 2;
@@ -48,12 +51,20 @@ pub(crate) struct RdfClassExpressionDecoder<'graph, 'data> {
     blank_roles: Vec<BlankRole<'data>>,
     data_properties: Vec<&'data str>,
     datatypes: Vec<&'data str>,
+    literals: Vec<RdfLiteralMetadata<'data>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BlankRole<'data> {
     label: &'data str,
     roles: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RdfLiteralMetadata<'data> {
+    triple_index: usize,
+    datatype: Option<&'data str>,
+    language: Option<&'data str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,6 +114,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             blank_roles: Vec::new(),
             data_properties: Vec::new(),
             datatypes: Vec::new(),
+            literals: Vec::new(),
         }
     }
 
@@ -120,6 +132,44 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         session: &mut Session<'_>,
     ) -> NativeResult<()> {
         register_kind_value(&mut self.datatypes, value, session)
+    }
+
+    pub(crate) fn register_literal(
+        &mut self,
+        triple_index: usize,
+        datatype: Option<&'data str>,
+        language: Option<&'data str>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<()> {
+        let triple = self
+            .triples
+            .get(triple_index)
+            .ok_or_else(|| NativeError::protocol("native RDF literal index exceeds graph"))?;
+        if !matches!(triple.object, RdfTerm::Literal(_)) {
+            return Err(NativeError::protocol(
+                "native RDF literal metadata targets a resource",
+            ));
+        }
+        session.step(usize_as_u64(
+            self.literals.len(),
+            "native RDF literal-metadata work exceeds u64",
+        )?)?;
+        if self
+            .literals
+            .iter()
+            .any(|metadata| metadata.triple_index == triple_index)
+        {
+            return Err(NativeError::protocol(
+                "native RDF literal metadata is duplicated",
+            ));
+        }
+        reserve_item(&mut self.literals, session)?;
+        self.literals.push(RdfLiteralMetadata {
+            triple_index,
+            datatype,
+            language,
+        });
+        Ok(())
     }
 
     pub(crate) fn decode_term(
@@ -479,11 +529,19 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             }
             RestrictionOperator::HasValue { index } => {
                 push_index(consumed, index, session)?;
-                let individual = self.decode_individual(self.triples[index].object, session)?;
-                let property = named_entity("object_property", property_iri, session)?;
-                let fields =
-                    reserved_fields([Field::Node(property), Field::Node(individual)], session)?;
-                Node::build(36, fields)
+                if matches!(self.triples[index].object, RdfTerm::Literal(_)) {
+                    let value = self.decode_literal(index, session)?;
+                    let property = named_entity("data_property", property_iri, session)?;
+                    let fields =
+                        reserved_fields([Field::Node(property), Field::Node(value)], session)?;
+                    Node::build(43, fields)
+                } else {
+                    let individual = self.decode_individual(self.triples[index].object, session)?;
+                    let property = named_entity("object_property", property_iri, session)?;
+                    let fields =
+                        reserved_fields([Field::Node(property), Field::Node(individual)], session)?;
+                    Node::build(36, fields)
+                }
             }
             RestrictionOperator::HasSelf { index } => {
                 if !matches!(
@@ -615,6 +673,78 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         }
     }
 
+    fn decode_literal(
+        &mut self,
+        triple_index: usize,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        let RdfTerm::Literal(lexical) = self
+            .triples
+            .get(triple_index)
+            .ok_or_else(|| NativeError::protocol("native RDF literal index exceeds graph"))?
+            .object
+        else {
+            return Err(NativeError::protocol(
+                "native RDF literal decoder received a resource",
+            ));
+        };
+        session.step(usize_as_u64(
+            self.literals.len(),
+            "native RDF literal-metadata work exceeds u64",
+        )?)?;
+        let metadata = self
+            .literals
+            .iter()
+            .find(|metadata| metadata.triple_index == triple_index)
+            .copied()
+            .ok_or_else(|| unsupported("native RDF literal metadata is unavailable"))?;
+        if metadata.datatype.is_some() && metadata.language.is_some() {
+            return Err(unsupported(
+                "native RDF literal cannot select both datatype and language",
+            ));
+        }
+        let (lexical, datatype, language) = if let Some(language) = metadata.language {
+            (
+                lexical,
+                RDF_PLAIN_LITERAL,
+                Some(owned_lowercase(language, session)?),
+            )
+        } else {
+            let datatype = metadata.datatype.unwrap_or(XSD_STRING);
+            let lexical = if datatype == RDF_PLAIN_LITERAL {
+                lexical.strip_suffix('@').unwrap_or(lexical)
+            } else {
+                lexical
+            };
+            (lexical, datatype, None)
+        };
+        if usize_as_u64(lexical.len(), "native RDF literal length exceeds u64")?
+            > session.limits().value(LimitKey::MaxLiteralBytes)
+        {
+            return Err(NativeError::limit(
+                "native RDF literal exceeds max_literal_bytes",
+            ));
+        }
+        let lexical = owned_value(lexical, session, "native RDF literal allocation failed")?;
+        let datatype = named_entity("datatype", datatype, session)?;
+        let value = literal(lexical, datatype, language)?;
+        session.step(usize_as_u64(
+            value.as_bytes().len(),
+            "native RDF literal validation work exceeds u64",
+        )?)?;
+        let mut budget = ScanBudget::from_limits(session.limits());
+        match scan_canonical(value.as_bytes(), &mut budget) {
+            Ok(Category::Literal) => Ok(value),
+            Ok(_) => Err(NativeError::protocol(
+                "native RDF literal has the wrong canonical category",
+            )),
+            Err(error) if error.code == "NATIVE_WIRE_CORRUPTION" => Err(unsupported(
+                "native RDF literal violates the structural model",
+            )),
+            Err(error) => Err(error),
+        }
+    }
+
     fn claim_blank(
         &mut self,
         label: &'data str,
@@ -710,6 +840,26 @@ fn named_class(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
 
 fn named_individual(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
     named_entity("named_individual", value, session)
+}
+
+fn owned_lowercase(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
+    let mut output = owned_value(value, session, "native RDF language-tag allocation failed")?;
+    output.make_ascii_lowercase();
+    Ok(output)
+}
+
+fn owned_value(
+    value: &str,
+    session: &mut Session<'_>,
+    allocation_error: &'static str,
+) -> NativeResult<String> {
+    session.reserve_bytes(value.len())?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(value.len())
+        .map_err(|_| NativeError::limit(allocation_error))?;
+    output.push_str(value);
+    Ok(output)
 }
 
 fn nonnegative_integer(value: RdfTerm<'_>, session: &mut Session<'_>) -> NativeResult<String> {
@@ -1019,6 +1169,143 @@ mod tests {
         .unwrap();
         assert_eq!(has_self.node.as_bytes(), expected_has_self.as_bytes());
         assert_eq!(has_self.consumed, [0, 1, 2]);
+    }
+
+    #[test]
+    fn data_has_value_preserves_literal_datatype_and_language() {
+        let typed_graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_HAS_VALUE, RdfTerm::Literal("007")),
+        ];
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut decoder = RdfClassExpressionDecoder::new(&typed_graph);
+        decoder
+            .register_literal(
+                2,
+                Some("http://www.w3.org/2001/XMLSchema#integer"),
+                None,
+                &mut session,
+            )
+            .expect("typed literal metadata");
+        let decoded = decoder
+            .decode_term(blank_term("e"), &mut session)
+            .expect("typed data value restriction");
+        let expected_literal = literal(
+            "007".to_owned(),
+            entity(
+                "datatype",
+                iri("http://www.w3.org/2001/XMLSchema#integer".to_owned()).unwrap(),
+            )
+            .unwrap(),
+            None,
+        )
+        .unwrap();
+        let expected = Node::build(
+            43,
+            vec![
+                Field::Node(entity("data_property", iri("urn:p".to_owned()).unwrap()).unwrap()),
+                Field::Node(expected_literal),
+            ],
+        )
+        .unwrap();
+        assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+        assert_eq!(decoded.consumed, [0, 1, 2]);
+
+        let language_graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_HAS_VALUE, RdfTerm::Literal("colour")),
+        ];
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut decoder = RdfClassExpressionDecoder::new(&language_graph);
+        decoder
+            .register_literal(2, None, Some("EN-gb"), &mut session)
+            .expect("language literal metadata");
+        let decoded = decoder
+            .decode_term(blank_term("e"), &mut session)
+            .expect("language data value restriction");
+        let expected_literal = literal(
+            "colour".to_owned(),
+            entity("datatype", iri(RDF_PLAIN_LITERAL.to_owned()).unwrap()).unwrap(),
+            Some("en-gb".to_owned()),
+        )
+        .unwrap();
+        let expected = Node::build(
+            43,
+            vec![
+                Field::Node(entity("data_property", iri("urn:p".to_owned()).unwrap()).unwrap()),
+                Field::Node(expected_literal),
+            ],
+        )
+        .unwrap();
+        assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+        assert_eq!(decoded.consumed, [0, 1, 2]);
+    }
+
+    #[test]
+    fn ambiguous_and_invalid_literal_metadata_fails_closed() {
+        let graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_HAS_VALUE, RdfTerm::Literal("value")),
+        ];
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut decoder = RdfClassExpressionDecoder::new(&graph);
+        decoder
+            .register_literal(2, Some(XSD_STRING), Some("en"), &mut session)
+            .expect("ambiguous literal metadata registration");
+        assert_eq!(
+            decoder
+                .decode_term(blank_term("e"), &mut session)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut decoder = RdfClassExpressionDecoder::new(&graph);
+        decoder
+            .register_literal(2, None, Some("not_valid"), &mut session)
+            .expect("invalid language metadata registration");
+        assert_eq!(
+            decoder
+                .decode_term(blank_term("e"), &mut session)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+        assert_eq!(
+            decoder
+                .register_literal(2, None, Some("en"), &mut session)
+                .unwrap_err()
+                .code,
+            "NATIVE_PROTOCOL",
+        );
     }
 
     #[test]
