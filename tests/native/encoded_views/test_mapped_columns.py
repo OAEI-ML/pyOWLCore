@@ -16,6 +16,18 @@ from tests.native.encoded_views._support import (
 from tools.wire_reference import encode_sections, read_wire
 
 
+def test_mapped_column_validation_releases_temporary_buffer_exports(tmp_path: Path) -> None:
+    path = tmp_path / "validated-columns.pyocore"
+    path.write_bytes(pyowl_core.encode_snapshot(complete_constructor_snapshot()))
+
+    mapped = pyowl_core.open_snapshot(path)
+    assert isinstance(mapped, pyowl_core.MappedOntologySnapshot)
+
+    mapped.close()
+
+    assert mapped.closed
+
+
 def test_mapped_closure_borrows_one_exporter_without_scalar_materialization(
     tmp_path: Path,
 ) -> None:

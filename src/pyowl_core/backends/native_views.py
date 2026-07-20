@@ -13,6 +13,7 @@ import importlib
 import json
 import mmap as _mmap
 import sys
+from array import array
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -2323,38 +2324,58 @@ def _canonical_node(
 
 
 def _validate_column_nesting(columns: _Columns, limits: ParseLimits) -> None:
-    depths: dict[int, int] = {}
-    active: set[int] = set()
+    node_count = len(columns.tags)
+    depths = array("Q", [0]) * (node_count + 1)
+    states = bytearray(node_count + 1)
 
-    def visit(node_id: int) -> int:
-        cached = depths.get(node_id)
-        if cached is not None:
-            return cached
-        if node_id in active:
-            _fail("encoded structural graph is cyclic", "ENCODED_VIEW_STRUCTURE")
-        active.add(node_id)
-        depth = 0
-        try:
-            start = columns.field_offsets[node_id - 1]
-            end = columns.field_offsets[node_id]
-            for field_index in range(start, end):
-                kind = columns.field_kinds[field_index]
-                if kind == _NODE:
-                    depth = max(depth, visit(columns.field_values[field_index]) + 1)
-                elif kind in {_SET, _SEQUENCE}:
-                    item_start = columns.field_values[field_index]
-                    item_end = item_start + columns.field_lengths[field_index]
-                    for item_index in range(item_start, item_end):
-                        if columns.item_kinds[item_index] == _NODE:
-                            depth = max(depth, visit(columns.item_values[item_index]) + 1)
+    # An explicit DFS also ensures mapped memoryviews remain refcount-releasable;
+    # a self-recursive closure would retain them in a GC cycle after validation.
+
+    def child_nodes(node_id: int) -> Iterable[int]:
+        start = columns.field_offsets[node_id - 1]
+        end = columns.field_offsets[node_id]
+        for field_index in range(start, end):
+            kind = columns.field_kinds[field_index]
+            if kind == _NODE:
+                yield columns.field_values[field_index]
+            elif kind in {_SET, _SEQUENCE}:
+                item_start = columns.field_values[field_index]
+                item_end = item_start + columns.field_lengths[field_index]
+                for item_index in range(item_start, item_end):
+                    if columns.item_kinds[item_index] == _NODE:
+                        yield columns.item_values[item_index]
+
+    for first in range(1, node_count + 1):
+        if states[first] == 2:
+            continue
+        stack = [first]
+        while stack:
+            signed_node_id = stack.pop()
+            if signed_node_id > 0:
+                node_id = signed_node_id
+                state = states[node_id]
+                if state == 2:
+                    continue
+                if state == 1:
+                    _fail("encoded structural graph is cyclic", "ENCODED_VIEW_STRUCTURE")
+                states[node_id] = 1
+                stack.append(-node_id)
+                for child in child_nodes(node_id):
+                    if states[child] == 1:
+                        _fail("encoded structural graph is cyclic", "ENCODED_VIEW_STRUCTURE")
+                    if states[child] != 2:
+                        stack.append(child)
+                continue
+
+            node_id = -signed_node_id
+            depth = 0
+            for child in child_nodes(node_id):
+                if states[child] != 2:
+                    _fail("encoded structural graph is cyclic", "ENCODED_VIEW_STRUCTURE")
+                depth = max(depth, depths[child] + 1)
             limits.enforce("max_nesting_depth", depth)
             depths[node_id] = depth
-            return depth
-        finally:
-            active.remove(node_id)
-
-    for node_id in range(1, len(columns.tags) + 1):
-        visit(node_id)
+            states[node_id] = 2
 
 
 def _canonical_component(
