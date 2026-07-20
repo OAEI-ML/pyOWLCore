@@ -9,10 +9,11 @@ active-node bitmap.  No ``StructuralNode`` is decoded or constructed.
 from __future__ import annotations
 
 import hashlib
+import sys
 from array import array
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from pyowl_core import AxiomScope, EncodedStructuralView, OntologySnapshot
 from pyowl_core.model import CONSTRUCTOR_SPECS, encode_varint
@@ -73,6 +74,17 @@ class DigestResult:
 
 
 @dataclass(frozen=True, slots=True)
+class SingleDocumentDigestResult:
+    """All ontology-sized contract digests from one root traversal."""
+
+    document: DigestResult
+    structural: DigestResult
+    logical: DigestResult
+    signature: DigestResult
+    inventories: Mapping[str, dict[str, object]]
+
+
+@dataclass(frozen=True, slots=True)
 class EncodedTraversalEvidence:
     """Bounded proof facts for the installed native comparator lane."""
 
@@ -82,6 +94,7 @@ class EncodedTraversalEvidence:
     root_count: int
     referenced_buffer_bytes: int
     referenced_buffer_copy_bytes: int = 0
+    provenance_rows_streamed: int = 0
     scalar_traversal_calls: int = 0
     structural_nodes_materialized: int = 0
 
@@ -93,6 +106,7 @@ class EncodedTraversalEvidence:
             "encoded_root_count": self.root_count,
             "encoded_referenced_buffer_bytes": self.referenced_buffer_bytes,
             "encoded_referenced_buffer_copy_bytes": self.referenced_buffer_copy_bytes,
+            "encoded_provenance_rows_streamed": self.provenance_rows_streamed,
             "encoded_scalar_traversal_calls": self.scalar_traversal_calls,
             "encoded_structural_nodes_materialized": self.structural_nodes_materialized,
         }
@@ -113,8 +127,19 @@ class _DigestSink:
         return DigestResult(self._digest.hexdigest(), self.byte_count)
 
 
+class _FanoutSink:
+    __slots__ = ("_sinks",)
+
+    def __init__(self, *sinks: _Sink) -> None:
+        self._sinks = sinks
+
+    def update(self, value: bytes | bytearray | memoryview) -> None:
+        for sink in self._sinks:
+            sink.update(value)
+
+
 class _Column:
-    __slots__ = ("data", "name", "width")
+    __slots__ = ("_length", "_values", "data", "name", "width")
 
     def __init__(self, data: memoryview, width: int, name: str) -> None:
         if len(data) % width:
@@ -122,13 +147,21 @@ class _Column:
         self.data = data
         self.width = width
         self.name = name
+        self._length = len(data) // width
+        value_format = cast(
+            Literal["B", "H", "I", "Q"],
+            {1: "B", 2: "H", 4: "I", 8: "Q"}[width],
+        )
+        self._values = data.cast(value_format) if sys.byteorder == "little" else None
 
     def __len__(self) -> int:
-        return len(self.data) // self.width
+        return self._length
 
     def __getitem__(self, index: int) -> int:
         if index < 0 or index >= len(self):
             raise EncodedContractError(f"encoded {self.name} row is out of range")
+        if self._values is not None:
+            return self._values[index]
         start = index * self.width
         return int.from_bytes(self.data[start : start + self.width], "little")
 
@@ -330,6 +363,130 @@ class EncodedStructuralTraversal:
             "transcript_bytes": result.byte_count,
             "sha256": result.sha256,
         }
+
+    def single_document_contract_digests(
+        self,
+        *,
+        ontology_iri: bytes | None,
+        version_iri: bytes | None,
+        direct_imports: Sequence[bytes],
+        manifest_bytes: bytes,
+        document_key: str,
+    ) -> SingleDocumentDigestResult:
+        """Hash all ontology-sized single-document ledgers in one root pass."""
+
+        document = _DigestSink()
+        document.update(b"pyowl-core:document-fingerprint:v1\x00")
+        for iri in (ontology_iri, version_iri):
+            if iri is None:
+                document.update(b"0")
+            else:
+                document.update(b"1")
+                _write_frame(document, iri)
+        _write_byte_collection(document, direct_imports)
+
+        structural = _DigestSink()
+        structural.update(b"pyowl-core:snapshot-structural:v1\x00")
+        _write_frame(structural, manifest_bytes)
+        _write_frame(structural, document_key.encode("ascii"))
+
+        logical = _DigestSink()
+        logical.update(b"pyowl-core:snapshot-logical:v1\x00")
+        logical.update(b"datatype-policy:owl2-v1\x00")
+        logical.update(encode_varint(sum(1 for _ in self._normalized_logical_roots())))
+        extension_count = sum(1 for _ in self._normalized_extension_roots())
+
+        signature = _DigestSink()
+        signature.update(b"pyowl-core:snapshot-signature:v1\x00")
+        signature.update(b"\x01")
+
+        inventories: dict[str, dict[str, object]] = {}
+        previous_logical: int | None = None
+        previous_extension: int | None = None
+        for root_kind, name in (
+            (_ROOT_ONTOLOGY_ANNOTATION, "ontology_annotations"),
+            (_ROOT_AXIOM, "axioms"),
+            (_ROOT_EXTENSION, "extensions"),
+        ):
+            if root_kind == _ROOT_EXTENSION:
+                logical.update(encode_varint(extension_count))
+            count = self._root_count(root_kind)
+            encoded_count = encode_varint(count)
+            document.update(encoded_count)
+            structural.update(encoded_count)
+            inventory = _DigestSink()
+            inventory.update(_RECORD_INVENTORY_DOMAIN)
+            inventory.update(encoded_count)
+            originals = _FanoutSink(document, structural, inventory)
+            originals_and_logical = _FanoutSink(document, structural, inventory, logical)
+            canonical_size = 0
+            for node_id in self._roots(root_kind):
+                canonical_size += self._node_length(node_id)
+                if root_kind == _ROOT_AXIOM and (
+                    _SPECS_BY_TAG[self._tag(node_id)].category == "logical_axiom"
+                ):
+                    annotations = self._annotations_field(node_id)
+                    unique = previous_logical is None or not self._same_without_top_annotations(
+                        previous_logical, node_id
+                    )
+                    if unique:
+                        previous_logical = node_id
+                    if unique and self._field_lengths[annotations] == 0:
+                        self._write_framed_node(originals_and_logical, node_id)
+                    else:
+                        self._write_framed_node(originals, node_id)
+                        if unique:
+                            self._write_framed_normalized_root(logical, node_id)
+                    continue
+                if root_kind == _ROOT_EXTENSION:
+                    annotations = self._annotations_field(node_id)
+                    unique = previous_extension is None or not self._same_without_top_annotations(
+                        previous_extension, node_id
+                    )
+                    if unique:
+                        previous_extension = node_id
+                        logical.update(b"E")
+                    if unique and self._field_lengths[annotations] == 0:
+                        self._write_framed_node(originals_and_logical, node_id)
+                    else:
+                        self._write_framed_node(originals, node_id)
+                        if unique:
+                            self._write_framed_normalized_root(logical, node_id)
+                    continue
+                self._write_framed_node(originals, node_id)
+            inventory_result = inventory.finish()
+            inventories[name] = {
+                "count": count,
+                "canonical_bytes": canonical_size,
+                "transcript_bytes": inventory_result.byte_count,
+                "sha256": inventory_result.sha256,
+            }
+
+        entity_count = sum(self._tag(node_id) == 2 for node_id in range(1, self.node_count + 1))
+        signature.update(encode_varint(entity_count))
+        signature_inventory = _DigestSink()
+        signature_inventory.update(_RECORD_INVENTORY_DOMAIN)
+        signature_inventory.update(encode_varint(entity_count))
+        signature_fanout = _FanoutSink(signature, signature_inventory)
+        signature_size = 0
+        for node_id in range(1, self.node_count + 1):
+            if self._tag(node_id) == 2:
+                signature_size += self._node_length(node_id)
+                self._write_framed_node(signature_fanout, node_id)
+        signature_inventory_result = signature_inventory.finish()
+        inventories["signature"] = {
+            "count": entity_count,
+            "canonical_bytes": signature_size,
+            "transcript_bytes": signature_inventory_result.byte_count,
+            "sha256": signature_inventory_result.sha256,
+        }
+        return SingleDocumentDigestResult(
+            document.finish(),
+            structural.finish(),
+            logical.finish(),
+            signature.finish(),
+            inventories,
+        )
 
     def write_collection(self, sink: _Sink, root_kind: int) -> None:
         sink.update(encode_varint(self._root_count(root_kind)))
@@ -561,7 +718,6 @@ class EncodedStructuralTraversal:
             )
 
     def _write_component(self, sink: _Sink, kind: int, value: int, length: int) -> None:
-        self._component_length(kind, value, length)
         sink.update(bytes((kind,)))
         if kind == _NONE:
             return
@@ -696,10 +852,11 @@ def combine_traversal_evidence(
 ) -> EncodedTraversalEvidence:
     """Combine exact direct-view facts without counting any copied payload."""
 
-    values = (closure, *documents)
+    document_values = tuple(value for value in documents if value is not closure)
+    values = (closure, *document_values)
     return EncodedTraversalEvidence(
         view_count=len(values),
-        document_view_count=len(documents),
+        document_view_count=len(document_values),
         node_count=sum(value.node_count for value in values),
         root_count=sum(value.root_count for value in values),
         referenced_buffer_bytes=sum(value.referenced_buffer_bytes for value in values),

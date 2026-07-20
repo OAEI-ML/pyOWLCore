@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any, cast
 
 from pyowl_core import (
@@ -24,11 +24,17 @@ from pyowl_core import (
     OntologySnapshot,
     canonical_bytes,
 )
+from pyowl_core.backends.native_handoff_v2 import (
+    NativeFacadeCollectionV2,
+    NativeOriginRowV2,
+    decode_native_auxiliary_row_v2,
+)
 from pyowl_core.model import LOGICAL_AXIOM_TYPES, Entity, StructuralNode, encode_varint
 from pyowl_core.model.axioms import AxiomNode
 
 from ..native_redesign.encoded_contract import (
     DigestResult,
+    EncodedContractUnavailable,
     EncodedStructuralTraversal,
     EncodedTraversalEvidence,
     combine_traversal_evidence,
@@ -165,17 +171,21 @@ def build_encoded_core_common_contract(
         scope=AxiomScope.CLOSURE,
         require_native_direct=require_native_direct,
     )
-    document_rows = tuple(
-        (
-            record,
-            EncodedStructuralTraversal.from_snapshot(
-                snapshot,
-                scope=AxiomScope.DOCUMENT,
-                document_key=record.document_key,
-                require_native_direct=require_native_direct,
-            ),
+    document_rows = (
+        ((manifest.documents[0], closure),)
+        if len(manifest.documents) == 1
+        else tuple(
+            (
+                record,
+                EncodedStructuralTraversal.from_snapshot(
+                    snapshot,
+                    scope=AxiomScope.DOCUMENT,
+                    document_key=record.document_key,
+                    require_native_direct=require_native_direct,
+                ),
+            )
+            for record in manifest.documents
         )
-        for record in manifest.documents
     )
     root_record, root_traversal = next(
         row for row in document_rows if row[0].document_key == snapshot.root_document_key
@@ -190,45 +200,85 @@ def build_encoded_core_common_contract(
         )
     )
 
-    fingerprints = {
-        "document": _encoded_fingerprint_evidence(
-            root_traversal.document_preimage(
-                ontology_iri=_optional_canonical_bytes(root_record.ontology_id.ontology_iri),
-                version_iri=_optional_canonical_bytes(root_record.ontology_id.version_iri),
-                direct_imports=direct_imports,
+    if len(document_rows) == 1:
+        combined = closure.single_document_contract_digests(
+            ontology_iri=_optional_canonical_bytes(root_record.ontology_id.ontology_iri),
+            version_iri=_optional_canonical_bytes(root_record.ontology_id.version_iri),
+            direct_imports=direct_imports,
+            manifest_bytes=manifest.canonical_bytes(),
+            document_key=root_record.document_key,
+        )
+        fingerprints = {
+            "document": _encoded_fingerprint_evidence(
+                combined.document,
+                root_record.document_fingerprint.hex,
             ),
-            root_record.document_fingerprint.hex,
-        ),
-        "structural": _encoded_fingerprint_evidence(
-            EncodedStructuralTraversal.structural_preimage(
-                manifest.canonical_bytes(),
-                tuple((record.document_key, traversal) for record, traversal in document_rows),
+            "structural": _encoded_fingerprint_evidence(
+                combined.structural,
+                snapshot.structural_fingerprint.hex,
             ),
-            snapshot.structural_fingerprint.hex,
-        ),
-        "logical": _encoded_fingerprint_evidence(
-            closure.logical_preimage(),
-            snapshot.logical_fingerprint.hex,
-        ),
-        "signature": _encoded_fingerprint_evidence(
-            closure.signature_preimage(),
-            snapshot.signature_fingerprint.hex,
-        ),
-    }
+            "logical": _encoded_fingerprint_evidence(
+                combined.logical,
+                snapshot.logical_fingerprint.hex,
+            ),
+            "signature": _encoded_fingerprint_evidence(
+                combined.signature,
+                snapshot.signature_fingerprint.hex,
+            ),
+        }
+        encoded_inventories: Mapping[str, dict[str, object]] | None = combined.inventories
+    else:
+        fingerprints = {
+            "document": _encoded_fingerprint_evidence(
+                root_traversal.document_preimage(
+                    ontology_iri=_optional_canonical_bytes(root_record.ontology_id.ontology_iri),
+                    version_iri=_optional_canonical_bytes(root_record.ontology_id.version_iri),
+                    direct_imports=direct_imports,
+                ),
+                root_record.document_fingerprint.hex,
+            ),
+            "structural": _encoded_fingerprint_evidence(
+                EncodedStructuralTraversal.structural_preimage(
+                    manifest.canonical_bytes(),
+                    tuple((record.document_key, traversal) for record, traversal in document_rows),
+                ),
+                snapshot.structural_fingerprint.hex,
+            ),
+            "logical": _encoded_fingerprint_evidence(
+                closure.logical_preimage(),
+                snapshot.logical_fingerprint.hex,
+            ),
+            "signature": _encoded_fingerprint_evidence(
+                closure.signature_preimage(),
+                snapshot.signature_fingerprint.hex,
+            ),
+        }
+        encoded_inventories = None
 
     diagnostic_rows = [value.to_dict() for value in snapshot.diagnostics]
     diagnostics_bytes = _canonical_json(diagnostic_rows)
-    provenance = _provenance_inventory(snapshot)
+    if require_native_direct:
+        provenance, provenance_rows_streamed = _encoded_provenance_inventory(snapshot)
+    else:
+        provenance = _provenance_inventory(snapshot)
+        provenance_rows_streamed = 0
     provenance_bytes = _canonical_json(provenance)
     identity = _identity_inventory(snapshot)
     identity_bytes = _canonical_json(identity)
-    inventories = {
-        "ontology_annotations": closure.record_inventory(1),
-        "axioms": closure.record_inventory(2),
-        "extensions": closure.record_inventory(3),
-        "signature": closure.signature_inventory(),
-        "documents": _document_inventory(snapshot),
-    }
+    inventories = (
+        {
+            **encoded_inventories,
+            "documents": _document_inventory(snapshot),
+        }
+        if encoded_inventories is not None
+        else {
+            "ontology_annotations": closure.record_inventory(1),
+            "axioms": closure.record_inventory(2),
+            "extensions": closure.record_inventory(3),
+            "signature": closure.signature_inventory(),
+            "documents": _document_inventory(snapshot),
+        }
+    )
     ledger = {
         "inventories": inventories,
         "identity_sha256": hashlib.sha256(identity_bytes).hexdigest(),
@@ -256,9 +306,12 @@ def build_encoded_core_common_contract(
     payload["contract_sha256"] = hashlib.sha256(_canonical_json(payload)).hexdigest()
     return EncodedCommonContractResult(
         payload,
-        combine_traversal_evidence(
-            closure,
-            tuple(traversal for _record, traversal in document_rows),
+        replace(
+            combine_traversal_evidence(
+                closure,
+                tuple(traversal for _record, traversal in document_rows),
+            ),
+            provenance_rows_streamed=provenance_rows_streamed,
         ),
     )
 
@@ -632,6 +685,67 @@ def _provenance_inventory(snapshot: OntologySnapshot) -> dict[str, object]:
         "source_byte_count": snapshot.report.total_source_bytes,
         "document_count": snapshot.report.document_count,
     }
+
+
+def _encoded_provenance_inventory(
+    snapshot: OntologySnapshot,
+) -> tuple[dict[str, object], int]:
+    bulk_rows = getattr(snapshot, "_native_origin_rows_v2", None)
+    if not callable(bulk_rows):
+        raise EncodedContractUnavailable(
+            "installed native lane did not publish bulk retained provenance rows"
+        )
+
+    origins: list[dict[str, object]] = []
+    occurrences: list[dict[str, object]] = []
+    active_digest: bytes | None = None
+    row_count = 0
+    for encoded in bulk_rows():
+        if type(encoded) is not bytes or not encoded:
+            raise CommonContractError("bulk retained provenance row is not exact bytes")
+        decoded = decode_native_auxiliary_row_v2(
+            NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+            encoded,
+            max_row_bytes=len(encoded),
+        )
+        if type(decoded) is not NativeOriginRowV2:
+            raise CommonContractError("bulk retained provenance row has the wrong type")
+        if active_digest is not None and decoded.digest < active_digest:
+            raise CommonContractError("bulk retained provenance rows are not canonical")
+        if decoded.digest != active_digest:
+            if active_digest is not None:
+                origins.append(
+                    {
+                        "structural_sha256": active_digest.hex(),
+                        "occurrences": occurrences,
+                    }
+                )
+            active_digest = decoded.digest
+            occurrences = []
+        occurrences.append(
+            {
+                "document_key": decoded.document_key,
+                "occurrence": decoded.occurrence,
+                "span": None if decoded.span is None else decoded.span.to_dict(),
+            }
+        )
+        row_count += 1
+    if active_digest is not None:
+        origins.append(
+            {
+                "structural_sha256": active_digest.hex(),
+                "occurrences": occurrences,
+            }
+        )
+    return (
+        {
+            "origins": origins,
+            "origin_entry_count": len(origins),
+            "source_byte_count": snapshot.report.total_source_bytes,
+            "document_count": snapshot.report.document_count,
+        },
+        row_count,
+    )
 
 
 def _optional_canonical(value: StructuralNode | None) -> str | None:

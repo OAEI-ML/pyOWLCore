@@ -289,10 +289,11 @@ def test_native_core_adapter_uses_bulk_contract_and_publishes_fence_metrics(
     assert result["status"] == "ok"
     validate_common_contract(result["contract"])
     assert result["timed_validation"]["inside_timed_envelope"] is True
-    assert result["metrics"]["encoded_view_count"] == 2
-    assert result["metrics"]["encoded_document_view_count"] == 1
+    assert result["metrics"]["encoded_view_count"] == 1
+    assert result["metrics"]["encoded_document_view_count"] == 0
     assert result["metrics"]["encoded_referenced_buffer_bytes"] > 0
     assert result["metrics"]["encoded_referenced_buffer_copy_bytes"] == 0
+    assert result["metrics"]["encoded_provenance_rows_streamed"] > 0
     assert result["metrics"]["encoded_scalar_traversal_calls"] == 0
     assert result["metrics"]["encoded_structural_nodes_materialized"] == 0
 

@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+import pyowl_core.backends.native_views as native_views_module
 from pyowl_core import (
     AxiomScope,
     BackendPreference,
@@ -223,8 +224,8 @@ def test_encoded_common_contract_matches_scalar_without_model_callbacks(
 
     assert initial.contract == reference
     assert encoded.contract == reference
-    assert encoded.evidence.view_count == 2
-    assert encoded.evidence.document_view_count == 1
+    assert encoded.evidence.view_count == 1
+    assert encoded.evidence.document_view_count == 0
     assert encoded.evidence.referenced_buffer_bytes > 0
     assert encoded.evidence.referenced_buffer_copy_bytes == 0
     assert encoded.evidence.scalar_traversal_calls == 0
@@ -317,6 +318,8 @@ def test_retained_native_encoded_contract_matches_scalar_without_model_callbacks
     def unexpected(*_arguments: object, **_keywords: object) -> object:
         raise AssertionError("retained native contract crossed a scalar model callback")
 
+    before = cast(Any, selected)._native_python_counters()
+    monkeypatch.setattr(native_views_module, "decode_canonical", unexpected)
     for name in ("iter_axioms", "iter_extensions", "ontology_annotations", "signature"):
         monkeypatch.setattr(type(selected), name, unexpected)
     encoded = build_encoded_core_common_contract(
@@ -325,13 +328,20 @@ def test_retained_native_encoded_contract_matches_scalar_without_model_callbacks
         source_sha256=source_sha256,
         options_sha256=digest,
     )
+    after = cast(Any, selected)._native_python_counters()
 
     assert encoded.contract == reference
-    assert encoded.evidence.view_count == 2
+    assert encoded.evidence.view_count == 1
+    assert encoded.evidence.document_view_count == 0
     assert encoded.evidence.referenced_buffer_bytes > 0
     assert encoded.evidence.referenced_buffer_copy_bytes == 0
+    assert encoded.evidence.provenance_rows_streamed == sum(
+        len(row["occurrences"]) for row in reference["provenance"]["origins"]
+    )
     assert encoded.evidence.scalar_traversal_calls == 0
     assert encoded.evidence.structural_nodes_materialized == 0
+    assert after.model_rows_materialized == before.model_rows_materialized
+    assert after.auxiliary_rows_decoded == before.auxiliary_rows_decoded
 
 
 def test_common_contract_is_deterministic_for_identical_bytes_and_options() -> None:
