@@ -12,6 +12,7 @@ import sysconfig
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from pyowl_core.cancellation import CancellationToken
@@ -77,6 +78,19 @@ class _NativeCancellation(Protocol):
     def cancelled(self) -> bool: ...
 
     def cancel(self) -> bool: ...
+
+
+class _NativeRetainedAxiomTypeIndex(Protocol):
+    def _layout_v1(
+        self,
+    ) -> tuple[
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        dict[str, int],
+    ]: ...
 
 
 class _Extension(Protocol):
@@ -164,6 +178,23 @@ class NativeValidation:
 class NativeAxiomPartition:
     postings: dict[type[AxiomNode], tuple[AxiomNode, ...]]
     canonical_sizes: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NativeRetainedAxiomPartition:
+    owner: _NativeRetainedAxiomTypeIndex
+    tags: tuple[int, ...]
+    offsets: tuple[int, ...]
+    category_codes: tuple[int, ...]
+    category_offsets: tuple[int, ...]
+    postings: tuple[int, ...]
+    axiom_rows: int
+    constructor_groups: int
+    category_groups: int
+    retained_buffer_bytes: int
+    peak_owned_bytes: int
+    canonical_work: int
+    complete_root_encode_calls: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -573,6 +604,141 @@ def partition_axioms(
     )
 
 
+def _retained_axiom_partition_v1(
+    ontology: OntologyView,
+    *,
+    scope: object,
+    document_key: str | None,
+    limits: ParseLimits,
+    cancellation_token: CancellationToken | None,
+) -> NativeRetainedAxiomPartition | None:
+    """Build postings directly from a compatible retained V2 arena."""
+
+    state = getattr(ontology, "_native_snapshot_state", None)
+    owner_state = getattr(state, "owner", None)
+    handle = getattr(owner_state, "handle", None)
+    if handle is None:
+        return None
+    try:
+        raw_owner = object.__getattribute__(handle, "_owner_v2")
+    except AttributeError:
+        return None
+    try:
+        extension = cast(_Extension, importlib.import_module(type(raw_owner).__module__))
+    except (ImportError, ValueError):
+        return None
+    raw_operation = getattr(extension, "_retained_axiom_type_index_v1", None)
+    owner_type = getattr(extension, "_NativeRetainedAxiomTypeIndexV1", None)
+    if not callable(raw_operation) or not isinstance(owner_type, type):
+        return None
+    native_scope = getattr(ontology, "_native_scope", None)
+    if not callable(native_scope):
+        return None
+    selected_scope, document_ordinal = native_scope(scope, document_key)
+    scope_value = getattr(selected_scope, "value", None)
+    if type(scope_value) is not str or scope_value not in {"closure", "document"}:
+        raise BackendProtocolError(
+            "native retained index returned an invalid scope",
+            code="NATIVE_INDEX_SCOPE",
+        )
+    config = _encode_config(limits, cancellation_token, verify=False)
+    operation = cast(Callable[..., object], raw_operation)
+    with _relay(extension, limits, cancellation_token) as cancel:
+        raw_index = _call_index_value(
+            extension,
+            lambda: operation(
+                raw_owner,
+                scope_value,
+                document_ordinal,
+                config,
+                cancel,
+            ),
+        )
+    if type(raw_index) is not owner_type:
+        raise BackendProtocolError(
+            "native retained index returned an invalid owner",
+            code="NATIVE_INDEX_RESULT",
+        )
+    layout = cast(_NativeRetainedAxiomTypeIndex, raw_index)._layout_v1()
+    if type(layout) is not tuple or len(layout) != 6:
+        raise BackendProtocolError(
+            "native retained index returned invalid framing",
+            code="NATIVE_INDEX_RESULT",
+        )
+    tags, offsets, category_codes, category_offsets, postings, counters = layout
+    for name, values, maximum in (
+        ("tags", tags, 0xFFFF),
+        ("offsets", offsets, (1 << 64) - 1),
+        ("category codes", category_codes, 0xFF),
+        ("category offsets", category_offsets, (1 << 64) - 1),
+        ("postings", postings, (1 << 64) - 1),
+    ):
+        if type(values) is not tuple or any(
+            type(value) is not int or not 0 <= value <= maximum for value in values
+        ):
+            raise BackendProtocolError(
+                f"native retained index returned invalid {name}",
+                code="NATIVE_INDEX_RESULT",
+            )
+    expected_counter_names = {
+        "axiom_rows",
+        "constructor_groups",
+        "category_groups",
+        "retained_buffer_bytes",
+        "peak_owned_bytes",
+        "canonical_work",
+        "complete_root_encode_calls",
+    }
+    if type(counters) is not dict or set(counters) != expected_counter_names or any(
+        type(value) is not int or value < 0 for value in counters.values()
+    ):
+        raise BackendProtocolError(
+            "native retained index returned invalid counters",
+            code="NATIVE_INDEX_RESULT",
+        )
+    if (
+        tags != tuple(sorted(set(tags)))
+        or category_codes != tuple(sorted(set(category_codes)))
+        or any(value not in {1, 2, 3} for value in category_codes)
+        or len(offsets) != len(tags) + 1
+        or len(category_offsets) != len(category_codes) + 1
+        or offsets[0] != 0
+        or category_offsets[0] != 0
+        or offsets[-1] != len(postings)
+        or category_offsets[-1] != len(postings)
+        or any(left > right for left, right in pairwise(offsets))
+        or any(
+            left > right
+            for left, right in pairwise(category_offsets)
+        )
+        or postings != tuple(range(len(postings)))
+        or counters["axiom_rows"] != len(postings)
+        or counters["constructor_groups"] != len(tags)
+        or counters["category_groups"] != len(category_codes)
+        or counters["complete_root_encode_calls"] != 0
+        or counters["peak_owned_bytes"] < counters["retained_buffer_bytes"]
+    ):
+        raise BackendProtocolError(
+            "native retained index layout is internally inconsistent",
+            code="NATIVE_INDEX_RESULT",
+        )
+    return NativeRetainedAxiomPartition(
+        cast(_NativeRetainedAxiomTypeIndex, raw_index),
+        tags,
+        offsets,
+        category_codes,
+        category_offsets,
+        postings,
+        counters["axiom_rows"],
+        counters["constructor_groups"],
+        counters["category_groups"],
+        counters["retained_buffer_bytes"],
+        counters["peak_owned_bytes"],
+        counters["canonical_work"],
+        counters["complete_root_encode_calls"],
+    )
+
+
 def encode_snapshot(
     snapshot: OntologyView,
     *,
@@ -963,7 +1129,7 @@ def _call_parse(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
     return result
 
 
-def _call_index(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
+def _call_index_value(extension: _Extension, operation: Callable[[], T]) -> T:
     try:
         result = operation()
     except (MemoryError, KeyboardInterrupt, SystemExit):
@@ -983,6 +1149,11 @@ def _call_index(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
         if code == "NATIVE_CAPABILITY_UNAVAILABLE":
             raise BackendUnavailableError(message, code=code) from error
         raise BackendProtocolError(message, code=code) from error
+    return result
+
+
+def _call_index(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
+    result = _call_index_value(extension, operation)
     if not isinstance(result, bytes):
         raise BackendProtocolError(
             "native index returned a non-bytes result",

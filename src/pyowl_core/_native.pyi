@@ -57,6 +57,18 @@ class _NativeSnapshotHandle:
 
 class _NativeParsedStructuralStorageV2: ...
 
+class _NativeRetainedAxiomTypeIndexV1:
+    def _layout_v1(
+        self,
+    ) -> tuple[
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        dict[str, int],
+    ]: ...
+
 def version() -> tuple[str, int]: ...
 def self_test() -> None: ...
 def validate_canonical(
@@ -97,6 +109,13 @@ def _encoded_structural_document_columns_v1(
     config: object,
     cancel: _Cancellation | None = None,
 ) -> tuple[dict[str, memoryview], dict[str, int]]: ...
+def _retained_axiom_type_index_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    cancel: _Cancellation | None = None,
+) -> _NativeRetainedAxiomTypeIndexV1: ...
 def _retain_structural_snapshot_v2(
     documents: object,
     origins: object,

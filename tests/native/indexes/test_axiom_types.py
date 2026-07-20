@@ -15,6 +15,7 @@ from pyowl_core import (
     ImportPolicy,
     LoadOptions,
     OntologyDelta,
+    OntologySnapshot,
     ParseLimits,
     SubClassOf,
     apply_delta,
@@ -40,7 +41,7 @@ def _source(prefix: str) -> bytes:
     ).encode()
 
 
-def _snapshot(prefix: str, backend: BackendPreference):
+def _snapshot(prefix: str, backend: BackendPreference) -> OntologySnapshot:
     return load_snapshot(
         _source(prefix),
         options=LoadOptions(
@@ -65,22 +66,49 @@ def _rows(index: AxiomTypeIndex) -> tuple[bytes, ...]:
     return tuple(canonical_bytes(value) for value in index.iter_all())
 
 
-def test_full_build_routes_once_and_matches_python_exactly() -> None:
+def test_full_build_routes_once_and_matches_python_exactly(
+    extension: NativeTestExtension,
+) -> None:
     python_snapshot = _snapshot("partition", BackendPreference.PYTHON)
     native_snapshot = _snapshot("partition", BackendPreference.NATIVE)
-    with patch(
-        "pyowl_core.backends.native.partition_axioms",
-        wraps=native.partition_axioms,
-    ) as partition:
+    unexpected = AssertionError("retained index crossed coarse canonical rows")
+    with patch("pyowl_core.backends.native.partition_axioms", side_effect=unexpected):
         selected = native_snapshot.view(AxiomTypeIndex)
     reference = python_snapshot.view(AxiomTypeIndex)
-    partition.assert_called_once()
+    owner = cast(Any, selected)._native_owner
+    assert type(owner) is cast(Any, extension)._NativeRetainedAxiomTypeIndexV1
+    *_layout, counters = owner._layout_v1()
+    assert counters["axiom_rows"] == len(tuple(reference.iter_all()))
+    assert counters["complete_root_encode_calls"] == 0
     assert selected.report.strategy is ViewBuildStrategy.FULL_BUILD
     assert selected.report.row_count == reference.report.row_count
     assert selected.report.tables == reference.report.tables
     assert _rows(selected) == _rows(reference)
     for constructor in AXIOM_TYPES:
         assert selected.tuple(constructor) == reference.tuple(constructor)
+
+
+def test_retained_owner_protocol_failure_does_not_fall_back(
+    extension: NativeTestExtension,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot("invalid-retained-owner", BackendPreference.NATIVE)
+
+    def wrong_owner(*_args: object) -> object:
+        return object()
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_retained_axiom_type_index_v1",
+        wrong_owner,
+    )
+    unexpected = AssertionError("invalid retained owner reached the coarse bridge")
+    with (
+        patch("pyowl_core.backends.native.partition_axioms", side_effect=unexpected),
+        pytest.raises(BackendProtocolError) as raised,
+    ):
+        snapshot.view(AxiomTypeIndex)
+    assert raised.value.code == "NATIVE_INDEX_RESULT"
 
 
 def test_auto_keeps_small_index_builds_on_python() -> None:

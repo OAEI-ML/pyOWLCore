@@ -14,6 +14,7 @@ from pyowl_core.document.composite import OntologyComposite
 from pyowl_core.document.overlay import OntologyOverlay
 from pyowl_core.document.provenance import OriginOccurrence
 from pyowl_core.document.snapshot import AxiomScope, OntologyView
+from pyowl_core.exceptions import BackendProtocolError
 from pyowl_core.model import canonical_bytes
 from pyowl_core.model.axioms import (
     ANNOTATION_AXIOM_TYPES,
@@ -64,6 +65,16 @@ _REGISTRY_AXIOM_CATEGORIES = {
     for spec in CONSTRUCTOR_SPECS
     if issubclass(spec.constructor, AxiomNode)
 }
+_REGISTRY_AXIOM_TAGS = {
+    spec.tag: spec.constructor
+    for spec in CONSTRUCTOR_SPECS
+    if issubclass(spec.constructor, AxiomNode)
+}
+_AXIOM_CATEGORY_CODES = {
+    "declaration_axiom": 1,
+    "logical_axiom": 2,
+    "annotation_axiom": 3,
+}
 if set(_REGISTRY_AXIOM_CATEGORIES) != set(AXIOM_TYPES):
     raise RuntimeError("axiom category table does not cover every registered constructor")
 if any(
@@ -72,6 +83,8 @@ if any(
     for constructor in AXIOM_TYPES
 ):
     raise RuntimeError("registered axiom has no supported generated category")
+if set(_REGISTRY_AXIOM_TAGS.values()) != set(AXIOM_TYPES):
+    raise RuntimeError("axiom tag table does not cover every registered constructor")
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +116,7 @@ class AxiomTypeIndex:
         additions: FrozenMap[type[AxiomNode], tuple[AxiomNode, ...]],
         removals: frozenset[AxiomNode],
         report: ViewBuildReport,
+        native_owner: object | None = None,
     ) -> None:
         self._ontology = ontology
         self.options = options
@@ -112,6 +126,7 @@ class AxiomTypeIndex:
         self._additions = additions
         self._removals = removals
         self.report = report
+        self._native_owner = native_owner
 
     @classmethod
     def _build(
@@ -237,13 +252,62 @@ class AxiomTypeIndex:
                     ).backend
                     == "native"
                 )
+        retained = None
+        if use_native:
+            from pyowl_core.backends.native import _retained_axiom_partition_v1
+
+            retained = _retained_axiom_partition_v1(
+                ontology,
+                scope=options.scope,
+                document_key=options.document_key,
+                limits=cast(LoadOptions, load_options).limits,
+                cancellation_token=cancellation_token,
+            )
         values = tuple(
             ontology.iter_axioms(
                 scope=options.scope,
                 document_key=options.document_key,
             )
         )
-        if use_native:
+        native_owner = None
+        if retained is not None:
+            if retained.axiom_rows != len(values):
+                raise BackendProtocolError(
+                    "retained axiom index cardinality diverges from its ontology",
+                    code="NATIVE_INDEX_RESULT",
+                )
+            retained_postings: dict[type[AxiomNode], tuple[AxiomNode, ...]] = {}
+            for group, tag in enumerate(retained.tags):
+                constructor = _REGISTRY_AXIOM_TAGS.get(tag)
+                if constructor is None:
+                    raise BackendProtocolError(
+                        "retained axiom index contains an unknown constructor tag",
+                        code="NATIVE_INDEX_RESULT",
+                    )
+                start, stop = retained.offsets[group : group + 2]
+                selected = tuple(values[retained.postings[index]] for index in range(start, stop))
+                if not selected or any(type(value) is not constructor for value in selected):
+                    raise BackendProtocolError(
+                        "retained axiom index constructor postings diverge",
+                        code="NATIVE_INDEX_RESULT",
+                    )
+                retained_postings[constructor] = selected
+            for group, code in enumerate(retained.category_codes):
+                start, stop = retained.category_offsets[group : group + 2]
+                if any(
+                    _AXIOM_CATEGORY_CODES[_REGISTRY_AXIOM_CATEGORIES[type(values[posting])]]
+                    != code
+                    for posting in retained.postings[start:stop]
+                ):
+                    raise BackendProtocolError(
+                        "retained axiom index category postings diverge",
+                        code="NATIVE_INDEX_RESULT",
+                    )
+            for value in values:
+                budget.add("constructor_postings", bytes_=64 + len(canonical_bytes(value)))
+            frozen = freeze_mapping(retained_postings)
+            native_owner = retained.owner
+        elif use_native:
             from pyowl_core.backends.native import partition_axioms
 
             native = partition_axioms(
@@ -271,6 +335,7 @@ class AxiomTypeIndex:
             FrozenMap(),
             frozenset(),
             build_report(cls, ViewBuildStrategy.FULL_BUILD, budget, started),
+            native_owner,
         )
 
     def iter(self, axiom_type: type[A], *, limit: int | None = None) -> Iterator[A]:

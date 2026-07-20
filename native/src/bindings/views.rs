@@ -5,7 +5,7 @@
 //! registry or the ingestion module.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyDict, PyMemoryView, PyModule, PySlice, PyString};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyMemoryView, PyModule, PySlice, PyString, PyTuple};
 
 use crate::error::NativeError;
 #[cfg(any(test, feature = "test-hooks"))]
@@ -48,17 +48,115 @@ type PyEncodedViewSchemaV1 = (String, u32, u32, Py<PyBytes>, Py<PyBytes>, String
 pub(super) const FEATURES: &[&str] = &[];
 
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
+    _module.add_class::<NativeRetainedAxiomTypeIndexV1>()?;
     _module.add_function(wrap_pyfunction!(_encoded_structural_columns_v1, _module)?)?;
     _module.add_function(wrap_pyfunction!(
         _encoded_structural_document_columns_v1,
         _module
     )?)?;
+    _module.add_function(wrap_pyfunction!(_retained_axiom_type_index_v1, _module)?)?;
     #[cfg(feature = "test-hooks")]
     {
         _module.add_function(wrap_pyfunction!(_encoded_view_schema_v1, _module)?)?;
         _module.add_function(wrap_pyfunction!(_encoded_structural_fixture_v1, _module)?)?;
     }
     Ok(())
+}
+
+/// Private owner for constructor postings built directly over retained arena
+/// root identifiers. The class and operation remain absent from VIEW_FEATURES
+/// until the complete installed consumer matrix closes.
+#[pyclass(
+    module = "pyowl_core._native",
+    frozen,
+    name = "_NativeRetainedAxiomTypeIndexV1",
+    skip_from_py_object
+)]
+struct NativeRetainedAxiomTypeIndexV1 {
+    index: crate::index::RetainedAxiomTypeIndexV1,
+}
+
+type PyRetainedAxiomTypeLayoutV1 = (
+    Py<PyTuple>,
+    Py<PyTuple>,
+    Py<PyTuple>,
+    Py<PyTuple>,
+    Py<PyTuple>,
+    Py<PyDict>,
+);
+
+#[pymethods]
+impl NativeRetainedAxiomTypeIndexV1 {
+    fn _layout_v1<'py>(&self, py: Python<'py>) -> PyResult<PyRetainedAxiomTypeLayoutV1> {
+        let tags = PyTuple::new(py, self.index.tags().iter().copied())?.unbind();
+        let offsets = PyTuple::new(py, self.index.offsets().iter().copied())?.unbind();
+        let category_codes =
+            PyTuple::new(py, self.index.category_codes().iter().copied())?.unbind();
+        let category_offsets =
+            PyTuple::new(py, self.index.category_offsets().iter().copied())?.unbind();
+        let postings = PyTuple::new(py, self.index.postings().iter().copied())?.unbind();
+        let counters = self.index.counters();
+        let observed = PyDict::new(py);
+        for (name, value) in [
+            ("axiom_rows", counters.axiom_rows),
+            ("constructor_groups", counters.constructor_groups),
+            ("category_groups", counters.category_groups),
+            ("retained_buffer_bytes", counters.retained_buffer_bytes),
+            ("peak_owned_bytes", counters.peak_owned_bytes),
+            ("canonical_work", counters.canonical_work),
+            (
+                "complete_root_encode_calls",
+                counters.complete_root_encode_calls,
+            ),
+        ] {
+            observed.set_item(name, value)?;
+        }
+        Ok((
+            tags,
+            offsets,
+            category_codes,
+            category_offsets,
+            postings,
+            observed.unbind(),
+        ))
+    }
+}
+
+/// Build constructor/category postings without encoding retained roots or
+/// crossing the scalar Python ontology iterator before native construction.
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, cancel=None))]
+fn _retained_axiom_type_index_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<NativeRetainedAxiomTypeIndexV1> {
+    if !scope.get_type().is(py.get_type::<PyString>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "retained axiom-type scope must be an exact str",
+        ));
+    }
+    let scope: String = scope.extract()?;
+    let selected_scope = encoded_selection(&scope, document_ordinal)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let limits = crate::limits_from_python(config)?;
+    let cancellation = crate::cancellation_or_default(cancel);
+    let storage = handle.encoded_storage_v2(py)?;
+    drop(handle);
+    let index = crate::run_detached(py, move |interrupt| {
+        storage.retained_axiom_type_index(
+            selected_scope,
+            document_ordinal,
+            false,
+            &limits,
+            cancellation,
+            Some(interrupt),
+        )
+    })?;
+    Ok(NativeRetainedAxiomTypeIndexV1 { index })
 }
 
 /// Exercise raw document-owner selection without relaxing the snapshot

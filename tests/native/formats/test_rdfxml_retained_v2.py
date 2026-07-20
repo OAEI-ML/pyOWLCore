@@ -31,6 +31,7 @@ from pyowl_core.backends import native
 from pyowl_core.backends.native_ingestion import publish_retained_rdfxml_snapshot_v2
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.exceptions import UnsupportedSyntaxError
+from pyowl_core.index import AxiomTypeIndex
 from pyowl_core.io.formats.detection import detect_format
 from pyowl_core.io.source import acquire_source
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
@@ -310,6 +311,49 @@ def test_private_provenance_rows_match_python_and_remain_native_until_access() -
     assert after.origin_rows_emitted >= expected_origin_rows
     assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
     assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_private_rdfxml_axiom_index_builds_over_the_retained_arena(
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(
+        SOURCE,
+        document_iri=DOCUMENT_IRI,
+        options=_options(BackendPreference.PYTHON),
+    )
+    selected = cast(Any, _retained_snapshot())
+    before_python = selected._native_python_counters()
+    unexpected = AssertionError("retained RDF/XML index crossed coarse canonical rows")
+    with patch.object(native, "partition_axioms", side_effect=unexpected):
+        index = selected.view(AxiomTypeIndex)
+    reference_index = reference.view(AxiomTypeIndex)
+    after_python = selected._native_python_counters()
+
+    native_owner = cast(Any, index)._native_owner
+    expected_owner_type = cast(Any, extension)._NativeRetainedAxiomTypeIndexV1
+    assert type(native_owner) is expected_owner_type
+    tags, offsets, category_codes, category_offsets, postings, counters = (
+        native_owner._layout_v1()
+    )
+    assert counters["axiom_rows"] == len(reference.root.axioms)
+    assert counters["constructor_groups"] == len(tags)
+    assert counters["category_groups"] == len(category_codes)
+    assert counters["retained_buffer_bytes"] > 0
+    assert counters["peak_owned_bytes"] >= counters["retained_buffer_bytes"]
+    assert counters["complete_root_encode_calls"] == 0
+    assert offsets[0] == category_offsets[0] == 0
+    assert offsets[-1] == category_offsets[-1] == len(postings)
+    assert postings == tuple(range(len(reference.root.axioms)))
+    assert index.report.tables == reference_index.report.tables
+    assert tuple(canonical_bytes(value) for value in index.iter_all()) == tuple(
+        canonical_bytes(value) for value in reference_index.iter_all()
+    )
+    assert after_python.model_rows_materialized - before_python.model_rows_materialized == len(
+        reference.root.axioms
+    )
+
+    selected.close()
+    assert tuple(index.iter_all()) == tuple(reference_index.iter_all())
 
 
 def test_private_record_unresolved_policy_matches_python_without_resolver() -> None:
