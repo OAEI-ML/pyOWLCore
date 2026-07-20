@@ -1016,7 +1016,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         }
     }
 
-    fn decode_individual(
+    pub(crate) fn decode_individual(
         &mut self,
         value: RdfTerm<'data>,
         session: &mut Session<'_>,
@@ -1032,7 +1032,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         }
     }
 
-    fn decode_literal(
+    pub(crate) fn decode_literal(
         &mut self,
         triple_index: usize,
         session: &mut Session<'_>,

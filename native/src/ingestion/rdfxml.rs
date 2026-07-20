@@ -1270,10 +1270,14 @@ fn map_graph(
             &mut consumed,
             session,
         )?;
-        if let Some(axiom) = match class_axiom {
+        let axiom = match class_axiom {
             Some(value) => Some(value),
-            None => named_axiom(triple, &kinds, session)?,
-        } {
+            None => match assertion_axiom(index, triple, &kinds, &mut expressions, session)? {
+                Some(value) => Some(value),
+                None => named_axiom(triple, &kinds, session)?,
+            },
+        };
+        if let Some(axiom) = axiom {
             push_axiom(axiom, &mut axioms, session)?;
             consumed[index] = true;
         }
@@ -1758,6 +1762,136 @@ fn add_member<'a>(
         members.push(value);
     }
     Ok(())
+}
+
+fn assertion_axiom<'view, 'graph>(
+    index: usize,
+    triple: &'graph Triple,
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Option<Node>> {
+    if is_annotation_property(&triple.predicate, kinds)
+        || is_assertion_structural_predicate(&triple.predicate)
+    {
+        return Ok(None);
+    }
+    let subject = match &triple.subject {
+        Resource::Iri(value) => ListTerm::Iri(value),
+        Resource::Blank(value) => ListTerm::Blank(value),
+    };
+    let axiom = match &triple.object {
+        Term::Literal { .. } if has_kind(kinds, &triple.predicate, "data_property") => build_node(
+            115,
+            [
+                Field::Node(named_entity("data_property", &triple.predicate, session)?),
+                Field::Node(expressions.decode_individual(subject, session)?),
+                Field::Node(expressions.decode_literal(index, session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?,
+        Term::Iri(value) if has_kind(kinds, &triple.predicate, "object_property") => build_node(
+            113,
+            [
+                Field::Node(named_entity("object_property", &triple.predicate, session)?),
+                Field::Node(expressions.decode_individual(subject, session)?),
+                Field::Node(expressions.decode_individual(ListTerm::Iri(value), session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?,
+        Term::Blank(value) if has_kind(kinds, &triple.predicate, "object_property") => build_node(
+            113,
+            [
+                Field::Node(named_entity("object_property", &triple.predicate, session)?),
+                Field::Node(expressions.decode_individual(subject, session)?),
+                Field::Node(expressions.decode_individual(ListTerm::Blank(value), session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?,
+        Term::Iri(_) | Term::Blank(_) | Term::Literal { .. } => return Ok(None),
+    };
+    Ok(Some(axiom))
+}
+
+fn is_annotation_property(value: &str, kinds: &[KindRecord<'_>]) -> bool {
+    has_kind(kinds, value, "annotation_property")
+        || matches!(
+            value,
+            "http://www.w3.org/2000/01/rdf-schema#label"
+                | "http://www.w3.org/2000/01/rdf-schema#comment"
+                | "http://www.w3.org/2000/01/rdf-schema#seeAlso"
+                | "http://www.w3.org/2000/01/rdf-schema#isDefinedBy"
+                | "http://www.w3.org/2002/07/owl#deprecated"
+                | "http://www.w3.org/2002/07/owl#versionInfo"
+                | "http://www.w3.org/2002/07/owl#priorVersion"
+                | "http://www.w3.org/2002/07/owl#backwardCompatibleWith"
+                | "http://www.w3.org/2002/07/owl#incompatibleWith"
+        )
+}
+
+fn is_assertion_structural_predicate(value: &str) -> bool {
+    if matches!(
+        value,
+        RDF_TYPE
+            | RDF_FIRST
+            | RDF_REST
+            | RDFS_SUB_CLASS_OF
+            | RDFS_SUB_PROPERTY_OF
+            | RDFS_DOMAIN
+            | RDFS_RANGE
+    ) {
+        return true;
+    }
+    value.strip_prefix(OWL).is_some_and(|local| {
+        matches!(
+            local,
+            "imports"
+                | "versionIRI"
+                | "intersectionOf"
+                | "unionOf"
+                | "complementOf"
+                | "oneOf"
+                | "datatypeComplementOf"
+                | "onDatatype"
+                | "withRestrictions"
+                | "onProperty"
+                | "onProperties"
+                | "someValuesFrom"
+                | "allValuesFrom"
+                | "hasValue"
+                | "hasSelf"
+                | "minCardinality"
+                | "maxCardinality"
+                | "cardinality"
+                | "minQualifiedCardinality"
+                | "maxQualifiedCardinality"
+                | "qualifiedCardinality"
+                | "onClass"
+                | "onDataRange"
+                | "equivalentClass"
+                | "disjointWith"
+                | "disjointUnionOf"
+                | "equivalentProperty"
+                | "propertyDisjointWith"
+                | "inverseOf"
+                | "propertyChainAxiom"
+                | "hasKey"
+                | "sameAs"
+                | "differentFrom"
+                | "members"
+                | "distinctMembers"
+                | "sourceIndividual"
+                | "assertionProperty"
+                | "targetIndividual"
+                | "targetValue"
+                | "annotatedSource"
+                | "annotatedProperty"
+                | "annotatedTarget"
+        )
+    })
 }
 
 fn named_axiom(
@@ -3531,6 +3665,139 @@ mod tests {
         assert_eq!(
             mapped(invalid_datatype.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+    }
+
+    #[test]
+    fn declared_object_and_data_property_assertions_map_exactly() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:ObjectProperty rdf:about=\"urn:p\"/><owl:DatatypeProperty rdf:about=\"urn:d\"/><rdf:Description rdf:about=\"urn:s\"><e:p rdf:resource=\"urn:o\"/><e:d rdf:datatype=\"http://www.w3.org/2001/XMLSchema#integer\">007</e:d></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("property assertions");
+        let object_assertion = Node::build(
+            113,
+            vec![
+                Field::Node(
+                    entity(
+                        "object_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("object property"),
+                ),
+                Field::Node(
+                    entity(
+                        "named_individual",
+                        iri("urn:s".to_owned()).expect("individual IRI"),
+                    )
+                    .expect("subject"),
+                ),
+                Field::Node(
+                    entity(
+                        "named_individual",
+                        iri("urn:o".to_owned()).expect("individual IRI"),
+                    )
+                    .expect("object"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("object assertion");
+        let data_assertion = Node::build(
+            115,
+            vec![
+                Field::Node(
+                    entity(
+                        "data_property",
+                        iri("urn:d".to_owned()).expect("property IRI"),
+                    )
+                    .expect("data property"),
+                ),
+                Field::Node(
+                    entity(
+                        "named_individual",
+                        iri("urn:s".to_owned()).expect("individual IRI"),
+                    )
+                    .expect("subject"),
+                ),
+                Field::Node(
+                    literal(
+                        "007".to_owned(),
+                        entity(
+                            "datatype",
+                            iri("http://www.w3.org/2001/XMLSchema#integer".to_owned())
+                                .expect("datatype IRI"),
+                        )
+                        .expect("datatype"),
+                        None,
+                    )
+                    .expect("literal"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("data assertion");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == object_assertion.as_bytes()));
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == data_assertion.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let blank_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:ObjectProperty rdf:about=\"urn:p\"/><rdf:Description rdf:nodeID=\"subject\"><e:p rdf:nodeID=\"object\"/></rdf:Description></rdf:RDF>"
+        );
+        let blank = mapped(blank_source.as_bytes(), None).expect("anonymous assertion");
+        let expected = Node::build(
+            113,
+            vec![
+                Field::Node(
+                    entity(
+                        "object_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("object property"),
+                ),
+                Field::Node(crate::canonical::anonymous("subject").expect("subject")),
+                Field::Node(crate::canonical::anonymous("object").expect("object")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("anonymous assertion");
+        assert!(blank
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+
+        let wrong_kind = source.replace("<owl:DatatypeProperty rdf:about=\"urn:d\"/>", "");
+        assert_eq!(
+            mapped(wrong_kind.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
+
+        let annotation_overlap = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:AnnotationProperty rdf:about=\"urn:a\"/><owl:DatatypeProperty rdf:about=\"urn:a\"/><rdf:Description rdf:about=\"urn:s\"><e:a>note</e:a></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(annotation_overlap.as_bytes(), None)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
+
+        let structural_overlap = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:DatatypeProperty rdf:about=\"{OWL}sameAs\"/><rdf:Description rdf:about=\"urn:s\"><owl:sameAs>not-an-assertion</owl:sameAs></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(structural_overlap.as_bytes(), None)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
         );
     }
 
