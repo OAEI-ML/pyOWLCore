@@ -16,7 +16,6 @@ use std::sync::Arc;
 use crate::error::{NativeError, NativeResult};
 use crate::model::{validate_iri, Category};
 
-#[cfg(feature = "test-hooks")]
 pub(crate) use facade_v2::PublicationStorageV2;
 #[allow(unused_imports)]
 pub(crate) use handle::{register_native_handle_types, NativeDocumentHandle, NativeSnapshotHandle};
@@ -43,6 +42,13 @@ pub(crate) const PUBLICATION_LEDGER_SHA256_V1: [u8; 32] = [
     0x8e, 0x2c, 0xf6, 0x76, 0xd9, 0x3f, 0xb5, 0xec, 0x39, 0x85, 0xea, 0x9b, 0xbe, 0x1a, 0x44, 0x9d,
     0x8a, 0xdf, 0xb8, 0xf2, 0xee, 0xbe, 0x0b, 0x07, 0xca, 0xae, 0xbf, 0x22, 0x4b, 0x1b, 0xb4, 0x6d,
 ];
+
+#[cfg(feature = "test-hooks")]
+pub(crate) fn encoded_fixture_handle_v2() -> NativeResult<NativeSnapshotHandle> {
+    Ok(NativeSnapshotHandle::from_storage_v2(
+        facade_v2::PublicationStorageV2::encoded_fixture_for_tests()?,
+    ))
+}
 
 #[cfg(feature = "test-hooks")]
 #[allow(clippy::too_many_arguments)]

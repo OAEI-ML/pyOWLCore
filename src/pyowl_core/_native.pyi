@@ -83,8 +83,21 @@ def build_index(
     request: object,
     cancel: _Cancellation | None = None,
 ) -> bytes: ...
+def _encoded_structural_columns_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    cancel: _Cancellation | None = None,
+) -> tuple[dict[str, memoryview], dict[str, int]]: ...
+def _encoded_structural_document_columns_v1(
+    handle: _NativeDocumentHandle,
+    config: object,
+    cancel: _Cancellation | None = None,
+) -> tuple[dict[str, memoryview], dict[str, int]]: ...
 def _work_probe(iterations: int, config: object, cancel: _Cancellation | None = None) -> int: ...
 def _panic_probe() -> None: ...
+def _encoded_structural_fixture_v1() -> _NativeSnapshotHandle: ...
 def _publication_fixture_v2(
     attestation: NativeSnapshotAttestationV2,
     collections: Mapping[tuple[object, ...], Sequence[bytes]],

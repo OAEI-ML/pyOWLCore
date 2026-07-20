@@ -5,17 +5,14 @@
 //! registry or the ingestion module.
 
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyAny, PyBytes, PyDict, PyMemoryView, PyModule, PySlice, PyString};
 
-#[cfg(feature = "test-hooks")]
-use pyo3::types::{PyAny, PyBytes, PyDict, PyMemoryView, PySlice, PyString};
-
+use crate::error::NativeError;
 #[cfg(any(test, feature = "test-hooks"))]
-use crate::error::{NativeError, NativeResult};
-#[cfg(any(test, feature = "test-hooks"))]
-use crate::publication::TypedFacadeScopeV2;
-#[cfg(feature = "test-hooks")]
-use crate::publication::{NativeDocumentHandle, NativeSnapshotHandle, PublicationStorageV2};
+use crate::error::NativeResult;
+use crate::publication::{
+    NativeDocumentHandle, NativeSnapshotHandle, PublicationStorageV2, TypedFacadeScopeV2,
+};
 
 #[cfg(any(test, feature = "test-hooks"))]
 mod generated {
@@ -51,21 +48,21 @@ type PyEncodedViewSchemaV1 = (String, u32, u32, Py<PyBytes>, Py<PyBytes>, String
 pub(super) const FEATURES: &[&str] = &[];
 
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
+    _module.add_function(wrap_pyfunction!(_encoded_structural_columns_v1, _module)?)?;
+    _module.add_function(wrap_pyfunction!(
+        _encoded_structural_document_columns_v1,
+        _module
+    )?)?;
     #[cfg(feature = "test-hooks")]
     {
         _module.add_function(wrap_pyfunction!(_encoded_view_schema_v1, _module)?)?;
-        _module.add_function(wrap_pyfunction!(_encoded_structural_columns_v1, _module)?)?;
-        _module.add_function(wrap_pyfunction!(
-            _encoded_structural_document_columns_v1,
-            _module
-        )?)?;
+        _module.add_function(wrap_pyfunction!(_encoded_structural_fixture_v1, _module)?)?;
     }
     Ok(())
 }
 
-/// Exercise raw document-owner selection without relaxing the snapshot hook's
-/// effective-scope semantics.
-#[cfg(feature = "test-hooks")]
+/// Exercise raw document-owner selection without relaxing the snapshot
+/// operation's effective-scope semantics.
 #[pyfunction]
 #[pyo3(signature = (handle, config, cancel=None))]
 fn _encoded_structural_document_columns_v1<'py>(
@@ -90,10 +87,9 @@ fn _encoded_structural_document_columns_v1<'py>(
     )
 }
 
-/// Exercise the direct retained-column path through an open V2 snapshot
-/// owner. This remains a test hook until the installed-wheel lifetime/copy
-/// matrix permits advertising the frozen view capability.
-#[cfg(feature = "test-hooks")]
+/// Exercise the direct retained-column path through an open V2 snapshot owner.
+/// The private operation remains unadvertised until the installed-wheel
+/// lifetime/copy matrix permits exposing the frozen view capability.
 #[pyfunction]
 #[pyo3(signature = (handle, scope, document_ordinal, config, cancel=None))]
 fn _encoded_structural_columns_v1<'py>(
@@ -127,7 +123,6 @@ fn _encoded_structural_columns_v1<'py>(
     )
 }
 
-#[cfg(any(test, feature = "test-hooks"))]
 fn encoded_selection(
     scope: &str,
     document_ordinal: Option<u64>,
@@ -140,7 +135,6 @@ fn encoded_selection(
     }
 }
 
-#[cfg(feature = "test-hooks")]
 fn encoded_columns_to_python(
     py: Python<'_>,
     storage: &PublicationStorageV2,
@@ -224,6 +218,12 @@ fn encoded_columns_to_python(
         .record_encoded_view_success()
         .map_err(crate::python_error)?;
     Ok((buffers.unbind(), observed.unbind()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+fn _encoded_structural_fixture_v1() -> PyResult<NativeSnapshotHandle> {
+    crate::publication::encoded_fixture_handle_v2().map_err(crate::python_error)
 }
 
 #[cfg(any(test, feature = "test-hooks"))]

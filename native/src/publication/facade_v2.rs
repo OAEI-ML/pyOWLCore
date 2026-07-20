@@ -1077,6 +1077,27 @@ impl PublicationStorageV2 {
         }))
     }
 
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn encoded_fixture_for_tests() -> NativeResult<Arc<Self>> {
+        use crate::canonical::{entity, iri, Field, Node};
+
+        let limits = Limits::default();
+        let declaration = Node::build(
+            60,
+            vec![
+                Field::Node(entity("class", iri("urn:encoded-view:fixture".into())?)?),
+                Field::Set(Vec::new()),
+            ],
+        )?;
+        let mut builder =
+            super::TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)?;
+        builder.add_document(&[], &[declaration.as_bytes().to_vec()], &[])?;
+        let typed = builder.freeze(&[vec![0]], &[0])?;
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.max_facade_row_bytes = typed.maximum_row_bytes();
+        Self::from_typed_structural(attestation, typed)
+    }
+
     #[cfg(test)]
     pub(super) fn fixture_for_tests() -> Arc<Self> {
         Self::fixture_for_tests_with_document_count(1)
@@ -2439,7 +2460,7 @@ fn coordinate_from_key(value: &Bound<'_, PyAny>) -> PyResult<CoordinateV2> {
 }
 
 impl NativeSnapshotAttestationV2 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     fn fixture_for_tests() -> Self {
         Self {
             version: PUBLICATION_VERSION_V2,
