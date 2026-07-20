@@ -11,6 +11,7 @@ use super::rdf_lists::{
 };
 
 const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
+const OWL_DATA_RANGE: &str = "http://www.w3.org/2002/07/owl#DataRange";
 const OWL_COMPLEMENT_OF: &str = "http://www.w3.org/2002/07/owl#complementOf";
 const OWL_DATATYPE_COMPLEMENT_OF: &str = "http://www.w3.org/2002/07/owl#datatypeComplementOf";
 const OWL_INTERSECTION_OF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
@@ -31,6 +32,7 @@ const OWL_QUALIFIED_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#qualified
 const OWL_ON_CLASS: &str = "http://www.w3.org/2002/07/owl#onClass";
 const OWL_ON_DATA_RANGE: &str = "http://www.w3.org/2002/07/owl#onDataRange";
 const OWL_ON_DATATYPE: &str = "http://www.w3.org/2002/07/owl#onDatatype";
+const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
 const OWL_UNION_OF: &str = "http://www.w3.org/2002/07/owl#unionOf";
 const OWL_WITH_RESTRICTIONS: &str = "http://www.w3.org/2002/07/owl#withRestrictions";
@@ -275,6 +277,57 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         Ok(DecodedPropertyExpression { node, consumed })
     }
 
+    pub(crate) fn decode_compatibility_class_boolean(
+        &mut self,
+        head: RdfTerm<'data>,
+        tag: u64,
+        session: &mut Session<'_>,
+    ) -> NativeResult<DecodedClassExpression> {
+        if !matches!(tag, 30 | 31) {
+            return Err(NativeError::protocol(
+                "native RDF compatibility boolean has an invalid canonical tag",
+            ));
+        }
+        let mut consumed = Vec::new();
+        let node = self.decode_boolean(head, tag, true, &mut consumed, session)?;
+        consumed.sort_unstable();
+        consumed.dedup();
+        Ok(DecodedClassExpression { node, consumed })
+    }
+
+    pub(crate) fn decode_compatibility_named_one_of(
+        &mut self,
+        head: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<DecodedClassExpression> {
+        let decoded = self.lists.decode(head, session)?;
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        let mut consumed = decoded.consumed;
+        if decoded.items.is_empty() {
+            return Ok(DecodedClassExpression {
+                node: named_class(OWL_NOTHING, session)?,
+                consumed,
+            });
+        }
+        let mut individuals = reserved_vec(decoded.items.len(), session)?;
+        for item in decoded.items {
+            let RdfTerm::Iri(value) = item else {
+                return Err(unsupported(
+                    "native OWL 1 named enumeration requires named individuals",
+                ));
+            };
+            individuals.push(named_individual(value, session)?);
+        }
+        let individuals = canonical_set(individuals, 1, None)?;
+        let fields = reserved_fields([Field::Set(individuals)], session)?;
+        let node = Node::build(33, fields)?;
+        consumed.sort_unstable();
+        consumed.dedup();
+        Ok(DecodedClassExpression { node, consumed })
+    }
+
     fn decode_data_range(
         &mut self,
         value: RdfTerm<'data>,
@@ -340,6 +393,12 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         let on_datatype = self.unique_edge(subject, OWL_ON_DATATYPE, session)?;
         let with_restrictions = self.unique_edge(subject, OWL_WITH_RESTRICTIONS, session)?;
         let marker = self.unique_marker(subject, RDFS_DATATYPE, session)?;
+        let compatibility_marker = self.unique_marker(subject, OWL_DATA_RANGE, session)?;
+        if marker.is_some() && compatibility_marker.is_some() {
+            return Err(unsupported(
+                "native RDF data range has conflicting datatype markers",
+            ));
+        }
         let datatype_restriction = on_datatype.is_some() || with_restrictions.is_some();
         let constructor_count = [
             intersection.is_some(),
@@ -387,6 +446,16 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         if let Some(marker) = marker {
             push_index(consumed, marker, session)?;
         }
+        if let Some(marker) = compatibility_marker {
+            push_index(consumed, marker, session)?;
+        }
+        if compatibility_marker.is_some()
+            && !matches!(constructor, DataRangeConstructor::OneOf { .. })
+        {
+            return Err(unsupported(
+                "native OWL 1 data range marker requires owl:oneOf",
+            ));
+        }
         match constructor {
             DataRangeConstructor::Boolean { index, tag } => {
                 push_index(consumed, index, session)?;
@@ -403,7 +472,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             DataRangeConstructor::OneOf { index } => {
                 push_index(consumed, index, session)?;
                 let target = self.triples[index].object;
-                self.decode_data_one_of(target, consumed, session)
+                self.decode_data_one_of(target, compatibility_marker.is_some(), consumed, session)
             }
             DataRangeConstructor::DatatypeRestriction {
                 on_datatype,
@@ -454,11 +523,12 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
     fn decode_data_one_of(
         &mut self,
         head: RdfTerm<'data>,
+        compatibility: bool,
         consumed: &mut Vec<usize>,
         session: &mut Session<'_>,
     ) -> NativeResult<Node> {
         let decoded = self.lists.decode(head, session)?;
-        if decoded.items.is_empty() || decoded.items.len() != decoded.cells.len() {
+        if decoded.items.len() != decoded.cells.len() {
             return Err(unsupported(
                 "native RDF data enumeration has no literal values",
             ));
@@ -468,6 +538,16 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         }
         for index in decoded.consumed {
             push_index(consumed, index, session)?;
+        }
+        if decoded.items.is_empty() {
+            if compatibility {
+                let operand = named_entity("datatype", RDFS_LITERAL, session)?;
+                let fields = reserved_fields([Field::Node(operand)], session)?;
+                return Node::build(23, fields);
+            }
+            return Err(unsupported(
+                "native RDF data enumeration has no literal values",
+            ));
         }
         let mut values = reserved_vec(decoded.items.len(), session)?;
         for (cell, item) in decoded.cells.into_iter().zip(decoded.items) {
@@ -659,6 +739,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         let complement = self.unique_edge(subject, OWL_COMPLEMENT_OF, session)?;
         let intersection = self.unique_edge(subject, OWL_INTERSECTION_OF, session)?;
         let one_of = self.unique_edge(subject, OWL_ONE_OF, session)?;
+        let class_marker = self.unique_marker(subject, OWL_CLASS, session)?;
         let restriction = self.unique_marker(subject, OWL_RESTRICTION, session)?;
         let union = self.unique_edge(subject, OWL_UNION_OF, session)?;
         let constructor_count = usize::from(complement.is_some())
@@ -691,20 +772,20 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         };
 
         push_index(consumed, constructor.index(), session)?;
-        if !matches!(constructor, ClassConstructor::Restriction { .. }) {
-            self.consume_class_markers(subject, consumed, session)?;
-        }
+        self.consume_class_markers(subject, consumed, session)?;
         let target = self.triples[constructor.index()].object;
         match constructor {
             ClassConstructor::Boolean { tag, .. } => {
-                self.decode_boolean(target, tag, consumed, session)
+                self.decode_boolean(target, tag, class_marker.is_some(), consumed, session)
             }
             ClassConstructor::Complement { .. } => {
                 let operand = self.decode_into(target, consumed, session)?;
                 let fields = reserved_fields([Field::Node(operand)], session)?;
                 Node::build(32, fields)
             }
-            ClassConstructor::OneOf { .. } => self.decode_one_of(target, consumed, session),
+            ClassConstructor::OneOf { .. } => {
+                self.decode_one_of(target, class_marker.is_some(), consumed, session)
+            }
             ClassConstructor::Restriction { .. } => {
                 self.decode_restriction(subject, consumed, session)
             }
@@ -715,21 +796,33 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         &mut self,
         head: RdfTerm<'data>,
         tag: u64,
+        compatibility: bool,
         consumed: &mut Vec<usize>,
         session: &mut Session<'_>,
     ) -> NativeResult<Node> {
         let decoded = self.lists.decode(head, session)?;
         let raw_length = decoded.items.len();
-        if raw_length < 2 {
-            return Err(unsupported(
-                "native RDF boolean class expression has fewer than two operands",
-            ));
-        }
         for cell in &decoded.cells {
             self.claim_blank(cell, ROLE_LIST, session)?;
         }
         for index in decoded.consumed {
             push_index(consumed, index, session)?;
+        }
+        if raw_length == 0 {
+            if compatibility {
+                return named_class(if tag == 30 { OWL_THING } else { OWL_NOTHING }, session);
+            }
+            return Err(unsupported(
+                "native RDF boolean class expression has fewer than two operands",
+            ));
+        }
+        if raw_length == 1 {
+            if compatibility {
+                return self.decode_into(decoded.items[0], consumed, session);
+            }
+            return Err(unsupported(
+                "native RDF boolean class expression has fewer than two operands",
+            ));
         }
 
         let mut operands = reserved_vec(raw_length, session)?;
@@ -756,20 +849,24 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
     fn decode_one_of(
         &mut self,
         head: RdfTerm<'data>,
+        compatibility: bool,
         consumed: &mut Vec<usize>,
         session: &mut Session<'_>,
     ) -> NativeResult<Node> {
         let decoded = self.lists.decode(head, session)?;
-        if decoded.items.is_empty() {
-            return Err(unsupported(
-                "native RDF object enumeration has no individuals",
-            ));
-        }
         for cell in &decoded.cells {
             self.claim_blank(cell, ROLE_LIST, session)?;
         }
         for index in decoded.consumed {
             push_index(consumed, index, session)?;
+        }
+        if decoded.items.is_empty() {
+            if compatibility {
+                return named_class(OWL_NOTHING, session);
+            }
+            return Err(unsupported(
+                "native RDF object enumeration has no individuals",
+            ));
         }
         let mut individuals = reserved_vec(decoded.items.len(), session)?;
         for item in decoded.items {
@@ -1723,6 +1820,73 @@ mod tests {
         let expected_one_of = Node::build(33, vec![Field::Set(individuals)]).unwrap();
         assert_eq!(one_of.node.as_bytes(), expected_one_of.as_bytes());
         assert_eq!(one_of.consumed, [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn owl1_class_expression_compatibility_handles_empty_and_singleton_lists() {
+        for (predicate, empty_class) in [
+            (OWL_INTERSECTION_OF, OWL_THING),
+            (OWL_UNION_OF, OWL_NOTHING),
+            (OWL_ONE_OF, OWL_NOTHING),
+        ] {
+            let graph = [
+                edge("e", RDF_TYPE, iri_term(OWL_CLASS)),
+                edge("e", predicate, iri_term(RDF_NIL)),
+            ];
+            let decoded = decode(&graph, blank_term("e")).expect("empty OWL 1 expression");
+            assert_eq!(
+                decoded.node.as_bytes(),
+                entity("class", iri(empty_class.to_owned()).unwrap())
+                    .unwrap()
+                    .as_bytes(),
+            );
+            assert_eq!(decoded.consumed, [0, 1]);
+        }
+
+        for predicate in [OWL_INTERSECTION_OF, OWL_UNION_OF] {
+            let graph = [
+                edge("e", RDF_TYPE, iri_term(OWL_CLASS)),
+                edge("e", predicate, blank_term("h")),
+                edge("h", RDF_FIRST, iri_term("urn:A")),
+                edge("h", RDF_REST, iri_term(RDF_NIL)),
+            ];
+            let decoded = decode(&graph, blank_term("e")).expect("singleton OWL 1 expression");
+            assert_eq!(
+                decoded.node.as_bytes(),
+                entity("class", iri("urn:A".to_owned()).unwrap())
+                    .unwrap()
+                    .as_bytes(),
+            );
+            assert_eq!(decoded.consumed, [0, 1, 2, 3]);
+        }
+
+        let unmarked = [edge("e", OWL_UNION_OF, iri_term(RDF_NIL))];
+        assert_eq!(
+            decode(&unmarked, blank_term("e")).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+    }
+
+    #[test]
+    fn owl1_empty_data_range_maps_to_literal_complement() {
+        let graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_DATA_RANGE)),
+            edge("e", OWL_ONE_OF, iri_term(RDF_NIL)),
+        ];
+        let decoded = decode_data(&graph, blank_term("e"), &[]).expect("OWL 1 data range");
+        let literal = entity("datatype", iri(RDFS_LITERAL.to_owned()).unwrap()).unwrap();
+        let expected = Node::build(23, vec![Field::Node(literal)]).unwrap();
+        assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+        assert_eq!(decoded.consumed, [0, 1]);
+
+        let modern = [
+            edge("e", RDF_TYPE, iri_term(RDFS_DATATYPE)),
+            edge("e", OWL_ONE_OF, iri_term(RDF_NIL)),
+        ];
+        assert_eq!(
+            decode_data(&modern, blank_term("e"), &[]).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
     }
 
     #[test]

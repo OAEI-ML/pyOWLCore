@@ -28,13 +28,17 @@ const SWRL: &str = "http://www.w3.org/2003/11/swrl#";
 const RDF_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#RDF";
 const RDF_DESCRIPTION: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Description";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const RDF_PROPERTY: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property";
 const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
 const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
 const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+const RDFS_CLASS: &str = "http://www.w3.org/2000/01/rdf-schema#Class";
+const RDFS_DATATYPE: &str = "http://www.w3.org/2000/01/rdf-schema#Datatype";
 const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
 const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
 const OWL_VERSION_IRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
 const RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 const RDFS_SUB_PROPERTY_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
@@ -42,6 +46,10 @@ const RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
 const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
 const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
 const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
+const OWL_INTERSECTION_OF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
+const OWL_UNION_OF: &str = "http://www.w3.org/2002/07/owl#unionOf";
+const OWL_COMPLEMENT_OF: &str = "http://www.w3.org/2002/07/owl#complementOf";
+const OWL_ONE_OF: &str = "http://www.w3.org/2002/07/owl#oneOf";
 const OWL_EQUIVALENT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#equivalentProperty";
 const OWL_PROPERTY_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#propertyDisjointWith";
 const OWL_PROPERTY_CHAIN_AXIOM: &str = "http://www.w3.org/2002/07/owl#propertyChainAxiom";
@@ -63,6 +71,21 @@ const OWL_TARGET_INDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#targetIndivid
 const OWL_TARGET_VALUE: &str = "http://www.w3.org/2002/07/owl#targetValue";
 const OWL_AXIOM: &str = "http://www.w3.org/2002/07/owl#Axiom";
 const OWL_ANNOTATION: &str = "http://www.w3.org/2002/07/owl#Annotation";
+const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
+const OWL_DATA_RANGE: &str = "http://www.w3.org/2002/07/owl#DataRange";
+const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
+const OWL_OBJECT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
+const OWL_DATATYPE_PROPERTY: &str = "http://www.w3.org/2002/07/owl#DatatypeProperty";
+const OWL_ANNOTATION_PROPERTY: &str = "http://www.w3.org/2002/07/owl#AnnotationProperty";
+const OWL_ONTOLOGY_PROPERTY: &str = "http://www.w3.org/2002/07/owl#OntologyProperty";
+const OWL_FUNCTIONAL_PROPERTY: &str = "http://www.w3.org/2002/07/owl#FunctionalProperty";
+const OWL_INVERSE_FUNCTIONAL_PROPERTY: &str =
+    "http://www.w3.org/2002/07/owl#InverseFunctionalProperty";
+const OWL_SYMMETRIC_PROPERTY: &str = "http://www.w3.org/2002/07/owl#SymmetricProperty";
+const OWL_TRANSITIVE_PROPERTY: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
+const OWL_DEPRECATED_CLASS: &str = "http://www.w3.org/2002/07/owl#DeprecatedClass";
+const OWL_DEPRECATED_PROPERTY: &str = "http://www.w3.org/2002/07/owl#DeprecatedProperty";
+const OWL_DEPRECATED: &str = "http://www.w3.org/2002/07/owl#deprecated";
 const OWL_ANNOTATED_SOURCE: &str = "http://www.w3.org/2002/07/owl#annotatedSource";
 const OWL_ANNOTATED_PROPERTY: &str = "http://www.w3.org/2002/07/owl#annotatedProperty";
 const OWL_ANNOTATED_TARGET: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
@@ -1256,6 +1279,7 @@ fn map_graph(
             )?;
         }
     }
+    consume_owl1_redundant_types(&triples, &mut consumed, session)?;
     let mut axiom_annotations =
         collect_axiom_annotations(&triples, &mut consumed, &mut expressions, session)?;
     for (index, triple) in triples.iter().enumerate() {
@@ -1266,7 +1290,11 @@ fn map_graph(
         let Term::Iri(object) = &triple.object else {
             continue;
         };
-        let Some(kind) = declaration_kind(object) else {
+        let (kind, inferred) = if let Some(kind) = declaration_kind(object) {
+            (kind, false)
+        } else if let Some(kind) = inferred_declaration_kind(object) {
+            (kind, true)
+        } else {
             continue;
         };
         // A blank `rdf:type owl:Class` is an optional structural-expression
@@ -1275,12 +1303,19 @@ fn map_graph(
         let Resource::Iri(subject) = &triple.subject else {
             continue;
         };
+        if inferred && has_explicit_declaration(&triples, subject, kind) {
+            continue;
+        }
         super::check_iri(
             subject,
             session,
             "native RDF declaration IRI exceeds max_iri_bytes",
         )?;
-        let annotations = axiom_annotations.annotations_for(triple, &triples, session)?;
+        let annotations = if inferred {
+            Vec::new()
+        } else {
+            axiom_annotations.annotations_for(triple, &triples, session)?
+        };
         let declaration = build_node(
             60,
             [
@@ -1290,8 +1325,10 @@ fn map_graph(
             session,
         )?;
         push_axiom(declaration, &mut axioms, session)?;
-        consumed[index] = true;
-        axiom_annotations.claim(triple, &triples)?;
+        if !inferred {
+            consumed[index] = true;
+            axiom_annotations.claim(triple, &triples)?;
+        }
     }
     map_ontology_annotations(
         header_index,
@@ -1362,6 +1399,16 @@ fn map_graph(
         &list_graph,
         &triples,
         &mut consumed,
+        &mut expressions,
+        &mut axiom_annotations,
+        &mut axioms,
+        session,
+    )?;
+    map_owl1_compatibility_class_axioms(
+        &list_graph,
+        &triples,
+        &mut consumed,
+        &kinds,
         &mut expressions,
         &mut axiom_annotations,
         &mut axioms,
@@ -1619,6 +1666,77 @@ impl AxiomAnnotationLedger {
     }
 }
 
+fn consume_owl1_redundant_types(
+    triples: &[Triple],
+    consumed: &mut [bool],
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if triple.predicate != RDF_TYPE {
+            continue;
+        }
+        let Term::Iri(object) = &triple.object else {
+            continue;
+        };
+        let redundant = match object.as_str() {
+            RDFS_CLASS => subject_has_type(
+                triples,
+                &triple.subject,
+                &[
+                    OWL_ONTOLOGY,
+                    OWL_CLASS,
+                    RDFS_DATATYPE,
+                    OWL_DATA_RANGE,
+                    OWL_RESTRICTION,
+                ],
+                session,
+            )?,
+            RDF_PROPERTY => subject_has_type(
+                triples,
+                &triple.subject,
+                &[
+                    OWL_OBJECT_PROPERTY,
+                    OWL_FUNCTIONAL_PROPERTY,
+                    OWL_INVERSE_FUNCTIONAL_PROPERTY,
+                    OWL_TRANSITIVE_PROPERTY,
+                    OWL_DATATYPE_PROPERTY,
+                    OWL_ANNOTATION_PROPERTY,
+                    OWL_ONTOLOGY_PROPERTY,
+                ],
+                session,
+            )?,
+            OWL_CLASS => subject_has_type(triples, &triple.subject, &[OWL_RESTRICTION], session)?,
+            _ => false,
+        };
+        if redundant {
+            let entry = consumed.get_mut(index).ok_or_else(|| {
+                NativeError::protocol("native RDF compatibility index exceeds consumed ledger")
+            })?;
+            *entry = true;
+        }
+    }
+    Ok(())
+}
+
+fn subject_has_type(
+    triples: &[Triple],
+    subject: &Resource,
+    expected: &[&str],
+    session: &mut Session<'_>,
+) -> NativeResult<bool> {
+    for triple in triples {
+        session.step(1)?;
+        if &triple.subject == subject
+            && triple.predicate == RDF_TYPE
+            && matches!(&triple.object, Term::Iri(value) if expected.contains(&value.as_str()))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn collect_entity_kinds<'a>(
     triples: &'a [Triple],
     session: &mut Session<'_>,
@@ -1632,7 +1750,8 @@ fn collect_entity_kinds<'a>(
         let (Resource::Iri(subject), Term::Iri(object)) = (&triple.subject, &triple.object) else {
             continue;
         };
-        let Some(kind) = declaration_kind(object) else {
+        let Some(kind) = declaration_kind(object).or_else(|| inferred_declaration_kind(object))
+        else {
             continue;
         };
         let record = KindRecord { iri: subject, kind };
@@ -2829,6 +2948,63 @@ fn map_disjoint_unions<'view, 'graph>(
             session,
         )?;
         consume_collection_indexes(collection_consumed, consumed, session)?;
+        consumed[index] = true;
+        reifications.claim(source_triple, source_triples)?;
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_owl1_compatibility_class_axioms<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
+    consumed: &mut [bool],
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index] {
+            continue;
+        }
+        let ListResource::Iri(class) = triple.subject else {
+            continue;
+        };
+        if !has_kind(kinds, class, "class") {
+            continue;
+        }
+        let decoded = match triple.predicate {
+            OWL_COMPLEMENT_OF => {
+                let operand =
+                    decode_class_expression(expressions, triple.object, consumed, session)?;
+                DecodedClassExpression {
+                    node: build_node(32, [Field::Node(operand)], session)?,
+                    consumed: Vec::new(),
+                }
+            }
+            OWL_UNION_OF => {
+                expressions.decode_compatibility_class_boolean(triple.object, 31, session)?
+            }
+            OWL_INTERSECTION_OF => {
+                expressions.decode_compatibility_class_boolean(triple.object, 30, session)?
+            }
+            OWL_ONE_OF => expressions.decode_compatibility_named_one_of(triple.object, session)?,
+            _ => continue,
+        };
+        consume_collection_indexes(decoded.consumed, consumed, session)?;
+        let mut members = reserved_vec(2, session)?;
+        members.push(named_entity("class", class, session)?);
+        members.push(decoded.node);
+        let members = canonical_set(members, 2, None)?;
+        let source_triple = source_triples.get(index).ok_or_else(|| {
+            NativeError::protocol("native OWL 1 compatibility index exceeds source graph")
+        })?;
+        let annotations = reifications.annotations_for(source_triple, source_triples, session)?;
+        let axiom = build_node(62, [Field::Set(members), Field::Set(annotations)], session)?;
         consumed[index] = true;
         reifications.claim(source_triple, source_triples)?;
         push_axiom(axiom, axioms, session)?;
@@ -4377,6 +4553,32 @@ fn named_axiom(
         RDFS_RANGE => {
             build_binary_named_axiom(75, "object_property", subject, object, annotations, session)?
         }
+        RDF_TYPE
+            if matches!(
+                object.as_str(),
+                OWL_DEPRECATED_CLASS | OWL_DEPRECATED_PROPERTY
+            ) =>
+        {
+            let value = crate::canonical::literal(
+                owned_text("true", session)?,
+                named_entity("datatype", XSD_BOOLEAN, session)?,
+                None,
+            )?;
+            build_node(
+                120,
+                [
+                    Field::Node(named_entity(
+                        "annotation_property",
+                        OWL_DEPRECATED,
+                        session,
+                    )?),
+                    Field::Node(iri_node(subject, session)?),
+                    Field::Node(value),
+                    Field::Set(cloned_annotations(annotations, session)?),
+                ],
+                session,
+            )?
+        }
         RDF_TYPE if has_kind(kinds, subject, "annotation_property") => return Ok(None),
         RDF_TYPE => {
             if let Some(tag) = characteristic_tag(object, has_kind(kinds, subject, "data_property"))
@@ -4415,14 +4617,14 @@ fn named_axiom(
 
 fn characteristic_tag(value: &str, data_property: bool) -> Option<u64> {
     Some(match value {
-        "http://www.w3.org/2002/07/owl#FunctionalProperty" if data_property => 95,
-        "http://www.w3.org/2002/07/owl#FunctionalProperty" => 76,
-        "http://www.w3.org/2002/07/owl#InverseFunctionalProperty" => 77,
+        OWL_FUNCTIONAL_PROPERTY if data_property => 95,
+        OWL_FUNCTIONAL_PROPERTY => 76,
+        OWL_INVERSE_FUNCTIONAL_PROPERTY => 77,
         "http://www.w3.org/2002/07/owl#ReflexiveProperty" => 78,
         "http://www.w3.org/2002/07/owl#IrreflexiveProperty" => 79,
-        "http://www.w3.org/2002/07/owl#SymmetricProperty" => 80,
+        OWL_SYMMETRIC_PROPERTY => 80,
         "http://www.w3.org/2002/07/owl#AsymmetricProperty" => 81,
-        "http://www.w3.org/2002/07/owl#TransitiveProperty" => 82,
+        OWL_TRANSITIVE_PROPERTY => 82,
         _ => return None,
     })
 }
@@ -4432,7 +4634,9 @@ fn is_structural_type(value: &str) -> bool {
         || matches!(
             value,
             "http://www.w3.org/1999/02/22-rdf-syntax-ns#List"
-                | "http://www.w3.org/2000/01/rdf-schema#Datatype"
+                | RDF_PROPERTY
+                | RDFS_CLASS
+                | RDFS_DATATYPE
         )
 }
 
@@ -4586,13 +4790,29 @@ fn varint_key(value: usize) -> ([u8; 10], usize) {
 
 fn declaration_kind(value: &str) -> Option<&'static str> {
     Some(match value {
-        "http://www.w3.org/2002/07/owl#Class" => "class",
-        "http://www.w3.org/2000/01/rdf-schema#Datatype" => "datatype",
-        "http://www.w3.org/2002/07/owl#ObjectProperty" => "object_property",
-        "http://www.w3.org/2002/07/owl#DatatypeProperty" => "data_property",
-        "http://www.w3.org/2002/07/owl#AnnotationProperty" => "annotation_property",
+        OWL_CLASS => "class",
+        RDFS_DATATYPE => "datatype",
+        OWL_OBJECT_PROPERTY => "object_property",
+        OWL_DATATYPE_PROPERTY => "data_property",
+        OWL_ANNOTATION_PROPERTY | OWL_ONTOLOGY_PROPERTY => "annotation_property",
         "http://www.w3.org/2002/07/owl#NamedIndividual" => "named_individual",
         _ => return None,
+    })
+}
+
+fn inferred_declaration_kind(value: &str) -> Option<&'static str> {
+    matches!(
+        value,
+        OWL_INVERSE_FUNCTIONAL_PROPERTY | OWL_SYMMETRIC_PROPERTY | OWL_TRANSITIVE_PROPERTY
+    )
+    .then_some("object_property")
+}
+
+fn has_explicit_declaration(triples: &[Triple], subject: &str, kind: &str) -> bool {
+    triples.iter().any(|triple| {
+        matches!(&triple.subject, Resource::Iri(value) if value == subject)
+            && triple.predicate == RDF_TYPE
+            && matches!(&triple.object, Term::Iri(value) if declaration_kind(value) == Some(kind))
     })
 }
 
@@ -5499,6 +5719,210 @@ mod tests {
         assert_eq!(
             equivalent.mapping.total_triples,
             equivalent.mapping.consumed_triples,
+        );
+    }
+
+    #[test]
+    fn owl1_named_class_constructor_axioms_map_to_equivalence() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:Complement\"><owl:complementOf rdf:resource=\"urn:A\"/></owl:Class><owl:Class rdf:about=\"urn:Union\"><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:unionOf></owl:Class><owl:Class rdf:about=\"urn:Intersection\"><owl:intersectionOf rdf:resource=\"{RDF_NIL}\"/></owl:Class><owl:Class rdf:about=\"urn:Enum\"><owl:oneOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:i\"/></owl:oneOf></owl:Class></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("OWL 1 named class constructors");
+        let complement = Node::build(32, vec![Field::Node(class_node("urn:A"))])
+            .expect("compatibility complement");
+        let enumeration = Node::build(33, vec![Field::Set(vec![named_individual_node("urn:i")])])
+            .expect("compatibility enumeration");
+        for (class, expression) in [
+            ("urn:Complement", complement),
+            ("urn:Union", boolean_node(31, &["urn:A", "urn:B"])),
+            (
+                "urn:Intersection",
+                class_node("http://www.w3.org/2002/07/owl#Thing"),
+            ),
+            ("urn:Enum", enumeration),
+        ] {
+            let expected = Node::build(
+                62,
+                vec![
+                    Field::Set(
+                        canonical_set(vec![class_node(class), expression], 2, None)
+                            .expect("compatibility equivalent classes"),
+                    ),
+                    Field::Set(Vec::new()),
+                ],
+            )
+            .expect("compatibility axiom");
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let anonymous_enumeration = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:Enum\"><owl:oneOf rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"anonymous\"/></owl:oneOf></owl:Class></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(anonymous_enumeration.as_bytes(), None)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+    }
+
+    #[test]
+    fn owl1_declarations_redundant_types_and_deprecation_map_exactly() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"><rdf:type rdf:resource=\"{RDFS_CLASS}\"/></owl:Class><owl:ObjectProperty rdf:about=\"urn:p\"><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></owl:ObjectProperty><owl:OntologyProperty rdf:about=\"urn:ap\"><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></owl:OntologyProperty><rdf:Description rdf:about=\"urn:inverse\"><rdf:type rdf:resource=\"{OWL_INVERSE_FUNCTIONAL_PROPERTY}\"/><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></rdf:Description><rdf:Description rdf:about=\"urn:symmetric\"><rdf:type rdf:resource=\"{OWL_SYMMETRIC_PROPERTY}\"/></rdf:Description><rdf:Description rdf:about=\"urn:transitive\"><rdf:type rdf:resource=\"{OWL_TRANSITIVE_PROPERTY}\"/><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></rdf:Description><owl:Class rdf:about=\"urn:Old\"><rdf:type rdf:resource=\"{OWL_DEPRECATED_CLASS}\"/></owl:Class></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("OWL 1 declarations");
+        let declaration = |kind: &'static str, value: &str| {
+            Node::build(
+                60,
+                vec![
+                    Field::Node(
+                        entity(kind, iri(value.to_owned()).expect("declaration IRI"))
+                            .expect("declared entity"),
+                    ),
+                    Field::Set(Vec::new()),
+                ],
+            )
+            .expect("declaration")
+        };
+        for expected in [
+            declaration("class", "urn:C"),
+            declaration("object_property", "urn:p"),
+            declaration("annotation_property", "urn:ap"),
+            declaration("object_property", "urn:inverse"),
+            declaration("object_property", "urn:symmetric"),
+            declaration("object_property", "urn:transitive"),
+            declaration("class", "urn:Old"),
+        ] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        for (tag, property) in [
+            (77, "urn:inverse"),
+            (80, "urn:symmetric"),
+            (82, "urn:transitive"),
+        ] {
+            let expected = Node::build(
+                tag,
+                vec![
+                    Field::Node(
+                        entity(
+                            "object_property",
+                            iri(property.to_owned()).expect("property IRI"),
+                        )
+                        .expect("object property"),
+                    ),
+                    Field::Set(Vec::new()),
+                ],
+            )
+            .expect("property characteristic");
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        let deprecated = Node::build(
+            120,
+            vec![
+                Field::Node(
+                    entity(
+                        "annotation_property",
+                        iri(OWL_DEPRECATED.to_owned()).expect("deprecated IRI"),
+                    )
+                    .expect("deprecated property"),
+                ),
+                Field::Node(iri("urn:Old".to_owned()).expect("deprecated subject")),
+                Field::Node(
+                    literal(
+                        "true".to_owned(),
+                        entity(
+                            "datatype",
+                            iri(XSD_BOOLEAN.to_owned()).expect("boolean IRI"),
+                        )
+                        .expect("boolean datatype"),
+                        None,
+                    )
+                    .expect("deprecated value"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("deprecated annotation assertion");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == deprecated.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        for unsupported in [RDFS_CLASS, RDF_PROPERTY] {
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"urn:x\"><rdf:type rdf:resource=\"{unsupported}\"/></rdf:Description></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(source.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            );
+        }
+    }
+
+    #[test]
+    fn owl1_empty_data_range_crosses_the_rdfxml_mapper() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\" xmlns:owl=\"{OWL}\"><owl:DatatypeProperty rdf:about=\"urn:d\"/><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:d\"/><owl:allValuesFrom><owl:DataRange><rdf:type rdf:resource=\"{RDFS_CLASS}\"/><owl:oneOf rdf:resource=\"{RDF_NIL}\"/></owl:DataRange></owl:allValuesFrom></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("OWL 1 empty data range");
+        let complement = Node::build(
+            23,
+            vec![Field::Node(
+                entity(
+                    "datatype",
+                    iri("http://www.w3.org/2000/01/rdf-schema#Literal".to_owned())
+                        .expect("literal IRI"),
+                )
+                .expect("literal datatype"),
+            )],
+        )
+        .expect("literal complement");
+        let restriction = Node::build(
+            42,
+            vec![
+                Field::Sequence(vec![entity(
+                    "data_property",
+                    iri("urn:d".to_owned()).expect("property IRI"),
+                )
+                .expect("data property")]),
+                Field::Node(complement),
+            ],
+        )
+        .expect("data all-values restriction");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("OWL 1 data-range subclass");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
         );
     }
 
