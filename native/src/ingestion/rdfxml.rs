@@ -1259,16 +1259,18 @@ fn map_graph(
             session,
             "native RDF declaration IRI exceeds max_iri_bytes",
         )?;
+        let annotations = axiom_annotations.annotations_for(triple, &triples, session)?;
         let declaration = build_node(
             60,
             [
                 Field::Node(named_entity(kind, subject, session)?),
-                Field::Set(Vec::new()),
+                Field::Set(annotations),
             ],
             session,
         )?;
         push_axiom(declaration, &mut axioms, session)?;
         consumed[index] = true;
+        axiom_annotations.claim(triple, &triples)?;
     }
     map_ontology_annotations(
         header_index,
@@ -1310,30 +1312,38 @@ fn map_graph(
     )?;
     map_property_chains(
         &list_graph,
+        &triples,
         &mut consumed,
         &mut expressions,
+        &mut axiom_annotations,
         &mut axioms,
         session,
     )?;
     map_has_keys(
         &list_graph,
+        &triples,
         &mut consumed,
         &mut expressions,
+        &mut axiom_annotations,
         &mut axioms,
         session,
     )?;
     map_disjoint_unions(
         &list_graph,
+        &triples,
         &mut consumed,
         &mut expressions,
+        &mut axiom_annotations,
         &mut axioms,
         session,
     )?;
     map_datatype_definitions(
         &list_graph,
+        &triples,
         &mut consumed,
         &kinds,
         &mut expressions,
+        &mut axiom_annotations,
         &mut axioms,
         session,
     )?;
@@ -2054,10 +2064,13 @@ fn map_all_disjoint_collections<'view, 'graph>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_property_chains<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -2079,27 +2092,35 @@ fn map_property_chains<'view, 'graph>(
                 "native object property chain has fewer than two members",
             ));
         }
+        let source_triple = source_triples.get(index).ok_or_else(|| {
+            NativeError::protocol("native property-chain index exceeds source graph")
+        })?;
+        let annotations = reifications.annotations_for(source_triple, source_triples, session)?;
         let chain = build_node(11, [Field::Sequence(properties)], session)?;
         let axiom = build_node(
             70,
             [
                 Field::Node(chain),
                 Field::Node(named_entity("object_property", super_property, session)?),
-                Field::Set(Vec::new()),
+                Field::Set(annotations),
             ],
             session,
         )?;
         consume_collection_indexes(collection_consumed, consumed, session)?;
         consumed[index] = true;
+        reifications.claim(source_triple, source_triples)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_has_keys<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -2124,6 +2145,10 @@ fn map_has_keys<'view, 'graph>(
                 "native owl:hasKey has no property members",
             ));
         }
+        let source_triple = source_triples
+            .get(index)
+            .ok_or_else(|| NativeError::protocol("native has-key index exceeds source graph"))?;
+        let annotations = reifications.annotations_for(source_triple, source_triples, session)?;
         let object_properties = canonical_set(object_properties, 0, None)?;
         let data_properties = canonical_set(data_properties, 0, None)?;
         let axiom = build_node(
@@ -2132,21 +2157,25 @@ fn map_has_keys<'view, 'graph>(
                 Field::Node(class_expression),
                 Field::Set(object_properties),
                 Field::Set(data_properties),
-                Field::Set(Vec::new()),
+                Field::Set(annotations),
             ],
             session,
         )?;
         consume_collection_indexes(collection_consumed, consumed, session)?;
         consumed[index] = true;
+        reifications.claim(source_triple, source_triples)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_disjoint_unions<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -2163,17 +2192,22 @@ fn map_disjoint_unions<'view, 'graph>(
             consumed: collection_consumed,
         } = expressions.decode_class_collection(triple.object, session)?;
         let members = canonical_set(members, 2, None)?;
+        let source_triple = source_triples.get(index).ok_or_else(|| {
+            NativeError::protocol("native disjoint-union index exceeds source graph")
+        })?;
+        let annotations = reifications.annotations_for(source_triple, source_triples, session)?;
         let axiom = build_node(
             64,
             [
                 Field::Node(named_entity("class", defined_class, session)?),
                 Field::Set(members),
-                Field::Set(Vec::new()),
+                Field::Set(annotations),
             ],
             session,
         )?;
         consume_collection_indexes(collection_consumed, consumed, session)?;
         consumed[index] = true;
+        reifications.claim(source_triple, source_triples)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -2182,9 +2216,11 @@ fn map_disjoint_unions<'view, 'graph>(
 #[allow(clippy::too_many_arguments)]
 fn map_datatype_definitions<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -2203,17 +2239,22 @@ fn map_datatype_definitions<'view, 'graph>(
             node: data_range,
             consumed: range_consumed,
         } = expressions.decode_data_term(triple.object, session)?;
+        let source_triple = source_triples.get(index).ok_or_else(|| {
+            NativeError::protocol("native datatype-definition index exceeds source graph")
+        })?;
+        let annotations = reifications.annotations_for(source_triple, source_triples, session)?;
         let axiom = build_node(
             100,
             [
                 Field::Node(named_entity("datatype", datatype, session)?),
                 Field::Node(data_range),
-                Field::Set(Vec::new()),
+                Field::Set(annotations),
             ],
             session,
         )?;
         consume_collection_indexes(range_consumed, consumed, session)?;
         consumed[index] = true;
+        reifications.claim(source_triple, source_triples)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -6130,6 +6171,87 @@ mod tests {
     }
 
     #[test]
+    fn reified_annotations_attach_to_list_backed_axioms() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:e=\"urn:\"><owl:ObjectProperty rdf:about=\"urn:super\"><owl:propertyChainAxiom rdf:nodeID=\"chain\"/></owl:ObjectProperty><owl:DatatypeProperty rdf:about=\"urn:d\"/><owl:Class rdf:about=\"urn:Keyed\"><owl:hasKey rdf:nodeID=\"keys\"/></owl:Class><owl:Class rdf:about=\"urn:Defined\"><owl:disjointUnionOf rdf:nodeID=\"union\"/></owl:Class><rdfs:Datatype rdf:about=\"urn:D\"><owl:equivalentClass rdf:resource=\"urn:Base\"/></rdfs:Datatype><rdf:Description rdf:nodeID=\"chain\"><rdf:first rdf:resource=\"urn:p\"/><rdf:rest rdf:nodeID=\"chain-tail\"/></rdf:Description><rdf:Description rdf:nodeID=\"chain-tail\"><rdf:first rdf:resource=\"urn:q\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description><rdf:Description rdf:nodeID=\"keys\"><rdf:first rdf:resource=\"urn:d\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description><rdf:Description rdf:nodeID=\"union\"><rdf:first rdf:resource=\"urn:A\"/><rdf:rest rdf:nodeID=\"union-tail\"/></rdf:Description><rdf:Description rdf:nodeID=\"union-tail\"><rdf:first rdf:resource=\"urn:B\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description><owl:Axiom rdf:nodeID=\"chain-axiom\"><owl:annotatedSource rdf:resource=\"urn:super\"/><owl:annotatedProperty rdf:resource=\"{OWL_PROPERTY_CHAIN_AXIOM}\"/><owl:annotatedTarget rdf:nodeID=\"chain\"/><e:note rdf:resource=\"urn:chain-note\"/></owl:Axiom><owl:Axiom rdf:nodeID=\"key-axiom\"><owl:annotatedSource rdf:resource=\"urn:Keyed\"/><owl:annotatedProperty rdf:resource=\"{OWL_HAS_KEY}\"/><owl:annotatedTarget rdf:nodeID=\"keys\"/><e:note rdf:resource=\"urn:key-note\"/></owl:Axiom><owl:Axiom rdf:nodeID=\"union-axiom\"><owl:annotatedSource rdf:resource=\"urn:Defined\"/><owl:annotatedProperty rdf:resource=\"{OWL_DISJOINT_UNION_OF}\"/><owl:annotatedTarget rdf:nodeID=\"union\"/><e:note rdf:resource=\"urn:union-note\"/></owl:Axiom><owl:Axiom rdf:nodeID=\"datatype-axiom\"><owl:annotatedSource rdf:resource=\"urn:D\"/><owl:annotatedProperty rdf:resource=\"{OWL_EQUIVALENT_CLASS}\"/><owl:annotatedTarget rdf:resource=\"urn:Base\"/><e:note rdf:resource=\"urn:datatype-note\"/></owl:Axiom></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("annotated list-backed axioms");
+        let property = |kind: &'static str, value: &str| {
+            entity(kind, iri(value.to_owned()).expect("property IRI")).expect("property")
+        };
+        let annotation = |value: &str| {
+            Node::build(
+                5,
+                vec![
+                    Field::Node(property("annotation_property", "urn:note")),
+                    Field::Node(iri(value.to_owned()).expect("annotation value")),
+                    Field::Set(Vec::new()),
+                ],
+            )
+            .expect("axiom annotation")
+        };
+        let chain = Node::build(
+            11,
+            vec![Field::Sequence(vec![
+                property("object_property", "urn:p"),
+                property("object_property", "urn:q"),
+            ])],
+        )
+        .expect("property chain");
+        let chain_axiom = Node::build(
+            70,
+            vec![
+                Field::Node(chain),
+                Field::Node(property("object_property", "urn:super")),
+                Field::Set(vec![annotation("urn:chain-note")]),
+            ],
+        )
+        .expect("annotated property chain");
+        let key_axiom = Node::build(
+            101,
+            vec![
+                Field::Node(class_node("urn:Keyed")),
+                Field::Set(Vec::new()),
+                Field::Set(vec![property("data_property", "urn:d")]),
+                Field::Set(vec![annotation("urn:key-note")]),
+            ],
+        )
+        .expect("annotated key");
+        let union_axiom = Node::build(
+            64,
+            vec![
+                Field::Node(class_node("urn:Defined")),
+                Field::Set(
+                    canonical_set(vec![class_node("urn:A"), class_node("urn:B")], 2, None)
+                        .expect("disjoint union members"),
+                ),
+                Field::Set(vec![annotation("urn:union-note")]),
+            ],
+        )
+        .expect("annotated disjoint union");
+        let datatype_axiom = Node::build(
+            100,
+            vec![
+                Field::Node(property("datatype", "urn:D")),
+                Field::Node(property("datatype", "urn:Base")),
+                Field::Set(vec![annotation("urn:datatype-note")]),
+            ],
+        )
+        .expect("annotated datatype definition");
+        for expected in [chain_axiom, key_axiom, union_axiom, datatype_axiom] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+    }
+
+    #[test]
     fn structural_data_property_ranges_map_exactly() {
         let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
         let source = format!(
@@ -6603,14 +6725,34 @@ mod tests {
         );
 
         let annotated_declaration = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><owl:Axiom rdf:nodeID=\"axiom\"><owl:annotatedSource rdf:resource=\"urn:C\"/><owl:annotatedProperty rdf:resource=\"{RDF_TYPE}\"/><owl:annotatedTarget rdf:resource=\"{OWL}Class\"/></owl:Axiom></rdf:RDF>"
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:Class rdf:about=\"urn:C\"/><owl:Axiom rdf:nodeID=\"axiom\"><owl:annotatedSource rdf:resource=\"urn:C\"/><owl:annotatedProperty rdf:resource=\"{RDF_TYPE}\"/><owl:annotatedTarget rdf:resource=\"{OWL}Class\"/><e:note rdf:resource=\"urn:value\"/></owl:Axiom></rdf:RDF>"
         );
-        assert_eq!(
-            mapped(annotated_declaration.as_bytes(), None)
-                .unwrap_err()
-                .code,
-            "NATIVE_RDF_AXIOM_REIFICATION",
-        );
+        let document =
+            mapped(annotated_declaration.as_bytes(), None).expect("annotated declaration");
+        let annotation = Node::build(
+            5,
+            vec![
+                Field::Node(
+                    entity(
+                        "annotation_property",
+                        iri("urn:note".to_owned()).expect("annotation property IRI"),
+                    )
+                    .expect("annotation property"),
+                ),
+                Field::Node(iri("urn:value".to_owned()).expect("annotation value")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("declaration annotation");
+        let expected = Node::build(
+            60,
+            vec![
+                Field::Node(class_node("urn:C")),
+                Field::Set(vec![annotation]),
+            ],
+        )
+        .expect("annotated declaration");
+        assert_eq!(document.axioms, [expected.as_bytes().to_vec()]);
 
         let nested = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Annotation rdf:nodeID=\"annotation\"><owl:annotatedSource rdf:resource=\"urn:s\"/><owl:annotatedProperty rdf:resource=\"urn:p\"/><owl:annotatedTarget rdf:resource=\"urn:o\"/></owl:Annotation></rdf:RDF>"
