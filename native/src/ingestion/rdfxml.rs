@@ -2071,10 +2071,13 @@ fn class_expression_axiom<'view, 'graph>(
                 session,
             )?
         }
-        RDF_TYPE if matches!(triple.object, ListTerm::Blank(_)) => {
-            let (ListResource::Iri(individual), Some(class)) = (triple.subject, object) else {
+        RDF_TYPE => {
+            let Some(class) = object else {
                 return Ok(None);
             };
+            if matches!(class, ClassTerm::Iri(value) if is_structural_type(value)) {
+                return Ok(None);
+            }
             build_node(
                 112,
                 [
@@ -2084,7 +2087,10 @@ fn class_expression_axiom<'view, 'graph>(
                         consumed,
                         session,
                     )?),
-                    Field::Node(named_entity("named_individual", individual, session)?),
+                    Field::Node(expressions.decode_individual(
+                        ClassTerm::from_resource(triple.subject).as_term(),
+                        session,
+                    )?),
                     Field::Set(Vec::new()),
                 ],
                 session,
@@ -4404,6 +4410,54 @@ mod tests {
             );
             assert!(mapped(reflexive.as_bytes(), None).is_err());
         }
+    }
+
+    #[test]
+    fn class_assertions_accept_anonymous_individuals_and_class_expressions() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"named-class\"><rdf:type rdf:resource=\"urn:C\"/></rdf:Description><rdf:Description rdf:nodeID=\"expression-class\"><rdf:type><owl:Class><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:unionOf></owl:Class></rdf:type></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("anonymous class assertions");
+        let named = Node::build(
+            112,
+            vec![
+                Field::Node(class_node("urn:C")),
+                Field::Node(
+                    crate::canonical::anonymous("named-class").expect("anonymous individual"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("named class assertion");
+        let expression = Node::build(
+            112,
+            vec![
+                Field::Node(boolean_node(31, &["urn:A", "urn:B"])),
+                Field::Node(
+                    crate::canonical::anonymous("expression-class").expect("anonymous individual"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("class-expression assertion");
+        for expected in [named, expression] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let structural = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"anonymous\"><rdf:type rdf:resource=\"{OWL}NamedIndividual\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(structural.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
     }
 
     #[test]
