@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::error::{NativeError, NativeResult};
 use crate::model::{validate_iri, Category};
 
-pub(crate) use facade_v2::PublicationStorageV2;
+pub(crate) use facade_v2::{PublicationStorageV2, AUXILIARY_CODEC_SCHEMA_SHA256_V2};
 #[allow(unused_imports)]
 pub(crate) use handle::{register_native_handle_types, NativeDocumentHandle, NativeSnapshotHandle};
 #[allow(unused_imports)]

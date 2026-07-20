@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
@@ -112,6 +113,7 @@ def test_public_forced_native_load_publishes_real_typed_owner_without_scalar_fal
         "native_result_encode_seconds",
         "native_arena_construction_seconds",
         "native_freeze_seconds",
+        "native_publication_prepare_seconds",
         "root_parse_seconds",
     ):
         assert selected.report.timings[phase] >= 0
@@ -152,13 +154,21 @@ def test_owner_first_publication_skips_eager_structural_model_decoding(
     assert selected.structural_fingerprint == reference.structural_fingerprint
     assert selected.logical_fingerprint == reference.logical_fingerprint
     assert selected.signature_fingerprint == reference.signature_fingerprint
-    assert ingestion.parser_result_bytes_scanned > 0
+    assert ingestion.parser_result_bytes_scanned == 0
+    assert 0 < ingestion.parser_summary_bytes_materialized < 1024
     assert ingestion.canonical_rows_scanned == 4  # ontology IRI plus three root rows
     assert ingestion.structural_occurrence_rows_scanned == 3
     assert ingestion.structural_root_rows_published == 3
     assert ingestion.eager_structural_objects_materialized == 0
     assert ingestion.metadata_iri_objects_materialized == 1
-    assert ingestion.provenance_occurrence_records_materialized == 3
+    assert ingestion.provenance_occurrence_records_materialized == 0
+    assert ingestion.canonical_bytes_copied_to_python == 0
+    assert ingestion.fingerprint_preimage_bytes_materialized_in_python == 0
+    assert ingestion.native_publication_canonical_rows_encoded == 5
+    assert ingestion.native_publication_canonical_bytes_encoded > 0
+    assert ingestion.native_fingerprint_temporary_bytes > 0
+    assert ingestion.native_origin_rows_retained == 3
+    assert ingestion.native_origin_bytes_retained > 0
     assert before.model_rows_materialized == 0
 
     assert tuple(selected.iter_axioms()) == tuple(reference.iter_axioms())
@@ -193,6 +203,48 @@ def test_owner_first_fingerprint_inputs_cover_annotations_and_nested_entities(
     assert selected.origin_index == reference.origin_index
     assert encode_snapshot(selected) == encode_snapshot(reference)
     assert cast(Any, selected)._native_python_counters().model_rows_materialized == 0
+
+
+def test_compact_publication_seed_does_not_copy_structural_rows_to_python(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    declarations = b" ".join(
+        f"Declaration(Class(<urn:retained-bulk:C{index:04d}>))".encode()
+        for index in range(256)
+    )
+    source = b"Ontology(<urn:retained-bulk> " + declarations + b")"
+    reference = load_snapshot(source, options=_options(BackendPreference.PYTHON))
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("compact retained load crossed the Python canonical scanner")
+
+    from pyowl_core.backends import native_ingestion
+
+    monkeypatch.setattr(native_ingestion, "_scan_functional_result_v2", unexpected)
+    selected = load_snapshot(source, options=_options(BackendPreference.NATIVE))
+    ingestion = cast(Any, selected)._native_ingestion_counters_v2()
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    owner = object.__getattribute__(handle, "_owner_v2")
+    counters = cast(Any, owner)._publication_counters_v2()
+
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert ingestion.parser_result_bytes_scanned == 0
+    assert ingestion.parser_summary_bytes_materialized < 1024
+    assert ingestion.canonical_rows_scanned == 257
+    assert ingestion.structural_occurrence_rows_scanned == 256
+    assert ingestion.structural_root_rows_published == 256
+    assert ingestion.canonical_bytes_copied_to_python == 0
+    assert ingestion.fingerprint_preimage_bytes_materialized_in_python == 0
+    assert ingestion.provenance_occurrence_records_materialized == 0
+    assert ingestion.native_origin_rows_retained == 256
+    assert ingestion.native_publication_canonical_rows_encoded == 512
+    assert ingestion.native_publication_canonical_bytes_encoded > len(source)
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
 
 
 def test_anonymous_re_scope_uses_the_authoritative_model_fallback(
@@ -356,6 +408,10 @@ def test_provenance_disabled_load_retains_parser_arena_without_origin_capability
     assert ingestion.structural_occurrence_rows_scanned == 3
     assert ingestion.eager_structural_objects_materialized == 0
     assert ingestion.provenance_occurrence_records_materialized == 0
+    assert ingestion.canonical_bytes_copied_to_python == 0
+    assert ingestion.fingerprint_preimage_bytes_materialized_in_python == 0
+    assert ingestion.native_origin_rows_retained == 0
+    assert ingestion.native_origin_bytes_retained == 0
     assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
@@ -496,18 +552,18 @@ def test_eligible_owner_construction_failure_propagates_without_fallback(
 
     def fail(
         parsed: object,
-        _origins: object,
         attestation: object,
         cancel: object,
     ) -> object:
         nonlocal calls
         calls += 1
-        return finalize(parsed, (b"",), attestation, cancel)
+        tampered = replace(cast(Any, attestation), root_table_sha256=b"\x00" * 32)
+        return finalize(parsed, tampered, cancel)
 
     monkeypatch.setattr(cast(Any, extension), "_finalize_parsed_structural_snapshot_v2", fail)
     with pytest.raises(BackendProtocolError) as raised:
         load_snapshot(SOURCE, options=_options(BackendPreference.NATIVE))
-    assert raised.value.code == "NATIVE_EXCEPTION"
+    assert raised.value.code == "NATIVE_PROTOCOL"
     assert calls == 1
 
 
@@ -534,12 +590,17 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["direct_root_parity"] is True
     assert observed["direct_owner_identity"] is True
     assert observed["direct_encoded_view_requests"] == 1
-    assert observed["ingestion_parser_result_bytes"] > 0
+    assert observed["ingestion_parser_result_bytes"] == 0
+    assert 0 < observed["ingestion_parser_summary_bytes"] < 1024
     assert observed["ingestion_canonical_rows_scanned"] == 4
     assert observed["ingestion_structural_occurrence_rows_scanned"] == 3
     assert observed["ingestion_structural_rows_published"] == 3
     assert observed["ingestion_eager_structural_objects"] == 0
-    assert observed["ingestion_provenance_occurrence_records"] == 3
+    assert observed["ingestion_provenance_occurrence_records"] == 0
+    assert observed["ingestion_canonical_bytes_copied_to_python"] == 0
+    assert observed["ingestion_fingerprint_preimage_bytes_in_python"] == 0
+    assert observed["ingestion_native_origin_rows_retained"] == 3
+    assert observed["ingestion_native_origin_bytes_retained"] > 0
     assert observed["decoded_parity"] is True
     assert len(observed["wire_sha256"]) == 64
     assert len(observed["wire_python_sha256"]) == 64
@@ -557,6 +618,7 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
         "native_result_encode_seconds",
         "native_arena_construction_seconds",
         "native_freeze_seconds",
+        "native_publication_prepare_seconds",
         "root_parse_seconds",
     } <= observed["phase_timings"].keys()
     assert observed["provenance_disabled_parity"] is True

@@ -131,22 +131,38 @@ class _NativeIngestionCountersV2:
     """Private evidence for the bounded retained-parser publication seam."""
 
     parser_result_bytes_scanned: int = 0
+    parser_summary_bytes_materialized: int = 0
     canonical_rows_scanned: int = 0
     structural_occurrence_rows_scanned: int = 0
     structural_root_rows_published: int = 0
     eager_structural_objects_materialized: int = 0
     metadata_iri_objects_materialized: int = 0
     provenance_occurrence_records_materialized: int = 0
+    canonical_bytes_copied_to_python: int = 0
+    fingerprint_preimage_bytes_materialized_in_python: int = 0
+    native_publication_canonical_rows_encoded: int = 0
+    native_publication_canonical_bytes_encoded: int = 0
+    native_fingerprint_temporary_bytes: int = 0
+    native_origin_rows_retained: int = 0
+    native_origin_bytes_retained: int = 0
 
     def __post_init__(self) -> None:
         for name in (
             "parser_result_bytes_scanned",
+            "parser_summary_bytes_materialized",
             "canonical_rows_scanned",
             "structural_occurrence_rows_scanned",
             "structural_root_rows_published",
             "eager_structural_objects_materialized",
             "metadata_iri_objects_materialized",
             "provenance_occurrence_records_materialized",
+            "canonical_bytes_copied_to_python",
+            "fingerprint_preimage_bytes_materialized_in_python",
+            "native_publication_canonical_rows_encoded",
+            "native_publication_canonical_bytes_encoded",
+            "native_fingerprint_temporary_bytes",
+            "native_origin_rows_retained",
+            "native_origin_bytes_retained",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:

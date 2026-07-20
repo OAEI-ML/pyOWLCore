@@ -21,7 +21,10 @@ mod tables;
 pub(crate) use arena::{CanonicalRow, ModelArena, NativeArena};
 #[allow(unused_imports)]
 pub(crate) use builder::NativeArenaBuilder;
-pub(crate) use canonical::{scan_canonical, validate_iri, Category, ScanBudget};
+pub(crate) use canonical::{
+    canonical_contains_tag, canonical_field_count, scan_canonical, validate_iri, Category,
+    ScanBudget,
+};
 #[allow(unused_imports)]
 pub(crate) use component_index::{
     structural_digest_v1, NativeComponentDigestIndex, StructuralDigest,

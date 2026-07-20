@@ -10,6 +10,7 @@ mod engine;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyModule, PyTuple};
+use std::time::Instant;
 
 #[cfg(feature = "test-hooks")]
 use pyo3::buffer::PyBuffer;
@@ -33,6 +34,8 @@ pub(super) const FEATURES: &[&str] = &[];
 )]
 struct NativeParsedStructuralStorageV2 {
     storage: Option<TypedFacadeStorageV2>,
+    metadata: Option<crate::parse::RetainedParseMetadataV2>,
+    prepared: Option<crate::parse::PreparedRetainedPublicationV2>,
     limits: Limits,
     parser_bytes: u64,
 }
@@ -48,6 +51,10 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     _module.add_function(wrap_pyfunction!(_retain_structural_snapshot_v2, _module)?)?;
     _module.add_function(wrap_pyfunction!(_parse_functional_retained_v2, _module)?)?;
     _module.add_function(wrap_pyfunction!(
+        _prepare_parsed_structural_snapshot_v2,
+        _module
+    )?)?;
+    _module.add_function(wrap_pyfunction!(
         _finalize_parsed_structural_snapshot_v2,
         _module
     )?)?;
@@ -59,17 +66,17 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
 /// Parse one Functional document and construct its typed structural arena in
 /// the same detached native operation.
 ///
-/// The result framing remains byte-for-byte identical to `parse_document` so
-/// the existing complete Python contract decoder can validate parity while
-/// WP16 incrementally removes that transitional model reconstruction.  The
-/// opaque storage state never advertises a capability and can only be consumed
-/// once by the final attested publication boundary below.
+/// Anonymous documents retain the complete fallback framing required for
+/// authoritative re-scoping. Eligible documents instead return only bounded
+/// metadata and fingerprint evidence; canonical ontology rows remain solely
+/// in the native component owner.
 #[pyfunction]
-#[pyo3(signature = (source, config, cancel=None))]
+#[pyo3(signature = (source, config, collect_provenance, cancel=None))]
 fn _parse_functional_retained_v2<'py>(
     py: Python<'py>,
     source: &Bound<'py, PyAny>,
     config: &Bound<'py, PyAny>,
+    collect_provenance: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<RetainedParseBindingResult> {
     let limits = crate::limits_from_python(config)?;
@@ -94,6 +101,7 @@ fn _parse_functional_retained_v2<'py>(
             cancellation,
             Some(interrupt),
             input_size,
+            collect_provenance,
         )?;
         Ok((outcome, parser_bytes))
     })?;
@@ -114,6 +122,8 @@ fn _parse_functional_retained_v2<'py>(
         encoded,
         NativeParsedStructuralStorageV2 {
             storage: Some(outcome.storage),
+            metadata: outcome.metadata,
+            prepared: None,
             limits,
             parser_bytes,
         },
@@ -121,43 +131,171 @@ fn _parse_functional_retained_v2<'py>(
     ))
 }
 
-/// Attach immutable metadata/origin attestations to parser-built storage.
+/// Prepare exact fingerprints, content manifests, and native-owned provenance
+/// without exporting canonical rows or preimages to Python.
 #[pyfunction]
-#[pyo3(signature = (parsed, origins, attestation, cancel=None))]
+#[pyo3(signature = (parsed, manifest, document_key, collect_provenance, cancel=None))]
+fn _prepare_parsed_structural_snapshot_v2<'py>(
+    py: Python<'py>,
+    mut parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
+    manifest: &Bound<'py, PyBytes>,
+    document_key: String,
+    collect_provenance: bool,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<Py<PyBytes>> {
+    if parsed.prepared.is_some() {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "native parsed structural storage was already prepared",
+        ));
+    }
+    let mut owned_manifest = Vec::new();
+    owned_manifest
+        .try_reserve_exact(manifest.as_bytes().len())
+        .map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native retained manifest allocation failed",
+            ))
+        })?;
+    owned_manifest.extend_from_slice(manifest.as_bytes());
+    let storage = parsed.storage.take().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "native parsed structural storage was already consumed",
+        )
+    })?;
+    let metadata = parsed.metadata.take().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "native parsed structural storage has no compact publication metadata",
+        )
+    })?;
+    let limits = parsed.limits;
+    let cancellation = crate::cancellation_or_default(cancel);
+    let (storage, prepared, summary) = crate::run_detached(py, move |interrupt| {
+        let started = Instant::now();
+        let prepared = crate::parse::prepare_retained_publication_v2(
+            &storage,
+            &metadata,
+            &owned_manifest,
+            &document_key,
+            collect_provenance,
+            &limits,
+            cancellation,
+            Some(interrupt),
+        )?;
+        let prepare_ns = u64::try_from(started.elapsed().as_nanos())
+            .map_err(|_| NativeError::limit("native publication preparation time exceeds u64"))?;
+        let summary = prepared.encode_summary(prepare_ns)?;
+        Ok((storage, prepared, summary))
+    })?;
+    let summary = PyBytes::new_with(py, summary.len(), |buffer| {
+        buffer.copy_from_slice(&summary);
+        Ok(())
+    })?
+    .unbind();
+    parsed.storage = Some(storage);
+    parsed.prepared = Some(prepared);
+    Ok(summary)
+}
+
+/// Attach immutable metadata attestations to already prepared parser storage.
+#[pyfunction]
+#[pyo3(signature = (parsed, attestation, cancel=None))]
 fn _finalize_parsed_structural_snapshot_v2<'py>(
     py: Python<'py>,
     mut parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
-    origins: Option<&Bound<'py, PyAny>>,
     attestation: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<NativeSnapshotHandle> {
-    let cancellation = crate::cancellation_or_default(cancel);
-    let limits = parsed.limits;
+    let _cancellation = crate::cancellation_or_default(cancel);
     let parser_bytes = parsed.parser_bytes;
     let storage = parsed.storage.take().ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err(
             "native parsed structural storage was already consumed",
         )
     })?;
-    let retained_origins = match origins {
-        Some(rows) => {
-            let mut external_bytes = 0_usize;
-            Some(owned_origin_rows(
-                py,
-                rows,
-                &limits,
-                &cancellation,
-                &mut external_bytes,
-            )?)
-        }
-        None => None,
-    };
+    let prepared = parsed.prepared.take().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "native parsed structural storage was not prepared",
+        )
+    })?;
+    validate_prepared_attestation(py, &prepared, attestation)?;
     crate::publication::typed_structural_handle_v2(
         attestation,
         storage,
-        retained_origins,
+        prepared.origin_rows,
         parser_bytes,
     )
+}
+
+fn validate_prepared_attestation(
+    py: Python<'_>,
+    prepared: &crate::parse::PreparedRetainedPublicationV2,
+    attestation: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let expected_digests = [
+        ("root_table_sha256", prepared.content.root_table_sha256),
+        (
+            "effective_root_table_sha256",
+            prepared.content.effective_root_table_sha256,
+        ),
+        (
+            "fingerprint_inputs_sha256",
+            prepared.content.fingerprint_inputs_sha256,
+        ),
+        (
+            "source_manifest_sha256",
+            prepared.content.source_manifest_sha256,
+        ),
+        (
+            "provenance_manifest_sha256",
+            prepared.content.provenance_manifest_sha256,
+        ),
+        (
+            "effective_origin_manifest_sha256",
+            prepared.content.effective_origin_manifest_sha256,
+        ),
+    ];
+    for (name, expected) in expected_digests {
+        let value = attestation.getattr(name)?;
+        if !value.get_type().is(py.get_type::<PyBytes>())
+            || value.cast::<PyBytes>()?.as_bytes() != expected
+        {
+            return Err(crate::python_error(NativeError::protocol(
+                "native retained content diverges from its attestation",
+            )));
+        }
+    }
+    let origins = prepared.origin_rows.as_ref().map_or(Ok(0_u64), |rows| {
+        u64::try_from(rows.len()).map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native retained origin count exceeds u64",
+            ))
+        })
+    })?;
+    let capability_bits = if prepared.origin_rows.is_some() {
+        23_u64
+    } else {
+        7_u64
+    };
+    if attestation
+        .getattr("root_document_key")?
+        .extract::<String>()?
+        != prepared.document_key.as_ref()
+        || attestation.getattr("document_count")?.extract::<u64>()? != 1
+        || attestation
+            .getattr("origin_entry_count")?
+            .extract::<u64>()?
+            != origins
+        || attestation.getattr("capability_bits")?.extract::<u64>()? != capability_bits
+        || attestation
+            .getattr("max_facade_row_bytes")?
+            .extract::<u64>()?
+            != prepared.max_facade_row_bytes
+    {
+        return Err(crate::python_error(NativeError::protocol(
+            "native retained publication metadata diverges from its attestation",
+        )));
+    }
+    Ok(())
 }
 
 /// Freeze one already-validated document into the real typed V2 owner.

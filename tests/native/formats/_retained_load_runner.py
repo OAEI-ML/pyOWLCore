@@ -281,10 +281,29 @@ def main() -> None:
                 ),
                 "ingestion_features": list(extension.INGESTION_FEATURES),
                 "ingestion_canonical_rows_scanned": ingestion.canonical_rows_scanned,
+                "ingestion_canonical_bytes_copied_to_python": (
+                    ingestion.canonical_bytes_copied_to_python
+                ),
                 "ingestion_eager_structural_objects": (
                     ingestion.eager_structural_objects_materialized
                 ),
+                "ingestion_fingerprint_preimage_bytes_in_python": (
+                    ingestion.fingerprint_preimage_bytes_materialized_in_python
+                ),
+                "ingestion_native_origin_bytes_retained": (
+                    ingestion.native_origin_bytes_retained
+                ),
+                "ingestion_native_origin_rows_retained": (
+                    ingestion.native_origin_rows_retained
+                ),
+                "ingestion_native_publication_canonical_bytes": (
+                    ingestion.native_publication_canonical_bytes_encoded
+                ),
+                "ingestion_native_publication_canonical_rows": (
+                    ingestion.native_publication_canonical_rows_encoded
+                ),
                 "ingestion_parser_result_bytes": ingestion.parser_result_bytes_scanned,
+                "ingestion_parser_summary_bytes": ingestion.parser_summary_bytes_materialized,
                 "ingestion_provenance_occurrence_records": (
                     ingestion.provenance_occurrence_records_materialized
                 ),

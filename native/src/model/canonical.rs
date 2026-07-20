@@ -141,18 +141,38 @@ impl ScanBudget {
 }
 
 pub(crate) fn scan_canonical(data: &[u8], budget: &mut ScanBudget) -> NativeResult<Category> {
+    scan_canonical_observing(data, budget, None).map(|(category, _found)| category)
+}
+
+/// Validate one canonical row while proving whether any nested node uses the
+/// requested constructor tag.  This keeps parser routing decisions inside the
+/// native structural scan instead of reconstructing Python model objects.
+pub(crate) fn canonical_contains_tag(
+    data: &[u8],
+    budget: &mut ScanBudget,
+    target_tag: u64,
+) -> NativeResult<bool> {
+    scan_canonical_observing(data, budget, Some(target_tag)).map(|(_category, found)| found)
+}
+
+fn scan_canonical_observing(
+    data: &[u8],
+    budget: &mut ScanBudget,
+    target_tag: Option<u64>,
+) -> NativeResult<(Category, bool)> {
     if u64::try_from(data.len()).map_or(true, |size| size > budget.max_canonical_work) {
         return Err(NativeError::limit(
             "canonical model row exceeds max_canonical_work",
         ));
     }
-    let (meta, offset) = scan_node(data, 0, data.len(), budget, 0)?;
+    let mut found = false;
+    let (meta, offset) = scan_node(data, 0, data.len(), budget, 0, target_tag, &mut found)?;
     if offset != data.len() {
         return Err(NativeError::corrupt(
             "canonical model row has trailing bytes",
         ));
     }
-    Ok(meta.category)
+    Ok((meta.category, found))
 }
 
 pub(crate) fn canonical_field_count(tag: u16) -> Option<u8> {
@@ -165,10 +185,15 @@ fn scan_node<'a>(
     end: usize,
     budget: &mut ScanBudget,
     depth: u32,
+    target_tag: Option<u64>,
+    found: &mut bool,
 ) -> NativeResult<(NodeMeta<'a>, usize)> {
     budget.enter(depth)?;
     let node_start = offset;
     let (tag, next) = scan_bounded_varint(data, offset, end)?;
+    if target_tag == Some(tag) {
+        *found = true;
+    }
     offset = next;
     let spec = spec(tag).ok_or_else(|| NativeError::corrupt("unknown canonical model tag"))?;
     let mut values: [Option<FieldValue<'a>>; 4] = [None; 4];
@@ -200,6 +225,8 @@ fn scan_node<'a>(
                     depth
                         .checked_add(1)
                         .ok_or_else(|| NativeError::limit("canonical depth overflow"))?,
+                    target_tag,
+                    found,
                 )?;
                 if consumed != frame_end {
                     return Err(NativeError::corrupt(
@@ -251,6 +278,8 @@ fn scan_node<'a>(
                         depth
                             .checked_add(1)
                             .ok_or_else(|| NativeError::limit("canonical depth overflow"))?,
+                        target_tag,
+                        found,
                     )?;
                     if consumed != frame_end {
                         return Err(NativeError::corrupt(
@@ -304,6 +333,8 @@ fn scan_node<'a>(
                         depth
                             .checked_add(1)
                             .ok_or_else(|| NativeError::limit("canonical depth overflow"))?,
+                        target_tag,
+                        found,
                     )?;
                     if consumed != frame_end || !node.accepts(child) {
                         return Err(NativeError::corrupt(

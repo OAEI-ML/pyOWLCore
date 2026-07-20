@@ -44,6 +44,8 @@ _PARSE_REQUEST = struct.Struct("<8sHHQ")
 _PARSE_RESULT_HEADER = struct.Struct("<8sHHQ")
 _PARSE_REQUEST_MAGIC = b"PYNFSS1\0"
 _PARSE_RESULT_MAGIC = b"PYNFSSR1"
+_RETAINED_FUNCTIONAL_SEED_MAGIC_V2 = b"PYNFRS2\0"
+_RETAINED_FUNCTIONAL_PREPARED_MAGIC_V2 = b"PYNFPP2\0"
 _INDEX_SOURCE_HEADER = struct.Struct("<8sHHQ")
 _INDEX_RESULT_HEADER = struct.Struct("<8sHHQ")
 _INDEX_SOURCE_MAGIC = b"PYNIDXS1"
@@ -108,7 +110,11 @@ class _Extension(Protocol):
     ) -> bytes: ...
 
     def _parse_functional_retained_v2(
-        self, data: object, config: object, cancel: _NativeCancellation | None = None
+        self,
+        data: object,
+        config: object,
+        collect_provenance: bool,
+        cancel: _NativeCancellation | None = None,
     ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
 
     def build_index(
@@ -152,6 +158,7 @@ class _NativeRetainedFunctionalParseV2:
     storage: object | None
     phase_timings: tuple[tuple[str, float], ...]
     encoded: bytes | None = None
+    summary: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,6 +308,7 @@ def _parse_functional_retained_v2(
     *,
     limits: ParseLimits | None = None,
     allow_swrl: bool = False,
+    collect_provenance: bool = True,
     cancellation_token: CancellationToken | None = None,
 ) -> _NativeRetainedFunctionalParseV2:
     """Parse once and retain the parser-built structural arena when available."""
@@ -323,6 +331,8 @@ def _parse_functional_retained_v2(
         raise TypeError("native Functional Syntax source must be bytes")
     if not isinstance(allow_swrl, bool):
         raise TypeError("allow_swrl must be bool")
+    if not isinstance(collect_provenance, bool):
+        raise TypeError("collect_provenance must be bool")
     selected.enforce("max_source_bytes", len(data))
     request = (
         _PARSE_REQUEST.pack(
@@ -337,16 +347,16 @@ def _parse_functional_retained_v2(
     with _relay(extension, selected, cancellation_token) as cancel:
         result = _call_parse_value(
             extension,
-            lambda: hook(request, config, cancel),
+            lambda: hook(request, config, collect_provenance, cancel),
         )
     if type(result) is not tuple or len(result) != 3:
         raise BackendProtocolError(
             "native retained parser returned invalid result framing",
             code="NATIVE_RESULT_TYPE",
         )
-    encoded, storage, phases = result
+    framing, storage, phases = result
     storage_type = getattr(extension, "_NativeParsedStructuralStorageV2", None)
-    if not isinstance(encoded, bytes) or not isinstance(storage_type, type):
+    if not isinstance(framing, bytes) or not isinstance(storage_type, type):
         raise BackendProtocolError(
             "native retained parser returned invalid result members",
             code="NATIVE_RESULT_TYPE",
@@ -371,11 +381,26 @@ def _parse_functional_retained_v2(
         "native_arena_construction_seconds",
         "native_freeze_seconds",
     )
-    return _NativeRetainedFunctionalParseV2(
-        None,
-        storage,
-        tuple((name, value / 1_000_000_000) for name, value in zip(names, phases, strict=True)),
-        encoded,
+    phase_timings = tuple(
+        (name, value / 1_000_000_000) for name, value in zip(names, phases, strict=True)
+    )
+    if framing.startswith(_PARSE_RESULT_MAGIC):
+        return _NativeRetainedFunctionalParseV2(
+            None,
+            storage,
+            phase_timings,
+            framing,
+        )
+    if framing.startswith(_RETAINED_FUNCTIONAL_SEED_MAGIC_V2):
+        return _NativeRetainedFunctionalParseV2(
+            None,
+            storage,
+            phase_timings,
+            summary=framing,
+        )
+    raise BackendProtocolError(
+        "native retained parser returned an unknown result framing",
+        code="NATIVE_PARSE_VERSION",
     )
 
 

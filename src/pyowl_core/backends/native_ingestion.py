@@ -31,6 +31,7 @@ class NativeIngestionExtension(Protocol):
 
 class _RetainedStructuralExtension(NativeIngestionExtension, Protocol):
     _retain_structural_snapshot_v2: Callable[..., object]
+    _prepare_parsed_structural_snapshot_v2: Callable[..., object]
     _finalize_parsed_structural_snapshot_v2: Callable[..., object]
 
 
@@ -560,8 +561,206 @@ def _structural_digest_v2(row: bytes) -> bytes:
     return hashlib.sha256(b"pyowl-core:structural-value:v1\x00" + encode_varint(1) + row).digest()
 
 
-def publish_retained_functional_snapshot_v2(
+@dataclass(frozen=True, slots=True)
+class _RetainedFingerprintEvidenceV2:
+    preimage_byte_length: int
+    digest: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _RetainedFunctionalSeedV2:
+    decoded_codepoint_length: int
+    canonical_rows_scanned: int
+    structural_occurrence_rows_scanned: int
+    rows: tuple[int, int, int]
+    metadata_iri_objects_materialized: int
+    document_fingerprint: _RetainedFingerprintEvidenceV2
+    ontology_iri: str | None
+    version_iri: str | None
+    imports: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedRetainedPublicationV2:
+    fingerprints: tuple[
+        _RetainedFingerprintEvidenceV2,
+        _RetainedFingerprintEvidenceV2,
+        _RetainedFingerprintEvidenceV2,
+    ]
+    content_digests: tuple[bytes, bytes, bytes, bytes, bytes, bytes]
+    origin_rows_retained: int
+    max_facade_row_bytes: int
+    canonical_rows_encoded: int
+    canonical_bytes_encoded: int
+    fingerprint_temporary_bytes: int
+    origin_bytes_retained: int
+    prepare_seconds: float
+
+
+def _read_u16_v2(reader: native._ResultReader) -> int:
+    return int.from_bytes(reader.take(2), "little")
+
+
+def _read_text64_v2(reader: native._ResultReader, *, maximum: int) -> str:
+    size = reader.u64()
+    if size > maximum:
+        raise BackendProtocolError(
+            "native retained metadata text exceeds its configured bound",
+            code="NATIVE_PARSE_MODEL",
+        )
+    try:
+        return reader.take(size).decode("utf-8")
+    except UnicodeError as error:
+        raise BackendProtocolError(
+            "native retained metadata is not UTF-8",
+            code="NATIVE_PARSE_MODEL",
+        ) from error
+
+
+def _decode_retained_functional_seed_v2(
     encoded: bytes,
+    limits: ParseLimits,
+) -> _RetainedFunctionalSeedV2:
+    reader = native._ResultReader(encoded)
+    magic = reader.take(8)
+    schema = _read_u16_v2(reader)
+    flags = _read_u16_v2(reader)
+    if magic != native._RETAINED_FUNCTIONAL_SEED_MAGIC_V2 or schema != 1 or flags != 0:
+        raise BackendProtocolError(
+            "native retained Functional seed has incompatible metadata",
+            code="NATIVE_PARSE_VERSION",
+        )
+    decoded_codepoints = reader.u64()
+    canonical_rows = reader.u64()
+    occurrences = reader.u64()
+    rows = (reader.u64(), reader.u64(), reader.u64())
+    metadata_iris = reader.u64()
+    document = _RetainedFingerprintEvidenceV2(reader.u64(), reader.take(32))
+    if document.preimage_byte_length == 0:
+        raise BackendProtocolError(
+            "native retained document fingerprint has an empty preimage",
+            code="NATIVE_PARSE_MODEL",
+        )
+
+    def optional_iri() -> str | None:
+        marker = reader.u8()
+        if marker == 0:
+            return None
+        if marker != 1:
+            raise BackendProtocolError(
+                "native retained metadata has an invalid optional marker",
+                code="NATIVE_PARSE_FRAMING",
+            )
+        return _read_text64_v2(reader, maximum=limits.max_iri_bytes)
+
+    ontology_iri = optional_iri()
+    version_iri = optional_iri()
+    if version_iri is not None and ontology_iri is None:
+        raise BackendProtocolError(
+            "native retained metadata has a version IRI without an ontology IRI",
+            code="NATIVE_PARSE_MODEL",
+        )
+    import_count = reader.u64()
+    reader.require_count(import_count, 8)
+    imports = tuple(
+        _read_text64_v2(reader, maximum=limits.max_iri_bytes) for _ in range(import_count)
+    )
+    reader.finish()
+    from pyowl_core.model import encode_varint
+
+    import_rows = tuple(
+        b"\x01\x02" + encode_varint(len(raw)) + raw
+        for value in imports
+        for raw in (value.encode("utf-8"),)
+    )
+    if import_rows != tuple(sorted(set(import_rows))):
+        raise BackendProtocolError(
+            "native retained imports are not canonical unique",
+            code="NATIVE_PARSE_MODEL",
+        )
+    limits.enforce("max_annotations", rows[0])
+    limits.enforce("max_axioms", rows[1])
+    if canonical_rows < occurrences or metadata_iris != sum(
+        (ontology_iri is not None, version_iri is not None, len(imports))
+    ):
+        raise BackendProtocolError(
+            "native retained seed counters are internally inconsistent",
+            code="NATIVE_PARSE_MODEL",
+        )
+    return _RetainedFunctionalSeedV2(
+        decoded_codepoints,
+        canonical_rows,
+        occurrences,
+        rows,
+        metadata_iris,
+        document,
+        ontology_iri,
+        version_iri,
+        imports,
+    )
+
+
+def _decode_prepared_retained_publication_v2(
+    encoded: bytes,
+    *,
+    collect_provenance: bool,
+) -> _PreparedRetainedPublicationV2:
+    reader = native._ResultReader(encoded)
+    magic = reader.take(8)
+    schema = _read_u16_v2(reader)
+    flags = _read_u16_v2(reader)
+    if magic != native._RETAINED_FUNCTIONAL_PREPARED_MAGIC_V2 or schema != 1 or flags != 0:
+        raise BackendProtocolError(
+            "native retained publication summary has incompatible metadata",
+            code="NATIVE_PARSE_VERSION",
+        )
+    fingerprints = cast(
+        tuple[
+            _RetainedFingerprintEvidenceV2,
+            _RetainedFingerprintEvidenceV2,
+            _RetainedFingerprintEvidenceV2,
+        ],
+        tuple(_RetainedFingerprintEvidenceV2(reader.u64(), reader.take(32)) for _ in range(3)),
+    )
+    content = cast(
+        tuple[bytes, bytes, bytes, bytes, bytes, bytes],
+        tuple(reader.take(32) for _ in range(6)),
+    )
+    origin_rows = reader.u64()
+    max_row = reader.u64()
+    canonical_rows = reader.u64()
+    canonical_bytes = reader.u64()
+    fingerprint_temporary_bytes = reader.u64()
+    origin_bytes = reader.u64()
+    prepare_ns = reader.u64()
+    reader.finish()
+    if any(item.preimage_byte_length == 0 for item in fingerprints) or max_row == 0:
+        raise BackendProtocolError(
+            "native retained publication summary has invalid fingerprint or row bounds",
+            code="NATIVE_PARSE_MODEL",
+        )
+    if (not collect_provenance and (origin_rows != 0 or origin_bytes != 0)) or (
+        origin_rows == 0 and origin_bytes != 0
+    ):
+        raise BackendProtocolError(
+            "native retained publication summary has inconsistent provenance counters",
+            code="NATIVE_PARSE_MODEL",
+        )
+    return _PreparedRetainedPublicationV2(
+        fingerprints,
+        content,
+        origin_rows,
+        max_row,
+        canonical_rows,
+        canonical_bytes,
+        fingerprint_temporary_bytes,
+        origin_bytes,
+        prepare_ns / 1_000_000_000,
+    )
+
+
+def publish_retained_functional_snapshot_v2(
+    summary: bytes,
     *,
     parsed_native_storage: object,
     phase_timings: tuple[tuple[str, float], ...],
@@ -574,13 +773,8 @@ def publish_retained_functional_snapshot_v2(
     cancellation_token: CancellationToken | None,
     load_started: float,
     root_parse_started: float,
-) -> OntologySnapshot | None:
-    """Publish one parser-owned Functional load without eager model decoding.
-
-    Returning ``None`` is a narrow eligibility result: anonymous individuals
-    still require the existing document-scope rewrite and therefore fall back
-    to the authoritative model path. Protocol and attestation failures raise.
-    """
+) -> OntologySnapshot:
+    """Publish one parser-owned Functional load from bounded native evidence."""
 
     from pyowl_core.backends.native_handoff import (
         NativeDocumentPublicationV1,
@@ -595,19 +789,12 @@ def publish_retained_functional_snapshot_v2(
         NativeDiagnosticReferenceSidecarsV2,
         NativeDocumentFacadeCardinalitiesV2,
         NativeFacadeCardinalitySummaryV2,
-        NativeFacadeCollectionV2,
-        NativeFacadeScopeV2,
-        NativeFingerprintEvidenceV2,
-        NativeOriginRowV2,
-        NativeSignatureKindV2,
+        NativeSnapshotContentDigestsV2,
         _seal_native_snapshot_owner_v2,
-        encode_native_auxiliary_row_v2,
         freeze_native_snapshot_publication_v2,
-        native_snapshot_content_digests_v2,
         native_snapshot_publication_attestation_v2,
     )
     from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy, LoadOptions
-    from pyowl_core.diagnostics import SourceSpan
     from pyowl_core.document import Fingerprint, OntologyID
     from pyowl_core.document.imports import (
         DocumentRecord,
@@ -623,9 +810,11 @@ def publish_retained_functional_snapshot_v2(
         ontology_snapshot_from_native_publication_v2,
     )
     from pyowl_core.document.provenance import DocumentProvenance
+    from pyowl_core.exceptions import ModelError
     from pyowl_core.io.formats.detection import FormatDetection
     from pyowl_core.io.resolver import resolver_configuration_fingerprint
     from pyowl_core.io.source import SourcePayload
+    from pyowl_core.model import IRI
 
     if not isinstance(options, LoadOptions):
         raise TypeError("options must be LoadOptions")
@@ -639,40 +828,28 @@ def publish_retained_functional_snapshot_v2(
         or detection.format is not DocumentFormat.FUNCTIONAL
     ):
         raise AssertionError("retained Functional publication was invoked for an ineligible load")
-    scanned = _scan_functional_result_v2(
-        encoded,
-        limits=options.limits,
-        cancellation_token=cancellation_token,
-        collect_provenance=options.collect_provenance,
-    )
-    if scanned.has_anonymous:
-        return None
+    seed = _decode_retained_functional_seed_v2(summary, options.limits)
     if cancellation_token is not None:
         cancellation_token.check()
     options.limits.enforce("max_documents", 1)
     options.limits.enforce("max_total_source_bytes", payload.byte_length)
-    for _row, _iri in scanned.imports:
+    for _iri in seed.imports:
         options.limits.enforce("max_import_depth", 1)
 
-    ontology_id = OntologyID(scanned.ontology_iri, scanned.version_iri)
-    direct_imports = tuple(iri for _row, iri in scanned.imports)
-    provisional_document_preimage = b"".join(
-        (
-            b"pyowl-core:document-fingerprint:v1\x00",
-            b"0"
-            if scanned.ontology_iri_row is None
-            else b"1" + _frame_v2(scanned.ontology_iri_row),
-            b"0" if scanned.version_iri_row is None else b"1" + _frame_v2(scanned.version_iri_row),
-            _collection_preimage_v2(tuple(row for row, _iri in scanned.imports)),
-            *(_collection_preimage_v2(rows) for rows in scanned.rows),
-        )
-    )
-    document_fingerprint = Fingerprint(
-        "sha256", 1, hashlib.sha256(provisional_document_preimage).digest()
-    )
+    try:
+        ontology_iri = None if seed.ontology_iri is None else IRI(seed.ontology_iri)
+        version_iri = None if seed.version_iri is None else IRI(seed.version_iri)
+        direct_imports = tuple(IRI(value) for value in seed.imports)
+    except ModelError as error:
+        raise BackendProtocolError(
+            "native retained metadata contains an invalid IRI",
+            code="NATIVE_PARSE_MODEL",
+        ) from error
+    ontology_id = OntologyID(ontology_iri, version_iri)
+    document_fingerprint = Fingerprint("sha256", 1, seed.document_fingerprint.digest)
     document_key = _document_key_v2(
-        scanned.ontology_iri,
-        scanned.version_iri,
+        ontology_iri,
+        version_iri,
         document_fingerprint.digest,
     )
     provenance = DocumentProvenance(
@@ -682,7 +859,7 @@ def publish_retained_functional_snapshot_v2(
         (
             payload.decoded_codepoint_length
             if payload.decoded_codepoint_length is not None
-            else scanned.decoded_codepoint_length
+            else seed.decoded_codepoint_length
         ),
         document_iri,
         payload.locator,
@@ -709,53 +886,39 @@ def publish_retained_functional_snapshot_v2(
         (record,),
         edges,
     )
-    preimages = _fingerprint_preimages_v2(scanned, manifest, document_key)
-    if preimages[0] != provisional_document_preimage:
-        raise AssertionError("document fingerprint preimage construction diverged")
-    fingerprints = tuple(
-        Fingerprint("sha256", 1, hashlib.sha256(value).digest()) for value in preimages
-    )
 
-    origin_items: list[tuple[tuple[object, ...], bytes]] = []
-    if options.collect_provenance:
-        options.limits.enforce("max_origin_entries", len(scanned.occurrences))
-        for occurrence_ordinal, occurrence in enumerate(scanned.occurrences):
-            digest = _structural_digest_v2(occurrence.encoded)
-            origin = NativeOriginRowV2(
-                digest=digest,
-                document_key=document_key,
-                occurrence=occurrence_ordinal,
-                span=SourceSpan(
-                    byte_start=occurrence.byte_start,
-                    byte_end=occurrence.byte_end,
-                    line_start=occurrence.line,
-                    column_start=occurrence.column,
-                ),
-            )
-            collection, origin_row = encode_native_auxiliary_row_v2(
-                origin,
-                max_row_bytes=options.limits.max_wire_bytes,
-            )
-            if collection is not NativeFacadeCollectionV2.ORIGIN_ENTRIES:
-                raise AssertionError(collection)
-            origin_items.append(
-                (
-                    (
-                        digest,
-                        document_key.encode("utf-8"),
-                        occurrence_ordinal,
-                        origin_row,
-                    ),
-                    origin_row,
-                )
-            )
-    origin_items.sort(key=lambda item: item[0])
-    origin_rows = tuple(item[1] for item in origin_items)
-    if len(set(origin_rows)) != len(origin_rows):
+    extension = native.require("parse-functional-v1")
+    prepare = getattr(extension, "_prepare_parsed_structural_snapshot_v2", None)
+    if not callable(prepare):
         raise BackendProtocolError(
-            "native parser publication produced duplicate origin rows",
-            code="NATIVE_PARSE_MODEL",
+            "native parser-built storage has no publication preparation boundary",
+            code="NATIVE_INGESTION_REGISTRATION",
         )
+    with native._relay(extension, options.limits, cancellation_token) as cancel:
+        prepared_encoded = native._call(
+            extension,
+            lambda: prepare(
+                parsed_native_storage,
+                manifest.canonical_bytes(),
+                document_key,
+                options.collect_provenance,
+                cancel,
+            ),
+        )
+    if type(prepared_encoded) is not bytes:
+        raise BackendProtocolError(
+            "native retained publication preparation returned a non-bytes summary",
+            code="NATIVE_RESULT_TYPE",
+        )
+    prepared = _decode_prepared_retained_publication_v2(
+        prepared_encoded,
+        collect_provenance=options.collect_provenance,
+    )
+    options.limits.enforce("max_origin_entries", prepared.origin_rows_retained)
+    fingerprints = (
+        document_fingerprint,
+        *(Fingerprint("sha256", 1, item.digest) for item in prepared.fingerprints),
+    )
 
     documents = (
         NativeDocumentPublicationV1(
@@ -766,11 +929,11 @@ def publish_retained_functional_snapshot_v2(
             provenance=freeze_native_provenance_publication_v1(provenance),
             document_fingerprint=fingerprints[0],
             diagnostics=(),
-            ontology_annotation_count=len(scanned.rows[0]),
-            axiom_count=len(scanned.rows[1]),
-            extension_count=len(scanned.rows[2]),
+            ontology_annotation_count=seed.rows[0],
+            axiom_count=seed.rows[1],
+            extension_count=seed.rows[2],
             source_map_entry_count=0,
-            origin_entry_count=len(origin_rows),
+            origin_entry_count=prepared.origin_rows_retained,
             rdf_mapping_conformant=None,
             rdf_mapping_report_sha256=None,
         ),
@@ -780,13 +943,14 @@ def publish_retained_functional_snapshot_v2(
         "root_parse_seconds": time.monotonic() - root_parse_started,
     }
     timings.update(phase_timings)
+    timings["native_publication_prepare_seconds"] = prepared.prepare_seconds
     report = NativeLoadReportPublicationV1(
         backend="native",
         api_version=(0, 1),
         model_schema=1,
         document_count=1,
         total_source_bytes=payload.byte_length,
-        effective_axiom_count=len(scanned.rows[1]),
+        effective_axiom_count=seed.rows[1],
         resolution_attempts=0,
         acquisition_cache_hits=0,
         document_cache_hits=0,
@@ -809,10 +973,10 @@ def publish_retained_functional_snapshot_v2(
         documents=(
             NativeDocumentFacadeCardinalitiesV2(
                 document_key=document_key,
-                effective_annotation_count=len(scanned.rows[0]),
-                effective_axiom_count=len(scanned.rows[1]),
-                effective_extension_count=len(scanned.rows[2]),
-                effective_origin_count=len(origin_rows),
+                effective_annotation_count=seed.rows[0],
+                effective_axiom_count=seed.rows[1],
+                effective_extension_count=seed.rows[2],
+                effective_origin_count=prepared.origin_rows_retained,
                 raw_source_prefix_count=0,
                 rdf_unconsumed_triple_count=0,
                 rdf_rule_count=0,
@@ -820,69 +984,19 @@ def publish_retained_functional_snapshot_v2(
             ),
         ),
         closure=NativeClosureFacadeCardinalitiesV2(
-            effective_annotation_count=len(scanned.rows[0]),
-            effective_axiom_count=len(scanned.rows[1]),
-            effective_extension_count=len(scanned.rows[2]),
-            effective_origin_count=len(origin_rows),
+            effective_annotation_count=seed.rows[0],
+            effective_axiom_count=seed.rows[1],
+            effective_extension_count=seed.rows[2],
+            effective_origin_count=prepared.origin_rows_retained,
         ),
     )
-    collections = {
-        (collection, scope, ordinal, NativeSignatureKindV2.ALL, True): values
-        for collection, values in zip(
-            (
-                NativeFacadeCollectionV2.ONTOLOGY_ANNOTATIONS,
-                NativeFacadeCollectionV2.AXIOMS,
-                NativeFacadeCollectionV2.EXTENSIONS,
-            ),
-            scanned.rows,
-            strict=True,
-        )
-        for scope, ordinal in (
-            (NativeFacadeScopeV2.DOCUMENT, 0),
-            (NativeFacadeScopeV2.CLOSURE, None),
-        )
-    }
-    for scope, ordinal in (
-        (NativeFacadeScopeV2.DOCUMENT, 0),
-        (NativeFacadeScopeV2.CLOSURE, None),
-    ):
-        collections[
-            (
-                NativeFacadeCollectionV2.ORIGIN_ENTRIES,
-                scope,
-                ordinal,
-                NativeSignatureKindV2.ALL,
-                True,
-            )
-        ] = origin_rows
-    evidence = tuple(
-        NativeFingerprintEvidenceV2(
-            tag=tag,
-            document_key=document_key if tag == 1 else None,
-            preimage_byte_length=len(preimage),
-            fingerprint_schema=fingerprint.schema,
-            digest=hashlib.sha256(preimage).digest(),
-        )
-        for tag, preimage, fingerprint in zip((1, 2, 3, 4), preimages, fingerprints, strict=True)
-    )
-    max_facade_row_bytes = max(
-        (
-            1,
-            *(len(row) for roots in scanned.rows for row in roots),
-            *(len(row) for row in origin_rows),
-        )
-    )
-    content = native_snapshot_content_digests_v2(
-        documents=documents,
-        report=report,
-        root_document_key=document_key,
-        load_options=options,
-        capability_bits=capability_bits,
-        collections=collections,
-        fingerprint_evidence=evidence,
-        fingerprint_preimages=preimages,
-        owl2_dl_report_summary=None,
-        facade_cardinality_summary=facade_summary,
+    content = NativeSnapshotContentDigestsV2(
+        root_table_sha256=prepared.content_digests[0],
+        effective_root_table_sha256=prepared.content_digests[1],
+        fingerprint_inputs_sha256=prepared.content_digests[2],
+        source_manifest_sha256=prepared.content_digests[3],
+        provenance_manifest_sha256=prepared.content_digests[4],
+        effective_origin_manifest_sha256=prepared.content_digests[5],
     )
     attestation = native_snapshot_publication_attestation_v2(
         documents=documents,
@@ -895,10 +1009,9 @@ def publish_retained_functional_snapshot_v2(
         report=report,
         capability_bits=capability_bits,
         content_digests=content,
-        max_facade_row_bytes=max_facade_row_bytes,
+        max_facade_row_bytes=prepared.max_facade_row_bytes,
         owl2_dl_report_summary=None,
     )
-    extension = native.require("parse-functional-v1")
     hook = getattr(extension, "_finalize_parsed_structural_snapshot_v2", None)
     if not callable(hook):
         raise BackendProtocolError(
@@ -910,7 +1023,6 @@ def publish_retained_functional_snapshot_v2(
             extension,
             lambda: hook(
                 parsed_native_storage,
-                origin_rows if options.collect_provenance else None,
                 attestation,
                 cancel,
             ),
@@ -928,20 +1040,28 @@ def publish_retained_functional_snapshot_v2(
         "facade_cardinality_summary": facade_summary,
         "report": report,
         "capability_bits": capability_bits,
-        "max_facade_row_bytes": max_facade_row_bytes,
+        "max_facade_row_bytes": prepared.max_facade_row_bytes,
         "owl2_dl_report_summary": None,
     }
     for field in fields(content):
         values[field.name] = getattr(content, field.name)
     publication = freeze_native_snapshot_publication_v2(values)
     ingestion_counters = _NativeIngestionCountersV2(
-        parser_result_bytes_scanned=len(encoded),
-        canonical_rows_scanned=scanned.canonical_rows_scanned,
-        structural_occurrence_rows_scanned=scanned.structural_occurrence_rows_scanned,
-        structural_root_rows_published=sum(len(rows) for rows in scanned.rows),
+        parser_result_bytes_scanned=0,
+        parser_summary_bytes_materialized=len(summary) + len(prepared_encoded),
+        canonical_rows_scanned=seed.canonical_rows_scanned,
+        structural_occurrence_rows_scanned=seed.structural_occurrence_rows_scanned,
+        structural_root_rows_published=sum(seed.rows),
         eager_structural_objects_materialized=0,
-        metadata_iri_objects_materialized=scanned.metadata_iri_objects_materialized,
-        provenance_occurrence_records_materialized=len(scanned.occurrences),
+        metadata_iri_objects_materialized=seed.metadata_iri_objects_materialized,
+        provenance_occurrence_records_materialized=0,
+        canonical_bytes_copied_to_python=0,
+        fingerprint_preimage_bytes_materialized_in_python=0,
+        native_publication_canonical_rows_encoded=prepared.canonical_rows_encoded,
+        native_publication_canonical_bytes_encoded=prepared.canonical_bytes_encoded,
+        native_fingerprint_temporary_bytes=prepared.fingerprint_temporary_bytes,
+        native_origin_rows_retained=prepared.origin_rows_retained,
+        native_origin_bytes_retained=prepared.origin_bytes_retained,
     )
     return ontology_snapshot_from_native_publication_v2(
         publication,

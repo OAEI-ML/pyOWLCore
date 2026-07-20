@@ -52,6 +52,7 @@ class _ParsedPayloadResult:
     native_storage: object | None = None
     phase_timings: tuple[tuple[str, float], ...] = ()
     native_encoded: bytes | None = None
+    native_summary: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,8 +165,9 @@ class PythonParser:
             allow_swrl=allow_swrl,
             backend=selected_backend,
             retain_native_storage=retain_native_storage,
+            collect_provenance=selected_options.collect_provenance,
         )
-        if parsed_result.native_encoded is not None:
+        if parsed_result.native_summary is not None:
             if (
                 not retain_native_storage
                 or parsed_result.native_storage is None
@@ -178,7 +180,7 @@ class PythonParser:
             )
 
             snapshot = publish_retained_functional_snapshot_v2(
-                parsed_result.native_encoded,
+                parsed_result.native_summary,
                 parsed_native_storage=parsed_result.native_storage,
                 phase_timings=parsed_result.phase_timings,
                 payload=payload,
@@ -191,8 +193,8 @@ class PythonParser:
                 load_started=retained_load_started,
                 root_parse_started=retained_root_parse_started,
             )
-            if snapshot is not None:
-                return _ParsedDocumentResult(None, snapshot=snapshot)
+            return _ParsedDocumentResult(None, snapshot=snapshot)
+        if parsed_result.native_encoded is not None:
             from pyowl_core.backends.native import _decode_parsed_functional
 
             parsed = _decode_parsed_functional(
@@ -432,6 +434,7 @@ def _parse_payload(
     allow_swrl: bool,
     backend: str,
     retain_native_storage: bool,
+    collect_provenance: bool,
 ) -> _ParsedPayloadResult:
     from pyowl_core.limits import ParseLimits
 
@@ -450,12 +453,14 @@ def _parse_payload(
                         limits=limits,
                         cancellation_token=cancellation_token,
                         allow_swrl=allow_swrl,
+                        collect_provenance=collect_provenance,
                     )
                     return _ParsedPayloadResult(
-                        retained.parsed,
-                        retained.storage,
-                        retained.phase_timings,
-                        retained.encoded,
+                        ontology=retained.parsed,
+                        native_storage=retained.storage,
+                        phase_timings=retained.phase_timings,
+                        native_encoded=retained.encoded,
+                        native_summary=retained.summary,
                     )
                 from pyowl_core.backends.dispatch import parse_functional_native
 

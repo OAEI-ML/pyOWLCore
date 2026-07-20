@@ -100,6 +100,7 @@ def _parse_functional_native_retained_v2(
     *,
     limits: ParseLimits,
     allow_swrl: bool,
+    collect_provenance: bool,
     cancellation_token: CancellationToken | None,
 ) -> _NativeRetainedFunctionalParseV2:
     """Execute the unadvertised parser-to-retained-arena construction seam."""
@@ -108,6 +109,7 @@ def _parse_functional_native_retained_v2(
         data,
         limits=limits,
         allow_swrl=allow_swrl,
+        collect_provenance=collect_provenance,
         cancellation_token=cancellation_token,
     )
 

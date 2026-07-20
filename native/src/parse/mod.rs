@@ -1,6 +1,12 @@
 //! Complete advertised native parser implementations and result framing.
 
 mod functional;
+mod retained;
+
+pub(crate) use retained::{
+    prepare_publication as prepare_retained_publication_v2, PreparedRetainedPublicationV2,
+    RetainedParseMetadataV2,
+};
 
 use std::mem::size_of;
 use std::time::Instant;
@@ -47,6 +53,7 @@ pub(crate) struct ParsedDocument {
 pub(crate) struct RetainedParseOutcome {
     pub(crate) encoded: Vec<u8>,
     pub(crate) storage: TypedFacadeStorageV2,
+    pub(crate) metadata: Option<RetainedParseMetadataV2>,
     pub(crate) phases: RetainedParsePhases,
 }
 
@@ -197,16 +204,30 @@ pub(crate) fn parse_retained(
     cancellation: Cancellation,
     interrupt: Option<InterruptSlot>,
     input_bytes: usize,
+    collect_provenance: bool,
 ) -> NativeResult<RetainedParseOutcome> {
     let parse_started = Instant::now();
     let parsed = functional::parse_functional(request.source, request.allow_swrl, session)?;
     let syntax_parse_ns = elapsed_ns(parse_started)?;
 
+    let has_anonymous = retained::contains_anonymous(&parsed, &limits)?;
     let encode_started = Instant::now();
-    let encoded = parsed.encode(session)?;
+    let (encoded, metadata, rows) = if has_anonymous {
+        let encoded = parsed.encode(session)?;
+        let rows = parsed.into_structural_rows();
+        (encoded, None, rows)
+    } else {
+        parsed.validate(session)?;
+        let (encoded, metadata, rows) = retained::build_seed(parsed, collect_provenance)?;
+        session.finish()?;
+        (encoded, Some(metadata), rows)
+    };
     let result_encode_ns = elapsed_ns(encode_started)?;
-    let rows = parsed.into_structural_rows();
-    let external_bytes = retained_parse_external_bytes(input_bytes, encoded.capacity(), &rows)?;
+    let metadata_bytes = metadata
+        .as_ref()
+        .map_or(Ok(0), RetainedParseMetadataV2::retained_bytes)?;
+    let external_bytes =
+        retained_parse_external_bytes(input_bytes, encoded.capacity(), metadata_bytes, &rows)?;
 
     let arena_started = Instant::now();
     let mut builder = TypedFacadeBuilderV2::new(limits, cancellation, interrupt, external_bytes)?;
@@ -219,6 +240,7 @@ pub(crate) fn parse_retained(
     Ok(RetainedParseOutcome {
         encoded,
         storage,
+        metadata,
         phases: RetainedParsePhases {
             syntax_parse_ns,
             result_encode_ns,
@@ -282,9 +304,11 @@ fn canonical_root_rows(values: Vec<SpannedNode>) -> Vec<Vec<u8>> {
 fn retained_parse_external_bytes(
     input_bytes: usize,
     encoded_capacity: usize,
+    metadata_bytes: usize,
     rows: &[Vec<Vec<u8>>; 3],
 ) -> NativeResult<usize> {
     let mut total = checked_add(input_bytes, encoded_capacity)?;
+    total = checked_add(total, metadata_bytes)?;
     for collection in rows {
         total = checked_add(
             total,

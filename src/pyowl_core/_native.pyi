@@ -107,11 +107,18 @@ def _retain_structural_snapshot_v2(
 def _parse_functional_retained_v2(
     source: object,
     config: object,
+    collect_provenance: bool,
     cancel: _Cancellation | None = None,
 ) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int]]: ...
+def _prepare_parsed_structural_snapshot_v2(
+    parsed: _NativeParsedStructuralStorageV2,
+    manifest: bytes,
+    document_key: str,
+    collect_provenance: bool,
+    cancel: _Cancellation | None = None,
+) -> bytes: ...
 def _finalize_parsed_structural_snapshot_v2(
     parsed: _NativeParsedStructuralStorageV2,
-    origins: object | None,
     attestation: NativeSnapshotAttestationV2,
     cancel: _Cancellation | None = None,
 ) -> _NativeSnapshotHandle: ...

@@ -869,6 +869,55 @@ impl TypedFacadeStorageV2 {
             .map_or(&[], |table| table.roots.as_slice()))
     }
 
+    /// Stream canonical root temporaries to native publication preparation.
+    ///
+    /// The callback cannot retain an arena borrow, and each encoded row is
+    /// dropped before the next one is produced.  Unlike facade paging this is
+    /// owner-internal validation work: it does not publish payload bytes or
+    /// mutate consumer-facing page/copy counters.
+    pub(crate) fn visit_canonical_roots<F>(
+        &self,
+        collection: TypedFacadeCollectionV2,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+        mut visitor: F,
+    ) -> NativeResult<()>
+    where
+        F: FnMut(&[u8]) -> NativeResult<()>,
+    {
+        let roots =
+            self.structural_roots(collection, scope, document_ordinal, raw_document_owner)?;
+        for identifier in roots {
+            cancellation.checkpoint()?;
+            let encoded = self.arena.encode(
+                *identifier,
+                &self.limits,
+                cancellation.clone(),
+                interrupt.clone(),
+                self.external_retained_bytes,
+            )?;
+            visitor(&encoded)?;
+        }
+        cancellation.checkpoint()
+    }
+
+    pub(crate) fn canonical_root_count(
+        &self,
+        collection: TypedFacadeCollectionV2,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+    ) -> NativeResult<u64> {
+        u64::try_from(
+            self.structural_roots(collection, scope, document_ordinal, raw_document_owner)?
+                .len(),
+        )
+        .map_err(|_| NativeError::limit("typed V2 canonical root count exceeds u64"))
+    }
+
     fn table_count(&self, coordinate: TypedFacadeCoordinateV2) -> NativeResult<u64> {
         self.effective_tables
             .binary_search_by_key(&coordinate, |table| table.coordinate)
