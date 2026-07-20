@@ -33,6 +33,18 @@ pub(crate) struct EncodedRootV1 {
     component: ComponentId,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EncodedRootTableV1<'arena> {
+    kind: EncodedRootKindV1,
+    components: &'arena [ComponentId],
+}
+
+impl<'arena> EncodedRootTableV1<'arena> {
+    pub(crate) const fn new(kind: EncodedRootKindV1, components: &'arena [ComponentId]) -> Self {
+        Self { kind, components }
+    }
+}
+
 impl EncodedRootV1 {
     pub(crate) const fn new(kind: EncodedRootKindV1, component: ComponentId) -> Self {
         Self { kind, component }
@@ -121,6 +133,14 @@ struct NodeRow {
     tag: u16,
 }
 
+#[derive(Debug, Default)]
+struct DiscoveryState {
+    seen: HashSet<ComponentId>,
+    nodes: Vec<NodeRow>,
+    stack: Vec<ComponentId>,
+    caller_external_bytes: usize,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct ColumnCounts {
     fields: usize,
@@ -177,7 +197,6 @@ impl ColumnWork {
 #[derive(Debug)]
 pub(crate) struct EncodedStructuralColumnsV1 {
     owner: NativeComponentArena,
-    roots: Vec<EncodedRootV1>,
     buffers: EncodedStructuralBuffersV1,
     counters: EncodedColumnCountersV1,
 }
@@ -185,10 +204,6 @@ pub(crate) struct EncodedStructuralColumnsV1 {
 impl EncodedStructuralColumnsV1 {
     pub(crate) const fn owner(&self) -> &NativeComponentArena {
         &self.owner
-    }
-
-    pub(crate) fn roots(&self) -> &[EncodedRootV1] {
-        &self.roots
     }
 
     pub(crate) const fn buffers(&self) -> &EncodedStructuralBuffersV1 {
@@ -207,28 +222,117 @@ pub(crate) fn build_encoded_structural_columns_v1(
     cancellation: Cancellation,
     interrupt: Option<InterruptSlot>,
 ) -> NativeResult<EncodedStructuralColumnsV1> {
+    build_encoded_structural_columns_from_source_v1(
+        arena,
+        &RootSliceV1(roots),
+        limits,
+        cancellation,
+        interrupt,
+        0,
+    )
+}
+
+pub(crate) fn build_encoded_structural_columns_from_tables_v1(
+    arena: &NativeComponentArena,
+    tables: &[EncodedRootTableV1<'_>],
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    caller_external_bytes: usize,
+) -> NativeResult<EncodedStructuralColumnsV1> {
+    build_encoded_structural_columns_from_source_v1(
+        arena,
+        &RootTablesV1(tables),
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+    )
+}
+
+trait EncodedRootSourceV1 {
+    fn len(&self) -> NativeResult<usize>;
+    fn get(&self, index: usize) -> NativeResult<EncodedRootV1>;
+}
+
+struct RootSliceV1<'roots>(&'roots [EncodedRootV1]);
+
+impl EncodedRootSourceV1 for RootSliceV1<'_> {
+    fn len(&self) -> NativeResult<usize> {
+        Ok(self.0.len())
+    }
+
+    fn get(&self, index: usize) -> NativeResult<EncodedRootV1> {
+        self.0
+            .get(index)
+            .copied()
+            .ok_or_else(|| NativeError::protocol("native encoded-column root is out of bounds"))
+    }
+}
+
+struct RootTablesV1<'tables, 'arena>(&'tables [EncodedRootTableV1<'arena>]);
+
+impl EncodedRootSourceV1 for RootTablesV1<'_, '_> {
+    fn len(&self) -> NativeResult<usize> {
+        self.0.iter().try_fold(0_usize, |total, table| {
+            total
+                .checked_add(table.components.len())
+                .ok_or_else(|| NativeError::limit("native encoded-column root count overflow"))
+        })
+    }
+
+    fn get(&self, mut index: usize) -> NativeResult<EncodedRootV1> {
+        for table in self.0 {
+            if index < table.components.len() {
+                return Ok(EncodedRootV1::new(table.kind, table.components[index]));
+            }
+            index = index.checked_sub(table.components.len()).ok_or_else(|| {
+                NativeError::protocol("native encoded-column root table is inconsistent")
+            })?;
+        }
+        Err(NativeError::protocol(
+            "native encoded-column root is out of bounds",
+        ))
+    }
+}
+
+fn build_encoded_structural_columns_from_source_v1(
+    arena: &NativeComponentArena,
+    roots: &impl EncodedRootSourceV1,
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    caller_external_bytes: usize,
+) -> NativeResult<EncodedStructuralColumnsV1> {
     let mut work = ColumnWork::new(limits, cancellation, interrupt)?;
-    let root_count = u64::try_from(roots.len())
+    let root_rows = roots.len()?;
+    let root_count = u64::try_from(root_rows)
         .map_err(|_| NativeError::limit("native encoded-column root count exceeds u64"))?;
     if root_count > limits.value(LimitKey::MaxIndexRows) {
         return Err(NativeError::limit(
             "native encoded-column roots exceed max_index_rows",
         ));
     }
-    let axiom_count = roots
-        .iter()
-        .filter(|root| root.kind == EncodedRootKindV1::Axiom)
-        .count();
+    let mut axiom_count = 0_usize;
+    for index in 0..root_rows {
+        if roots.get(index)?.kind == EncodedRootKindV1::Axiom {
+            axiom_count = axiom_count
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native encoded-column axiom count overflow"))?;
+        }
+    }
     if u64::try_from(axiom_count).map_or(true, |count| count > limits.max_axioms) {
         return Err(NativeError::limit(
             "native encoded-column roots exceed max_axioms",
         ));
     }
 
-    let mut seen = HashSet::new();
-    let mut nodes = Vec::new();
-    let mut stack = Vec::new();
-    for root in roots.iter().copied() {
+    let mut discovery = DiscoveryState {
+        caller_external_bytes,
+        ..DiscoveryState::default()
+    };
+    for index in 0..root_rows {
+        let root = roots.get(index)?;
         work.consume(1)?;
         let row = node_row(arena, root.component)?;
         if !root_accepts(root.kind, row.tag) {
@@ -236,34 +340,31 @@ pub(crate) fn build_encoded_structural_columns_v1(
                 "native encoded-column root kind does not match its constructor",
             ));
         }
-        discover_node(
-            arena, row, &mut seen, &mut nodes, &mut stack, limits, &mut work,
-        )?;
+        discover_node(arena, row, &mut discovery, limits, &mut work)?;
     }
 
-    while let Some(identifier) = stack.pop() {
+    while let Some(identifier) = discovery.stack.pop() {
         let record = arena.record(identifier)?;
         for field_index in 0..record.field_count() {
             work.consume(1)?;
             discover_field_nodes(
                 arena,
                 record.field(field_index)?,
-                &mut seen,
-                &mut nodes,
-                &mut stack,
+                &mut discovery,
                 limits,
                 &mut work,
             )?;
         }
     }
-    if nodes.len() > u32::MAX as usize {
+    if discovery.nodes.len() > u32::MAX as usize {
         return Err(NativeError::limit(
             "native encoded-column node ID space is exhausted",
         ));
     }
-    let mut workspace_bytes = discovery_workspace_bytes(&seen, &nodes, &stack)?;
-    drop(seen);
-    drop(stack);
+    let mut workspace_bytes =
+        discovery_workspace_bytes(&discovery.seen, &discovery.nodes, &discovery.stack)?;
+    let mut nodes = std::mem::take(&mut discovery.nodes);
+    drop(discovery);
 
     let mut lengths = HashMap::new();
     lengths
@@ -274,7 +375,7 @@ pub(crate) fn build_encoded_structural_columns_v1(
         canonical_node_len(arena, row.component, &mut lengths, &mut visiting, &mut work)?;
     }
     workspace_bytes = workspace_bytes.max(length_workspace_bytes(&lengths, &visiting, &nodes)?);
-    check_workspace_memory(arena, workspace_bytes, limits)?;
+    check_workspace_memory(arena, workspace_bytes, caller_external_bytes, limits)?;
     drop(visiting);
     check_workspace_memory(
         arena,
@@ -283,6 +384,7 @@ pub(crate) fn build_encoded_structural_columns_v1(
             lengths.capacity(),
             limits.max_nesting_depth,
         )?,
+        caller_external_bytes,
         limits,
     )?;
     let mut comparison_bytes = 0_u64;
@@ -295,11 +397,12 @@ pub(crate) fn build_encoded_structural_columns_v1(
         &mut comparison_bytes,
     )?;
     workspace_bytes = workspace_bytes.max(sort_workspace);
-    check_workspace_memory(arena, workspace_bytes, limits)?;
+    check_workspace_memory(arena, workspace_bytes, caller_external_bytes, limits)?;
     nodes = ordered;
     validate_root_order(
         arena,
         roots,
+        root_rows,
         &lengths,
         limits,
         &mut work,
@@ -321,7 +424,7 @@ pub(crate) fn build_encoded_structural_columns_v1(
         }
     }
     workspace_bytes = workspace_bytes.max(id_workspace_bytes(&node_ids, &nodes)?);
-    check_workspace_memory(arena, workspace_bytes, limits)?;
+    check_workspace_memory(arena, workspace_bytes, caller_external_bytes, limits)?;
 
     let counts = measure_columns(arena, &nodes, limits, &mut work)?;
     if counts.strings > limits.max_strings
@@ -333,21 +436,19 @@ pub(crate) fn build_encoded_structural_columns_v1(
         ));
     }
     let buffer_bytes = encoded_buffer_bytes(
-        roots.len(),
+        root_rows,
         nodes.len(),
         counts.fields,
         counts.items,
         counts.scalar_bytes,
     )?;
-    let metadata_bytes = roots
-        .len()
-        .checked_mul(size_of::<EncodedRootV1>())
-        .ok_or_else(|| NativeError::limit("native encoded-column metadata size overflow"))?;
+    let metadata_bytes = 0;
     check_layout_limits(
         arena,
         limits,
+        caller_external_bytes,
         ColumnLayout {
-            root_rows: roots.len(),
+            root_rows,
             node_rows: nodes.len(),
             field_rows: counts.fields,
             item_rows: counts.items,
@@ -359,13 +460,14 @@ pub(crate) fn build_encoded_structural_columns_v1(
     work.consume(buffer_bytes)?;
 
     let mut buffers = allocate_buffers(
-        roots.len(),
+        root_rows,
         nodes.len(),
         counts.fields,
         counts.items,
         counts.scalar_bytes,
     )?;
-    for root in roots.iter().copied() {
+    for index in 0..root_rows {
+        let root = roots.get(index)?;
         buffers.root_kinds.push(root.kind as u8);
         append_u32(
             &mut buffers.root_ids,
@@ -393,11 +495,6 @@ pub(crate) fn build_encoded_structural_columns_v1(
     }
     work.finish()?;
 
-    let mut retained_roots = Vec::new();
-    retained_roots
-        .try_reserve_exact(roots.len())
-        .map_err(|_| NativeError::limit("native encoded-column root metadata allocation failed"))?;
-    retained_roots.extend_from_slice(roots);
     let retained_buffer_bytes = u64::try_from(buffer_bytes)
         .map_err(|_| NativeError::limit("native encoded-column buffers exceed u64"))?;
     let retained_metadata_bytes = u64::try_from(metadata_bytes)
@@ -412,7 +509,6 @@ pub(crate) fn build_encoded_structural_columns_v1(
         .ok_or_else(|| NativeError::limit("native encoded-column memory overflow"))?;
     Ok(EncodedStructuralColumnsV1 {
         owner: arena.clone(),
-        roots: retained_roots,
         buffers,
         counters: EncodedColumnCountersV1 {
             root_rows: root_count,
@@ -453,9 +549,7 @@ fn root_accepts(kind: EncodedRootKindV1, tag: u16) -> bool {
 fn discover_node(
     arena: &NativeComponentArena,
     row: NodeRow,
-    seen: &mut HashSet<ComponentId>,
-    nodes: &mut Vec<NodeRow>,
-    stack: &mut Vec<ComponentId>,
+    state: &mut DiscoveryState,
     limits: &Limits,
     work: &mut ColumnWork,
 ) -> NativeResult<()> {
@@ -465,10 +559,11 @@ fn discover_node(
             "native encoded-column graph exceeds max_nesting_depth",
         ));
     }
-    if seen.contains(&row.component) {
+    if state.seen.contains(&row.component) {
         return Ok(());
     }
-    let next = nodes
+    let next = state
+        .nodes
         .len()
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("native encoded-column node count overflow"))?;
@@ -477,40 +572,36 @@ fn discover_node(
             "native encoded-column nodes exceed max_terms",
         ));
     }
-    check_discovery_memory(arena, next, limits)?;
-    seen.try_reserve(1)
+    check_discovery_memory(arena, next, state.caller_external_bytes, limits)?;
+    state
+        .seen
+        .try_reserve(1)
         .map_err(|_| NativeError::limit("native encoded-column visited allocation failed"))?;
-    nodes
+    state
+        .nodes
         .try_reserve(1)
         .map_err(|_| NativeError::limit("native encoded-column node allocation failed"))?;
-    stack
+    state
+        .stack
         .try_reserve(1)
         .map_err(|_| NativeError::limit("native encoded-column stack allocation failed"))?;
-    seen.insert(row.component);
-    nodes.push(row);
-    stack.push(row.component);
+    state.seen.insert(row.component);
+    state.nodes.push(row);
+    state.stack.push(row.component);
     work.consume(1)
 }
 
 fn discover_field_nodes(
     arena: &NativeComponentArena,
     field: ComponentFieldRef<'_>,
-    seen: &mut HashSet<ComponentId>,
-    nodes: &mut Vec<NodeRow>,
-    stack: &mut Vec<ComponentId>,
+    state: &mut DiscoveryState,
     limits: &Limits,
     work: &mut ColumnWork,
 ) -> NativeResult<()> {
     match field {
-        ComponentFieldRef::Node(component) => discover_node(
-            arena,
-            node_row(arena, component)?,
-            seen,
-            nodes,
-            stack,
-            limits,
-            work,
-        ),
+        ComponentFieldRef::Node(component) => {
+            discover_node(arena, node_row(arena, component)?, state, limits, work)
+        }
         ComponentFieldRef::CanonicalSet(sequence)
         | ComponentFieldRef::OrderedSequence(sequence) => {
             if u64::try_from(sequence.len())
@@ -523,15 +614,9 @@ fn discover_field_nodes(
             for index in 0..sequence.len() {
                 work.consume(1)?;
                 match sequence.item(index)? {
-                    ComponentFieldRef::Node(component) => discover_node(
-                        arena,
-                        node_row(arena, component)?,
-                        seen,
-                        nodes,
-                        stack,
-                        limits,
-                        work,
-                    )?,
+                    ComponentFieldRef::Node(component) => {
+                        discover_node(arena, node_row(arena, component)?, state, limits, work)?
+                    }
                     ComponentFieldRef::CanonicalSet(_) | ComponentFieldRef::OrderedSequence(_) => {
                         return Err(NativeError::protocol(
                             "native encoded-column nested collection item is unsupported",
@@ -557,6 +642,7 @@ fn discover_field_nodes(
 fn check_discovery_memory(
     arena: &NativeComponentArena,
     node_count: usize,
+    caller_external_bytes: usize,
     limits: &Limits,
 ) -> NativeResult<()> {
     let bytes_per_node = size_of::<NodeRow>()
@@ -570,7 +656,10 @@ fn check_discovery_memory(
     let peak = arena
         .counters()
         .retained_bytes
-        .checked_add(workspace)
+        .checked_add(u64::try_from(caller_external_bytes).map_err(|_| {
+            NativeError::limit("native encoded-column caller allocation exceeds u64")
+        })?)
+        .and_then(|value| value.checked_add(workspace))
         .ok_or_else(|| NativeError::limit("native encoded-column workspace overflow"))?;
     if limits
         .max_memory_bytes
@@ -629,6 +718,7 @@ fn length_workspace_bytes(
 fn check_workspace_memory(
     arena: &NativeComponentArena,
     workspace_bytes: usize,
+    caller_external_bytes: usize,
     limits: &Limits,
 ) -> NativeResult<()> {
     let workspace_bytes = u64::try_from(workspace_bytes)
@@ -636,7 +726,10 @@ fn check_workspace_memory(
     let peak = arena
         .counters()
         .retained_bytes
-        .checked_add(workspace_bytes)
+        .checked_add(u64::try_from(caller_external_bytes).map_err(|_| {
+            NativeError::limit("native encoded-column caller allocation exceeds u64")
+        })?)
+        .and_then(|value| value.checked_add(workspace_bytes))
         .ok_or_else(|| NativeError::limit("native encoded-column workspace overflow"))?;
     if limits
         .max_memory_bytes
@@ -1198,24 +1291,27 @@ fn canonical_node_order(
 
 fn validate_root_order(
     arena: &NativeComponentArena,
-    roots: &[EncodedRootV1],
+    roots: &impl EncodedRootSourceV1,
+    root_rows: usize,
     lengths: &HashMap<ComponentId, usize>,
     limits: &Limits,
     work: &mut ColumnWork,
     comparison_bytes: &mut u64,
 ) -> NativeResult<()> {
-    if roots.len() < 2 {
+    if root_rows < 2 {
         return Ok(());
     }
     let mut left_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth)?;
     let mut right_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth)?;
-    for pair in roots.windows(2) {
-        let ordering = pair[0].kind.cmp(&pair[1].kind);
+    let mut prior = roots.get(0)?;
+    for index in 1..root_rows {
+        let current = roots.get(index)?;
+        let ordering = prior.kind.cmp(&current.kind);
         if ordering == Ordering::Greater
             || (ordering == Ordering::Equal
                 && compare_canonical_nodes(
-                    pair[0].component,
-                    pair[1].component,
+                    prior.component,
+                    current.component,
                     &mut left_cursor,
                     &mut right_cursor,
                     work,
@@ -1226,6 +1322,7 @@ fn validate_root_order(
                 "native encoded-column roots are not canonical and unique",
             ));
         }
+        prior = current;
     }
     Ok(())
 }
@@ -1633,6 +1730,7 @@ fn total_buffer_bytes(buffers: &EncodedStructuralBuffersV1) -> NativeResult<usiz
 fn check_layout_limits(
     arena: &NativeComponentArena,
     limits: &Limits,
+    caller_external_bytes: usize,
     layout: ColumnLayout,
 ) -> NativeResult<()> {
     let row_limit = limits.value(LimitKey::MaxIndexRows);
@@ -1660,10 +1758,13 @@ fn check_layout_limits(
         .map_err(|_| NativeError::limit("native encoded-column metadata exceeds u64"))?;
     let workspace_bytes = u64::try_from(layout.workspace_bytes)
         .map_err(|_| NativeError::limit("native encoded-column workspace exceeds u64"))?;
+    let caller_external_bytes = u64::try_from(caller_external_bytes)
+        .map_err(|_| NativeError::limit("native encoded-column caller allocation exceeds u64"))?;
     let peak = arena
         .counters()
         .retained_bytes
-        .checked_add(buffer_bytes)
+        .checked_add(caller_external_bytes)
+        .and_then(|value| value.checked_add(buffer_bytes))
         .and_then(|value| value.checked_add(metadata_bytes))
         .and_then(|value| value.checked_add(workspace_bytes))
         .ok_or_else(|| NativeError::limit("native encoded-column memory overflow"))?;
@@ -1945,7 +2046,7 @@ mod tests {
         assert_eq!(columns.buffers().node_field_offsets, 0_u64.to_le_bytes());
         assert_eq!(columns.counters().retained_buffer_bytes, 8);
         assert!(columns.owner().shares_storage_with(&arena));
-        assert!(columns.roots().is_empty());
+        assert_eq!(columns.counters().root_rows, 0);
     }
 
     #[test]
@@ -1996,7 +2097,7 @@ mod tests {
         let decoded = independently_decode_node(buffers, read_u32(&buffers.root_ids, 0));
         assert_eq!(decoded, canonical);
         assert!(columns.owner().shares_storage_with(&arena));
-        assert_eq!(columns.roots(), &[root]);
+        assert_eq!(columns.counters().root_rows, 1);
 
         let counters = columns.counters();
         assert_eq!(counters.root_rows, 1);
@@ -2005,10 +2106,7 @@ mod tests {
         assert_eq!(counters.item_rows, 0);
         assert_eq!(counters.scalar_bytes, 14);
         assert_eq!(counters.retained_buffer_bytes, 142);
-        assert_eq!(
-            counters.retained_metadata_bytes,
-            size_of::<EncodedRootV1>() as u64
-        );
+        assert_eq!(counters.retained_metadata_bytes, 0);
         assert_eq!(
             counters.peak_owned_bytes,
             arena.counters().retained_bytes

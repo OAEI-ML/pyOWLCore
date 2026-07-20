@@ -34,7 +34,8 @@ pub(crate) use components::{
 };
 #[allow(unused_imports)]
 pub(crate) use encoded_columns::{
-    build_encoded_structural_columns_v1, EncodedColumnCountersV1, EncodedRootKindV1, EncodedRootV1,
+    build_encoded_structural_columns_from_tables_v1, build_encoded_structural_columns_v1,
+    EncodedColumnCountersV1, EncodedRootKindV1, EncodedRootTableV1, EncodedRootV1,
     EncodedStructuralBuffersV1, EncodedStructuralColumnsV1, ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
     ENCODED_STRUCTURAL_SCHEMA_NAME_V1, ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
 };

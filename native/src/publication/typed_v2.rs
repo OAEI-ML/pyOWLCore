@@ -12,8 +12,9 @@ use crate::cancel::{Cancellation, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
 use crate::limits::{LimitKey, Limits};
 use crate::model::{
-    scan_canonical, structural_digest_v1, Category, ComponentCounters, ComponentId,
-    NativeComponentArena, NativeComponentDigestIndex, ScanBudget,
+    build_encoded_structural_columns_from_tables_v1, scan_canonical, structural_digest_v1,
+    Category, ComponentCounters, ComponentId, EncodedRootKindV1, EncodedRootTableV1,
+    EncodedStructuralColumnsV1, NativeComponentArena, NativeComponentDigestIndex, ScanBudget,
 };
 
 const MAX_TYPED_FACADE_TABLES_V2: usize = 100_000;
@@ -607,6 +608,51 @@ impl TypedFacadeStorageV2 {
         })
     }
 
+    /// Build direct structural columns by borrowing the retained root tables.
+    /// The encoded owner keeps the shared component arena alive but does not
+    /// retain or construct a second root-identifier table.
+    pub(crate) fn encoded_structural_columns(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> NativeResult<EncodedStructuralColumnsV1> {
+        let annotations = self.structural_roots(
+            TypedFacadeCollectionV2::OntologyAnnotations,
+            scope,
+            document_ordinal,
+            raw_document_owner,
+        )?;
+        let axioms = self.structural_roots(
+            TypedFacadeCollectionV2::Axioms,
+            scope,
+            document_ordinal,
+            raw_document_owner,
+        )?;
+        let extensions = self.structural_roots(
+            TypedFacadeCollectionV2::Extensions,
+            scope,
+            document_ordinal,
+            raw_document_owner,
+        )?;
+        let tables = [
+            EncodedRootTableV1::new(EncodedRootKindV1::OntologyAnnotation, annotations),
+            EncodedRootTableV1::new(EncodedRootKindV1::Axiom, axioms),
+            EncodedRootTableV1::new(EncodedRootKindV1::Extension, extensions),
+        ];
+        build_encoded_structural_columns_from_tables_v1(
+            &self.arena,
+            &tables,
+            limits,
+            cancellation,
+            interrupt,
+            self.external_retained_bytes,
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn observation_for_tests(&self) -> NativeResult<TypedFacadeStorageObservationV2> {
         let root_identifier_rows = root_count(&self.effective_tables, &self.raw_document_tables)?;
@@ -679,6 +725,26 @@ impl TypedFacadeStorageV2 {
             }
         }
         Ok(total)
+    }
+
+    fn structural_roots(
+        &self,
+        collection: TypedFacadeCollectionV2,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+    ) -> NativeResult<&[ComponentId]> {
+        let coordinate = TypedFacadeCoordinateV2 {
+            collection,
+            scope,
+            document_ordinal,
+            signature_kind: TypedFacadeSignatureKindV2::All,
+            include_builtins: true,
+        };
+        validate_coordinate(coordinate, self.document_count, raw_document_owner)?;
+        Ok(self
+            .select_table(coordinate, raw_document_owner)
+            .map_or(&[], |table| table.roots.as_slice()))
     }
 
     fn table_count(&self, coordinate: TypedFacadeCoordinateV2) -> NativeResult<u64> {

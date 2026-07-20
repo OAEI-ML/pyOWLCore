@@ -975,6 +975,83 @@ mod tests {
             .rows
     }
 
+    fn encoded_root_kinds(columns: &crate::model::EncodedStructuralColumnsV1) -> &[u8] {
+        columns
+            .buffers()
+            .named()
+            .into_iter()
+            .find_map(|(name, value)| (name == "root_kinds").then_some(value))
+            .expect("root kind buffer")
+    }
+
+    #[test]
+    fn direct_columns_borrow_effective_and_raw_root_tables_without_retaining_a_copy() {
+        let (storage, _) = two_document_owner();
+        let limits = Limits::default();
+        let closure = storage
+            .encoded_structural_columns(
+                TypedFacadeScopeV2::Closure,
+                None,
+                false,
+                &limits,
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("closure columns");
+        assert_eq!(closure.counters().root_rows, 4);
+        assert_eq!(encoded_root_kinds(&closure), [2, 2, 2, 2]);
+        assert_eq!(closure.counters().retained_metadata_bytes, 0);
+
+        let effective_document = storage
+            .encoded_structural_columns(
+                TypedFacadeScopeV2::Document,
+                Some(0),
+                false,
+                &limits,
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("effective document columns");
+        let raw_document = storage
+            .encoded_structural_columns(
+                TypedFacadeScopeV2::Document,
+                Some(0),
+                true,
+                &limits,
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("raw document columns");
+        assert_eq!(effective_document.counters().root_rows, 4);
+        assert_eq!(raw_document.counters().root_rows, 2);
+        assert_eq!(raw_document.counters().retained_metadata_bytes, 0);
+
+        let retained = storage
+            .counters()
+            .expect("storage counters")
+            .retained_owner_bytes;
+        let required = retained
+            .checked_add(closure.counters().retained_buffer_bytes)
+            .and_then(|value| value.checked_add(closure.counters().peak_workspace_bytes))
+            .expect("column peak");
+        let mut tight = limits;
+        tight.max_memory_bytes = Some(required - 1);
+        assert_eq!(
+            storage
+                .encoded_structural_columns(
+                    TypedFacadeScopeV2::Closure,
+                    None,
+                    false,
+                    &tight,
+                    Cancellation::with_duration(None),
+                    None,
+                )
+                .unwrap_err()
+                .code,
+            "NATIVE_WIRE_LIMIT"
+        );
+    }
+
     #[test]
     fn builder_derives_effective_raw_closure_and_signature_tables_from_one_arena() {
         let (storage, documents) = two_document_owner();
