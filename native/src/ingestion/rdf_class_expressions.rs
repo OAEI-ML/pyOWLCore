@@ -15,6 +15,8 @@ const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
 const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
 const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
 const OWL_ALL_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#allValuesFrom";
+const OWL_HAS_VALUE: &str = "http://www.w3.org/2002/07/owl#hasValue";
+const OWL_HAS_SELF: &str = "http://www.w3.org/2002/07/owl#hasSelf";
 const OWL_UNION_OF: &str = "http://www.w3.org/2002/07/owl#unionOf";
 
 const ROLE_EXPRESSION: u8 = 1;
@@ -295,21 +297,21 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             .ok_or_else(|| unsupported("native RDF restriction has no property selector"))?;
         let some = self.unique_edge(subject, OWL_SOME_VALUES_FROM, session)?;
         let all = self.unique_edge(subject, OWL_ALL_VALUES_FROM, session)?;
-        let (quantifier, tag) = match (some, all) {
-            (Some(index), None) => (index, 34),
-            (None, Some(index)) => (index, 35),
-            (Some(_), Some(_)) => {
-                return Err(unsupported(
-                    "native RDF restriction has conflicting quantifiers",
-                ));
-            }
-            (None, None) => {
-                return Err(unsupported(
-                    "native RDF restriction has no supported quantifier",
-                ));
-            }
-        };
-        let property = match self.triples[on_property].object {
+        let has_value = self.unique_edge(subject, OWL_HAS_VALUE, session)?;
+        let has_self = self.unique_edge(subject, OWL_HAS_SELF, session)?;
+        let operator_count = usize::from(some.is_some())
+            .checked_add(usize::from(all.is_some()))
+            .and_then(|value| value.checked_add(usize::from(has_value.is_some())))
+            .and_then(|value| value.checked_add(usize::from(has_self.is_some())))
+            .ok_or_else(|| NativeError::limit("native RDF restriction operator count overflow"))?;
+        if operator_count != 1 {
+            return Err(unsupported(if operator_count == 0 {
+                "native RDF restriction has no supported operator"
+            } else {
+                "native RDF restriction has conflicting operators"
+            }));
+        }
+        let property_iri = match self.triples[on_property].object {
             RdfTerm::Iri(value) => value,
             RdfTerm::Blank(_) | RdfTerm::Literal(_) => {
                 return Err(unsupported(
@@ -317,22 +319,46 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 ));
             }
         };
-        session.step(usize_as_u64(
-            self.data_properties.len(),
-            "native RDF property-kind work exceeds u64",
-        )?)?;
-        if self.data_properties.contains(&property) {
-            return Err(unsupported(
-                "native bounded RDF restriction does not map data properties",
-            ));
-        }
-
         push_index(consumed, on_property, session)?;
-        push_index(consumed, quantifier, session)?;
-        let filler = self.decode_into(self.triples[quantifier].object, consumed, session)?;
-        let property = named_entity("object_property", property, session)?;
-        let fields = reserved_fields([Field::Node(property), Field::Node(filler)], session)?;
-        Node::build(tag, fields)
+        if let Some(quantifier) = some.or(all) {
+            session.step(usize_as_u64(
+                self.data_properties.len(),
+                "native RDF property-kind work exceeds u64",
+            )?)?;
+            if self.data_properties.contains(&property_iri) {
+                return Err(unsupported(
+                    "native bounded RDF restriction does not map data properties",
+                ));
+            }
+            push_index(consumed, quantifier, session)?;
+            let filler = self.decode_into(self.triples[quantifier].object, consumed, session)?;
+            let property = named_entity("object_property", property_iri, session)?;
+            let fields = reserved_fields([Field::Node(property), Field::Node(filler)], session)?;
+            return Node::build(if some.is_some() { 34 } else { 35 }, fields);
+        }
+        if let Some(has_value) = has_value {
+            push_index(consumed, has_value, session)?;
+            let individual = self.decode_individual(self.triples[has_value].object, session)?;
+            let property = named_entity("object_property", property_iri, session)?;
+            let fields =
+                reserved_fields([Field::Node(property), Field::Node(individual)], session)?;
+            return Node::build(36, fields);
+        }
+        if let Some(has_self) = has_self {
+            if !matches!(
+                self.triples[has_self].object,
+                RdfTerm::Literal(value) if value.eq_ignore_ascii_case("true")
+            ) {
+                return Err(unsupported("native RDF owl:hasSelf value must be true"));
+            }
+            push_index(consumed, has_self, session)?;
+            let property = named_entity("object_property", property_iri, session)?;
+            let fields = reserved_fields([Field::Node(property)], session)?;
+            return Node::build(37, fields);
+        }
+        Err(NativeError::protocol(
+            "native RDF restriction operator ledger is empty",
+        ))
     }
 
     fn decode_individual(
@@ -347,9 +373,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 session.reserve_bytes(value.len())?;
                 anonymous(value)
             }
-            RdfTerm::Literal(_) => Err(unsupported(
-                "native RDF object enumeration item must be a resource",
-            )),
+            RdfTerm::Literal(_) => Err(unsupported("native RDF individual must be a resource")),
         }
     }
 
@@ -654,6 +678,43 @@ mod tests {
     }
 
     #[test]
+    fn object_value_and_self_restrictions_match_canonical_tags() {
+        let has_value_graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_HAS_VALUE, iri_term("urn:i")),
+        ];
+        let has_value =
+            decode(&has_value_graph, blank_term("e")).expect("object value restriction");
+        let expected_has_value = Node::build(
+            36,
+            vec![
+                Field::Node(entity("object_property", iri("urn:p".to_owned()).unwrap()).unwrap()),
+                Field::Node(entity("named_individual", iri("urn:i".to_owned()).unwrap()).unwrap()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(has_value.node.as_bytes(), expected_has_value.as_bytes());
+        assert_eq!(has_value.consumed, [0, 1, 2]);
+
+        let has_self_graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_HAS_SELF, RdfTerm::Literal("TRUE")),
+        ];
+        let has_self = decode(&has_self_graph, blank_term("e")).expect("self restriction");
+        let expected_has_self = Node::build(
+            37,
+            vec![Field::Node(
+                entity("object_property", iri("urn:p".to_owned()).unwrap()).unwrap(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(has_self.node.as_bytes(), expected_has_self.as_bytes());
+        assert_eq!(has_self.consumed, [0, 1, 2]);
+    }
+
+    #[test]
     fn declared_data_property_is_not_misclassified_as_object_restriction() {
         let graph = [
             edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
@@ -710,6 +771,27 @@ mod tests {
             edge("e", OWL_ON_PROPERTY, blank_term("p")),
             edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:A")),
         ];
+        let conflicting_operators = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:A")),
+            edge("e", OWL_HAS_VALUE, iri_term("urn:i")),
+        ];
+        let literal_has_value = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_HAS_VALUE, RdfTerm::Literal("value")),
+        ];
+        let false_has_self = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_HAS_SELF, RdfTerm::Literal("false")),
+        ];
+        let resource_has_self = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_HAS_SELF, iri_term("urn:true")),
+        ];
         for (graph, value) in [
             (conflict.as_slice(), blank_term("e")),
             (cycle.as_slice(), blank_term("e")),
@@ -717,6 +799,10 @@ mod tests {
             (ambiguous_individual.as_slice(), blank_term("e")),
             (conflicting_quantifiers.as_slice(), blank_term("e")),
             (blank_property.as_slice(), blank_term("e")),
+            (conflicting_operators.as_slice(), blank_term("e")),
+            (literal_has_value.as_slice(), blank_term("e")),
+            (false_has_self.as_slice(), blank_term("e")),
+            (resource_has_self.as_slice(), blank_term("e")),
             (&[][..], RdfTerm::Literal("not-a-class")),
         ] {
             assert_eq!(

@@ -3022,6 +3022,91 @@ mod tests {
     }
 
     #[test]
+    fn object_value_and_self_restrictions_map_exactly() {
+        let has_value_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:hasValue rdf:resource=\"urn:i\"/></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let has_value =
+            mapped(has_value_source.as_bytes(), None).expect("object value restriction");
+        let restriction = Node::build(
+            36,
+            vec![
+                Field::Node(
+                    entity(
+                        "object_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("object property"),
+                ),
+                Field::Node(
+                    entity(
+                        "named_individual",
+                        iri("urn:i".to_owned()).expect("individual IRI"),
+                    )
+                    .expect("named individual"),
+                ),
+            ],
+        )
+        .expect("value restriction node");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(has_value
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            has_value.mapping.total_triples,
+            has_value.mapping.consumed_triples,
+        );
+
+        let has_self_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:hasSelf>TrUe</owl:hasSelf></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let has_self = mapped(has_self_source.as_bytes(), None).expect("self restriction");
+        let restriction = Node::build(
+            37,
+            vec![Field::Node(
+                entity(
+                    "object_property",
+                    iri("urn:p".to_owned()).expect("property IRI"),
+                )
+                .expect("object property"),
+            )],
+        )
+        .expect("self restriction node");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(has_self
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            has_self.mapping.total_triples,
+            has_self.mapping.consumed_triples,
+        );
+
+        let invalid_self = has_self_source.replace(">TrUe<", ">false<");
+        assert_eq!(
+            mapped(invalid_self.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+    }
+
+    #[test]
     fn malformed_collection_reached_through_class_mapping_fails_closed() {
         let cyclic = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf rdf:nodeID=\"e\"/></rdf:Description><rdf:Description rdf:nodeID=\"e\"><owl:intersectionOf rdf:nodeID=\"h\"/></rdf:Description><rdf:Description rdf:nodeID=\"h\"><rdf:first rdf:resource=\"urn:B\"/><rdf:rest rdf:nodeID=\"h\"/></rdf:Description></rdf:RDF>"
