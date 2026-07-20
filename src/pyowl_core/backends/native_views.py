@@ -12,11 +12,12 @@ import hashlib
 import importlib
 import json
 import mmap as _mmap
+import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn, Protocol, cast
 
 from pyowl_core.document.document import Fingerprint
 from pyowl_core.document.overlay import view_limits
@@ -351,13 +352,30 @@ EncodedStructuralView = EncodedStructuralViewV1
 class _UIntColumn:
     data: memoryview
     width: int
+    _length: int = field(init=False, repr=False)
+    _values: memoryview | None = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        value_format = cast(
+            Literal["B", "H", "I", "Q"],
+            {1: "B", 2: "H", 4: "I", 8: "Q"}[self.width],
+        )
+        values = (
+            self.data.cast(value_format)
+            if sys.byteorder == "little" and len(self.data) % self.width == 0
+            else None
+        )
+        object.__setattr__(self, "_length", len(self.data) // self.width)
+        object.__setattr__(self, "_values", values)
 
     def __len__(self) -> int:
-        return len(self.data) // self.width
+        return self._length
 
     def __getitem__(self, index: int) -> int:
         if index < 0 or index >= len(self):
             raise IndexError(index)
+        if self._values is not None:
+            return self._values[index]
         start = index * self.width
         return int.from_bytes(self.data[start : start + self.width], "little")
 
@@ -2016,6 +2034,7 @@ def _validate_columns(buffers: Mapping[str, memoryview], limits: ParseLimits) ->
         _fail("encoded structural postings are not exactly covered", "ENCODED_VIEW_STRUCTURE")
     if scalar_cursor != len(columns.scalar_bytes):
         _fail("encoded structural scalar arena is not exactly covered", "ENCODED_VIEW_STRUCTURE")
+    _validate_column_nesting(columns, limits)
 
     memo: dict[int, bytes] = {}
     previous_node: bytes | None = None
@@ -2048,16 +2067,7 @@ def _validate_columns(buffers: Mapping[str, memoryview], limits: ParseLimits) ->
         root_hasher.update(root_kind.to_bytes(1, "little"))
         root_hasher.update(len(encoded).to_bytes(8, "little"))
         root_hasher.update(encoded)
-        try:
-            decoded = decode_canonical(encoded, limits=limits)
-        except ResourceLimitError:
-            raise
-        except Exception as error:
-            raise BackendProtocolError(
-                "encoded structural root does not decode as canonical model v1",
-                code="ENCODED_VIEW_STRUCTURE",
-            ) from error
-        _validate_root_type(root_kind, decoded)
+        _validate_root_tag(root_kind, columns.tags[root_id - 1])
     if reached != set(range(1, node_count + 1)):
         _fail("encoded structural view contains unreachable nodes", "ENCODED_VIEW_STRUCTURE")
     return root_hasher.digest()
@@ -2312,6 +2322,41 @@ def _canonical_node(
         active.remove(node_id)
 
 
+def _validate_column_nesting(columns: _Columns, limits: ParseLimits) -> None:
+    depths: dict[int, int] = {}
+    active: set[int] = set()
+
+    def visit(node_id: int) -> int:
+        cached = depths.get(node_id)
+        if cached is not None:
+            return cached
+        if node_id in active:
+            _fail("encoded structural graph is cyclic", "ENCODED_VIEW_STRUCTURE")
+        active.add(node_id)
+        depth = 0
+        try:
+            start = columns.field_offsets[node_id - 1]
+            end = columns.field_offsets[node_id]
+            for field_index in range(start, end):
+                kind = columns.field_kinds[field_index]
+                if kind == _NODE:
+                    depth = max(depth, visit(columns.field_values[field_index]) + 1)
+                elif kind in {_SET, _SEQUENCE}:
+                    item_start = columns.field_values[field_index]
+                    item_end = item_start + columns.field_lengths[field_index]
+                    for item_index in range(item_start, item_end):
+                        if columns.item_kinds[item_index] == _NODE:
+                            depth = max(depth, visit(columns.item_values[item_index]) + 1)
+            limits.enforce("max_nesting_depth", depth)
+            depths[node_id] = depth
+            return depth
+        finally:
+            active.remove(node_id)
+
+    for node_id in range(1, len(columns.tags) + 1):
+        visit(node_id)
+
+
 def _canonical_component(
     columns: _Columns,
     kind: int,
@@ -2403,6 +2448,23 @@ def _validate_root_type(kind: int, value: StructuralNode) -> None:
     if kind == _ROOT_AXIOM and not isinstance(value, AxiomNode):
         _fail("axiom root has the wrong constructor", "ENCODED_VIEW_STRUCTURE")
     if kind == _ROOT_EXTENSION and not isinstance(value, SWRLRule):
+        _fail("extension root has the wrong constructor", "ENCODED_VIEW_STRUCTURE")
+
+
+def _validate_root_tag(kind: int, tag: int) -> None:
+    constructor = _CONSTRUCTOR_BY_TAG.get(tag)
+    if constructor is None:  # pragma: no cover - checked before root traversal
+        _fail("structural root has an unsupported constructor", "ENCODED_VIEW_STRUCTURE")
+    category = constructor[1]
+    if kind == _ROOT_ONTOLOGY_ANNOTATION and tag != 5:
+        _fail("ontology-annotation root has the wrong constructor", "ENCODED_VIEW_STRUCTURE")
+    if kind == _ROOT_AXIOM and category not in {
+        "annotation_axiom",
+        "declaration_axiom",
+        "logical_axiom",
+    }:
+        _fail("axiom root has the wrong constructor", "ENCODED_VIEW_STRUCTURE")
+    if kind == _ROOT_EXTENSION and tag != 148:
         _fail("extension root has the wrong constructor", "ENCODED_VIEW_STRUCTURE")
 
 

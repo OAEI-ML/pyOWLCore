@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 import pytest
 
+import pyowl_core.backends.native_views as native_views_module
 from pyowl_core import (
     IRI,
     AxiomScope,
@@ -88,7 +89,7 @@ class _NativeViewProxy:
     def report(self):  # type: ignore[no-untyped-def]
         return self._fallback.report
 
-    def _forbid_scalar(self) -> None:
+    def _forbid_scalar(self) -> NoReturn:
         self.scalar_calls += 1
         raise AssertionError("native direct publication crossed scalar traversal")
 
@@ -160,6 +161,23 @@ def test_public_view_uses_native_direct_columns_without_scalar_callbacks(
 
     cast(Any, raw_owner)._publication_close_v2()
     assert decode_root_canonical_bytes(closure.buffers) == ((2, expected),)
+
+
+def test_direct_column_validation_never_decodes_structural_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    owner, _raw_owner = _proxy(extension)
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("direct column validation decoded a structural root")
+
+    monkeypatch.setattr(native_views_module, "decode_canonical", unexpected)
+
+    encoded = owner.view(EncodedStructuralViewV1)
+
+    assert encoded.owner is owner
+    assert owner.scalar_calls == 0
 
 
 def test_public_native_direct_limits_and_cancellation_fail_without_fallback(
