@@ -654,6 +654,10 @@ impl<'arena> ComponentRecordRef<'arena> {
         self.component.tag
     }
 
+    pub(crate) const fn height(self) -> u32 {
+        self.component.height
+    }
+
     pub(crate) fn field_count(self) -> usize {
         self.component.fields.len()
     }
