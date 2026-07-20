@@ -1359,9 +1359,11 @@ fn map_graph(
     )?;
     map_equivalent_property_components(
         OWL_EQUIVALENT_PROPERTY,
+        &list_graph,
         &triples,
         &mut consumed,
         &kinds,
+        &mut expressions,
         &mut axiom_annotations,
         &mut axioms,
         session,
@@ -2567,40 +2569,96 @@ fn class_expression_axiom<'view, 'graph>(
                 session,
             )?
         }
-        RDFS_DOMAIN | RDFS_RANGE => {
-            let (ListResource::Iri(property), Some(object)) = (triple.subject, object) else {
+        OWL_PROPERTY_DISJOINT_WITH => {
+            let Some(object) = object else {
                 return Ok(None);
             };
-            if is_annotation_property(property, kinds) {
+            if matches!(triple.subject, ListResource::Iri(_)) && matches!(object, ClassTerm::Iri(_))
+            {
                 return Ok(None);
             }
-            if triple.predicate == RDFS_RANGE && has_kind(kinds, property, "data_property") {
-                let DecodedDataRange {
-                    node: data_range,
-                    consumed: range_consumed,
-                } = expressions.decode_data_term(object.as_term(), session)?;
-                consume_collection_indexes(range_consumed, consumed, session)?;
-                return Ok(Some(build_node(
-                    94,
-                    [
-                        Field::Node(named_entity("data_property", property, session)?),
-                        Field::Node(data_range),
-                        Field::Set(cloned_annotations(annotations, session)?),
-                    ],
-                    session,
-                )?));
-            }
-            let (tag, property_kind) = if has_kind(kinds, property, "data_property") {
-                (93, "data_property")
-            } else if triple.predicate == RDFS_DOMAIN {
-                (74, "object_property")
-            } else {
-                (75, "object_property")
+            let DecodedPropertyExpression {
+                node: first,
+                consumed: first_consumed,
+            } = expressions.decode_object_property_term(
+                ClassTerm::from_resource(triple.subject).as_term(),
+                session,
+            )?;
+            consume_collection_indexes(first_consumed, consumed, session)?;
+            let DecodedPropertyExpression {
+                node: second,
+                consumed: second_consumed,
+            } = expressions.decode_object_property_term(object.as_term(), session)?;
+            consume_collection_indexes(second_consumed, consumed, session)?;
+            let mut properties = reserved_vec(2, session)?;
+            properties.push(first);
+            properties.push(second);
+            let properties = canonical_set(properties, 2, None)?;
+            build_node(
+                72,
+                [
+                    Field::Set(properties),
+                    Field::Set(cloned_annotations(annotations, session)?),
+                ],
+                session,
+            )?
+        }
+        RDFS_DOMAIN | RDFS_RANGE => {
+            let Some(object) = object else {
+                return Ok(None);
+            };
+            let (property, tag) = match triple.subject {
+                ListResource::Iri(property) => {
+                    if is_annotation_property(property, kinds) {
+                        return Ok(None);
+                    }
+                    if triple.predicate == RDFS_RANGE && has_kind(kinds, property, "data_property")
+                    {
+                        let DecodedDataRange {
+                            node: data_range,
+                            consumed: range_consumed,
+                        } = expressions.decode_data_term(object.as_term(), session)?;
+                        consume_collection_indexes(range_consumed, consumed, session)?;
+                        return Ok(Some(build_node(
+                            94,
+                            [
+                                Field::Node(named_entity("data_property", property, session)?),
+                                Field::Node(data_range),
+                                Field::Set(cloned_annotations(annotations, session)?),
+                            ],
+                            session,
+                        )?));
+                    }
+                    let (tag, property_kind) = if has_kind(kinds, property, "data_property") {
+                        (93, "data_property")
+                    } else if triple.predicate == RDFS_DOMAIN {
+                        (74, "object_property")
+                    } else {
+                        (75, "object_property")
+                    };
+                    (named_entity(property_kind, property, session)?, tag)
+                }
+                ListResource::Blank(_) => {
+                    let DecodedPropertyExpression {
+                        node: property,
+                        consumed: property_consumed,
+                    } = expressions.decode_object_property_term(
+                        ClassTerm::from_resource(triple.subject).as_term(),
+                        session,
+                    )?;
+                    consume_collection_indexes(property_consumed, consumed, session)?;
+                    let tag = if triple.predicate == RDFS_DOMAIN {
+                        74
+                    } else {
+                        75
+                    };
+                    (property, tag)
+                }
             };
             build_node(
                 tag,
                 [
-                    Field::Node(named_entity(property_kind, property, session)?),
+                    Field::Node(property),
                     Field::Node(decode_class_expression(
                         expressions,
                         object.as_term(),
@@ -2643,11 +2701,13 @@ fn class_expression_axiom<'view, 'graph>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn map_equivalent_property_components(
+fn map_equivalent_property_components<'view, 'graph>(
     predicate: &str,
-    triples: &[Triple],
+    triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
-    kinds: &[KindRecord<'_>],
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
     reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
@@ -2656,7 +2716,7 @@ fn map_equivalent_property_components(
         if consumed[start] {
             continue;
         }
-        let Some((left, right)) = named_edge(&triples[start], predicate) else {
+        let Some((left, right)) = property_equivalent_edge(&triples[start], predicate) else {
             continue;
         };
         if !equivalent_property_member_supported(left, kinds)
@@ -2666,8 +2726,8 @@ fn map_equivalent_property_components(
         }
         let mut members = Vec::new();
         let mut edge_indexes = Vec::new();
-        add_member(&mut members, left, session)?;
-        add_member(&mut members, right, session)?;
+        add_property_member(&mut members, left, session)?;
+        add_property_member(&mut members, right, session)?;
         reserve_vec_item(&mut edge_indexes, session)?;
         edge_indexes.push(start);
         consumed[start] = true;
@@ -2678,7 +2738,8 @@ fn map_equivalent_property_components(
                 if consumed[index] {
                     continue;
                 }
-                let Some((edge_left, edge_right)) = named_edge(triple, predicate) else {
+                let Some((edge_left, edge_right)) = property_equivalent_edge(triple, predicate)
+                else {
                     continue;
                 };
                 if !equivalent_property_member_supported(edge_left, kinds)
@@ -2687,8 +2748,8 @@ fn map_equivalent_property_components(
                     continue;
                 }
                 if members.contains(&edge_left) || members.contains(&edge_right) {
-                    add_member(&mut members, edge_left, session)?;
-                    add_member(&mut members, edge_right, session)?;
+                    add_property_member(&mut members, edge_left, session)?;
+                    add_property_member(&mut members, edge_right, session)?;
                     reserve_vec_item(&mut edge_indexes, session)?;
                     edge_indexes.push(index);
                     consumed[index] = true;
@@ -2699,24 +2760,71 @@ fn map_equivalent_property_components(
                 break;
             }
         }
-        let (tag, entity_kind) = if members
-            .iter()
-            .all(|value| has_kind(kinds, value, "data_property"))
-        {
-            (91, "data_property")
-        } else {
-            (71, "object_property")
-        };
-        let members = named_set(entity_kind, &members, session)?;
-        let annotations = component_annotations(&edge_indexes, triples, reifications, session)?;
-        let axiom = build_node(tag, [Field::Set(members), Field::Set(annotations)], session)?;
+        let data_properties = members.iter().all(
+            |value| matches!(value, ClassTerm::Iri(iri) if has_kind(kinds, iri, "data_property")),
+        );
+        let tag = if data_properties { 91 } else { 71 };
+        let mut nodes = reserved_vec(members.len(), session)?;
+        for member in members {
+            if data_properties {
+                let ClassTerm::Iri(value) = member else {
+                    return Err(NativeError::protocol(
+                        "native data property component contains a blank expression",
+                    ));
+                };
+                nodes.push(named_entity("data_property", value, session)?);
+            } else {
+                let DecodedPropertyExpression {
+                    node,
+                    consumed: property_consumed,
+                } = expressions.decode_object_property_term(member.as_term(), session)?;
+                consume_collection_indexes(property_consumed, consumed, session)?;
+                nodes.push(node);
+            }
+        }
+        let nodes = canonical_set(nodes, 2, None)?;
+        let annotations =
+            component_annotations(&edge_indexes, source_triples, reifications, session)?;
+        let axiom = build_node(tag, [Field::Set(nodes), Field::Set(annotations)], session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
 }
 
-fn equivalent_property_member_supported(value: &str, kinds: &[KindRecord<'_>]) -> bool {
-    !has_kind(kinds, value, "annotation_property")
+fn property_equivalent_edge<'graph>(
+    triple: &ListTriple<'graph>,
+    predicate: &str,
+) -> Option<(ClassTerm<'graph>, ClassTerm<'graph>)> {
+    if triple.predicate != predicate {
+        return None;
+    }
+    Some((
+        ClassTerm::from_resource(triple.subject),
+        ClassTerm::from_term(triple.object)?,
+    ))
+}
+
+fn equivalent_property_member_supported(value: ClassTerm<'_>, kinds: &[KindRecord<'_>]) -> bool {
+    match value {
+        ClassTerm::Iri(value) => !has_kind(kinds, value, "annotation_property"),
+        ClassTerm::Blank(_) => true,
+    }
+}
+
+fn add_property_member<'graph>(
+    members: &mut Vec<ClassTerm<'graph>>,
+    value: ClassTerm<'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session.step(
+        u64::try_from(members.len())
+            .map_err(|_| NativeError::limit("native RDF property component work exceeds u64"))?,
+    )?;
+    if !members.contains(&value) {
+        reserve_vec_item(members, session)?;
+        members.push(value);
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2803,32 +2911,6 @@ fn add_individual_member<'graph>(
         .step(u64::try_from(members.len()).map_err(|_| {
             NativeError::limit("native RDF individual component work exceeds u64")
         })?)?;
-    if !members.contains(&value) {
-        reserve_vec_item(members, session)?;
-        members.push(value);
-    }
-    Ok(())
-}
-
-fn named_edge<'a>(triple: &'a Triple, predicate: &str) -> Option<(&'a str, &'a str)> {
-    if triple.predicate != predicate {
-        return None;
-    }
-    let (Resource::Iri(left), Term::Iri(right)) = (&triple.subject, &triple.object) else {
-        return None;
-    };
-    Some((left, right))
-}
-
-fn add_member<'a>(
-    members: &mut Vec<&'a str>,
-    value: &'a str,
-    session: &mut Session<'_>,
-) -> NativeResult<()> {
-    session.step(
-        u64::try_from(members.len())
-            .map_err(|_| NativeError::limit("native RDF component work exceeds u64"))?,
-    )?;
     if !members.contains(&value) {
         reserve_vec_item(members, session)?;
         members.push(value);
@@ -4974,6 +5056,79 @@ mod tests {
     }
 
     #[test]
+    fn inverse_properties_map_in_domain_range_and_disjoint_positions() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:e=\"urn:\"><rdf:Description rdf:nodeID=\"domain\"><owl:inverseOf rdf:resource=\"urn:p\"/><rdfs:domain rdf:resource=\"urn:C\"/></rdf:Description><rdf:Description rdf:nodeID=\"range\"><owl:inverseOf rdf:resource=\"urn:q\"/><rdfs:range rdf:resource=\"urn:D\"/></rdf:Description><rdf:Description rdf:nodeID=\"disjoint\"><owl:inverseOf rdf:resource=\"urn:r\"/><owl:propertyDisjointWith rdf:resource=\"urn:s\"/></rdf:Description><owl:Axiom rdf:nodeID=\"domain-axiom\"><owl:annotatedSource rdf:nodeID=\"domain\"/><owl:annotatedProperty rdf:resource=\"{RDFS_DOMAIN}\"/><owl:annotatedTarget rdf:resource=\"urn:C\"/><e:note rdf:resource=\"urn:value\"/></owl:Axiom></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("inverse property positions");
+        let property = |value: &str| {
+            entity(
+                "object_property",
+                iri(value.to_owned()).expect("property IRI"),
+            )
+            .expect("object property")
+        };
+        let inverse = |value: &str| {
+            Node::build(10, vec![Field::Node(property(value))]).expect("inverse property")
+        };
+        let annotation = Node::build(
+            5,
+            vec![
+                Field::Node(
+                    entity(
+                        "annotation_property",
+                        iri("urn:note".to_owned()).expect("annotation property IRI"),
+                    )
+                    .expect("annotation property"),
+                ),
+                Field::Node(iri("urn:value".to_owned()).expect("annotation value")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("domain annotation");
+        let domain = Node::build(
+            74,
+            vec![
+                Field::Node(inverse("urn:p")),
+                Field::Node(class_node("urn:C")),
+                Field::Set(vec![annotation]),
+            ],
+        )
+        .expect("inverse domain");
+        let range = Node::build(
+            75,
+            vec![
+                Field::Node(inverse("urn:q")),
+                Field::Node(class_node("urn:D")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("inverse range");
+        let disjoint = Node::build(
+            72,
+            vec![
+                Field::Set(
+                    canonical_set(vec![inverse("urn:r"), property("urn:s")], 2, None)
+                        .expect("disjoint properties"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("inverse disjoint properties");
+        for expected in [domain, range, disjoint] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+    }
+
+    #[test]
     fn structural_data_ranges_map_inside_restrictions() {
         let union_source = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:DatatypeProperty rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:someValuesFrom><rdfs:Datatype><owl:unionOf rdf:parseType=\"Collection\"><rdfs:Datatype rdf:about=\"urn:B\"/><rdfs:Datatype rdf:about=\"urn:C\"/></owl:unionOf></rdfs:Datatype></owl:someValuesFrom></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
@@ -5873,6 +6028,38 @@ mod tests {
         assert_eq!(
             document.mapping.total_triples,
             document.mapping.consumed_triples,
+        );
+
+        let inverse_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><rdf:Description rdf:nodeID=\"inverse\"><owl:inverseOf rdf:resource=\"urn:p\"/><owl:equivalentProperty rdf:resource=\"urn:q\"/></rdf:Description><rdf:Description rdf:about=\"urn:q\"><owl:equivalentProperty rdf:resource=\"urn:r\"/></rdf:Description><owl:Axiom rdf:nodeID=\"axiom\"><owl:annotatedSource rdf:nodeID=\"inverse\"/><owl:annotatedProperty rdf:resource=\"{OWL_EQUIVALENT_PROPERTY}\"/><owl:annotatedTarget rdf:resource=\"urn:q\"/><e:note rdf:resource=\"urn:inverse\"/></owl:Axiom></rdf:RDF>"
+        );
+        let inverse_document =
+            mapped(inverse_source.as_bytes(), None).expect("inverse equivalent properties");
+        let inverse = Node::build(10, vec![Field::Node(property("object_property", "urn:p"))])
+            .expect("inverse property");
+        let expected = Node::build(
+            71,
+            vec![
+                Field::Set(
+                    canonical_set(
+                        vec![
+                            inverse,
+                            property("object_property", "urn:q"),
+                            property("object_property", "urn:r"),
+                        ],
+                        2,
+                        None,
+                    )
+                    .expect("equivalent object properties"),
+                ),
+                Field::Set(vec![annotation("urn:inverse")]),
+            ],
+        )
+        .expect("annotated inverse property component");
+        assert_eq!(inverse_document.axioms, [expected.as_bytes().to_vec()]);
+        assert_eq!(
+            inverse_document.mapping.total_triples,
+            inverse_document.mapping.consumed_triples,
         );
     }
 
