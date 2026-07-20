@@ -12,7 +12,8 @@ use crate::limits::LimitKey;
 use crate::session::Session;
 
 use super::rdf_class_expressions::{
-    DecodedClassExpression, DecodedIndividualCollection, RdfClassExpressionDecoder,
+    DecodedClassCollection, DecodedClassExpression, DecodedIndividualCollection,
+    DecodedPropertyCollection, RdfClassExpressionDecoder,
 };
 use super::rdf_lists::{RdfResource as ListResource, RdfTerm as ListTerm, RdfTriple as ListTriple};
 use super::{CanonicalDocument, MappingEvidence};
@@ -45,7 +46,10 @@ const OWL_INVERSE_OF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
 const OWL_SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
 const OWL_DIFFERENT_FROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
 const OWL_ALL_DIFFERENT: &str = "http://www.w3.org/2002/07/owl#AllDifferent";
+const OWL_ALL_DISJOINT_CLASSES: &str = "http://www.w3.org/2002/07/owl#AllDisjointClasses";
+const OWL_ALL_DISJOINT_PROPERTIES: &str = "http://www.w3.org/2002/07/owl#AllDisjointProperties";
 const OWL_DISTINCT_MEMBERS: &str = "http://www.w3.org/2002/07/owl#distinctMembers";
+const OWL_MEMBERS: &str = "http://www.w3.org/2002/07/owl#members";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1255,6 +1259,13 @@ fn map_graph(
         &mut axioms,
         session,
     )?;
+    map_all_disjoint_collections(
+        &list_graph,
+        &mut consumed,
+        &mut expressions,
+        &mut axioms,
+        session,
+    )?;
     map_equivalent_class_components(
         &list_graph,
         &mut consumed,
@@ -1475,21 +1486,14 @@ fn map_all_different<'view, 'graph>(
         {
             continue;
         }
-        let mut distinct = None;
-        for (index, candidate) in triples.iter().enumerate() {
-            session.step(1)?;
-            if candidate.subject != triple.subject || candidate.predicate != OWL_DISTINCT_MEMBERS {
-                continue;
-            }
-            if distinct.replace((index, candidate.object)).is_some() {
-                return Err(rdf_mapping_cardinality(
-                    "native owl:AllDifferent has more than one distinctMembers list",
-                ));
-            }
-        }
-        let (distinct_index, head) = distinct.ok_or_else(|| {
-            rdf_mapping_cardinality("native owl:AllDifferent has no distinctMembers list")
-        })?;
+        let (distinct_index, head) = collection_head(
+            triples,
+            triple.subject,
+            OWL_DISTINCT_MEMBERS,
+            "native owl:AllDifferent has no distinctMembers list",
+            "native owl:AllDifferent has more than one distinctMembers list",
+            session,
+        )?;
         let DecodedIndividualCollection {
             individuals,
             consumed: collection_consumed,
@@ -1506,6 +1510,105 @@ fn map_all_different<'view, 'graph>(
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
+}
+
+fn map_all_disjoint_collections<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (type_index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[type_index] || triple.predicate != RDF_TYPE {
+            continue;
+        }
+        let kind = match triple.object {
+            ListTerm::Iri(OWL_ALL_DISJOINT_CLASSES) => "classes",
+            ListTerm::Iri(OWL_ALL_DISJOINT_PROPERTIES) => "properties",
+            ListTerm::Iri(_) | ListTerm::Blank(_) | ListTerm::Literal(_) => continue,
+        };
+        let (members_index, head) = collection_head(
+            triples,
+            triple.subject,
+            OWL_MEMBERS,
+            "native all-disjoint axiom has no members list",
+            "native all-disjoint axiom has more than one members list",
+            session,
+        )?;
+        let (axiom, collection_consumed) = if kind == "classes" {
+            let DecodedClassCollection {
+                expressions: raw_expressions,
+                consumed,
+            } = expressions.decode_class_collection(head, session)?;
+            let raw_length = raw_expressions.len();
+            let mut expressions_set = canonical_set(raw_expressions, 1, None)?;
+            let axiom = if raw_length >= 2 && expressions_set.len() == 1 {
+                build_node(
+                    61,
+                    [
+                        Field::Node(expressions_set.pop().ok_or_else(|| {
+                            NativeError::protocol("native RDF all-disjoint class ledger is empty")
+                        })?),
+                        Field::Node(named_entity("class", OWL_NOTHING, session)?),
+                        Field::Set(Vec::new()),
+                    ],
+                    session,
+                )?
+            } else {
+                let expressions_set = canonical_set(expressions_set, 2, None)?;
+                build_node(
+                    63,
+                    [Field::Set(expressions_set), Field::Set(Vec::new())],
+                    session,
+                )?
+            };
+            (axiom, consumed)
+        } else {
+            let DecodedPropertyCollection {
+                properties,
+                consumed,
+                data_properties,
+            } = expressions.decode_property_collection(head, session)?;
+            let properties = canonical_set(properties, 2, None)?;
+            let tag = if data_properties { 92 } else { 72 };
+            (
+                build_node(
+                    tag,
+                    [Field::Set(properties), Field::Set(Vec::new())],
+                    session,
+                )?,
+                consumed,
+            )
+        };
+        consume_collection_indexes(collection_consumed, consumed, session)?;
+        consumed[type_index] = true;
+        consumed[members_index] = true;
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
+fn collection_head<'graph>(
+    triples: &[ListTriple<'graph>],
+    subject: ListResource<'graph>,
+    predicate: &str,
+    missing: &'static str,
+    multiple: &'static str,
+    session: &mut Session<'_>,
+) -> NativeResult<(usize, ListTerm<'graph>)> {
+    let mut selected = None;
+    for (index, candidate) in triples.iter().enumerate() {
+        session.step(1)?;
+        if candidate.subject != subject || candidate.predicate != predicate {
+            continue;
+        }
+        if selected.replace((index, candidate.object)).is_some() {
+            return Err(rdf_mapping_cardinality(multiple));
+        }
+    }
+    selected.ok_or_else(|| rdf_mapping_cardinality(missing))
 }
 
 fn consume_collection_indexes(
@@ -4143,6 +4246,123 @@ mod tests {
             mapped(multiple.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_CARDINALITY",
         );
+    }
+
+    #[test]
+    fn all_disjoint_collections_map_classes_and_properties_exactly() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:DatatypeProperty rdf:about=\"urn:d\"/><owl:DatatypeProperty rdf:about=\"urn:e\"/><owl:ObjectProperty rdf:about=\"urn:p\"/><owl:ObjectProperty rdf:about=\"urn:q\"/><rdf:Description rdf:nodeID=\"classes\"><rdf:type rdf:resource=\"{OWL}AllDisjointClasses\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:B\"/><rdf:Description rdf:about=\"urn:C\"/></owl:unionOf></rdf:Description></owl:members></rdf:Description><rdf:Description rdf:nodeID=\"data\"><rdf:type rdf:resource=\"{OWL}AllDisjointProperties\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:d\"/><rdf:Description rdf:about=\"urn:e\"/></owl:members></rdf:Description><rdf:Description rdf:nodeID=\"objects\"><rdf:type rdf:resource=\"{OWL}AllDisjointProperties\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:p\"/><rdf:Description><owl:inverseOf rdf:resource=\"urn:q\"/></rdf:Description></owl:members></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("all-disjoint collections");
+        let disjoint_classes = Node::build(
+            63,
+            vec![
+                Field::Set(
+                    canonical_set(
+                        vec![class_node("urn:A"), boolean_node(31, &["urn:B", "urn:C"])],
+                        2,
+                        None,
+                    )
+                    .expect("disjoint classes"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("disjoint classes axiom");
+        let disjoint_data = Node::build(
+            92,
+            vec![
+                Field::Set(
+                    canonical_set(
+                        vec![
+                            entity(
+                                "data_property",
+                                iri("urn:d".to_owned()).expect("property IRI"),
+                            )
+                            .expect("data property"),
+                            entity(
+                                "data_property",
+                                iri("urn:e".to_owned()).expect("property IRI"),
+                            )
+                            .expect("data property"),
+                        ],
+                        2,
+                        None,
+                    )
+                    .expect("data properties"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("disjoint data properties");
+        let inverse = Node::build(
+            10,
+            vec![Field::Node(
+                entity(
+                    "object_property",
+                    iri("urn:q".to_owned()).expect("property IRI"),
+                )
+                .expect("object property"),
+            )],
+        )
+        .expect("inverse property");
+        let disjoint_objects = Node::build(
+            72,
+            vec![
+                Field::Set(
+                    canonical_set(
+                        vec![
+                            entity(
+                                "object_property",
+                                iri("urn:p".to_owned()).expect("property IRI"),
+                            )
+                            .expect("object property"),
+                            inverse,
+                        ],
+                        2,
+                        None,
+                    )
+                    .expect("object properties"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("disjoint object properties");
+        for expected in [disjoint_classes, disjoint_data, disjoint_objects] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let duplicate_class = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><rdf:type rdf:resource=\"{OWL}AllDisjointClasses\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:A\"/></owl:members></rdf:Description></rdf:RDF>"
+        );
+        let duplicate = mapped(duplicate_class.as_bytes(), None).expect("duplicate class members");
+        let expected_duplicate = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(class_node(OWL_NOTHING)),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("self-disjoint class");
+        assert!(duplicate
+            .axioms
+            .iter()
+            .any(|value| value == expected_duplicate.as_bytes()));
+
+        for kind in [OWL_ALL_DISJOINT_CLASSES, OWL_ALL_DISJOINT_PROPERTIES] {
+            let single = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><rdf:type rdf:resource=\"{kind}\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:only\"/></owl:members></rdf:Description></rdf:RDF>"
+            );
+            assert!(mapped(single.as_bytes(), None).is_err());
+        }
     }
 
     #[test]

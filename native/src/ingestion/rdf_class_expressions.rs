@@ -55,6 +55,19 @@ pub(crate) struct DecodedIndividualCollection {
     pub(crate) consumed: Vec<usize>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DecodedClassCollection {
+    pub(crate) expressions: Vec<Node>,
+    pub(crate) consumed: Vec<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DecodedPropertyCollection {
+    pub(crate) properties: Vec<Node>,
+    pub(crate) consumed: Vec<usize>,
+    pub(crate) data_properties: bool,
+}
+
 /// Retains recursion and RDF-list ownership state across every expression
 /// decoded from one source graph.
 pub(crate) struct RdfClassExpressionDecoder<'graph, 'data> {
@@ -1055,6 +1068,64 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         Ok(DecodedIndividualCollection {
             individuals,
             consumed: decoded.consumed,
+        })
+    }
+
+    pub(crate) fn decode_class_collection(
+        &mut self,
+        head: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<DecodedClassCollection> {
+        let decoded = self.lists.decode(head, session)?;
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        let mut consumed = decoded.consumed;
+        let mut expressions = reserved_vec(decoded.items.len(), session)?;
+        for item in decoded.items {
+            expressions.push(self.decode_into(item, &mut consumed, session)?);
+        }
+        consumed.sort_unstable();
+        consumed.dedup();
+        session.finish()?;
+        Ok(DecodedClassCollection {
+            expressions,
+            consumed,
+        })
+    }
+
+    pub(crate) fn decode_property_collection(
+        &mut self,
+        head: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<DecodedPropertyCollection> {
+        let decoded = self.lists.decode(head, session)?;
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        session.step(usize_as_u64(
+            self.data_properties.len(),
+            "native RDF property-kind work exceeds u64",
+        )?)?;
+        let data_properties = decoded.items.iter().all(
+            |item| matches!(item, RdfTerm::Iri(value) if self.data_properties.contains(value)),
+        );
+        let mut consumed = decoded.consumed;
+        let mut properties = reserved_vec(decoded.items.len(), session)?;
+        for item in decoded.items {
+            properties.push(if data_properties {
+                named_data_property(item, session)?
+            } else {
+                self.decode_object_property(item, &mut consumed, session)?
+            });
+        }
+        consumed.sort_unstable();
+        consumed.dedup();
+        session.finish()?;
+        Ok(DecodedPropertyCollection {
+            properties,
+            consumed,
+            data_properties,
         })
     }
 
