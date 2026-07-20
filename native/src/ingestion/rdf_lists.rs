@@ -46,28 +46,27 @@ struct ListOwner<'graph> {
 
 /// Decodes multiple collections against one graph while retaining the tail
 /// ownership ledger needed to reject cross-collection sharing.
-pub(crate) struct RdfListDecoder<'graph, 'data, 'session, 'guard> {
+pub(crate) struct RdfListDecoder<'graph, 'data> {
     triples: &'graph [RdfTriple<'data>],
     owners: Vec<ListOwner<'data>>,
-    session: &'session mut Session<'guard>,
 }
 
-impl<'graph, 'data, 'session, 'guard> RdfListDecoder<'graph, 'data, 'session, 'guard> {
-    pub(crate) fn new(
-        triples: &'graph [RdfTriple<'data>],
-        session: &'session mut Session<'guard>,
-    ) -> Self {
+impl<'graph, 'data> RdfListDecoder<'graph, 'data> {
+    pub(crate) fn new(triples: &'graph [RdfTriple<'data>]) -> Self {
         Self {
             triples,
             owners: Vec::new(),
-            session,
         }
     }
 
-    pub(crate) fn decode(&mut self, head: RdfTerm<'data>) -> NativeResult<DecodedRdfList<'data>> {
+    pub(crate) fn decode(
+        &mut self,
+        head: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<DecodedRdfList<'data>> {
         // Check cancellation/deadline state before even inspecting an
         // attacker-controlled graph or allocating a traversal ledger.
-        self.session.finish()?;
+        session.finish()?;
         let root = match head {
             RdfTerm::Iri(RDF_NIL) => {
                 return Ok(DecodedRdfList {
@@ -95,28 +94,30 @@ impl<'graph, 'data, 'session, 'guard> RdfListDecoder<'graph, 'data, 'session, 'g
                 .len()
                 .checked_add(1)
                 .ok_or_else(|| NativeError::limit("native RDF list length overflow"))?;
-            enforce_length(next_length, self.session)?;
+            enforce_length(next_length, session)?;
 
-            self.session.step(usize_as_u64(
+            session.step(usize_as_u64(
                 visited.len(),
                 "native RDF list cycle work exceeds u64",
             )?)?;
             if visited.contains(&current) {
                 return Err(unsupported("native cyclic RDF collection"));
             }
-            reserve_item(&mut visited, self.session)?;
+            reserve_item(&mut visited, session)?;
             visited.push(current);
 
-            self.claim(current, root, &mut pending_owners)?;
-            self.consume_list_markers(current, &mut consumed)?;
-            let first = self.unique_edge(current, RDF_FIRST, "native forked RDF first edge")?;
-            let rest = self.unique_edge(current, RDF_REST, "native forked RDF rest edge")?;
+            self.claim(current, root, &mut pending_owners, session)?;
+            self.consume_list_markers(current, &mut consumed, session)?;
+            let first =
+                self.unique_edge(current, RDF_FIRST, "native forked RDF first edge", session)?;
+            let rest =
+                self.unique_edge(current, RDF_REST, "native forked RDF rest edge", session)?;
 
-            reserve_item(&mut items, self.session)?;
+            reserve_item(&mut items, session)?;
             items.push(self.triples[first].object);
-            reserve_item(&mut consumed, self.session)?;
+            reserve_item(&mut consumed, session)?;
             consumed.push(first);
-            reserve_item(&mut consumed, self.session)?;
+            reserve_item(&mut consumed, session)?;
             consumed.push(rest);
 
             match self.triples[rest].object {
@@ -130,8 +131,8 @@ impl<'graph, 'data, 'session, 'guard> RdfListDecoder<'graph, 'data, 'session, 'g
             }
         }
 
-        self.session.finish()?;
-        reserve_additional(&mut self.owners, pending_owners.len(), self.session)?;
+        session.finish()?;
+        reserve_additional(&mut self.owners, pending_owners.len(), session)?;
         self.owners.extend(pending_owners);
         consumed.sort_unstable();
         consumed.dedup();
@@ -143,8 +144,9 @@ impl<'graph, 'data, 'session, 'guard> RdfListDecoder<'graph, 'data, 'session, 'g
         cell: &'data str,
         root: &'data str,
         pending: &mut Vec<ListOwner<'data>>,
+        session: &mut Session<'_>,
     ) -> NativeResult<()> {
-        self.session.step(usize_as_u64(
+        session.step(usize_as_u64(
             self.owners.len(),
             "native RDF list ownership work exceeds u64",
         )?)?;
@@ -155,7 +157,7 @@ impl<'graph, 'data, 'session, 'guard> RdfListDecoder<'graph, 'data, 'session, 'g
         {
             return Err(unsupported("native shared RDF collection tail"));
         }
-        self.session.step(usize_as_u64(
+        session.step(usize_as_u64(
             pending.len(),
             "native RDF list ownership work exceeds u64",
         )?)?;
@@ -168,7 +170,7 @@ impl<'graph, 'data, 'session, 'guard> RdfListDecoder<'graph, 'data, 'session, 'g
         if !self.owners.iter().any(|owner| owner.cell == cell)
             && !pending.iter().any(|owner| owner.cell == cell)
         {
-            reserve_item(pending, self.session)?;
+            reserve_item(pending, session)?;
             pending.push(ListOwner { cell, root });
         }
         Ok(())
@@ -179,10 +181,11 @@ impl<'graph, 'data, 'session, 'guard> RdfListDecoder<'graph, 'data, 'session, 'g
         subject: &'data str,
         predicate: &str,
         malformed: &'static str,
+        session: &mut Session<'_>,
     ) -> NativeResult<usize> {
         let mut selected = None;
         for (index, triple) in self.triples.iter().enumerate() {
-            self.session.step(1)?;
+            session.step(1)?;
             if triple.subject == RdfResource::Blank(subject)
                 && triple.predicate == predicate
                 && selected.replace(index).is_some()
@@ -197,14 +200,15 @@ impl<'graph, 'data, 'session, 'guard> RdfListDecoder<'graph, 'data, 'session, 'g
         &mut self,
         subject: &'data str,
         consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
     ) -> NativeResult<()> {
         for (index, triple) in self.triples.iter().enumerate() {
-            self.session.step(1)?;
+            session.step(1)?;
             if triple.subject == RdfResource::Blank(subject)
                 && triple.predicate == RDF_TYPE
                 && triple.object == RdfTerm::Iri(RDF_LIST)
             {
-                reserve_item(consumed, self.session)?;
+                reserve_item(consumed, session)?;
                 consumed.push(index);
             }
         }
@@ -321,7 +325,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, limits, 0)?;
-        RdfListDecoder::new(graph, &mut session).decode(head)
+        RdfListDecoder::new(graph).decode(head, &mut session)
     }
 
     #[test]
@@ -410,12 +414,16 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut decoder = RdfListDecoder::new(&graph, &mut session);
+        let mut decoder = RdfListDecoder::new(&graph);
         assert_eq!(
-            decoder.decode(bterm("h1")).expect("first root").items.len(),
+            decoder
+                .decode(bterm("h1"), &mut session)
+                .expect("first root")
+                .items
+                .len(),
             2
         );
-        let error = decoder.decode(bterm("h2")).unwrap_err();
+        let error = decoder.decode(bterm("h2"), &mut session).unwrap_err();
         assert_eq!(error.code, "NATIVE_RDF_MAPPING_UNSUPPORTED");
         assert!(error.message.contains("shared"));
     }
@@ -451,8 +459,8 @@ mod tests {
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
         assert_eq!(
-            RdfListDecoder::new(&graph, &mut session)
-                .decode(bterm("h"))
+            RdfListDecoder::new(&graph)
+                .decode(bterm("h"), &mut session)
                 .unwrap_err()
                 .code,
             "NATIVE_DEADLINE",
