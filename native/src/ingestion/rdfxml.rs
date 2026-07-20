@@ -13,7 +13,8 @@ use crate::session::Session;
 
 use super::rdf_class_expressions::{
     DecodedClassCollection, DecodedClassExpression, DecodedDataRange, DecodedIndividualCollection,
-    DecodedKeyCollection, DecodedPropertyCollection, RdfClassExpressionDecoder,
+    DecodedKeyCollection, DecodedPropertyCollection, DecodedPropertyExpression,
+    RdfClassExpressionDecoder,
 };
 use super::rdf_lists::{RdfResource as ListResource, RdfTerm as ListTerm, RdfTriple as ListTriple};
 use super::{CanonicalDocument, MappingEvidence};
@@ -2026,6 +2027,29 @@ fn class_expression_axiom<'view, 'graph>(
                 )?
             }
         }
+        OWL_INVERSE_OF => {
+            let (ListResource::Iri(first_iri), Some(second_term)) = (triple.subject, object) else {
+                return Ok(None);
+            };
+            let DecodedPropertyExpression {
+                node: mut second,
+                consumed: property_consumed,
+            } = expressions.decode_object_property_term(second_term.as_term(), session)?;
+            consume_collection_indexes(property_consumed, consumed, session)?;
+            let mut first = named_entity("object_property", first_iri, session)?;
+            if second.as_bytes() < first.as_bytes() {
+                std::mem::swap(&mut first, &mut second);
+            }
+            build_node(
+                73,
+                [
+                    Field::Node(first),
+                    Field::Node(second),
+                    Field::Set(Vec::new()),
+                ],
+                session,
+            )?
+        }
         RDFS_DOMAIN | RDFS_RANGE => {
             let (ListResource::Iri(property), Some(object)) = (triple.subject, object) else {
                 return Ok(None);
@@ -3796,6 +3820,61 @@ mod tests {
         assert_eq!(
             document.mapping.total_triples,
             document.mapping.consumed_triples,
+        );
+    }
+
+    #[test]
+    fn inverse_property_axioms_accept_inverse_object_expressions() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:ObjectProperty rdf:about=\"urn:p\"><owl:inverseOf><rdf:Description><owl:inverseOf rdf:resource=\"urn:q\"/></rdf:Description></owl:inverseOf></owl:ObjectProperty></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("inverse properties");
+        let property = |value: &str| {
+            entity(
+                "object_property",
+                iri(value.to_owned()).expect("property IRI"),
+            )
+            .expect("object property")
+        };
+        let mut first = property("urn:p");
+        let mut second =
+            Node::build(10, vec![Field::Node(property("urn:q"))]).expect("inverse expression");
+        if second.as_bytes() < first.as_bytes() {
+            std::mem::swap(&mut first, &mut second);
+        }
+        let expected = Node::build(
+            73,
+            vec![
+                Field::Node(first),
+                Field::Node(second),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("inverse properties axiom");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let malformed = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:ObjectProperty rdf:about=\"urn:p\"><owl:inverseOf><rdf:Description/></owl:inverseOf></owl:ObjectProperty></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(malformed.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+        let unowned_expression = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><owl:inverseOf rdf:resource=\"urn:q\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(unowned_expression.as_bytes(), None)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
         );
     }
 

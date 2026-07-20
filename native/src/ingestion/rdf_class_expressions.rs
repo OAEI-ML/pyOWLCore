@@ -56,6 +56,12 @@ pub(crate) struct DecodedDataRange {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DecodedPropertyExpression {
+    pub(crate) node: Node,
+    pub(crate) consumed: Vec<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedIndividualCollection {
     pub(crate) individuals: Vec<Node>,
     pub(crate) consumed: Vec<usize>,
@@ -253,6 +259,18 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         consumed.sort_unstable();
         consumed.dedup();
         Ok(DecodedDataRange { node, consumed })
+    }
+
+    pub(crate) fn decode_object_property_term(
+        &mut self,
+        value: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<DecodedPropertyExpression> {
+        let mut consumed = Vec::new();
+        let node = self.decode_object_property(value, &mut consumed, session)?;
+        consumed.sort_unstable();
+        consumed.dedup();
+        Ok(DecodedPropertyExpression { node, consumed })
     }
 
     fn decode_data_range(
