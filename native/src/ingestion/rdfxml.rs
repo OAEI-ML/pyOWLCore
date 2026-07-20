@@ -52,6 +52,7 @@ const OWL_ALL_DISJOINT_PROPERTIES: &str = "http://www.w3.org/2002/07/owl#AllDisj
 const OWL_DISTINCT_MEMBERS: &str = "http://www.w3.org/2002/07/owl#distinctMembers";
 const OWL_MEMBERS: &str = "http://www.w3.org/2002/07/owl#members";
 const OWL_HAS_KEY: &str = "http://www.w3.org/2002/07/owl#hasKey";
+const OWL_DISJOINT_UNION_OF: &str = "http://www.w3.org/2002/07/owl#disjointUnionOf";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1282,6 +1283,13 @@ fn map_graph(
         &mut axioms,
         session,
     )?;
+    map_disjoint_unions(
+        &list_graph,
+        &mut consumed,
+        &mut expressions,
+        &mut axioms,
+        session,
+    )?;
     map_equivalent_class_components(
         &list_graph,
         &mut consumed,
@@ -1684,6 +1692,42 @@ fn map_has_keys<'view, 'graph>(
                 Field::Node(class_expression),
                 Field::Set(object_properties),
                 Field::Set(data_properties),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?;
+        consume_collection_indexes(collection_consumed, consumed, session)?;
+        consumed[index] = true;
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
+fn map_disjoint_unions<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index] || triple.predicate != OWL_DISJOINT_UNION_OF {
+            continue;
+        }
+        let ListResource::Iri(defined_class) = triple.subject else {
+            return Err(rdf_mapping_type());
+        };
+        let DecodedClassCollection {
+            expressions: members,
+            consumed: collection_consumed,
+        } = expressions.decode_class_collection(triple.object, session)?;
+        let members = canonical_set(members, 2, None)?;
+        let axiom = build_node(
+            64,
+            [
+                Field::Node(named_entity("class", defined_class, session)?),
+                Field::Set(members),
                 Field::Set(Vec::new()),
             ],
             session,
@@ -4592,6 +4636,55 @@ mod tests {
         assert_eq!(
             mapped(empty.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+    }
+
+    #[test]
+    fn disjoint_union_maps_named_class_and_nested_members() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:Defined\"><owl:disjointUnionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description><owl:complementOf rdf:resource=\"urn:B\"/></rdf:Description></owl:disjointUnionOf></owl:Class></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("DisjointUnion");
+        let complement =
+            Node::build(32, vec![Field::Node(class_node("urn:B"))]).expect("class complement");
+        let expected = Node::build(
+            64,
+            vec![
+                Field::Node(class_node("urn:Defined")),
+                Field::Set(
+                    canonical_set(vec![class_node("urn:A"), complement], 2, None)
+                        .expect("disjoint union members"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("DisjointUnion axiom");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        for members in [
+            "",
+            "<rdf:Description rdf:about=\"urn:A\"/>",
+            "<rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:A\"/>",
+        ] {
+            let invalid = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:Defined\"><owl:disjointUnionOf rdf:parseType=\"Collection\">{members}</owl:disjointUnionOf></owl:Class></rdf:RDF>"
+            );
+            assert!(mapped(invalid.as_bytes(), None).is_err());
+        }
+
+        let blank_class = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><owl:disjointUnionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:disjointUnionOf></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(blank_class.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_TYPE",
         );
     }
 
