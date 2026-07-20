@@ -2545,14 +2545,33 @@ fn map_all_different<'view, 'graph>(
         {
             continue;
         }
-        let (_distinct_index, head) = collection_head(
+        let members = metadata_edge(
+            triples,
+            triple.subject,
+            OWL_MEMBERS,
+            "native owl:AllDifferent has more than one members list",
+            session,
+        )?;
+        let distinct_members = metadata_edge(
             triples,
             triple.subject,
             OWL_DISTINCT_MEMBERS,
-            "native owl:AllDifferent has no distinctMembers list",
             "native owl:AllDifferent has more than one distinctMembers list",
             session,
         )?;
+        let head = match (members, distinct_members) {
+            (Some((_, head)), None) | (None, Some((_, head))) => head,
+            (None, None) => {
+                return Err(rdf_mapping_cardinality(
+                    "native owl:AllDifferent has no members list",
+                ))
+            }
+            (Some(_), Some(_)) => {
+                return Err(rdf_mapping_cardinality(
+                    "native owl:AllDifferent has both members and distinctMembers lists",
+                ))
+            }
+        };
         let DecodedIndividualCollection {
             individuals,
             consumed: collection_consumed,
@@ -2560,7 +2579,7 @@ fn map_all_different<'view, 'graph>(
         let individuals = canonical_set(individuals, 2, None)?;
         let annotations = annotations_on_structural_node(
             triple.subject,
-            &[RDF_TYPE, OWL_DISTINCT_MEMBERS],
+            &[RDF_TYPE, OWL_MEMBERS, OWL_DISTINCT_MEMBERS],
             triples,
             source_triples,
             expressions,
@@ -5589,7 +5608,6 @@ mod tests {
             document.mapping.total_triples,
             document.mapping.consumed_triples,
         );
-
         let declared_data = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:DatatypeProperty rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:allValuesFrom rdf:resource=\"urn:B\"/></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
         );
@@ -6791,6 +6809,13 @@ mod tests {
             document.mapping.total_triples,
             document.mapping.consumed_triples,
         );
+        let modern_source = source.replace("distinctMembers", "members");
+        let modern = mapped(modern_source.as_bytes(), None).expect("OWL 2 AllDifferent members");
+        assert_eq!(modern.axioms, document.axioms);
+        assert_eq!(
+            modern.mapping.total_triples,
+            modern.mapping.consumed_triples
+        );
 
         for members in [
             "",
@@ -6815,6 +6840,13 @@ mod tests {
         );
         assert_eq!(
             mapped(multiple.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+        let conflicting = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><rdf:type rdf:resource=\"{OWL}AllDifferent\"/><owl:members rdf:resource=\"{RDF_NIL}\"/><owl:distinctMembers rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(conflicting.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_CARDINALITY",
         );
     }
