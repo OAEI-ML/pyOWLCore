@@ -54,6 +54,12 @@ const OWL_DISTINCT_MEMBERS: &str = "http://www.w3.org/2002/07/owl#distinctMember
 const OWL_MEMBERS: &str = "http://www.w3.org/2002/07/owl#members";
 const OWL_HAS_KEY: &str = "http://www.w3.org/2002/07/owl#hasKey";
 const OWL_DISJOINT_UNION_OF: &str = "http://www.w3.org/2002/07/owl#disjointUnionOf";
+const OWL_NEGATIVE_PROPERTY_ASSERTION: &str =
+    "http://www.w3.org/2002/07/owl#NegativePropertyAssertion";
+const OWL_SOURCE_INDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#sourceIndividual";
+const OWL_ASSERTION_PROPERTY: &str = "http://www.w3.org/2002/07/owl#assertionProperty";
+const OWL_TARGET_INDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#targetIndividual";
+const OWL_TARGET_VALUE: &str = "http://www.w3.org/2002/07/owl#targetValue";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1256,6 +1262,13 @@ fn map_graph(
             )?;
         }
     }
+    map_negative_property_assertions(
+        &list_graph,
+        &mut consumed,
+        &mut expressions,
+        &mut axioms,
+        session,
+    )?;
     map_all_different(
         &list_graph,
         &mut consumed,
@@ -1502,6 +1515,173 @@ impl<'graph> ClassTerm<'graph> {
             Self::Blank(value) => ListTerm::Blank(value),
         }
     }
+}
+
+fn map_negative_property_assertions<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (type_index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[type_index]
+            || triple.predicate != RDF_TYPE
+            || triple.object != ListTerm::Iri(OWL_NEGATIVE_PROPERTY_ASSERTION)
+        {
+            continue;
+        }
+        for candidate in triples {
+            session.step(1)?;
+            if candidate.subject == triple.subject
+                && !matches!(
+                    candidate.predicate,
+                    RDF_TYPE
+                        | OWL_SOURCE_INDIVIDUAL
+                        | OWL_ASSERTION_PROPERTY
+                        | OWL_TARGET_INDIVIDUAL
+                        | OWL_TARGET_VALUE
+                )
+            {
+                return Err(mapping_incomplete());
+            }
+        }
+        let (source_index, source) = required_metadata_edge(
+            triples,
+            triple.subject,
+            OWL_SOURCE_INDIVIDUAL,
+            "native negative property assertion has no source individual",
+            "native negative property assertion has more than one source individual",
+            session,
+        )?;
+        let (property_index, property) = required_metadata_edge(
+            triples,
+            triple.subject,
+            OWL_ASSERTION_PROPERTY,
+            "native negative property assertion has no assertion property",
+            "native negative property assertion has more than one assertion property",
+            session,
+        )?;
+        let target_individual = metadata_edge(
+            triples,
+            triple.subject,
+            OWL_TARGET_INDIVIDUAL,
+            "native negative property assertion has more than one individual target",
+            session,
+        )?;
+        let target_value = metadata_edge(
+            triples,
+            triple.subject,
+            OWL_TARGET_VALUE,
+            "native negative property assertion has more than one value target",
+            session,
+        )?;
+        if target_individual.is_some() == target_value.is_some() {
+            return Err(rdf_mapping_cardinality(
+                "native negative property assertion requires exactly one target",
+            ));
+        }
+        let source = match source {
+            ListTerm::Iri(value) => ListTerm::Iri(value),
+            ListTerm::Blank(value) => ListTerm::Blank(value),
+            ListTerm::Literal(_) => return Err(rdf_mapping_type()),
+        };
+        let source = expressions.decode_individual(source, session)?;
+        let (axiom, target_index, property_consumed) = if let Some((target_index, target)) =
+            target_individual
+        {
+            let target = match target {
+                ListTerm::Iri(value) => ListTerm::Iri(value),
+                ListTerm::Blank(value) => ListTerm::Blank(value),
+                ListTerm::Literal(_) => return Err(rdf_mapping_type()),
+            };
+            let property = match property {
+                ListTerm::Iri(value) => ListTerm::Iri(value),
+                ListTerm::Blank(value) => ListTerm::Blank(value),
+                ListTerm::Literal(_) => return Err(rdf_mapping_type()),
+            };
+            let DecodedPropertyExpression {
+                node: property,
+                consumed: property_consumed,
+            } = expressions.decode_object_property_term(property, session)?;
+            (
+                build_node(
+                    114,
+                    [
+                        Field::Node(property),
+                        Field::Node(source),
+                        Field::Node(expressions.decode_individual(target, session)?),
+                        Field::Set(Vec::new()),
+                    ],
+                    session,
+                )?,
+                target_index,
+                property_consumed,
+            )
+        } else {
+            let (target_index, target) = target_value
+                .ok_or_else(|| NativeError::protocol("native negative target ledger is empty"))?;
+            if !matches!(target, ListTerm::Literal(_)) {
+                return Err(rdf_mapping_type());
+            }
+            let ListTerm::Iri(property) = property else {
+                return Err(rdf_mapping_type());
+            };
+            (
+                build_node(
+                    116,
+                    [
+                        Field::Node(named_entity("data_property", property, session)?),
+                        Field::Node(source),
+                        Field::Node(expressions.decode_literal(target_index, session)?),
+                        Field::Set(Vec::new()),
+                    ],
+                    session,
+                )?,
+                target_index,
+                Vec::new(),
+            )
+        };
+        consume_collection_indexes(property_consumed, consumed, session)?;
+        for index in [type_index, source_index, property_index, target_index] {
+            consumed[index] = true;
+        }
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
+fn required_metadata_edge<'graph>(
+    triples: &[ListTriple<'graph>],
+    subject: ListResource<'graph>,
+    predicate: &str,
+    missing: &'static str,
+    multiple: &'static str,
+    session: &mut Session<'_>,
+) -> NativeResult<(usize, ListTerm<'graph>)> {
+    metadata_edge(triples, subject, predicate, multiple, session)?
+        .ok_or_else(|| rdf_mapping_cardinality(missing))
+}
+
+fn metadata_edge<'graph>(
+    triples: &[ListTriple<'graph>],
+    subject: ListResource<'graph>,
+    predicate: &str,
+    multiple: &'static str,
+    session: &mut Session<'_>,
+) -> NativeResult<Option<(usize, ListTerm<'graph>)>> {
+    let mut selected = None;
+    for (index, candidate) in triples.iter().enumerate() {
+        session.step(1)?;
+        if candidate.subject != subject || candidate.predicate != predicate {
+            continue;
+        }
+        if selected.replace((index, candidate.object)).is_some() {
+            return Err(rdf_mapping_cardinality(multiple));
+        }
+    }
+    Ok(selected)
 }
 
 fn map_all_different<'view, 'graph>(
@@ -4433,6 +4613,82 @@ mod tests {
             mapped(structural_overlap.as_bytes(), None)
                 .unwrap_err()
                 .code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
+    }
+
+    #[test]
+    fn negative_property_assertions_map_object_and_data_targets() {
+        let xsd_integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:NegativePropertyAssertion rdf:nodeID=\"object-axiom\"><owl:sourceIndividual rdf:resource=\"urn:s\"/><owl:assertionProperty><rdf:Description><owl:inverseOf rdf:resource=\"urn:p\"/></rdf:Description></owl:assertionProperty><owl:targetIndividual rdf:nodeID=\"target\"/></owl:NegativePropertyAssertion><owl:NegativePropertyAssertion rdf:nodeID=\"data-axiom\"><owl:sourceIndividual rdf:nodeID=\"source\"/><owl:assertionProperty rdf:resource=\"urn:d\"/><owl:targetValue rdf:datatype=\"{xsd_integer}\">007</owl:targetValue></owl:NegativePropertyAssertion></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("negative assertions");
+        let property = |kind: &'static str, value: &str| {
+            entity(kind, iri(value.to_owned()).expect("property IRI")).expect("property")
+        };
+        let inverse = Node::build(10, vec![Field::Node(property("object_property", "urn:p"))])
+            .expect("inverse property");
+        let object = Node::build(
+            114,
+            vec![
+                Field::Node(inverse),
+                Field::Node(named_individual_node("urn:s")),
+                Field::Node(crate::canonical::anonymous("target").expect("anonymous individual")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("negative object assertion");
+        let data = Node::build(
+            116,
+            vec![
+                Field::Node(property("data_property", "urn:d")),
+                Field::Node(crate::canonical::anonymous("source").expect("anonymous individual")),
+                Field::Node(
+                    literal(
+                        "007".to_owned(),
+                        entity(
+                            "datatype",
+                            iri(xsd_integer.to_owned()).expect("datatype IRI"),
+                        )
+                        .expect("datatype"),
+                        None,
+                    )
+                    .expect("literal"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("negative data assertion");
+        for expected in [object, data] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        for targets in [
+            "",
+            "<owl:targetIndividual rdf:resource=\"urn:t\"/><owl:targetValue>value</owl:targetValue>",
+        ] {
+            let invalid = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:NegativePropertyAssertion><owl:sourceIndividual rdf:resource=\"urn:s\"/><owl:assertionProperty rdf:resource=\"urn:p\"/>{targets}</owl:NegativePropertyAssertion></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(invalid.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_CARDINALITY",
+            );
+        }
+
+        let annotated = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:NegativePropertyAssertion><owl:sourceIndividual rdf:resource=\"urn:s\"/><owl:assertionProperty rdf:resource=\"urn:p\"/><owl:targetIndividual rdf:resource=\"urn:t\"/><e:note>annotation</e:note></owl:NegativePropertyAssertion></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(annotated.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_INCOMPLETE",
         );
     }
