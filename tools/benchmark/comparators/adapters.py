@@ -409,7 +409,7 @@ def run_external_adapter(
             timeout=timeout_seconds,
             max_stdout_bytes=max_stdout_bytes,
             max_stderr_bytes=max_stderr_bytes,
-            env=_external_environment(pin),
+            env=_external_environment(pin, protocol_mode="fresh"),
         )
     except (OSError, TypeError, ValueError) as error:
         return _error(pin, request, error)
@@ -951,16 +951,24 @@ def _verified_runner_command(
     return (str(resolved),)
 
 
-def _external_environment(pin: ComparatorPin) -> dict[str, str]:
+def _external_environment(
+    pin: ComparatorPin,
+    *,
+    protocol_mode: str = "fresh",
+) -> dict[str, str]:
     """Return a minimal, lane-bound child environment with deterministic ceilings.
 
     Raw and common Horned lanes intentionally share one executable pin.  The
     launcher therefore needs an authenticated, parent-selected lane before it
-    emits its pre-request handshake; the request itself arrives only after that
-    handshake has been validated.  These three values are descriptive inputs,
-    not trust anchors: the parent still verifies every handshake/result field
-    against ``pin`` and the executable digest before accepting evidence.
+    emits its pre-request handshake. The explicit protocol mode prevents a
+    runner from guessing whether it must emit that handshake or consume the
+    one-shot request already waiting on stdin. These values are descriptive
+    inputs, not trust anchors: the parent still verifies every handshake/result
+    field against ``pin`` and the executable digest before accepting evidence.
     """
+
+    if protocol_mode not in {"fresh", "persistent"}:
+        raise ValueError("external comparator protocol mode must be fresh or persistent")
 
     selected = {
         name: value
@@ -977,6 +985,7 @@ def _external_environment(pin: ComparatorPin) -> dict[str, str]:
             "PYOWL_CORE_COMPARATOR_BOUNDARY": pin.boundary,
             "PYOWL_CORE_COMPARATOR_IMPLEMENTATION": pin.implementation,
             "PYOWL_CORE_COMPARATOR_LANE": pin.id,
+            "PYOWL_CORE_COMPARATOR_PROTOCOL_MODE": protocol_mode,
             "RAYON_NUM_THREADS": ceiling,
             "TOKIO_WORKER_THREADS": ceiling,
         }

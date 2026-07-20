@@ -195,7 +195,7 @@ class PersistentExternalRunner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=cwd,
-                env=_external_environment(pin),
+                env=_external_environment(pin, protocol_mode="persistent"),
                 bufsize=0,
                 close_fds=True,
                 start_new_session=os.name == "posix",

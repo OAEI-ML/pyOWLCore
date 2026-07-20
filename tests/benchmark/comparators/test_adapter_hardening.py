@@ -176,13 +176,30 @@ def test_external_environment_selects_shared_runner_lane_without_leaking_parent_
     assert raw_environment["PYOWL_CORE_COMPARATOR_LANE"] == raw.id
     assert raw_environment["PYOWL_CORE_COMPARATOR_IMPLEMENTATION"] == raw.implementation
     assert raw_environment["PYOWL_CORE_COMPARATOR_BOUNDARY"] == raw.boundary
+    assert raw_environment["PYOWL_CORE_COMPARATOR_PROTOCOL_MODE"] == "fresh"
     assert common_environment["PYOWL_CORE_COMPARATOR_LANE"] == common.id
     assert common_environment["PYOWL_CORE_COMPARATOR_IMPLEMENTATION"] == common.implementation
     assert common_environment["PYOWL_CORE_COMPARATOR_BOUNDARY"] == common.boundary
+    assert common_environment["PYOWL_CORE_COMPARATOR_PROTOCOL_MODE"] == "fresh"
     assert raw_environment["RAYON_NUM_THREADS"] == str(raw.thread_ceiling)
     assert common_environment["RAYON_NUM_THREADS"] == str(common.thread_ceiling)
     assert "PYOWL_CORE_SECRET_FIXTURE" not in raw_environment
     assert "PYOWL_CORE_SECRET_FIXTURE" not in common_environment
+
+
+def test_external_environment_selects_persistent_protocol_explicitly() -> None:
+    pin = load_comparator_manifest().by_id("py-horned-common")
+
+    environment = _external_environment(pin, protocol_mode="persistent")
+
+    assert environment["PYOWL_CORE_COMPARATOR_PROTOCOL_MODE"] == "persistent"
+
+
+def test_external_environment_rejects_unknown_protocol_mode() -> None:
+    pin = load_comparator_manifest().by_id("py-horned-common")
+
+    with pytest.raises(ValueError, match="protocol mode"):
+        _external_environment(pin, protocol_mode="streaming")
 
 
 def test_failure_diagnostics_are_redacted_flattened_and_bounded() -> None:
