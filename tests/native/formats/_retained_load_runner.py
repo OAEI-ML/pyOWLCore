@@ -31,6 +31,7 @@ def main() -> None:
     from pyowl_core.backends import native
     from pyowl_core.model import canonical_bytes
     from tests.native.encoded_views._independent import decode_root_canonical_bytes
+    from tools.benchmark.comparators.common_contract import build_core_common_contract
     from tools.wire_reference import read_wire
 
     native._reset_probe_cache_for_tests()
@@ -78,6 +79,51 @@ def main() -> None:
         raise AssertionError("retained publication eagerly materialized structural objects")
     if before_python.model_rows_materialized != 0:
         raise AssertionError("retained publication eagerly materialized facade model rows")
+    summary_method = cast(Any, selected)._native_common_contract_summary_v1
+    summary = summary_method()
+    summary_zero_work = (
+        raw_owner._publication_counters_v2() == before_native
+        and cast(Any, selected)._native_python_counters() == before_python
+    )
+    if not summary_zero_work:
+        raise AssertionError("retained contract summary crossed facade or owner work")
+    if summary_method() is not summary:
+        raise AssertionError("retained contract summary was not returned by identity")
+    scalar_contract = build_core_common_contract(
+        reference,
+        corpus_id="retained-installed-summary",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        options_sha256="00" * 32,
+    )
+    scalar_fingerprints = cast(dict[str, dict[str, object]], scalar_contract["fingerprints"])
+    summary_fingerprint_parity = all(
+        evidence.preimage_bytes == scalar_fingerprints[name]["preimage_bytes"]
+        and evidence.sha256.hex() == scalar_fingerprints[name]["preimage_sha256"]
+        for name, evidence in (
+            ("document", summary.document_fingerprint),
+            ("structural", summary.structural_fingerprint),
+            ("logical", summary.logical_fingerprint),
+            ("signature", summary.signature_fingerprint),
+        )
+    )
+    scalar_inventories = cast(
+        dict[str, dict[str, object]],
+        cast(dict[str, object], scalar_contract["ledger"])["inventories"],
+    )
+    summary_inventory_parity = all(
+        inventory.count == scalar_inventories[name]["count"]
+        and inventory.canonical_bytes == scalar_inventories[name]["canonical_bytes"]
+        and inventory.transcript_bytes == scalar_inventories[name]["transcript_bytes"]
+        and inventory.sha256.hex() == scalar_inventories[name]["sha256"]
+        for name, inventory in (
+            ("ontology_annotations", summary.ontology_annotations),
+            ("axioms", summary.axioms),
+            ("extensions", summary.extensions),
+            ("signature", summary.signature),
+        )
+    )
+    if not summary_fingerprint_parity or not summary_inventory_parity:
+        raise AssertionError("retained contract summary differs from the scalar reference")
     direct = selected.view(EncodedStructuralView)
     after_direct_native = raw_owner._publication_counters_v2()
     after_direct_python = cast(Any, selected)._native_python_counters()
@@ -428,6 +474,15 @@ def main() -> None:
                 "retained_origin_rows": retained_origin_rows,
                 "selected_closed": selected.closed,
                 "snapshot_type": type(selected).__name__,
+                "summary_fingerprint_parity": summary_fingerprint_parity,
+                "summary_inventory_parity": summary_inventory_parity,
+                "summary_node_count_parity": (
+                    summary.node_count == len(direct.buffers["node_tags"]) // 2
+                ),
+                "summary_root_count_parity": (
+                    summary.root_count == len(direct.buffers["root_ids"]) // 4
+                ),
+                "summary_zero_work": summary_zero_work,
                 "unresolved_retained_parity": unresolved_parity,
                 "unresolved_snapshot_type": type(unresolved_selected).__name__,
                 "view_features": list(extension.VIEW_FEATURES),

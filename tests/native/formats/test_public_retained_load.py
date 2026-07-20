@@ -773,6 +773,11 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["backend"] == "native"
     assert observed["snapshot_type"] == "_NativeOntologySnapshot"
     assert observed["fingerprint_parity"] is True
+    assert observed["summary_fingerprint_parity"] is True
+    assert observed["summary_inventory_parity"] is True
+    assert observed["summary_node_count_parity"] is True
+    assert observed["summary_root_count_parity"] is True
+    assert observed["summary_zero_work"] is True
     assert observed["direct_root_parity"] is True
     assert observed["direct_owner_identity"] is True
     assert observed["direct_encoded_view_requests"] == 1
