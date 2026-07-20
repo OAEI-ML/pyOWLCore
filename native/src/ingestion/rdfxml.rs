@@ -1273,9 +1273,11 @@ fn map_graph(
     map_ontology_annotations(
         header_index,
         &list_graph,
+        &triples,
         &mut consumed,
         &kinds,
         &mut expressions,
+        &mut axiom_annotations,
         &mut ontology_annotations,
         session,
     )?;
@@ -1482,9 +1484,17 @@ struct AxiomAnnotationRecord {
     claimed: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct NestedAnnotationRecord {
+    type_index: usize,
+    main_index: usize,
+    claimed: bool,
+}
+
 #[derive(Debug, Default)]
 struct AxiomAnnotationLedger {
     records: Vec<AxiomAnnotationRecord>,
+    nested_records: Vec<NestedAnnotationRecord>,
 }
 
 impl AxiomAnnotationLedger {
@@ -1529,8 +1539,27 @@ impl AxiomAnnotationLedger {
         Ok(())
     }
 
+    fn nested_annotations_for<'view, 'graph>(
+        &mut self,
+        main_index: usize,
+        triples: &'graph [Triple],
+        expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Vec<Node>> {
+        let mut stack = Vec::new();
+        nested_annotations(
+            main_index,
+            &mut self.nested_records,
+            triples,
+            expressions,
+            &mut stack,
+            session,
+        )
+    }
+
     fn has_unclaimed(&self) -> bool {
         self.records.iter().any(|record| !record.claimed)
+            || self.nested_records.iter().any(|record| !record.claimed)
     }
 }
 
@@ -1629,9 +1658,11 @@ impl<'graph> ClassTerm<'graph> {
 fn map_ontology_annotations<'view, 'graph>(
     header_index: Option<usize>,
     triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
     annotations: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -1650,7 +1681,9 @@ fn map_ontology_annotations<'view, 'graph>(
         {
             continue;
         }
-        let annotation = annotation_node(index, triple, expressions, session)?;
+        let nested =
+            reifications.nested_annotations_for(index, source_triples, expressions, session)?;
+        let annotation = annotation_node(index, triple, expressions, nested, session)?;
         push_annotation(annotation, annotations, session)?;
         consumed[index] = true;
     }
@@ -2632,19 +2665,12 @@ fn collect_axiom_annotations<'view, 'graph>(
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
     session: &mut Session<'_>,
 ) -> NativeResult<AxiomAnnotationLedger> {
-    for triple in triples {
-        session.step(1)?;
-        if triple.predicate == RDF_TYPE
-            && matches!(&triple.object, Term::Iri(value) if value == OWL_ANNOTATION)
-        {
-            return Err(NativeError::new(
-                "NATIVE_RDF_MAPPING_UNSUPPORTED",
-                "native nested RDF annotation reification is not yet supported",
-            ));
-        }
-    }
-
-    let mut ledger = AxiomAnnotationLedger::default();
+    let nested_records = collect_nested_annotation_records(triples, consumed, session)?;
+    validate_nested_annotation_records(&nested_records, triples, session)?;
+    let mut ledger = AxiomAnnotationLedger {
+        records: Vec::new(),
+        nested_records,
+    };
     for (type_index, type_triple) in triples.iter().enumerate() {
         session.step(1)?;
         if consumed.get(type_index).copied().ok_or_else(|| {
@@ -2655,35 +2681,7 @@ fn collect_axiom_annotations<'view, 'graph>(
             continue;
         }
         let reification = &type_triple.subject;
-        let (_, source) =
-            unique_reification_term(reification, OWL_ANNOTATED_SOURCE, triples, session)?;
-        let (_, property) =
-            unique_reification_term(reification, OWL_ANNOTATED_PROPERTY, triples, session)?;
-        let (_, target) =
-            unique_reification_term(reification, OWL_ANNOTATED_TARGET, triples, session)?;
-        if !matches!(source, Term::Iri(_) | Term::Blank(_)) {
-            return Err(rdf_axiom_reification(
-                "native owl:Axiom annotatedSource must be an IRI or blank node",
-            ));
-        }
-        let Term::Iri(property) = property else {
-            return Err(rdf_axiom_reification(
-                "native owl:Axiom annotatedProperty must be an IRI",
-            ));
-        };
-        let mut main_index = None;
-        for (index, candidate) in triples.iter().enumerate() {
-            session.step(1)?;
-            if resource_matches_term(&candidate.subject, source)
-                && candidate.predicate == *property
-                && candidate.object == *target
-            {
-                main_index.get_or_insert(index);
-            }
-        }
-        let main_index = main_index.ok_or_else(|| {
-            rdf_axiom_reification("native owl:Axiom reification main triple is absent")
-        })?;
+        let main_index = reification_main_index(reification, triples, session)?;
 
         let mut annotations = Vec::new();
         for (index, triple) in triples.iter().enumerate() {
@@ -2700,7 +2698,12 @@ fn collect_axiom_annotations<'view, 'graph>(
                         session,
                     )?),
                     Field::Node(annotation_value(index, triple, expressions, session)?),
-                    Field::Set(Vec::new()),
+                    Field::Set(ledger.nested_annotations_for(
+                        index,
+                        triples,
+                        expressions,
+                        session,
+                    )?),
                 ],
                 session,
             )?;
@@ -2720,17 +2723,261 @@ fn collect_axiom_annotations<'view, 'graph>(
             annotations,
             claimed: false,
         });
-        for (index, triple) in triples.iter().enumerate() {
-            session.step(1)?;
-            if &triple.subject == reification {
-                let value = consumed.get_mut(index).ok_or_else(|| {
-                    NativeError::protocol("native RDF consumed ledger is shorter than graph")
-                })?;
-                *value = true;
-            }
-        }
+        consume_reification_node(reification, triples, consumed, session)?;
     }
     Ok(ledger)
+}
+
+fn collect_nested_annotation_records(
+    triples: &[Triple],
+    consumed: &mut [bool],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<NestedAnnotationRecord>> {
+    let mut records = Vec::new();
+    for (type_index, type_triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed.get(type_index).copied().ok_or_else(|| {
+            NativeError::protocol("native RDF consumed ledger is shorter than graph")
+        })? || type_triple.predicate != RDF_TYPE
+            || !matches!(&type_triple.object, Term::Iri(value) if value == OWL_ANNOTATION)
+        {
+            continue;
+        }
+        let reification = &type_triple.subject;
+        if triples.iter().any(|triple| {
+            triple.subject == *reification
+                && triple.predicate == RDF_TYPE
+                && matches!(&triple.object, Term::Iri(value) if value == OWL_AXIOM)
+        }) {
+            return Err(rdf_axiom_reification(
+                "native RDF reification node cannot be both owl:Annotation and owl:Axiom",
+            ));
+        }
+        let main_index = reification_main_index(reification, triples, session)?;
+        reserve_vec_item(&mut records, session)?;
+        records.push(NestedAnnotationRecord {
+            type_index,
+            main_index,
+            claimed: false,
+        });
+        consume_reification_node(reification, triples, consumed, session)?;
+    }
+    Ok(records)
+}
+
+fn validate_nested_annotation_records(
+    records: &[NestedAnnotationRecord],
+    triples: &[Triple],
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    let mut stack = Vec::new();
+    for record in records {
+        validate_nested_annotation_main(record.main_index, records, triples, &mut stack, session)?;
+    }
+    Ok(())
+}
+
+fn validate_nested_annotation_main(
+    main_index: usize,
+    records: &[NestedAnnotationRecord],
+    triples: &[Triple],
+    stack: &mut Vec<usize>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    let main = triples.get(main_index).ok_or_else(|| {
+        NativeError::protocol("native nested annotation main index exceeds graph")
+    })?;
+    if stack.iter().any(|index| {
+        triples
+            .get(*index)
+            .is_some_and(|candidate| candidate == main)
+    }) {
+        return Err(rdf_axiom_reification(
+            "native RDF annotation reification contains a cycle",
+        ));
+    }
+    let mut matching = Vec::new();
+    for record in records {
+        session.step(1)?;
+        let record_main = triples.get(record.main_index).ok_or_else(|| {
+            NativeError::protocol("native nested annotation main index exceeds graph")
+        })?;
+        if record_main == main {
+            reserve_vec_item(&mut matching, session)?;
+            matching.push(record.type_index);
+        }
+    }
+    if matching.is_empty() {
+        return Ok(());
+    }
+    enforce_usize(
+        stack.len().saturating_add(1),
+        session.limits().value(LimitKey::MaxNestingDepth),
+        "native RDF annotation nesting exceeds max_nesting_depth",
+    )?;
+    reserve_vec_item(stack, session)?;
+    stack.push(main_index);
+    for type_index in matching {
+        let reification = &triples
+            .get(type_index)
+            .ok_or_else(|| {
+                NativeError::protocol("native annotation reification index exceeds graph")
+            })?
+            .subject;
+        for (index, triple) in triples.iter().enumerate() {
+            session.step(1)?;
+            if &triple.subject != reification || is_reification_metadata(&triple.predicate) {
+                continue;
+            }
+            validate_nested_annotation_main(index, records, triples, stack, session)?;
+        }
+    }
+    stack
+        .pop()
+        .ok_or_else(|| NativeError::protocol("native RDF annotation validation stack is empty"))?;
+    Ok(())
+}
+
+fn nested_annotations<'view, 'graph>(
+    main_index: usize,
+    records: &mut [NestedAnnotationRecord],
+    triples: &'graph [Triple],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    stack: &mut Vec<usize>,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<Node>> {
+    let main = triples.get(main_index).ok_or_else(|| {
+        NativeError::protocol("native nested annotation main index exceeds graph")
+    })?;
+    let has_records = records.iter().any(|record| {
+        triples
+            .get(record.main_index)
+            .is_some_and(|candidate| candidate == main)
+    });
+    if !has_records {
+        return Ok(Vec::new());
+    }
+    if stack.iter().any(|index| {
+        triples
+            .get(*index)
+            .is_some_and(|candidate| candidate == main)
+    }) {
+        return Err(rdf_axiom_reification(
+            "native RDF annotation reification contains a cycle",
+        ));
+    }
+    enforce_usize(
+        stack.len().saturating_add(1),
+        session.limits().value(LimitKey::MaxNestingDepth),
+        "native RDF annotation nesting exceeds max_nesting_depth",
+    )?;
+    reserve_vec_item(stack, session)?;
+    stack.push(main_index);
+
+    let mut annotations = Vec::new();
+    for record_index in 0..records.len() {
+        session.step(1)?;
+        let matches = {
+            let record_main = triples
+                .get(records[record_index].main_index)
+                .ok_or_else(|| {
+                    NativeError::protocol("native nested annotation main index exceeds graph")
+                })?;
+            record_main == main
+        };
+        if !matches {
+            continue;
+        }
+        records[record_index].claimed = true;
+        let type_index = records[record_index].type_index;
+        let reification = &triples
+            .get(type_index)
+            .ok_or_else(|| {
+                NativeError::protocol("native annotation reification index exceeds graph")
+            })?
+            .subject;
+        for (index, triple) in triples.iter().enumerate() {
+            session.step(1)?;
+            if &triple.subject != reification || is_reification_metadata(&triple.predicate) {
+                continue;
+            }
+            let nested = nested_annotations(index, records, triples, expressions, stack, session)?;
+            let annotation = build_node(
+                5,
+                [
+                    Field::Node(named_entity(
+                        "annotation_property",
+                        &triple.predicate,
+                        session,
+                    )?),
+                    Field::Node(annotation_value(index, triple, expressions, session)?),
+                    Field::Set(nested),
+                ],
+                session,
+            )?;
+            enforce_usize(
+                annotations.len().saturating_add(1),
+                session.limits().value(LimitKey::MaxAnnotations),
+                "native RDF nested annotations exceed max_annotations",
+            )?;
+            reserve_vec_item(&mut annotations, session)?;
+            annotations.push(annotation);
+        }
+    }
+    stack
+        .pop()
+        .ok_or_else(|| NativeError::protocol("native RDF annotation recursion stack is empty"))?;
+    canonical_set(annotations, 0, None)
+}
+
+fn reification_main_index(
+    reification: &Resource,
+    triples: &[Triple],
+    session: &mut Session<'_>,
+) -> NativeResult<usize> {
+    let (_, source) = unique_reification_term(reification, OWL_ANNOTATED_SOURCE, triples, session)?;
+    let (_, property) =
+        unique_reification_term(reification, OWL_ANNOTATED_PROPERTY, triples, session)?;
+    let (_, target) = unique_reification_term(reification, OWL_ANNOTATED_TARGET, triples, session)?;
+    if !matches!(source, Term::Iri(_) | Term::Blank(_)) {
+        return Err(rdf_axiom_reification(
+            "native RDF annotatedSource must be an IRI or blank node",
+        ));
+    }
+    let Term::Iri(property) = property else {
+        return Err(rdf_axiom_reification(
+            "native RDF annotatedProperty must be an IRI",
+        ));
+    };
+    let mut main_index = None;
+    for (index, candidate) in triples.iter().enumerate() {
+        session.step(1)?;
+        if resource_matches_term(&candidate.subject, source)
+            && candidate.predicate == *property
+            && candidate.object == *target
+        {
+            main_index.get_or_insert(index);
+        }
+    }
+    main_index.ok_or_else(|| rdf_axiom_reification("native RDF reification main triple is absent"))
+}
+
+fn consume_reification_node(
+    reification: &Resource,
+    triples: &[Triple],
+    consumed: &mut [bool],
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if &triple.subject == reification {
+            let value = consumed.get_mut(index).ok_or_else(|| {
+                NativeError::protocol("native RDF consumed ledger is shorter than graph")
+            })?;
+            *value = true;
+        }
+    }
+    Ok(())
 }
 
 fn unique_reification_term<'a>(
@@ -2747,13 +2994,13 @@ fn unique_reification_term<'a>(
         }
         if value.replace((index, &triple.object)).is_some() {
             return Err(rdf_axiom_reification(
-                "native owl:Axiom reification metadata must have cardinality one",
+                "native RDF reification metadata must have cardinality one",
             ));
         }
     }
     value.ok_or_else(|| {
         rdf_axiom_reification(
-            "native owl:Axiom reification requires source, property, and target metadata",
+            "native RDF reification requires source, property, and target metadata",
         )
     })
 }
@@ -2864,6 +3111,7 @@ fn annotation_node<'view, 'graph>(
     index: usize,
     triple: &ListTriple<'graph>,
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    nested: Vec<Node>,
     session: &mut Session<'_>,
 ) -> NativeResult<Node> {
     build_node(
@@ -2880,7 +3128,7 @@ fn annotation_node<'view, 'graph>(
                 expressions,
                 session,
             )?),
-            Field::Set(Vec::new()),
+            Field::Set(nested),
         ],
         session,
     )
@@ -6217,7 +6465,127 @@ mod tests {
         );
         assert_eq!(
             mapped(nested.as_bytes(), None).unwrap_err().code,
-            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            "NATIVE_RDF_AXIOM_REIFICATION",
+        );
+
+        let cyclic = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:Annotation rdf:nodeID=\"a\"><owl:annotatedSource rdf:nodeID=\"b\"/><owl:annotatedProperty rdf:resource=\"urn:p\"/><owl:annotatedTarget rdf:resource=\"urn:o\"/><e:q rdf:resource=\"urn:x\"/></owl:Annotation><owl:Annotation rdf:nodeID=\"b\"><owl:annotatedSource rdf:nodeID=\"a\"/><owl:annotatedProperty rdf:resource=\"urn:q\"/><owl:annotatedTarget rdf:resource=\"urn:x\"/><e:p rdf:resource=\"urn:o\"/></owl:Annotation></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(cyclic.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_AXIOM_REIFICATION",
+        );
+    }
+
+    #[test]
+    fn nested_annotation_reification_maps_recursively() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let xsd_integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let plain_literal = "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:e=\"urn:\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf rdf:resource=\"urn:B\"/></rdf:Description><owl:Axiom rdf:nodeID=\"axiom\"><owl:annotatedSource rdf:resource=\"urn:A\"/><owl:annotatedProperty rdf:resource=\"{RDFS_SUB_CLASS_OF}\"/><owl:annotatedTarget rdf:resource=\"urn:B\"/><e:note rdf:resource=\"urn:value\"/></owl:Axiom><owl:Annotation rdf:nodeID=\"annotation\"><owl:annotatedSource rdf:nodeID=\"axiom\"/><owl:annotatedProperty rdf:resource=\"urn:note\"/><owl:annotatedTarget rdf:resource=\"urn:value\"/><e:provenance rdf:datatype=\"{xsd_integer}\">007</e:provenance></owl:Annotation><owl:Annotation rdf:nodeID=\"deep\"><owl:annotatedSource rdf:nodeID=\"annotation\"/><owl:annotatedProperty rdf:resource=\"urn:provenance\"/><owl:annotatedTarget rdf:datatype=\"{xsd_integer}\">007</owl:annotatedTarget><e:detail xml:lang=\"EN\">deep</e:detail></owl:Annotation></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("nested axiom annotations");
+        let annotation_property = |value: &str| {
+            entity(
+                "annotation_property",
+                iri(value.to_owned()).expect("annotation property IRI"),
+            )
+            .expect("annotation property")
+        };
+        let detail = Node::build(
+            5,
+            vec![
+                Field::Node(annotation_property("urn:detail")),
+                Field::Node(
+                    literal(
+                        "deep".to_owned(),
+                        entity(
+                            "datatype",
+                            iri(plain_literal.to_owned()).expect("plain literal IRI"),
+                        )
+                        .expect("plain literal datatype"),
+                        Some("en".to_owned()),
+                    )
+                    .expect("detail literal"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("detail annotation");
+        let provenance = Node::build(
+            5,
+            vec![
+                Field::Node(annotation_property("urn:provenance")),
+                Field::Node(
+                    literal(
+                        "007".to_owned(),
+                        entity(
+                            "datatype",
+                            iri(xsd_integer.to_owned()).expect("integer datatype IRI"),
+                        )
+                        .expect("integer datatype"),
+                        None,
+                    )
+                    .expect("provenance literal"),
+                ),
+                Field::Set(vec![detail]),
+            ],
+        )
+        .expect("provenance annotation");
+        let note = Node::build(
+            5,
+            vec![
+                Field::Node(annotation_property("urn:note")),
+                Field::Node(iri("urn:value".to_owned()).expect("note value")),
+                Field::Set(vec![provenance]),
+            ],
+        )
+        .expect("note annotation");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(class_node("urn:B")),
+                Field::Set(vec![note]),
+            ],
+        )
+        .expect("nested annotated subclass");
+        assert_eq!(document.axioms, [expected.as_bytes().to_vec()]);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let ontology = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:Ontology rdf:about=\"urn:o\"><e:note rdf:resource=\"urn:value\"/></owl:Ontology><owl:AnnotationProperty rdf:about=\"urn:note\"/><owl:Annotation rdf:nodeID=\"annotation\"><owl:annotatedSource rdf:resource=\"urn:o\"/><owl:annotatedProperty rdf:resource=\"urn:note\"/><owl:annotatedTarget rdf:resource=\"urn:value\"/><e:detail rdf:resource=\"urn:nested\"/></owl:Annotation></rdf:RDF>"
+        );
+        let document = mapped(ontology.as_bytes(), None).expect("nested ontology annotation");
+        let nested = Node::build(
+            5,
+            vec![
+                Field::Node(annotation_property("urn:detail")),
+                Field::Node(iri("urn:nested".to_owned()).expect("nested value")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("nested ontology annotation");
+        let expected = Node::build(
+            5,
+            vec![
+                Field::Node(annotation_property("urn:note")),
+                Field::Node(iri("urn:value".to_owned()).expect("ontology value")),
+                Field::Set(vec![nested]),
+            ],
+        )
+        .expect("ontology annotation");
+        assert_eq!(
+            document.ontology_annotations,
+            [expected.as_bytes().to_vec()],
+        );
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
         );
     }
 
