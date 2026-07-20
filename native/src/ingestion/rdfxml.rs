@@ -21,6 +21,9 @@ const XINCLUDE: &str = "http://www.w3.org/2001/XInclude";
 const RDF_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#RDF";
 const RDF_DESCRIPTION: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Description";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
+const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
 const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
 const OWL_VERSION_IRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
@@ -372,6 +375,12 @@ enum FrameRole {
         datatype: Option<String>,
         language: Option<String>,
     },
+    Collection {
+        subject: Resource,
+        predicate: String,
+        tail: Option<Resource>,
+        member_count: u64,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -533,6 +542,17 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     self.set_parent_object(object)?;
                     role
                 }
+                Some(FrameRole::Collection { .. }) => {
+                    self.check_collection_member_limit()?;
+                    let role =
+                        self.node_role(&event.attributes, &expanded_name, base.as_deref(), None)?;
+                    let member = match &role {
+                        FrameRole::Node { subject } => clone_resource(subject, self.session)?,
+                        _ => return Err(xml_syntax()),
+                    };
+                    self.append_collection_member(member)?;
+                    role
+                }
                 _ => return Err(xml_syntax()),
             }
         };
@@ -593,11 +613,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             }
             Resource::Blank(owned_text(value, self.session)?)
         } else {
-            self.blank_counter = self
-                .blank_counter
-                .checked_add(1)
-                .ok_or_else(|| NativeError::limit("native RDF blank counter overflow"))?;
-            Resource::Blank(generated_blank(self.blank_counter, self.session)?)
+            self.fresh_blank()?
         };
         if expanded_name != RDF_DESCRIPTION {
             let triple_subject = clone_resource(&subject, self.session)?;
@@ -633,18 +649,34 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         let resource = self.attribute(attributes, RDF, "resource")?;
         let node_id = self.attribute(attributes, RDF, "nodeID")?;
         let parse_type = self.attribute(attributes, RDF, "parseType")?;
+        let datatype_attribute = self.attribute(attributes, RDF, "datatype")?;
         if usize::from(resource.is_some())
             + usize::from(node_id.is_some())
             + usize::from(parse_type.is_some())
+            + usize::from(datatype_attribute.is_some())
             > 1
         {
             return Err(xml_syntax());
         }
-        if parse_type.is_some() {
-            return Err(mapping_incomplete());
+        if let Some(parse_type) = parse_type {
+            if parse_type != "Collection" {
+                return Err(mapping_incomplete());
+            }
+            if self.attribute(attributes, RDF, "ID")?.is_some() {
+                return Err(mapping_incomplete());
+            }
+            self.reject_unknown_attributes(
+                attributes,
+                &[(RDF, "parseType"), (XML, "base"), (XML, "lang")],
+            )?;
+            return Ok(FrameRole::Collection {
+                subject,
+                predicate: owned_text(predicate, self.session)?,
+                tail: None,
+                member_count: 0,
+            });
         }
-        let datatype = self
-            .attribute(attributes, RDF, "datatype")?
+        let datatype = datatype_attribute
             .map(|value| resolve_iri(value, base, self.session))
             .transpose()?;
         self.reject_unknown_attributes(
@@ -711,6 +743,89 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         })
     }
 
+    fn check_collection_member_limit(&self) -> NativeResult<()> {
+        let member_count = match self.frames.last().map(|frame| &frame.role) {
+            Some(FrameRole::Collection { member_count, .. }) => *member_count,
+            _ => return Err(xml_syntax()),
+        };
+        let following = member_count
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native RDF list length overflow"))?;
+        enforce_u64(
+            following,
+            self.session.limits().value(LimitKey::MaxRdfListLength),
+            "native RDF list exceeds max_rdf_list_length",
+        )
+    }
+
+    fn append_collection_member(&mut self, member: Resource) -> NativeResult<()> {
+        let (subject, predicate, tail, member_count) =
+            match self.frames.last().map(|frame| &frame.role) {
+                Some(FrameRole::Collection {
+                    subject,
+                    predicate,
+                    tail,
+                    member_count,
+                }) => (
+                    clone_resource(subject, self.session)?,
+                    owned_text(predicate, self.session)?,
+                    tail.as_ref()
+                        .map(|value| clone_resource(value, self.session))
+                        .transpose()?,
+                    *member_count,
+                ),
+                _ => return Err(xml_syntax()),
+            };
+        let following = member_count
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native RDF list length overflow"))?;
+        enforce_u64(
+            following,
+            self.session.limits().value(LimitKey::MaxRdfListLength),
+            "native RDF list exceeds max_rdf_list_length",
+        )?;
+        let cell = self.fresh_blank()?;
+        let linked_cell = clone_resource(&cell, self.session)?;
+        match tail {
+            Some(tail) => self.add_resource_edge(tail, RDF_REST, linked_cell)?,
+            None => self.add_resource_edge(subject, &predicate, linked_cell)?,
+        }
+        let first_subject = clone_resource(&cell, self.session)?;
+        self.add_resource_edge(first_subject, RDF_FIRST, member)?;
+        match self.frames.last_mut().map(|frame| &mut frame.role) {
+            Some(FrameRole::Collection {
+                tail, member_count, ..
+            }) => {
+                *tail = Some(cell);
+                *member_count = following;
+                Ok(())
+            }
+            _ => Err(xml_syntax()),
+        }
+    }
+
+    fn add_resource_edge(
+        &mut self,
+        subject: Resource,
+        predicate: &str,
+        object: Resource,
+    ) -> NativeResult<()> {
+        let predicate = owned_text(predicate, self.session)?;
+        self.add(Triple {
+            subject,
+            predicate,
+            object: object.into(),
+        })
+    }
+
+    fn fresh_blank(&mut self) -> NativeResult<Resource> {
+        self.blank_counter = self
+            .blank_counter
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native RDF blank counter overflow"))?;
+        generated_blank(self.blank_counter, self.session).map(Resource::Blank)
+    }
+
     fn text(&mut self, value: String, _span: Span) -> NativeResult<()> {
         if value.is_empty() {
             return Ok(());
@@ -765,35 +880,49 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         if frame.raw_name != raw_name {
             return Err(xml_syntax());
         }
-        if let FrameRole::Property {
-            subject,
-            predicate,
-            object_set,
-            text,
-            datatype,
-            language,
-        } = frame.role
-        {
-            if object_set {
-                if !text.chars().all(char::is_whitespace) {
-                    return Err(xml_syntax());
+        match frame.role {
+            FrameRole::Property {
+                subject,
+                predicate,
+                object_set,
+                text,
+                datatype,
+                language,
+            } => {
+                if object_set {
+                    if !text.chars().all(char::is_whitespace) {
+                        return Err(xml_syntax());
+                    }
+                } else {
+                    let datatype = match datatype {
+                        Some(value) => Some(value),
+                        None if language.is_none() => Some(owned_text(XSD_STRING, self.session)?),
+                        None => None,
+                    };
+                    self.add(Triple {
+                        subject,
+                        predicate,
+                        object: Term::Literal {
+                            lexical: text,
+                            datatype,
+                            language,
+                        },
+                    })?;
                 }
-            } else {
-                let datatype = match datatype {
-                    Some(value) => Some(value),
-                    None if language.is_none() => Some(owned_text(XSD_STRING, self.session)?),
-                    None => None,
-                };
-                self.add(Triple {
-                    subject,
-                    predicate,
-                    object: Term::Literal {
-                        lexical: text,
-                        datatype,
-                        language,
-                    },
-                })?;
             }
+            FrameRole::Collection {
+                subject,
+                predicate,
+                tail,
+                ..
+            } => {
+                let nil = Resource::Iri(owned_text(RDF_NIL, self.session)?);
+                match tail {
+                    Some(tail) => self.add_resource_edge(tail, RDF_REST, nil)?,
+                    None => self.add_resource_edge(subject, &predicate, nil)?,
+                }
+            }
+            FrameRole::Root | FrameRole::Node { .. } => {}
         }
         self.namespaces.truncate(frame.namespace_start);
         if self.frames.is_empty() {
@@ -2182,6 +2311,145 @@ mod tests {
         );
         let mut session = Session::new(&mut guard, &limits, 0)?;
         resolve_iri(reference, base, &mut session)
+    }
+
+    fn graph(source: &str) -> NativeResult<Vec<Triple>> {
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len())?;
+        GraphParser::new(source, None, &mut session)?.parse()
+    }
+
+    fn iri_resource(value: &str) -> Resource {
+        Resource::Iri(value.to_owned())
+    }
+
+    fn blank_resource(value: &str) -> Resource {
+        Resource::Blank(value.to_owned())
+    }
+
+    fn contains_edge(graph: &[Triple], subject: Resource, predicate: &str, object: Term) -> bool {
+        graph.contains(&Triple {
+            subject,
+            predicate: predicate.to_owned(),
+            object,
+        })
+    }
+
+    #[test]
+    fn parse_type_collection_emits_empty_single_and_multi_member_chains() {
+        let empty = graph(&format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Collection\"/></rdf:Description></rdf:RDF>"
+        ))
+        .expect("empty collection");
+        assert_eq!(empty.len(), 1);
+        assert!(contains_edge(
+            &empty,
+            iri_resource("urn:s"),
+            "urn:e:p",
+            Term::Iri(RDF_NIL.to_owned()),
+        ));
+
+        let single = graph(&format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:a\"/></e:p></rdf:Description></rdf:RDF>"
+        ))
+        .expect("single collection");
+        assert_eq!(single.len(), 3);
+        assert!(contains_edge(
+            &single,
+            iri_resource("urn:s"),
+            "urn:e:p",
+            blank_resource("generated-1").into(),
+        ));
+        assert!(contains_edge(
+            &single,
+            blank_resource("generated-1"),
+            RDF_FIRST,
+            iri_resource("urn:a").into(),
+        ));
+        assert!(contains_edge(
+            &single,
+            blank_resource("generated-1"),
+            RDF_REST,
+            Term::Iri(RDF_NIL.to_owned()),
+        ));
+
+        let multiple = graph(&format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:a\"/><rdf:Description rdf:about=\"urn:b\"/></e:p></rdf:Description></rdf:RDF>"
+        ))
+        .expect("multi collection");
+        assert_eq!(multiple.len(), 5);
+        assert!(contains_edge(
+            &multiple,
+            blank_resource("generated-1"),
+            RDF_REST,
+            blank_resource("generated-2").into(),
+        ));
+        assert!(contains_edge(
+            &multiple,
+            blank_resource("generated-2"),
+            RDF_FIRST,
+            iri_resource("urn:b").into(),
+        ));
+        assert!(contains_edge(
+            &multiple,
+            blank_resource("generated-2"),
+            RDF_REST,
+            Term::Iri(RDF_NIL.to_owned()),
+        ));
+    }
+
+    #[test]
+    fn parse_type_collection_rejects_conflicts_text_and_preflights_length() {
+        for source in [
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Collection\" rdf:resource=\"urn:o\"/></rdf:Description></rdf:RDF>"
+            ),
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Collection\">not-whitespace</e:p></rdf:Description></rdf:RDF>"
+            ),
+        ] {
+            assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
+        let unsupported = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Resource\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            graph(&unsupported).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE"
+        );
+
+        let limits = Limits::default();
+        let maximum = limits.value(LimitKey::MaxRdfListLength);
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut parser = GraphParser::new("", None, &mut session).expect("parser");
+        parser.frames.push(Frame {
+            raw_name: "e:p".to_owned(),
+            namespace_start: parser.namespaces.len(),
+            base: None,
+            language: None,
+            role: FrameRole::Collection {
+                subject: iri_resource("urn:s"),
+                predicate: "urn:e:p".to_owned(),
+                tail: None,
+                member_count: maximum,
+            },
+        });
+        assert_eq!(
+            parser.check_collection_member_limit().unwrap_err().code,
+            "NATIVE_WIRE_LIMIT"
+        );
+        assert_eq!(parser.blank_counter, 0);
+        assert!(parser.triples.is_empty());
     }
 
     #[test]
