@@ -62,9 +62,8 @@ def test_unknown_major_model_schema_required_section_and_flags_fail_as_version_e
     struct.pack_into("<I", flags, 16, 0x8000_0000)
     cases.append(flags)
     required = bytearray(original)
-    section_count = struct.unpack_from("<I", required, 20)[0]
-    last_directory = 96 + (section_count - 1) * 72
-    struct.pack_into("<H", required, last_directory, 60_000)
+    footer_directory = 96 + (14 - 1) * 72
+    struct.pack_into("<H", required, footer_directory, 60_000)
     cases.append(required)
     for case in cases:
         with pytest.raises(WireVersionError):

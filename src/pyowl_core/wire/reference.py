@@ -19,7 +19,7 @@ from pyowl_core.exceptions import WireCorruptionError, WireVersionError
 _HEADER = struct.Struct("<8sHHIIIIIQQQ32sII")
 _DIRECTORY = struct.Struct("<HHIQQQQ32s")
 _REQUIRED = frozenset(range(1, 15))
-_KNOWN_TABLES = _REQUIRED | {0x8001, 0x8002}
+_KNOWN_TABLES = _REQUIRED | {0x8001, 0x8002, 0x8003}
 
 
 @dataclass(frozen=True, slots=True)

@@ -145,7 +145,11 @@ def test_new_minor_and_unknown_optional_section_are_skippable() -> None:
 
     sections = dict(image.sections)
     sections[60_000] = b"opaque optional payload"
-    extended = encode_sections(sections, feature_flags=image.feature_flags)
+    extended = encode_sections(
+        sections,
+        feature_flags=image.feature_flags,
+        minor=image.minor,
+    )
     decoded = decode_snapshot(extended)
     assert decoded.structural_fingerprint == source.structural_fingerprint
     assert encode_snapshot(decoded) == encode_snapshot(source)

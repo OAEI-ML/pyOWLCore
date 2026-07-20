@@ -11,7 +11,8 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+import mmap as _mmap
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
@@ -52,6 +53,7 @@ ENCODED_STRUCTURAL_MODEL_SCHEMA_V1: Final = 1
 _ROOT_ONTOLOGY_ANNOTATION = 1
 _ROOT_AXIOM = 2
 _ROOT_EXTENSION = 3
+_ROOT_DIGEST_DOMAIN: Final = b"pyowl-core:encoded-structural-roots:v1\x00"
 
 _SEGMENT_DIRECT = 1
 _SEGMENT_OVERLAY_BASE = 2
@@ -201,6 +203,7 @@ if ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1 != _FROZEN_DESCRIPTOR_SHA256_V1:
     )
 
 _TRUSTED_ZERO_COPY = object()
+_TRUSTED_MAPPED_ZERO_COPY = object()
 _VALIDATED_VIEW_SEAL = object()
 
 
@@ -422,6 +425,15 @@ def produce_encoded_structural_view_v1(
         )
         if segmented is not None:
             return segmented
+    direct = _produce_mapped_direct_view_v1(
+        owner,
+        scope=scope,
+        document_key=document_key,
+        limits=selected_limits,
+        budget=_budget,
+    )
+    if direct is not None:
+        return direct
     direct = _produce_native_direct_view_v1(
         owner,
         scope=scope,
@@ -807,6 +819,81 @@ def _reserve_referenced_rows(
     if budget is None:
         return
     budget.add_shared_rows(sum(len(source.buffers["root_ids"]) // 4 for source in sources))
+
+
+def _produce_mapped_direct_view_v1(
+    owner: OntologyView,
+    *,
+    scope: AxiomScope,
+    document_key: str | None,
+    limits: ParseLimits,
+    budget: IndexBuildBudget | None,
+) -> EncodedStructuralViewV1 | None:
+    """Return closure columns borrowed from a validated PYOCORE mapping."""
+
+    # Keep the dependency local: wire mapping imports the public encoded view
+    # only when a caller requests it through OntologyView.view(...).
+    from pyowl_core.wire.mapping import MappedOntologySnapshot
+
+    if type(owner) is not MappedOntologySnapshot:
+        return None
+    acquire = getattr(owner, "_encoded_structural_columns_v1", None)
+    if not callable(acquire):
+        return None
+    result = acquire(scope, document_key, limits)
+    if result is None:
+        return None
+    if type(result) is not tuple or len(result) != 2:
+        _fail("mapped encoded-view result has invalid framing", "ENCODED_VIEW_MAPPED")
+    raw_buffers, lease = result
+    if not isinstance(raw_buffers, Mapping) or set(raw_buffers) != set(_BUFFER_NAMES):
+        _fail("mapped encoded-view result has invalid columns", "ENCODED_VIEW_MAPPED")
+    buffers = MappingProxyType(
+        {name: cast(memoryview, raw_buffers[name]) for name in _BUFFER_NAMES}
+    )
+    if budget is not None:
+        budget.add_shared_rows(
+            len(buffers["root_ids"]) // 4
+            + len(buffers["node_tags"]) // 2
+            + len(buffers["field_kinds"])
+            + len(buffers["item_kinds"])
+        )
+        budget.add("encoded_mapped_metadata", rows=0, bytes_=256)
+    retained = (owner, lease)
+    segment = EncodedStructuralSegmentV1(
+        _SEGMENT_DIRECT,
+        owner,
+        None,
+        _POSTINGS_ALL,
+        _empty_bytes_view(),
+        _empty_bytes_view(),
+        None,
+        retained,
+    )
+    segments = (segment,)
+    candidate = EncodedStructuralViewV1(
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
+        owner,
+        buffers,
+        ENCODED_STRUCTURAL_DESCRIPTOR_V1,
+        _fingerprint(buffers, segments),
+        segments,
+        scope,
+        document_key,
+        retained,
+        None,
+    )
+    return _freeze_encoded_structural_view_v1(
+        candidate,
+        expected_owner=owner,
+        expected_scope=scope,
+        expected_document_key=document_key,
+        limits=limits,
+        trusted_zero_copy=_TRUSTED_MAPPED_ZERO_COPY,
+        active_views=frozenset(),
+    )
 
 
 def _produce_native_direct_view_v1(
@@ -1340,6 +1427,7 @@ def _freeze_encoded_structural_view_v1(
         _fail("encoded structural buffers must be a mapping", "ENCODED_VIEW_BUFFERS")
 
     frozen: dict[str, memoryview] = {}
+    mapped_exporter: object | None = None
     try:
         for key, raw in raw_buffers.items():
             if len(frozen) >= len(_BUFFER_NAMES):
@@ -1363,11 +1451,25 @@ def _freeze_encoded_structural_view_v1(
                     "encoded structural buffers must be read-only contiguous byte views",
                     "ENCODED_VIEW_BUFFERS",
                 )
-            if trusted_zero_copy is _TRUSTED_ZERO_COPY and type(raw.obj) is not bytes:
-                _fail(
-                    "module-owned zero-copy buffers require immutable bytes exporters",
-                    "ENCODED_VIEW_BUFFERS",
-                )
+            if trusted_zero_copy is _TRUSTED_ZERO_COPY:
+                if type(raw.obj) is not bytes:
+                    _fail(
+                        "module-owned zero-copy buffers require immutable bytes exporters",
+                        "ENCODED_VIEW_BUFFERS",
+                    )
+            elif trusted_zero_copy is _TRUSTED_MAPPED_ZERO_COPY:
+                if type(raw.obj) is not _mmap.mmap:
+                    _fail(
+                        "mapped zero-copy buffers require an mmap exporter",
+                        "ENCODED_VIEW_BUFFERS",
+                    )
+                if mapped_exporter is None:
+                    mapped_exporter = raw.obj
+                elif raw.obj is not mapped_exporter:
+                    _fail(
+                        "mapped zero-copy buffers must share one exporter",
+                        "ENCODED_VIEW_BUFFERS",
+                    )
             frozen[key] = raw
     except (BackendProtocolError, ResourceLimitError):
         raise
@@ -1395,7 +1497,8 @@ def _freeze_encoded_structural_view_v1(
             len(frozen["item_kinds"]),
         ),
     )
-    if trusted_zero_copy is not _TRUSTED_ZERO_COPY:
+    trusted = trusted_zero_copy in {_TRUSTED_ZERO_COPY, _TRUSTED_MAPPED_ZERO_COPY}
+    if not trusted:
         selected_limits.enforce("max_temporary_bytes", total_bytes)
         if selected_limits.max_memory_bytes is not None:
             selected_limits.enforce("max_memory_bytes", total_bytes)
@@ -1454,6 +1557,7 @@ def _freeze_segments(
     trusted_zero_copy: object | None,
     active_views: frozenset[int],
 ) -> tuple[EncodedStructuralSegmentV1, ...]:
+    trusted = trusted_zero_copy in {_TRUSTED_ZERO_COPY, _TRUSTED_MAPPED_ZERO_COPY}
     if not raw_segments:
         _fail("encoded structural segment table must not be empty", "ENCODED_VIEW_SEGMENTS")
     limits.enforce("max_index_rows", len(raw_segments))
@@ -1541,8 +1645,14 @@ def _freeze_segments(
         limits.enforce("max_index_rows", posting_rows)
         limits.enforce("max_index_bytes", local_buffer_bytes + posting_bytes)
         limits.enforce("max_canonical_work", local_buffer_bytes + posting_bytes)
-        if trusted_zero_copy is _TRUSTED_ZERO_COPY:
-            if type(raw_root_ids.obj) is not bytes or type(raw_scope_map.obj) is not bytes:
+        if trusted:
+            allowed_exporters = (bytes,) if trusted_zero_copy is _TRUSTED_ZERO_COPY else (
+                bytes,
+                _mmap.mmap,
+            )
+            if not isinstance(raw_root_ids.obj, allowed_exporters) or not isinstance(
+                raw_scope_map.obj, allowed_exporters
+            ):
                 _fail(
                     "module-owned zero-copy segment rows require immutable bytes exporters",
                     "ENCODED_VIEW_SEGMENTS",
@@ -1581,11 +1691,18 @@ def _freeze_segments(
                     "referenced encoded structural view options are invalid",
                     code="ENCODED_VIEW_SEGMENTS",
                 ) from error
-            source_trust = (
-                _TRUSTED_ZERO_COPY
-                if type(source) is EncodedStructuralViewV1 and source._seal is _VALIDATED_VIEW_SEAL
-                else None
-            )
+            source_trust: object | None = None
+            if type(source) is EncodedStructuralViewV1 and source._seal is _VALIDATED_VIEW_SEAL:
+                exporters = tuple(value.obj for value in source.buffers.values())
+                if exporters and all(type(value) is _mmap.mmap for value in exporters) and all(
+                    value is exporters[0] for value in exporters[1:]
+                ):
+                    source_trust = _TRUSTED_MAPPED_ZERO_COPY
+                else:
+                    # Validated non-mapped publications are normalized onto
+                    # exact immutable bytes; recheck that invariant so
+                    # object.__setattr__ cannot turn the seal into a bypass.
+                    source_trust = _TRUSTED_ZERO_COPY
             frozen_source = _freeze_encoded_structural_view_v1(
                 source,
                 expected_owner=owner,
@@ -1742,7 +1859,7 @@ def _validate_segment_family(
         )
 
 
-def _validate_columns(buffers: Mapping[str, memoryview], limits: ParseLimits) -> None:
+def _validate_columns(buffers: Mapping[str, memoryview], limits: ParseLimits) -> bytes:
     columns = _Columns(
         _UIntColumn(buffers["root_kinds"], 1),
         _UIntColumn(buffers["root_ids"], 4),
@@ -1854,6 +1971,7 @@ def _validate_columns(buffers: Mapping[str, memoryview], limits: ParseLimits) ->
 
     reached: set[int] = set()
     previous_root: tuple[int, bytes] | None = None
+    root_hasher = hashlib.sha256(_ROOT_DIGEST_DOMAIN)
     for root_index in range(len(columns.roots_kind)):
         root_kind = columns.roots_kind[root_index]
         root_id = columns.roots_id[root_index]
@@ -1869,6 +1987,9 @@ def _validate_columns(buffers: Mapping[str, memoryview], limits: ParseLimits) ->
                 "ENCODED_VIEW_STRUCTURE",
             )
         previous_root = order_key
+        root_hasher.update(root_kind.to_bytes(1, "little"))
+        root_hasher.update(len(encoded).to_bytes(8, "little"))
+        root_hasher.update(encoded)
         try:
             decoded = decode_canonical(encoded, limits=limits)
         except ResourceLimitError:
@@ -1881,6 +2002,28 @@ def _validate_columns(buffers: Mapping[str, memoryview], limits: ParseLimits) ->
         _validate_root_type(root_kind, decoded)
     if reached != set(range(1, node_count + 1)):
         _fail("encoded structural view contains unreachable nodes", "ENCODED_VIEW_STRUCTURE")
+    return root_hasher.digest()
+
+
+def _encoded_structural_root_digest_v1(
+    buffers: Mapping[str, memoryview], limits: ParseLimits
+) -> bytes:
+    """Validate one column set and return its canonical effective-root digest."""
+
+    return _validate_columns(buffers, limits)
+
+
+def _encoded_structural_rows_digest_v1(
+    rows: Iterable[tuple[int, bytes | memoryview]],
+) -> bytes:
+    """Digest canonical model rows using the encoded-view root ordering."""
+
+    hasher = hashlib.sha256(_ROOT_DIGEST_DOMAIN)
+    for kind, encoded in rows:
+        hasher.update(kind.to_bytes(1, "little"))
+        hasher.update(len(encoded).to_bytes(8, "little"))
+        hasher.update(encoded)
+    return hasher.digest()
 
 
 def _validate_leaf(

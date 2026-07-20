@@ -115,6 +115,22 @@ name = "VIEW_PROVENANCE"
 required = false
 schema = 1
 
+[[sections]]
+kind = 32771
+name = "ENCODED_STRUCTURAL_V1"
+required = false
+schema = 1
+
+[encoded_structural_v1]
+minor = 1
+row_count = 1
+magic_hex = "50594f4345563100"
+header_layout = "<8sHHI32s32s"
+buffer_count = 11
+directory_layout = "<QQ"
+buffer_alignment = 8
+selection = "closure"
+
 [table]
 count = "u64"
 offset = "u64"

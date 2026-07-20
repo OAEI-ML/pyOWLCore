@@ -463,10 +463,13 @@ def _validate_table(section: memoryview, entry: DirectoryEntry, guard: Guard) ->
             next_offset = _U64.unpack_from(section, 16 + 8 * index)[0]
             if next_offset < offset:
                 raise _corrupt("wire table contains a reversed row slice")
-            current = bytes(section[header_bytes + offset : header_bytes + next_offset])
-            if previous_row is not None and current <= previous_row:
-                raise _corrupt("wire table rows are not strictly canonical")
-            previous_row = current
+            # A one-row table is already canonical by construction.  Avoid an
+            # ontology-sized temporary copy for mmap-backed bulk-column rows.
+            if count > 1:
+                current = bytes(section[header_bytes + offset : header_bytes + next_offset])
+                if previous_row is not None and current <= previous_row:
+                    raise _corrupt("wire table rows are not strictly canonical")
+                previous_row = current
         previous_offset = offset
     if previous_offset != payload_size:
         raise _corrupt("wire table offsets do not exactly cover the payload")

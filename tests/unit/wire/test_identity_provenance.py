@@ -84,7 +84,10 @@ def test_identity_and_digests_match_direct_decoded_and_unmaterialized_mmap(
 def test_minor_zero_manifest_metadata_has_zero_copy_identity_fallback(tmp_path: Path) -> None:
     source = snapshot("A")
     direct = source.view(OntologyIdentityIndex)
-    encoded = encode_snapshot(source)
+    current = read_wire(encode_snapshot(source))
+    sections = dict(current.sections)
+    sections.pop(int(SectionKind.ENCODED_STRUCTURAL_V1))
+    encoded = encode_sections(sections, feature_flags=current.feature_flags, minor=0)
     image = read_wire(encoded)
     assert image.minor == 0
     assert int(SectionKind.VIEW_PROVENANCE) not in image.sections

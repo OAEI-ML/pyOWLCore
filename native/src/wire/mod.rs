@@ -23,6 +23,12 @@ const SECTION_REQUIRED: u16 = 1;
 const SECTION_OPTIONAL: u16 = 2;
 const SWRL_KIND: u16 = 0x8001;
 const VIEW_PROVENANCE_KIND: u16 = 0x8002;
+const ENCODED_STRUCTURAL_KIND: u16 = 0x8003;
+const ENCODED_STRUCTURAL_MAGIC: &[u8; 8] = b"PYOCEV1\0";
+const ENCODED_STRUCTURAL_DESCRIPTOR_SHA256: [u8; 32] = [
+    0x9a, 0xd2, 0x9d, 0xb6, 0xa7, 0xe6, 0x16, 0xf6, 0x5c, 0xea, 0x29, 0x57, 0xbc, 0x5b, 0xa8, 0xd1,
+    0xf9, 0xb9, 0x9e, 0xf0, 0xeb, 0x1f, 0xe1, 0x43, 0x2c, 0x09, 0xbe, 0x25, 0x78, 0x62, 0x67, 0xb5,
+];
 const NONE_U64: u64 = u64::MAX;
 const HASH_CHUNK: usize = 64 * 1024;
 pub(crate) const RECEIPT_MAGIC: &[u8; 8] = b"PYNVAL1\0";
@@ -257,12 +263,18 @@ fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Val
                 "required PYOCORE section is marked optional",
             ));
         }
-        if (required_kind || matches!(kind, SWRL_KIND | VIEW_PROVENANCE_KIND)) && schema != 1 {
+        if (required_kind
+            || matches!(
+                kind,
+                SWRL_KIND | VIEW_PROVENANCE_KIND | ENCODED_STRUCTURAL_KIND
+            ))
+            && schema != 1
+        {
             return Err(NativeError::version("unsupported PYOCORE section schema"));
         }
-        if kind == VIEW_PROVENANCE_KIND && minor < 1 {
+        if matches!(kind, VIEW_PROVENANCE_KIND | ENCODED_STRUCTURAL_KIND) && minor < 1 {
             return Err(NativeError::version(
-                "VIEW_PROVENANCE requires PYOCORE minor 1",
+                "optional PYOCORE section requires minor 1",
             ));
         }
         if decoded_length != stored_length {
@@ -336,7 +348,11 @@ fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Val
         if digest != entry.digest {
             return Err(NativeError::corrupt("PYOCORE section SHA-256 mismatch"));
         }
-        if (1..=14).contains(&entry.kind) || matches!(entry.kind, SWRL_KIND | VIEW_PROVENANCE_KIND)
+        if (1..=14).contains(&entry.kind)
+            || matches!(
+                entry.kind,
+                SWRL_KIND | VIEW_PROVENANCE_KIND | ENCODED_STRUCTURAL_KIND
+            )
         {
             tables.push(validate_table(data, *entry, guard, &mut work)?);
         }
@@ -536,6 +552,7 @@ fn validate_semantics(
     let docs = validate_documents(data, tables, limits, guard, work, memory)?;
     validate_imports(data, tables, &docs, limits, guard, work)?;
     let view = validate_view(data, tables, &docs, limits)?;
+    validate_encoded_structural(data, tables, limits)?;
     validate_view_provenance(data, tables, limits, guard, work)?;
     validate_origins(data, tables, limits, guard, work)?;
     validate_footer(data, tables, &view)?;
@@ -897,6 +914,200 @@ fn validate_view_provenance(
         }
     }
     reader.finish()
+}
+
+fn validate_encoded_structural(data: &[u8], tables: &[Table], limits: &Limits) -> NativeResult<()> {
+    let Some(table) = find_table(tables, ENCODED_STRUCTURAL_KIND) else {
+        return Ok(());
+    };
+    if table.count != 1 {
+        return Err(NativeError::corrupt(
+            "ENCODED_STRUCTURAL_V1 must contain exactly one row",
+        ));
+    }
+    let row = table.row(data, 0)?;
+    const BUFFER_COUNT: usize = 11;
+    const HEADER_BYTES: usize = 80;
+    const DIRECTORY_BYTES: usize = 16;
+    const PREFIX_BYTES: usize = HEADER_BYTES + BUFFER_COUNT * DIRECTORY_BYTES;
+    const WIDTHS: [usize; BUFFER_COUNT] = [1, 4, 2, 8, 1, 8, 8, 1, 8, 8, 1];
+    if row.len() < PREFIX_BYTES
+        || row.get(..8) != Some(ENCODED_STRUCTURAL_MAGIC)
+        || u16_at(row, 8)? != 1
+        || u16_at(row, 10)? != 1
+        || u32_at(row, 12)? != BUFFER_COUNT as u32
+        || row.get(16..48) != Some(&ENCODED_STRUCTURAL_DESCRIPTOR_SHA256)
+    {
+        return Err(NativeError::corrupt(
+            "ENCODED_STRUCTURAL_V1 descriptor metadata is invalid",
+        ));
+    }
+    let mut buffers: [&[u8]; BUFFER_COUNT] = [&[]; BUFFER_COUNT];
+    let mut cursor = PREFIX_BYTES;
+    let mut total_bytes = 0_u64;
+    for (index, width) in WIDTHS.into_iter().enumerate() {
+        let offset = usize_from_u64(u64_at(row, HEADER_BYTES + index * DIRECTORY_BYTES)?)?;
+        let length = usize_from_u64(u64_at(row, HEADER_BYTES + index * DIRECTORY_BYTES + 8)?)?;
+        let expected = cursor
+            .checked_add(7)
+            .map(|value| value & !7)
+            .ok_or_else(|| NativeError::corrupt("encoded column alignment overflow"))?;
+        let end = offset
+            .checked_add(length)
+            .ok_or_else(|| NativeError::corrupt("encoded column range overflow"))?;
+        if offset != expected
+            || end > row.len()
+            || (index != BUFFER_COUNT - 1 && length % width != 0)
+            || row
+                .get(cursor..offset)
+                .is_none_or(|padding| padding.iter().any(|byte| *byte != 0))
+        {
+            return Err(NativeError::corrupt(
+                "ENCODED_STRUCTURAL_V1 buffer directory is invalid",
+            ));
+        }
+        buffers[index] = row
+            .get(offset..end)
+            .ok_or_else(|| NativeError::corrupt("encoded column exceeds row bounds"))?;
+        total_bytes = total_bytes
+            .checked_add(length as u64)
+            .ok_or_else(|| NativeError::limit("encoded column byte count overflow"))?;
+        cursor = end;
+    }
+    if cursor != row.len() {
+        return Err(NativeError::corrupt(
+            "ENCODED_STRUCTURAL_V1 row has trailing bytes",
+        ));
+    }
+    if total_bytes > limits.value(LimitKey::MaxIndexBytes) {
+        return Err(NativeError::limit("encoded columns exceed max_index_bytes"));
+    }
+    validate_encoded_column_shapes(buffers, limits)
+}
+
+fn validate_encoded_column_shapes(buffers: [&[u8]; 11], limits: &Limits) -> NativeResult<()> {
+    let root_count = buffers[0].len();
+    let node_count = buffers[2].len() / 2;
+    let field_count = buffers[4].len();
+    let item_count = buffers[7].len();
+    if buffers[1].len() != root_count.saturating_mul(4)
+        || buffers[3].len() != node_count.saturating_add(1).saturating_mul(8)
+        || buffers[5].len() != field_count.saturating_mul(8)
+        || buffers[6].len() != field_count.saturating_mul(8)
+        || buffers[8].len() != item_count.saturating_mul(8)
+        || buffers[9].len() != item_count.saturating_mul(8)
+    {
+        return Err(NativeError::corrupt(
+            "encoded structural column lengths disagree",
+        ));
+    }
+    let maximum_rows = root_count.max(node_count).max(field_count).max(item_count) as u64;
+    if node_count as u64 > limits.max_terms || maximum_rows > limits.value(LimitKey::MaxIndexRows) {
+        return Err(NativeError::limit("encoded structural rows exceed limits"));
+    }
+    if u64_at(buffers[3], 0)? != 0 || u64_at(buffers[3], node_count * 8)? != field_count as u64 {
+        return Err(NativeError::corrupt(
+            "encoded structural field offsets are invalid",
+        ));
+    }
+    let mut previous = 0_u64;
+    for index in 1..=node_count {
+        let current = u64_at(buffers[3], index * 8)?;
+        if current < previous || current > field_count as u64 {
+            return Err(NativeError::corrupt(
+                "encoded structural field offsets are invalid",
+            ));
+        }
+        previous = current;
+    }
+    for index in 0..root_count {
+        if !matches!(buffers[0][index], 1..=3) {
+            return Err(NativeError::corrupt(
+                "encoded structural root kind is invalid",
+            ));
+        }
+        let node_id = u32_at(buffers[1], index * 4)?;
+        if node_id == 0 || node_id as usize > node_count {
+            return Err(NativeError::corrupt(
+                "encoded structural root ID is invalid",
+            ));
+        }
+    }
+    let mut item_cursor = 0_usize;
+    let mut scalar_cursor = 0_usize;
+    for index in 0..field_count {
+        let kind = buffers[4][index];
+        let value = u64_at(buffers[5], index * 8)?;
+        let length = u64_at(buffers[6], index * 8)?;
+        if matches!(kind, 6 | 7) {
+            let start = usize_from_u64(value)?;
+            let count = usize_from_u64(length)?;
+            let end = start
+                .checked_add(count)
+                .ok_or_else(|| NativeError::corrupt("encoded item range overflow"))?;
+            if start != item_cursor || end > item_count {
+                return Err(NativeError::corrupt(
+                    "encoded structural item range is invalid",
+                ));
+            }
+            for item_index in start..end {
+                scalar_cursor = validate_encoded_leaf(
+                    buffers[7][item_index],
+                    u64_at(buffers[8], item_index * 8)?,
+                    u64_at(buffers[9], item_index * 8)?,
+                    node_count,
+                    buffers[10],
+                    scalar_cursor,
+                )?;
+            }
+            item_cursor = end;
+        } else {
+            scalar_cursor =
+                validate_encoded_leaf(kind, value, length, node_count, buffers[10], scalar_cursor)?;
+        }
+    }
+    if item_cursor != item_count || scalar_cursor != buffers[10].len() {
+        return Err(NativeError::corrupt(
+            "encoded structural arenas are not exactly covered",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_encoded_leaf(
+    kind: u8,
+    value: u64,
+    length: u64,
+    node_count: usize,
+    scalar_bytes: &[u8],
+    scalar_cursor: usize,
+) -> NativeResult<usize> {
+    match kind {
+        0 if value == 0 && length == 0 => Ok(scalar_cursor),
+        1 if length == 0 && value != 0 && value <= node_count as u64 => Ok(scalar_cursor),
+        2..=5 => {
+            let start = usize_from_u64(value)?;
+            let length = usize_from_u64(length)?;
+            let end = start
+                .checked_add(length)
+                .ok_or_else(|| NativeError::corrupt("encoded scalar range overflow"))?;
+            let payload = scalar_bytes
+                .get(start..end)
+                .ok_or_else(|| NativeError::corrupt("encoded scalar exceeds arena bounds"))?;
+            if start != scalar_cursor
+                || (kind == 2 && std::str::from_utf8(payload).is_err())
+                || (kind == 5 && !payload.is_ascii())
+                || (kind == 4
+                    && (payload.is_empty() || (payload.len() > 1 && payload.last() == Some(&0))))
+            {
+                return Err(NativeError::corrupt("encoded structural scalar is invalid"));
+            }
+            Ok(end)
+        }
+        _ => Err(NativeError::corrupt(
+            "encoded structural component kind is invalid",
+        )),
+    }
 }
 
 fn read_identity_text<'a>(reader: &mut Reader<'a>) -> NativeResult<&'a [u8]> {

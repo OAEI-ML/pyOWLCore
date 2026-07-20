@@ -37,9 +37,10 @@ of cache files is forbidden.
 
 The current supported maximum is wire minor 1. `CoreCapabilities.wire_format`
 and `WIRE_FORMAT_VERSION` report `(1, 1)` for direct, decoded, and mapped views.
-The canonical writer may still emit a minimal minor-0 image when no minor-1
-optional section is needed; this does not change the semantic capability
-version exposed to consumers.
+The canonical writer emits minor 1 so every new artifact can carry the mapped
+encoded-structural section. Readers continue to accept historical minor-0
+images and use the complete scalar fallback when that optional section is
+absent.
 
 ## 3. Scalar conventions
 
@@ -151,6 +152,22 @@ IRI optionals encoded as `u8 present` and, when present,
 `u64 iri_length + iri_utf8`. A version IRI requires an ontology IRI. Counts,
 UTF-8, IRI validity, strict key order, and limits are validated before the
 metadata is published.
+
+Wire minor 1 also defines optional section `ENCODED_STRUCTURAL_V1` (kind
+`0x8003`, schema 1). It contains exactly one closure row for the frozen
+`pyowl-core/structural-columns` schema. The row begins with the eight-byte
+magic `PYOCEV1\0`, `u16` encoded/model schema versions, `u32` buffer count,
+the 32-byte descriptor digest, and a 32-byte digest binding the canonical
+encoded roots to the required `VIEW` postings. Eleven `(u64 offset, u64
+length)` entries follow in descriptor buffer order. Buffer starts are
+eight-byte aligned relative to the row, gaps are zero, and the final slice
+ends exactly at the row boundary.
+
+Readers validate the descriptor, widths, graph structure, canonical ordering,
+resource limits, and root binding before publication. A mapped closure request
+borrows the eleven read-only slices from one mapping exporter and retains a
+snapshot lease. Historical files and non-closure selections use the complete
+scalar fallback rather than manufacturing a zero-copy claim.
 
 The section is emitted only when required-section metadata would lose the
 source view's loader-diagnostic digest or pre-materialization overlay/composite

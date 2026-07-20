@@ -50,10 +50,17 @@ class SectionKind(IntEnum):
     FOOTER = 14
     SWRL = 0x8001
     VIEW_PROVENANCE = 0x8002
+    ENCODED_STRUCTURAL_V1 = 0x8003
 
 
 REQUIRED_SECTIONS = tuple(SectionKind(value) for value in range(1, 15))
-KNOWN_OPTIONAL_SECTIONS = frozenset((SectionKind.SWRL, SectionKind.VIEW_PROVENANCE))
+KNOWN_OPTIONAL_SECTIONS = frozenset(
+    (
+        SectionKind.SWRL,
+        SectionKind.VIEW_PROVENANCE,
+        SectionKind.ENCODED_STRUCTURAL_V1,
+    )
+)
 
 SECTION_SCHEMAS = {kind: 1 for kind in (*REQUIRED_SECTIONS, *KNOWN_OPTIONAL_SECTIONS)}
 

@@ -6,6 +6,7 @@ import hashlib
 import struct
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import BinaryIO, cast
 
 from pyowl_core.cancellation import CancellationToken
@@ -41,6 +42,7 @@ from pyowl_core.document.snapshot import (
     materialize_view,
 )
 from pyowl_core.exceptions import (
+    BackendProtocolError,
     ModelError,
     OperationCancelledError,
     ResourceLimitError,
@@ -100,6 +102,9 @@ from .schema import (
 _NONE_U64 = 0xFFFF_FFFF_FFFF_FFFF
 _CANONICAL_WIRE_PARSER = "pyowl_core.wire.canonical"
 _CANONICAL_WIRE_BACKEND = "wire"
+_ENCODED_STRUCTURAL_MAGIC_V1 = b"PYOCEV1\x00"
+_ENCODED_STRUCTURAL_HEADER_V1 = struct.Struct("<8sHHI32s32s")
+_ENCODED_STRUCTURAL_DIRECTORY_V1 = struct.Struct("<QQ")
 
 _FORMATS = {
     DocumentFormat.RDF_XML: 1,
@@ -246,18 +251,23 @@ def encode_snapshot(
     digests = {kind: hashlib.sha256(data).digest() for kind, data in sections.items()}
     footer = _footer_row(concrete, sections, digests)
     sections[SectionKind.FOOTER] = encode_table((footer,))
+    sections[SectionKind.ENCODED_STRUCTURAL_V1] = _encoded_structural_section_v1(
+        concrete,
+        selected_limits,
+        guard,
+        cancellation_token,
+    )
     required_identity = _identity_metadata_from_manifest(
         concrete.import_manifest,
         (),
         is_complete=concrete.is_complete,
     )
     selected_identity = required_identity if source_identity is None else source_identity
-    minor = 0
+    minor = WIRE_MINOR
     if selected_identity != required_identity:
         sections[SectionKind.VIEW_PROVENANCE] = encode_table(
             (_view_provenance_row(selected_identity, selected_limits),)
         )
-        minor = WIRE_MINOR
     result = _assemble(sections, flags, selected_limits, guard, minor=minor)
     guard.check(force=True)
     return result
@@ -380,6 +390,7 @@ def inspect_image(
         raise _corrupt("VIEW document count disagrees with DOCUMENTS")
     if summary.root_document_key not in keys:
         raise _corrupt("VIEW root document is absent from DOCUMENTS")
+    _validate_encoded_structural_section_v1(image, keys, limits)
     _read_view_provenance(image, limits, is_complete=summary.complete)
     _validate_origins(image, keys, limits, collect=False)
     _validate_footer(image, summary)
@@ -982,6 +993,178 @@ def _footer_row(
     return writer.finish()
 
 
+def _encoded_structural_section_v1(
+    snapshot: OntologySnapshot,
+    limits: ParseLimits,
+    guard: Guard,
+    cancellation_token: CancellationToken | None,
+) -> bytes:
+    """Encode one aligned closure-column row for zero-copy mmap publication."""
+
+    from pyowl_core.backends.native_views import (
+        _BUFFER_SPECS,
+        ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        _encoded_structural_root_digest_v1,
+        produce_encoded_structural_view_v1,
+    )
+
+    publication = produce_encoded_structural_view_v1(
+        snapshot,
+        scope=AxiomScope.CLOSURE,
+        limits=limits,
+        materialize_segments=True,
+        _cancellation_token=cancellation_token,
+    )
+    buffers = publication.buffers
+    root_digest = _encoded_structural_root_digest_v1(buffers, limits)
+    row_header_bytes = _ENCODED_STRUCTURAL_HEADER_V1.size + len(_BUFFER_SPECS) * (
+        _ENCODED_STRUCTURAL_DIRECTORY_V1.size
+    )
+    cursor = row_header_bytes
+    slices: list[tuple[int, int]] = []
+    for index, (name, _width, _scalar) in enumerate(_BUFFER_SPECS):
+        guard.check(index)
+        cursor = _align(cursor)
+        length = len(buffers[name])
+        slices.append((cursor, length))
+        cursor += length
+    section_length = 24 + cursor
+    limits.enforce("max_wire_bytes", section_length)
+    limits.enforce("max_temporary_bytes", section_length)
+    section = bytearray(section_length)
+    struct.pack_into("<QQQ", section, 0, 1, 0, cursor)
+    row_start = 24
+    _ENCODED_STRUCTURAL_HEADER_V1.pack_into(
+        section,
+        row_start,
+        _ENCODED_STRUCTURAL_MAGIC_V1,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
+        len(_BUFFER_SPECS),
+        ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
+        root_digest,
+    )
+    directory_start = row_start + _ENCODED_STRUCTURAL_HEADER_V1.size
+    for index, ((name, _width, _scalar), (offset, length)) in enumerate(
+        zip(_BUFFER_SPECS, slices, strict=True)
+    ):
+        guard.check(index)
+        _ENCODED_STRUCTURAL_DIRECTORY_V1.pack_into(
+            section,
+            directory_start + index * _ENCODED_STRUCTURAL_DIRECTORY_V1.size,
+            offset,
+            length,
+        )
+        section[row_start + offset : row_start + offset + length] = buffers[name]
+    return bytes(section)
+
+
+def _encoded_structural_buffers_v1(
+    image: WireImage,
+    limits: ParseLimits,
+    *,
+    validate_columns: bool,
+) -> tuple[Mapping[str, memoryview], bytes] | None:
+    """Parse aligned buffer slices without copying their shared exporter."""
+
+    table = image.tables.get(int(SectionKind.ENCODED_STRUCTURAL_V1))
+    if table is None:
+        return None
+    if image.header.minor < 1:
+        raise WireVersionError(
+            "ENCODED_STRUCTURAL_V1 requires wire minor 1",
+            code="WIRE_SECTION_VERSION",
+        )
+    if table.count != 1:
+        raise _corrupt("ENCODED_STRUCTURAL_V1 must contain exactly one row")
+
+    from pyowl_core.backends.native_views import (
+        _BUFFER_SPECS,
+        ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        _encoded_structural_root_digest_v1,
+    )
+
+    row = table.row(0)
+    prefix_bytes = _ENCODED_STRUCTURAL_HEADER_V1.size + len(_BUFFER_SPECS) * (
+        _ENCODED_STRUCTURAL_DIRECTORY_V1.size
+    )
+    if len(row) < prefix_bytes:
+        raise _corrupt("ENCODED_STRUCTURAL_V1 row is truncated")
+    (
+        magic,
+        schema_version,
+        model_schema,
+        buffer_count,
+        descriptor_digest,
+        recorded_root_digest,
+    ) = _ENCODED_STRUCTURAL_HEADER_V1.unpack_from(row)
+    if (
+        magic != _ENCODED_STRUCTURAL_MAGIC_V1
+        or schema_version != ENCODED_STRUCTURAL_SCHEMA_VERSION_V1
+        or model_schema != ENCODED_STRUCTURAL_MODEL_SCHEMA_V1
+        or buffer_count != len(_BUFFER_SPECS)
+        or descriptor_digest != ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1
+    ):
+        raise _corrupt("ENCODED_STRUCTURAL_V1 descriptor metadata is invalid")
+    directory_start = _ENCODED_STRUCTURAL_HEADER_V1.size
+    cursor = prefix_bytes
+    total_bytes = 0
+    buffers: dict[str, memoryview] = {}
+    for index, (name, width, _scalar) in enumerate(_BUFFER_SPECS):
+        offset, length = _ENCODED_STRUCTURAL_DIRECTORY_V1.unpack_from(
+            row,
+            directory_start + index * _ENCODED_STRUCTURAL_DIRECTORY_V1.size,
+        )
+        expected_offset = _align(cursor)
+        end = offset + length
+        if (
+            offset != expected_offset
+            or end < offset
+            or end > len(row)
+            or (name != "scalar_bytes" and length % width)
+            or any(row[cursor:offset])
+        ):
+            raise _corrupt("ENCODED_STRUCTURAL_V1 buffer directory is invalid")
+        buffers[name] = row[offset:end]
+        total_bytes += length
+        cursor = end
+    if cursor != len(row):
+        raise _corrupt("ENCODED_STRUCTURAL_V1 row has trailing bytes")
+    limits.enforce("max_index_bytes", total_bytes)
+    immutable = MappingProxyType(buffers)
+    if validate_columns:
+        try:
+            observed_root_digest = _encoded_structural_root_digest_v1(immutable, limits)
+        except BackendProtocolError as error:
+            raise _corrupt("ENCODED_STRUCTURAL_V1 columns are invalid") from error
+        if observed_root_digest != recorded_root_digest:
+            raise _corrupt("ENCODED_STRUCTURAL_V1 root digest is invalid")
+    return immutable, recorded_root_digest
+
+
+def encoded_structural_buffers_from_inspected_v1(
+    inspected: InspectedWire,
+    *,
+    limits: ParseLimits,
+) -> Mapping[str, memoryview] | None:
+    """Borrow the already-validated closure columns retained by an image."""
+
+    if not isinstance(inspected, InspectedWire):
+        raise TypeError("inspected must be InspectedWire")
+    if not isinstance(limits, ParseLimits):
+        raise TypeError("limits must be ParseLimits")
+    parsed = _encoded_structural_buffers_v1(
+        inspected.image,
+        limits,
+        validate_columns=False,
+    )
+    return None if parsed is None else parsed[0]
+
+
 def _assemble(
     sections: Mapping[SectionKind, bytes],
     feature_flags: int,
@@ -1117,6 +1300,36 @@ def _validate_feature_sections(image: WireImage) -> None:
         raise WireVersionError(
             "SWRL section/feature capability mismatch", code="WIRE_FEATURE_SECTION"
         )
+
+
+def _validate_encoded_structural_section_v1(
+    image: WireImage,
+    document_keys: set[str],
+    limits: ParseLimits,
+) -> None:
+    parsed = _encoded_structural_buffers_v1(image, limits, validate_columns=True)
+    if parsed is None:
+        return
+    _buffers, observed_digest = parsed
+    _summary, references = _read_view(image, document_keys, limits, collect=True)
+    from pyowl_core.backends.native_views import _encoded_structural_rows_digest_v1
+
+    tables = (
+        (1, SectionKind.ANNOTATIONS, references.annotations),
+        (2, SectionKind.AXIOMS, references.axioms),
+        (3, SectionKind.SWRL, references.extensions),
+    )
+
+    def rows() -> Iterator[tuple[int, memoryview]]:
+        for root_kind, section_kind, postings in tables:
+            if not postings:
+                continue
+            table = image.table(section_kind)
+            for row_id in postings:
+                yield root_kind, table.row(row_id - 1)
+
+    if _encoded_structural_rows_digest_v1(rows()) != observed_digest:
+        raise _corrupt("ENCODED_STRUCTURAL_V1 roots disagree with VIEW postings")
 
 
 def _validate_model_table(

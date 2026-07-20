@@ -29,7 +29,7 @@ def test_core_cross_syntax_and_independent_differential_has_frozen_result() -> N
         "document_fingerprint": "55291b5bd2afd97fed64e8cc75edc6c42a75cebe6b9fd57584c7c58443aee703",
         "formats": ["functional", "owlxml", "rdfxml", "turtle"],
         "independent_wire": True,
-        "wire_bytes": 4880,
+        "wire_bytes": 6188,
     }
 
 

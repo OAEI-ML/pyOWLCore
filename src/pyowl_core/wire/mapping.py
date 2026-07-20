@@ -41,6 +41,7 @@ from .codec import (
     InspectedWire,
     checked_materialize_image,
     decode_snapshot,
+    encoded_structural_buffers_from_inspected_v1,
     identity_metadata_from_inspected,
     image_import_options,
     validate_bytes,
@@ -188,6 +189,10 @@ class _MappedState:
         with self.lock:
             if self.closed:
                 return
+            # Drop owner-local strong cache references before checking leases.
+            # A caller-retained mmap view still keeps its lease and therefore
+            # continues to fail close with the public lifecycle error.
+            self.index_cache.clear()
             if self.dependents:
                 raise SnapshotInUseError(
                     "mapped snapshot still has dependent ontology views",
@@ -311,6 +316,25 @@ class MappedOntologySnapshot(OntologySnapshot):
 
     def _retain_dependent(self) -> object:
         return self._mapped_state.retain()
+
+    def _encoded_structural_columns_v1(
+        self,
+        scope: AxiomScope,
+        document_key: str | None,
+        limits: ParseLimits,
+    ) -> tuple[Mapping[str, memoryview], object] | None:
+        """Borrow validated closure columns together with a mapping lease."""
+
+        self._check_open()
+        if scope is not AxiomScope.CLOSURE or document_key is not None:
+            return None
+        buffers = encoded_structural_buffers_from_inspected_v1(
+            self._mapped_state.inspected,
+            limits=limits,
+        )
+        if buffers is None:
+            return None
+        return buffers, self._mapped_state.retain()
 
     def _on_close(self, callback: Callable[[], None]) -> None:
         self._mapped_state.add_close_callback(callback)

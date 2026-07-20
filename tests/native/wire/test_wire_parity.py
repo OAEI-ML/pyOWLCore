@@ -168,6 +168,49 @@ class NativeWireParityTests(unittest.TestCase):
         with self.assertRaises(WireError):
             native.roundtrip_wire(hostile)
 
+    def test_encoded_structural_section_framing_and_columns_are_validated(self) -> None:
+        encoded = encode_snapshot(snapshot("A"))
+        image = read_wire(encoded)
+        kind = int(SectionKind.ENCODED_STRUCTURAL_V1)
+        self.assertIn(kind, image.sections)
+        self.assertEqual(native.roundtrip_wire(encoded), encoded)
+
+        with self.assertRaises(WireError):
+            native.roundtrip_wire(
+                encode_sections(
+                    image.sections,
+                    feature_flags=image.feature_flags,
+                    minor=0,
+                )
+            )
+
+        sections = dict(image.sections)
+        descriptor = bytearray(sections[kind])
+        descriptor[24 + 16] ^= 1
+        sections[kind] = bytes(descriptor)
+        with self.assertRaises(WireError):
+            native.roundtrip_wire(
+                encode_sections(
+                    sections,
+                    feature_flags=image.feature_flags,
+                    minor=image.minor,
+                )
+            )
+
+        sections = dict(image.sections)
+        columns = bytearray(sections[kind])
+        root_kinds_offset = struct.unpack_from("<Q", columns, 24 + 80)[0]
+        columns[24 + root_kinds_offset] = 0xFF
+        sections[kind] = bytes(columns)
+        with self.assertRaises(WireError):
+            native.roundtrip_wire(
+                encode_sections(
+                    sections,
+                    feature_flags=image.feature_flags,
+                    minor=image.minor,
+                )
+            )
+
     def test_new_minor_unknown_optional_and_verify_false_match_python_policy(self) -> None:
         encoded = encode_snapshot(snapshot("A"))
         image = read_wire(encoded)
