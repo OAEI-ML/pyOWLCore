@@ -3175,6 +3175,76 @@ mod tests {
             one_of.mapping.total_triples,
             one_of.mapping.consumed_triples
         );
+
+        let restriction_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema#\"><owl:DatatypeProperty rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:someValuesFrom rdf:nodeID=\"e\"/></owl:Restriction></rdfs:subClassOf></rdf:Description><rdfs:Datatype rdf:nodeID=\"e\"><owl:onDatatype rdf:resource=\"urn:Datatype\"/><owl:withRestrictions rdf:nodeID=\"h\"/></rdfs:Datatype><rdf:Description rdf:nodeID=\"h\"><rdf:first rdf:nodeID=\"facet\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive rdf:datatype=\"http://www.w3.org/2001/XMLSchema#integer\">007</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        let restriction_document =
+            mapped(restriction_source.as_bytes(), None).expect("datatype restriction");
+        let facet_value = literal(
+            "007".to_owned(),
+            entity(
+                "datatype",
+                iri("http://www.w3.org/2001/XMLSchema#integer".to_owned()).expect("datatype IRI"),
+            )
+            .expect("datatype"),
+            None,
+        )
+        .expect("facet literal");
+        let facet = Node::build(
+            20,
+            vec![
+                Field::Node(
+                    iri("http://www.w3.org/2001/XMLSchema#minInclusive".to_owned())
+                        .expect("facet IRI"),
+                ),
+                Field::Node(facet_value),
+            ],
+        )
+        .expect("facet restriction");
+        let data_range = Node::build(
+            25,
+            vec![
+                Field::Node(
+                    entity(
+                        "datatype",
+                        iri("urn:Datatype".to_owned()).expect("datatype IRI"),
+                    )
+                    .expect("datatype"),
+                ),
+                Field::Set(vec![facet]),
+            ],
+        )
+        .expect("datatype restriction");
+        let restriction = Node::build(
+            41,
+            vec![
+                Field::Sequence(vec![entity(
+                    "data_property",
+                    iri("urn:p".to_owned()).expect("property IRI"),
+                )
+                .expect("data property")]),
+                Field::Node(data_range),
+            ],
+        )
+        .expect("data restriction");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(restriction_document
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            restriction_document.mapping.total_triples,
+            restriction_document.mapping.consumed_triples,
+        );
     }
 
     #[test]

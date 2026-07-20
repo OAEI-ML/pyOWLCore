@@ -39,6 +39,7 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const ROLE_EXPRESSION: u8 = 1;
 const ROLE_LIST: u8 = 2;
 const ROLE_INDIVIDUAL: u8 = 4;
+const ROLE_FACET: u8 = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedClassExpression {
@@ -101,10 +102,20 @@ enum RestrictionOperator {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DataRangeConstructor {
-    Boolean { index: usize, tag: u64 },
-    Complement { index: usize },
-    OneOf { index: usize },
-    DatatypeRestriction,
+    Boolean {
+        index: usize,
+        tag: u64,
+    },
+    Complement {
+        index: usize,
+    },
+    OneOf {
+        index: usize,
+    },
+    DatatypeRestriction {
+        on_datatype: usize,
+        with_restrictions: usize,
+    },
 }
 
 impl ClassConstructor {
@@ -290,43 +301,50 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         } else if let Some(index) = one_of {
             DataRangeConstructor::OneOf { index }
         } else {
-            DataRangeConstructor::DatatypeRestriction
+            match (on_datatype, with_restrictions) {
+                (Some(on_datatype), Some(with_restrictions)) => {
+                    DataRangeConstructor::DatatypeRestriction {
+                        on_datatype,
+                        with_restrictions,
+                    }
+                }
+                (Some(_), None) | (None, Some(_)) => {
+                    return Err(unsupported("native RDF datatype restriction is incomplete"));
+                }
+                (None, None) => {
+                    return Err(NativeError::protocol(
+                        "native RDF data-range constructor ledger is empty",
+                    ));
+                }
+            }
         };
-        if matches!(constructor, DataRangeConstructor::DatatypeRestriction) {
-            return Err(unsupported(
-                "native bounded RDF datatype restrictions are not mapped",
-            ));
-        }
         if let Some(marker) = marker {
             push_index(consumed, marker, session)?;
         }
-        let index = match constructor {
-            DataRangeConstructor::Boolean { index, .. }
-            | DataRangeConstructor::Complement { index }
-            | DataRangeConstructor::OneOf { index } => index,
-            DataRangeConstructor::DatatypeRestriction => {
-                return Err(NativeError::protocol(
-                    "native RDF data-range constructor ledger is empty",
-                ));
-            }
-        };
-        push_index(consumed, index, session)?;
-        let target = self.triples[index].object;
         match constructor {
-            DataRangeConstructor::Boolean { tag, .. } => {
+            DataRangeConstructor::Boolean { index, tag } => {
+                push_index(consumed, index, session)?;
+                let target = self.triples[index].object;
                 self.decode_data_boolean(target, tag, consumed, session)
             }
-            DataRangeConstructor::Complement { .. } => {
+            DataRangeConstructor::Complement { index } => {
+                push_index(consumed, index, session)?;
+                let target = self.triples[index].object;
                 let operand = self.decode_data_range(target, consumed, session)?;
                 let fields = reserved_fields([Field::Node(operand)], session)?;
                 Node::build(23, fields)
             }
-            DataRangeConstructor::OneOf { .. } => {
+            DataRangeConstructor::OneOf { index } => {
+                push_index(consumed, index, session)?;
+                let target = self.triples[index].object;
                 self.decode_data_one_of(target, consumed, session)
             }
-            DataRangeConstructor::DatatypeRestriction => Err(NativeError::protocol(
-                "native RDF data-range constructor ledger is empty",
-            )),
+            DataRangeConstructor::DatatypeRestriction {
+                on_datatype,
+                with_restrictions,
+            } => {
+                self.decode_datatype_restriction(on_datatype, with_restrictions, consumed, session)
+            }
         }
     }
 
@@ -404,6 +422,81 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         let values = canonical_set(values, 1, None)?;
         let fields = reserved_fields([Field::Set(values)], session)?;
         Node::build(24, fields)
+    }
+
+    fn decode_datatype_restriction(
+        &mut self,
+        on_datatype: usize,
+        with_restrictions: usize,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        let datatype = match self.triples[on_datatype].object {
+            RdfTerm::Iri(value) => named_entity("datatype", value, session)?,
+            RdfTerm::Blank(_) | RdfTerm::Literal(_) => {
+                return Err(unsupported(
+                    "native RDF datatype restriction requires a named datatype",
+                ));
+            }
+        };
+        let decoded = self
+            .lists
+            .decode(self.triples[with_restrictions].object, session)?;
+        if decoded.items.is_empty() {
+            return Err(unsupported("native RDF datatype restriction has no facets"));
+        }
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        push_index(consumed, on_datatype, session)?;
+        push_index(consumed, with_restrictions, session)?;
+        for index in decoded.consumed {
+            push_index(consumed, index, session)?;
+        }
+        let mut facets = reserved_vec(decoded.items.len(), session)?;
+        for item in decoded.items {
+            let RdfTerm::Blank(item) = item else {
+                return Err(unsupported(
+                    "native RDF facet restriction list item must be blank",
+                ));
+            };
+            self.claim_blank(item, ROLE_FACET, session)?;
+            let facet_index = self
+                .unique_literal_edge(item, session)?
+                .ok_or_else(|| unsupported("native RDF facet restriction has no literal value"))?;
+            push_index(consumed, facet_index, session)?;
+            let facet_iri = iri_node(self.triples[facet_index].predicate, session)?;
+            let value = self.decode_literal(facet_index, session)?;
+            let fields = reserved_fields([Field::Node(facet_iri), Field::Node(value)], session)?;
+            facets.push(Node::build(20, fields)?);
+        }
+        session.step(usize_as_u64(
+            facets.len(),
+            "native RDF facet-set work exceeds u64",
+        )?)?;
+        let facets = canonical_set(facets, 1, None)?;
+        let fields = reserved_fields([Field::Node(datatype), Field::Set(facets)], session)?;
+        Node::build(25, fields)
+    }
+
+    fn unique_literal_edge(
+        &mut self,
+        subject: &'data str,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Option<usize>> {
+        let mut selected = None;
+        for (index, triple) in self.triples.iter().enumerate() {
+            session.step(1)?;
+            if triple.subject == RdfResource::Blank(subject)
+                && matches!(triple.object, RdfTerm::Literal(_))
+                && selected.replace(index).is_some()
+            {
+                return Err(unsupported(
+                    "native RDF facet restriction has multiple literal values",
+                ));
+            }
+        }
+        Ok(selected)
     }
 
     fn restriction_uses_data_range(
@@ -980,7 +1073,9 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             .find(|record| record.label == label)
         {
             let roles = record.roles | role;
-            if roles & ROLE_INDIVIDUAL != 0 && roles != ROLE_INDIVIDUAL {
+            if (roles & ROLE_INDIVIDUAL != 0 && roles != ROLE_INDIVIDUAL)
+                || (roles & ROLE_FACET != 0 && roles != ROLE_FACET)
+            {
                 return Err(unsupported("native RDF blank node has ambiguous roles"));
             }
             record.roles = roles;
@@ -1119,6 +1214,10 @@ fn nonnegative_integer(value: RdfTerm<'_>, session: &mut Session<'_>) -> NativeR
 }
 
 fn named_entity(kind: &'static str, value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
+    entity(kind, iri_node(value, session)?)
+}
+
+fn iri_node(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
     super::check_iri(
         value,
         session,
@@ -1130,7 +1229,7 @@ fn named_entity(kind: &'static str, value: &str, session: &mut Session<'_>) -> N
         .try_reserve_exact(value.len())
         .map_err(|_| NativeError::limit("native RDF class IRI allocation failed"))?;
     owned.push_str(value);
-    entity(kind, iri(owned)?)
+    iri(owned)
 }
 
 fn push_index(
@@ -1443,6 +1542,53 @@ mod tests {
     }
 
     #[test]
+    fn datatype_restriction_maps_exact_facet_literal() {
+        const MIN_INCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#minInclusive";
+        let graph = [
+            edge("e", RDF_TYPE, iri_term(RDFS_DATATYPE)),
+            edge("e", OWL_ON_DATATYPE, iri_term("urn:Datatype")),
+            edge("e", OWL_WITH_RESTRICTIONS, blank_term("h")),
+            edge("h", RDF_FIRST, blank_term("facet")),
+            edge("h", RDF_REST, iri_term(RDF_NIL)),
+            edge("facet", MIN_INCLUSIVE, RdfTerm::Literal("007")),
+        ];
+        let decoded = decode_data(
+            &graph,
+            blank_term("e"),
+            &[(5, Some("http://www.w3.org/2001/XMLSchema#integer"), None)],
+        )
+        .expect("datatype restriction");
+        let value = literal(
+            "007".to_owned(),
+            entity(
+                "datatype",
+                iri("http://www.w3.org/2001/XMLSchema#integer".to_owned()).unwrap(),
+            )
+            .unwrap(),
+            None,
+        )
+        .unwrap();
+        let facet = Node::build(
+            20,
+            vec![
+                Field::Node(iri(MIN_INCLUSIVE.to_owned()).unwrap()),
+                Field::Node(value),
+            ],
+        )
+        .unwrap();
+        let expected = Node::build(
+            25,
+            vec![
+                Field::Node(entity("datatype", iri("urn:Datatype".to_owned()).unwrap()).unwrap()),
+                Field::Set(vec![facet]),
+            ],
+        )
+        .unwrap();
+        assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+        assert_eq!(decoded.consumed, [0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
     fn conflicting_cyclic_and_wrong_typed_data_ranges_fail_closed() {
         let conflict = [
             edge("e", OWL_INTERSECTION_OF, iri_term(RDF_NIL)),
@@ -1458,11 +1604,27 @@ mod tests {
             edge("e", OWL_ON_DATATYPE, iri_term("urn:Datatype")),
             edge("e", OWL_WITH_RESTRICTIONS, iri_term(RDF_NIL)),
         ];
+        let multiple_facet_values = [
+            edge("e", OWL_ON_DATATYPE, iri_term("urn:Datatype")),
+            edge("e", OWL_WITH_RESTRICTIONS, blank_term("h")),
+            edge("h", RDF_FIRST, blank_term("facet")),
+            edge("h", RDF_REST, iri_term(RDF_NIL)),
+            edge("facet", "urn:min", RdfTerm::Literal("1")),
+            edge("facet", "urn:max", RdfTerm::Literal("2")),
+        ];
+        let resource_facet = [
+            edge("e", OWL_ON_DATATYPE, iri_term("urn:Datatype")),
+            edge("e", OWL_WITH_RESTRICTIONS, blank_term("h")),
+            edge("h", RDF_FIRST, iri_term("urn:not-a-facet-node")),
+            edge("h", RDF_REST, iri_term(RDF_NIL)),
+        ];
         for graph in [
             conflict.as_slice(),
             cycle.as_slice(),
             resource_enumeration.as_slice(),
             datatype_restriction.as_slice(),
+            multiple_facet_values.as_slice(),
+            resource_facet.as_slice(),
         ] {
             assert_eq!(
                 decode_data(graph, blank_term("e"), &[]).unwrap_err().code,
