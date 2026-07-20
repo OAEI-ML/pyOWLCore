@@ -49,6 +49,7 @@ pub(super) struct RetainedRdfXmlOutcomeV2 {
     pub(super) storage: TypedFacadeStorageV2,
     pub(super) metadata: crate::parse::RetainedParseMetadataV2,
     pub(super) phases: crate::parse::RetainedParsePhases,
+    pub(super) mapping_ns: u64,
 }
 
 #[cfg(feature = "test-hooks")]
@@ -62,6 +63,14 @@ fn parse_rdfxml(
     document_iri: Option<&str>,
     session: &mut Session<'_>,
 ) -> NativeResult<CanonicalDocument> {
+    Ok(parse_rdfxml_timed(source, document_iri, session)?.0)
+}
+
+fn parse_rdfxml_timed(
+    source: &[u8],
+    document_iri: Option<&str>,
+    session: &mut Session<'_>,
+) -> NativeResult<(CanonicalDocument, u64)> {
     check_source(source, session)?;
     if let Some(iri) = document_iri {
         check_iri(
@@ -70,14 +79,14 @@ fn parse_rdfxml(
             "native RDF/XML document IRI exceeds max_iri_bytes",
         )?;
     }
-    let mut document = rdfxml::parse_and_map(source, document_iri, session)?;
+    let (mut document, mapping_ns) = rdfxml::parse_and_map_timed(source, document_iri, session)?;
     document.document_iri = document_iri
         .map(|value| owned_text(value, session))
         .transpose()?;
     document.source_sha256 = sha256(source);
     document.byte_length = u64::try_from(source.len())
         .map_err(|_| NativeError::limit("native RDF/XML source length exceeds u64"))?;
-    Ok(document)
+    Ok((document, mapping_ns))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -92,8 +101,9 @@ pub(super) fn parse_rdfxml_retained_v2(
     require_empty_imports: bool,
 ) -> NativeResult<RetainedRdfXmlOutcomeV2> {
     let parse_started = Instant::now();
-    let document = parse_rdfxml(source, document_iri, session)?;
-    let syntax_parse_ns = elapsed_ns(parse_started)?;
+    let (document, mapping_ns) = parse_rdfxml_timed(source, document_iri, session)?;
+    let parse_mapping_ns = elapsed_ns(parse_started)?;
+    let syntax_parse_ns = parse_mapping_ns.saturating_sub(mapping_ns);
     if require_empty_imports && !document.imports.is_empty() {
         return Err(NativeError::new(
             "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
@@ -141,6 +151,7 @@ pub(super) fn parse_rdfxml_retained_v2(
             arena_construction_ns: published.arena_construction_ns,
             freeze_ns: published.freeze_ns,
         },
+        mapping_ns,
     })
 }
 
@@ -274,6 +285,7 @@ mod tests {
         assert_eq!(counts.effective_axioms, 1);
         assert_eq!(counts.extensions, 0);
         assert!(outcome.phases.syntax_parse_ns > 0);
+        assert!(outcome.mapping_ns > 0);
         assert!(outcome.phases.result_encode_ns > 0);
         assert!(outcome.phases.arena_construction_ns > 0);
         assert!(outcome.phases.freeze_ns > 0);

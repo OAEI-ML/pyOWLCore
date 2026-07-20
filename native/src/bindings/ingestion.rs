@@ -42,6 +42,12 @@ type RetainedParseBindingResult = (
     (u64, u64, u64, u64),
 );
 
+type RetainedRdfXmlParseBindingResult = (
+    Py<PyBytes>,
+    NativeParsedStructuralStorageV2,
+    (u64, u64, u64, u64, u64),
+);
+
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
     _module.add_class::<NativeParsedStructuralStorageV2>()?;
     _module.add_function(wrap_pyfunction!(_retain_structural_snapshot_v2, _module)?)?;
@@ -84,7 +90,7 @@ fn _parse_rdfxml_retained_v2<'py>(
     allow_partial_rdf_mapping: bool,
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
-) -> PyResult<RetainedParseBindingResult> {
+) -> PyResult<RetainedRdfXmlParseBindingResult> {
     if collect_provenance || allow_partial_rdf_mapping {
         return Err(crate::python_error(NativeError::new(
             "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
@@ -125,6 +131,7 @@ fn _parse_rdfxml_retained_v2<'py>(
         .map_err(crate::python_error)?;
     let phases = (
         outcome.phases.syntax_parse_ns,
+        outcome.mapping_ns,
         outcome.phases.result_encode_ns,
         outcome.phases.arena_construction_ns,
         outcome.phases.freeze_ns,

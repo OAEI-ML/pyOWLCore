@@ -158,6 +158,9 @@ def test_private_production_seam_publishes_exact_lazy_rdf_report(
     assert selected.logical_fingerprint == reference.logical_fingerprint
     assert selected.signature_fingerprint == reference.signature_fingerprint
     assert selected.import_manifest == reference.import_manifest
+    assert selected.report.timings["native_rdfxml_syntax_parse_seconds"] >= 0
+    assert selected.report.timings["native_rdf_mapping_seconds"] >= 0
+    assert "native_rdfxml_parse_mapping_seconds" not in selected.report.timings
 
     raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
     assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle

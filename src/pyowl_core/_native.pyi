@@ -120,7 +120,7 @@ def _parse_rdfxml_retained_v2(
     allow_partial_rdf_mapping: bool,
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
-) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int]]: ...
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
 def _prepare_parsed_structural_snapshot_v2(
     parsed: _NativeParsedStructuralStorageV2,
     manifest: bytes,

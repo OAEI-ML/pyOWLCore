@@ -129,7 +129,7 @@ class _Extension(Protocol):
         allow_partial_rdf_mapping: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
-    ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
+    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
 
     def build_index(
         self, data: object, request: object, cancel: _NativeCancellation | None = None
@@ -502,7 +502,7 @@ def _parse_rdfxml_retained_v2(
         )
     if (
         type(phases) is not tuple
-        or len(phases) != 4
+        or len(phases) != 5
         or not all(type(value) is int and value >= 0 for value in phases)
     ):
         raise BackendProtocolError(
@@ -515,7 +515,8 @@ def _parse_rdfxml_retained_v2(
             code="NATIVE_PARSE_VERSION",
         )
     names = (
-        "native_rdfxml_parse_mapping_seconds",
+        "native_rdfxml_syntax_parse_seconds",
+        "native_rdf_mapping_seconds",
         "native_result_encode_seconds",
         "native_arena_construction_seconds",
         "native_freeze_seconds",

@@ -10,6 +10,7 @@ use crate::canonical::{canonical_set, entity, iri, Field, Node};
 use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
 use crate::session::Session;
+use std::time::Instant;
 
 use super::rdf_class_expressions::{
     DecodedClassCollection, DecodedClassExpression, DecodedDataRange, DecodedIndividualCollection,
@@ -1135,12 +1136,24 @@ pub(super) fn parse_and_map(
     document_iri: Option<&str>,
     session: &mut Session<'_>,
 ) -> NativeResult<CanonicalDocument> {
+    Ok(parse_and_map_timed(source, document_iri, session)?.0)
+}
+
+pub(super) fn parse_and_map_timed(
+    source: &[u8],
+    document_iri: Option<&str>,
+    session: &mut Session<'_>,
+) -> NativeResult<(CanonicalDocument, u64)> {
     let (text, decoded_codepoints) = decode_utf8(source, session)?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     let decoded_codepoints =
         decoded_codepoints.saturating_sub(u64::from(source.starts_with(&[0xef, 0xbb, 0xbf])));
     let triples = GraphParser::new(text, document_iri, session)?.parse()?;
-    map_graph(triples, decoded_codepoints, session)
+    let mapping_started = Instant::now();
+    let document = map_graph(triples, decoded_codepoints, session)?;
+    let mapping_ns = u64::try_from(mapping_started.elapsed().as_nanos())
+        .map_err(|_| NativeError::limit("native RDF mapping phase time exceeds u64"))?;
+    Ok((document, mapping_ns))
 }
 
 fn decode_utf8(source: &[u8], session: &mut Session<'_>) -> NativeResult<(String, u64)> {
