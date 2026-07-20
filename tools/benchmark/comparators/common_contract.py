@@ -22,12 +22,8 @@ from pyowl_core import (
     CanonicalSet,
     OntologyDocument,
     OntologySnapshot,
+    SourceSpan,
     canonical_bytes,
-)
-from pyowl_core.backends.native_handoff_v2 import (
-    NativeFacadeCollectionV2,
-    NativeOriginRowV2,
-    decode_native_auxiliary_row_v2,
 )
 from pyowl_core.model import LOGICAL_AXIOM_TYPES, Entity, StructuralNode, encode_varint
 from pyowl_core.model.axioms import AxiomNode
@@ -690,29 +686,43 @@ def _provenance_inventory(snapshot: OntologySnapshot) -> dict[str, object]:
 def _encoded_provenance_inventory(
     snapshot: OntologySnapshot,
 ) -> tuple[dict[str, object], int]:
-    bulk_rows = getattr(snapshot, "_native_origin_rows_v2", None)
-    if not callable(bulk_rows):
+    bulk_records = getattr(snapshot, "_native_origin_records_v2", None)
+    if not callable(bulk_records):
         raise EncodedContractUnavailable(
-            "installed native lane did not publish bulk retained provenance rows"
+            "installed native lane did not publish validated retained provenance records"
         )
 
     origins: list[dict[str, object]] = []
     occurrences: list[dict[str, object]] = []
     active_digest: bytes | None = None
     row_count = 0
-    for encoded in bulk_rows():
-        if type(encoded) is not bytes or not encoded:
-            raise CommonContractError("bulk retained provenance row is not exact bytes")
-        decoded = decode_native_auxiliary_row_v2(
-            NativeFacadeCollectionV2.ORIGIN_ENTRIES,
-            encoded,
-            max_row_bytes=len(encoded),
-        )
-        if type(decoded) is not NativeOriginRowV2:
-            raise CommonContractError("bulk retained provenance row has the wrong type")
-        if active_digest is not None and decoded.digest < active_digest:
-            raise CommonContractError("bulk retained provenance rows are not canonical")
-        if decoded.digest != active_digest:
+    for record in bulk_records():
+        if type(record) is not tuple or len(record) != 4:
+            raise CommonContractError(
+                "bulk retained provenance record is not an exact four-tuple"
+            )
+        digest, document_key, occurrence, span = record
+        if type(digest) is not bytes or len(digest) != 32:
+            raise CommonContractError(
+                "bulk retained provenance record digest is not exact bytes32"
+            )
+        if type(document_key) is not str or not document_key:
+            raise CommonContractError(
+                "bulk retained provenance record document key is not a non-empty exact string"
+            )
+        if type(occurrence) is not int or not 0 <= occurrence < 2**64:
+            raise CommonContractError(
+                "bulk retained provenance record occurrence is not a non-negative u64 integer"
+            )
+        if span is not None and type(span) is not SourceSpan:
+            raise CommonContractError(
+                "bulk retained provenance record span has the wrong type"
+            )
+        if active_digest is not None and digest < active_digest:
+            raise CommonContractError(
+                "bulk retained provenance records are not canonical"
+            )
+        if digest != active_digest:
             if active_digest is not None:
                 origins.append(
                     {
@@ -720,13 +730,13 @@ def _encoded_provenance_inventory(
                         "occurrences": occurrences,
                     }
                 )
-            active_digest = decoded.digest
+            active_digest = digest
             occurrences = []
         occurrences.append(
             {
-                "document_key": decoded.document_key,
-                "occurrence": decoded.occurrence,
-                "span": None if decoded.span is None else decoded.span.to_dict(),
+                "document_key": document_key,
+                "occurrence": occurrence,
+                "span": None if span is None else span.to_dict(),
             }
         )
         row_count += 1
