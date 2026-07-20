@@ -44,12 +44,12 @@ pub(super) struct CanonicalDocument {
     pub(super) mapping: MappingEvidence,
 }
 
-pub(super) struct RetainedRdfXmlOutcomeV2 {
-    pub(super) encoded: Vec<u8>,
-    pub(super) storage: TypedFacadeStorageV2,
-    pub(super) metadata: crate::parse::RetainedParseMetadataV2,
-    pub(super) phases: crate::parse::RetainedParsePhases,
-    pub(super) mapping_ns: u64,
+pub(crate) struct RetainedRdfXmlOutcomeV2 {
+    pub(crate) encoded: Vec<u8>,
+    pub(crate) storage: TypedFacadeStorageV2,
+    pub(crate) metadata: crate::parse::RetainedParseMetadataV2,
+    pub(crate) phases: crate::parse::RetainedParsePhases,
+    pub(crate) mapping_ns: u64,
 }
 
 #[cfg(feature = "test-hooks")]
@@ -90,7 +90,7 @@ fn parse_rdfxml_timed(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn parse_rdfxml_retained_v2(
+pub(crate) fn parse_rdfxml_retained_v2(
     source: &[u8],
     document_iri: Option<&str>,
     session: &mut Session<'_>,

@@ -6,7 +6,7 @@
 
 #[allow(dead_code)]
 #[path = "../ingestion/mod.rs"]
-mod engine;
+pub(crate) mod engine;
 
 use pyo3::buffer::PyBuffer;
 use pyo3::prelude::*;

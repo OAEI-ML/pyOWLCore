@@ -6,6 +6,8 @@
 mod bindings;
 mod cancel;
 mod canonical;
+#[cfg(feature = "comparator")]
+pub mod comparator;
 mod error;
 mod hash;
 mod index;
