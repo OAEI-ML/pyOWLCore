@@ -582,6 +582,14 @@ class _RetainedFunctionalSeedV2:
 
 
 @dataclass(frozen=True, slots=True)
+class _RetainedRecordInventoryV1:
+    count: int
+    canonical_bytes: int
+    transcript_bytes: int
+    digest: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class _PreparedRetainedPublicationV2:
     fingerprints: tuple[
         _RetainedFingerprintEvidenceV2,
@@ -589,6 +597,14 @@ class _PreparedRetainedPublicationV2:
         _RetainedFingerprintEvidenceV2,
     ]
     content_digests: tuple[bytes, bytes, bytes, bytes, bytes, bytes]
+    record_inventories: tuple[
+        _RetainedRecordInventoryV1,
+        _RetainedRecordInventoryV1,
+        _RetainedRecordInventoryV1,
+        _RetainedRecordInventoryV1,
+    ]
+    root_count: int
+    node_count: int
     origin_rows_retained: int
     max_facade_row_bytes: int
     canonical_rows_encoded: int
@@ -710,7 +726,7 @@ def _decode_prepared_retained_publication_v2(
     magic = reader.take(8)
     schema = _read_u16_v2(reader)
     flags = _read_u16_v2(reader)
-    if magic != native._RETAINED_FUNCTIONAL_PREPARED_MAGIC_V2 or schema != 1 or flags != 0:
+    if magic != native._RETAINED_FUNCTIONAL_PREPARED_MAGIC_V2 or schema != 2 or flags != 0:
         raise BackendProtocolError(
             "native retained publication summary has incompatible metadata",
             code="NATIVE_PARSE_VERSION",
@@ -727,6 +743,25 @@ def _decode_prepared_retained_publication_v2(
         tuple[bytes, bytes, bytes, bytes, bytes, bytes],
         tuple(reader.take(32) for _ in range(6)),
     )
+    inventories = cast(
+        tuple[
+            _RetainedRecordInventoryV1,
+            _RetainedRecordInventoryV1,
+            _RetainedRecordInventoryV1,
+            _RetainedRecordInventoryV1,
+        ],
+        tuple(
+            _RetainedRecordInventoryV1(
+                reader.u64(),
+                reader.u64(),
+                reader.u64(),
+                reader.take(32),
+            )
+            for _ in range(4)
+        ),
+    )
+    root_count = reader.u64()
+    node_count = reader.u64()
     origin_rows = reader.u64()
     max_row = reader.u64()
     canonical_rows = reader.u64()
@@ -740,6 +775,11 @@ def _decode_prepared_retained_publication_v2(
             "native retained publication summary has invalid fingerprint or row bounds",
             code="NATIVE_PARSE_MODEL",
         )
+    if root_count != sum(item.count for item in inventories[:3]) or node_count < root_count:
+        raise BackendProtocolError(
+            "native retained publication summary has inconsistent structural counts",
+            code="NATIVE_PARSE_MODEL",
+        )
     if (not collect_provenance and (origin_rows != 0 or origin_bytes != 0)) or (
         origin_rows == 0 and origin_bytes != 0
     ):
@@ -750,6 +790,9 @@ def _decode_prepared_retained_publication_v2(
     return _PreparedRetainedPublicationV2(
         fingerprints,
         content,
+        inventories,
+        root_count,
+        node_count,
         origin_rows,
         max_row,
         canonical_rows,
@@ -811,6 +854,9 @@ def publish_retained_functional_snapshot_v2(
     from pyowl_core.document.native_storage import (
         _NO_ANONYMOUS_SCOPES_SEAL_V2,
         _WIRE_STRUCTURAL_ALIAS_SEAL_V1,
+        _NativeCommonContractFingerprintEvidenceV1,
+        _NativeCommonContractRecordInventoryV1,
+        _NativeCommonContractSummaryV1,
         _NativeIngestionCountersV2,
         ontology_snapshot_from_native_publication_v2,
     )
@@ -950,6 +996,51 @@ def publish_retained_functional_snapshot_v2(
         document_fingerprint,
         *(Fingerprint("sha256", 1, item.digest) for item in prepared.fingerprints),
     )
+    try:
+        inventory_rows = tuple(
+            _NativeCommonContractRecordInventoryV1(
+                item.count,
+                item.canonical_bytes,
+                item.transcript_bytes,
+                item.digest,
+            )
+            for item in prepared.record_inventories
+        )
+        common_contract_summary = _NativeCommonContractSummaryV1(
+            schema=1,
+            document_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
+                seed.document_fingerprint.preimage_byte_length,
+                seed.document_fingerprint.digest,
+            ),
+            structural_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
+                prepared.fingerprints[0].preimage_byte_length,
+                prepared.fingerprints[0].digest,
+            ),
+            logical_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
+                prepared.fingerprints[1].preimage_byte_length,
+                prepared.fingerprints[1].digest,
+            ),
+            signature_fingerprint=_NativeCommonContractFingerprintEvidenceV1(
+                prepared.fingerprints[2].preimage_byte_length,
+                prepared.fingerprints[2].digest,
+            ),
+            ontology_annotations=inventory_rows[0],
+            axioms=inventory_rows[1],
+            extensions=inventory_rows[2],
+            signature=inventory_rows[3],
+            root_count=prepared.root_count,
+            node_count=prepared.node_count,
+        )
+    except (IndexError, ValueError) as error:
+        raise BackendProtocolError(
+            "native retained common-contract summary is invalid",
+            code="NATIVE_PARSE_MODEL",
+        ) from error
+    if tuple(item.count for item in inventory_rows[:3]) != seed.rows:
+        raise BackendProtocolError(
+            "native retained common-contract inventories diverge from parser metadata",
+            code="NATIVE_PARSE_MODEL",
+        )
 
     documents = (
         NativeDocumentPublicationV1(
@@ -1124,6 +1215,7 @@ def publish_retained_functional_snapshot_v2(
         _wire_structural_aliases=_WIRE_STRUCTURAL_ALIAS_SEAL_V1,
         _ingestion_counters=ingestion_counters,
         _anonymous_scope_evidence=_NO_ANONYMOUS_SCOPES_SEAL_V2,
+        _common_contract_summary=common_contract_summary,
     )
     for diagnostic in public_diagnostics:
         warnings.warn(diagnostic.message, UnresolvedImportWarning, stacklevel=3)

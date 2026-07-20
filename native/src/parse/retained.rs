@@ -24,13 +24,14 @@ use super::{ParsedDocument, Span, SpannedNode};
 pub(crate) const RETAINED_SEED_MAGIC_V2: &[u8; 8] = b"PYNFRS2\0";
 pub(crate) const RETAINED_PREPARED_MAGIC_V2: &[u8; 8] = b"PYNFPP2\0";
 const RETAINED_SEED_SCHEMA_V2: u16 = 1;
-const RETAINED_PREPARED_SCHEMA_V2: u16 = 1;
+const RETAINED_PREPARED_SCHEMA_V2: u16 = 2;
 
 const DOCUMENT_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:document-fingerprint:v1\0";
 const STRUCTURAL_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:snapshot-structural:v1\0";
 const LOGICAL_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:snapshot-logical:v1\0";
 const LOGICAL_POLICY_V1: &[u8] = b"datatype-policy:owl2-v1\0";
 const SIGNATURE_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:snapshot-signature:v1\0";
+const RECORD_INVENTORY_DOMAIN_V1: &[u8] = b"pyowl-core:comparator-record-inventory:v1\0";
 
 const ROOT_TABLE_MANIFEST_DOMAIN_V2: &[u8] = b"pyowl-core:native-root-table-manifest:v2";
 const DOCUMENT_ROOT_TABLE_DOMAIN_V2: &[u8] = b"pyowl-core:native-document-root-table:v2";
@@ -83,12 +84,23 @@ pub(crate) struct RetainedContentDigestsV2 {
     pub(crate) effective_origin_manifest_sha256: [u8; 32],
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RecordInventoryEvidenceV1 {
+    pub(crate) count: u64,
+    pub(crate) canonical_bytes: u64,
+    pub(crate) transcript_bytes: u64,
+    pub(crate) digest: [u8; 32],
+}
+
 #[derive(Debug)]
 pub(crate) struct PreparedRetainedPublicationV2 {
     pub(crate) structural_fingerprint: FingerprintEvidenceV2,
     pub(crate) logical_fingerprint: FingerprintEvidenceV2,
     pub(crate) signature_fingerprint: FingerprintEvidenceV2,
     pub(crate) content: RetainedContentDigestsV2,
+    pub(crate) record_inventories: [RecordInventoryEvidenceV1; 4],
+    pub(crate) root_count: u64,
+    pub(crate) node_count: u64,
     pub(crate) origin_rows: Option<Vec<Vec<u8>>>,
     pub(crate) max_facade_row_bytes: u64,
     pub(crate) canonical_rows_encoded: u64,
@@ -102,7 +114,7 @@ impl PreparedRetainedPublicationV2 {
     pub(crate) fn encode_summary(&self, prepare_ns: u64) -> NativeResult<Vec<u8>> {
         let mut output = Vec::new();
         output
-            .try_reserve_exact(384)
+            .try_reserve_exact(640)
             .map_err(|_| NativeError::limit("native retained summary allocation failed"))?;
         append(&mut output, RETAINED_PREPARED_MAGIC_V2)?;
         append(&mut output, &RETAINED_PREPARED_SCHEMA_V2.to_le_bytes())?;
@@ -125,6 +137,14 @@ impl PreparedRetainedPublicationV2 {
         ] {
             append(&mut output, &digest)?;
         }
+        for inventory in self.record_inventories {
+            append_u64(&mut output, inventory.count)?;
+            append_u64(&mut output, inventory.canonical_bytes)?;
+            append_u64(&mut output, inventory.transcript_bytes)?;
+            append(&mut output, &inventory.digest)?;
+        }
+        append_u64(&mut output, self.root_count)?;
+        append_u64(&mut output, self.node_count)?;
         let origin_rows = self.origin_rows.as_ref().map_or(Ok(0_u64), |rows| {
             u64::try_from(rows.len())
                 .map_err(|_| NativeError::limit("native retained origin count exceeds u64"))
@@ -297,6 +317,18 @@ pub(crate) fn prepare_publication(
             "native retained provenance was prepared while disabled",
         ));
     }
+    let storage_counters = storage.counters()?;
+    let node_count = storage_counters.component.unique_nodes;
+    let root_count = metadata
+        .root_counts
+        .into_iter()
+        .try_fold(0_u64, |total, count| {
+            checked_add(
+                total,
+                count,
+                "native retained root inventory count overflow",
+            )
+        })?;
 
     let mut raw_document = MeasuredSha256::domain(DOCUMENT_ROOT_TABLE_DOMAIN_V2)?;
     let mut effective_document = MeasuredSha256::domain(EFFECTIVE_DOCUMENT_ROOT_TABLE_DOMAIN_V2)?;
@@ -322,6 +354,7 @@ pub(crate) fn prepare_publication(
         .map_err(|_| NativeError::limit("native logical extension workspace allocation failed"))?;
     let mut canonical_rows_encoded = 0_u64;
     let mut canonical_bytes_encoded = 0_u64;
+    let mut record_inventories = [RecordInventoryEvidenceV1::default(); 4];
 
     for (tag, collection, expected) in [
         (
@@ -345,6 +378,10 @@ pub(crate) fn prepare_publication(
         effective_document.update(&[tag])?;
         effective_document.u64_le(expected)?;
         structural.varint(expected)?;
+        let mut inventory = MeasuredSha256::new();
+        inventory.update(RECORD_INVENTORY_DOMAIN_V1)?;
+        inventory.varint(expected)?;
+        let mut inventory_canonical_bytes = 0_u64;
         let mut emitted = 0_u64;
         storage.visit_canonical_roots(
             collection,
@@ -360,16 +397,22 @@ pub(crate) fn prepare_publication(
                     1,
                     "native retained canonical row count overflow",
                 )?;
+                let row_bytes = u64::try_from(row.len())
+                    .map_err(|_| NativeError::limit("native retained canonical row exceeds u64"))?;
                 canonical_bytes_encoded = checked_add(
                     canonical_bytes_encoded,
-                    u64::try_from(row.len()).map_err(|_| {
-                        NativeError::limit("native retained canonical row exceeds u64")
-                    })?,
+                    row_bytes,
                     "native retained canonical byte count overflow",
+                )?;
+                inventory_canonical_bytes = checked_add(
+                    inventory_canonical_bytes,
+                    row_bytes,
+                    "native retained inventory canonical byte count overflow",
                 )?;
                 raw_document.frame64(row)?;
                 effective_document.frame64(row)?;
                 structural.frame_varint(row)?;
+                inventory.frame_varint(row)?;
                 if collection == TypedFacadeCollectionV2::Axioms && is_logical_axiom(row_tag(row)?)
                 {
                     logical_axioms.push(without_annotations(row)?);
@@ -384,6 +427,13 @@ pub(crate) fn prepare_publication(
                 "native retained root traversal diverges from its count",
             ));
         }
+        let inventory_evidence = inventory.finish();
+        record_inventories[usize::from(tag - 1)] = RecordInventoryEvidenceV1 {
+            count: emitted,
+            canonical_bytes: inventory_canonical_bytes,
+            transcript_bytes: inventory_evidence.preimage_bytes,
+            digest: inventory_evidence.digest,
+        };
     }
 
     let raw_document_digest = raw_document.finish().digest;
@@ -416,7 +466,7 @@ pub(crate) fn prepare_publication(
             "native retained fingerprint workspace exceeds max_temporary_bytes",
         ));
     }
-    let retained_owner_bytes = storage.counters()?.retained_owner_bytes;
+    let retained_owner_bytes = storage_counters.retained_owner_bytes;
     let peak_live_bytes = retained_owner_bytes
         .checked_add(temporary_workspace)
         .ok_or_else(|| NativeError::limit("native retained publication memory overflow"))?;
@@ -469,6 +519,10 @@ pub(crate) fn prepare_publication(
     signature.update(SIGNATURE_FINGERPRINT_DOMAIN_V1)?;
     signature.update(&[1])?;
     signature.varint(signature_count)?;
+    let mut signature_inventory = MeasuredSha256::new();
+    signature_inventory.update(RECORD_INVENTORY_DOMAIN_V1)?;
+    signature_inventory.varint(signature_count)?;
+    let mut signature_canonical_bytes = 0_u64;
     let mut emitted_signature = 0_u64;
     storage.visit_canonical_roots(
         TypedFacadeCollectionV2::Signature,
@@ -488,13 +542,20 @@ pub(crate) fn prepare_publication(
                 1,
                 "native retained canonical row count overflow",
             )?;
+            let row_bytes = u64::try_from(row.len())
+                .map_err(|_| NativeError::limit("native signature row exceeds u64"))?;
             canonical_bytes_encoded = checked_add(
                 canonical_bytes_encoded,
-                u64::try_from(row.len())
-                    .map_err(|_| NativeError::limit("native signature row exceeds u64"))?,
+                row_bytes,
                 "native retained canonical byte count overflow",
             )?;
-            signature.frame_varint(row)
+            signature_canonical_bytes = checked_add(
+                signature_canonical_bytes,
+                row_bytes,
+                "native retained signature inventory byte count overflow",
+            )?;
+            signature.frame_varint(row)?;
+            signature_inventory.frame_varint(row)
         },
     )?;
     if emitted_signature != signature_count {
@@ -503,6 +564,13 @@ pub(crate) fn prepare_publication(
         ));
     }
     let signature_fingerprint = signature.finish();
+    let signature_inventory_evidence = signature_inventory.finish();
+    record_inventories[3] = RecordInventoryEvidenceV1 {
+        count: emitted_signature,
+        canonical_bytes: signature_canonical_bytes,
+        transcript_bytes: signature_inventory_evidence.preimage_bytes,
+        digest: signature_inventory_evidence.digest,
+    };
 
     let (origin_rows, origin_bytes_retained) = if collect_provenance {
         let rows = encode_origin_rows(metadata, document_key, limits, &cancellation)?;
@@ -550,6 +618,9 @@ pub(crate) fn prepare_publication(
             provenance_manifest_sha256,
             effective_origin_manifest_sha256,
         },
+        record_inventories,
+        root_count,
+        node_count,
         origin_rows,
         max_facade_row_bytes: storage.maximum_row_bytes().max(origin_max),
         canonical_rows_encoded,

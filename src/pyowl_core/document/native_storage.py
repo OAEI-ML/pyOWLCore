@@ -124,6 +124,99 @@ _REPLACE_ERROR = "native ontology facades cannot be replaced; materialize them f
 _EMPTY_CACHE_BYTES = sys.getsizeof(OrderedDict())
 _WIRE_STRUCTURAL_ALIAS_SEAL_V1 = object()
 _NO_ANONYMOUS_SCOPES_SEAL_V2 = object()
+_COMMON_CONTRACT_RECORD_INVENTORY_DOMAIN_V1 = (
+    b"pyowl-core:comparator-record-inventory:v1\x00"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeCommonContractFingerprintEvidenceV1:
+    """One immutable native-produced fingerprint preimage measurement."""
+
+    preimage_bytes: int
+    sha256: bytes
+
+    def __post_init__(self) -> None:
+        if type(self.preimage_bytes) is not int or self.preimage_bytes <= 0:
+            raise ValueError("native common-contract fingerprint length must be positive")
+        if type(self.sha256) is not bytes or len(self.sha256) != 32:
+            raise ValueError("native common-contract fingerprint digest must be exact bytes32")
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeCommonContractRecordInventoryV1:
+    """One immutable common-contract record inventory produced in Rust."""
+
+    count: int
+    canonical_bytes: int
+    transcript_bytes: int
+    sha256: bytes
+
+    def __post_init__(self) -> None:
+        for name in ("count", "canonical_bytes", "transcript_bytes"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"native common-contract inventory {name} must be nonnegative")
+        if type(self.sha256) is not bytes or len(self.sha256) != 32:
+            raise ValueError("native common-contract inventory digest must be exact bytes32")
+        if (self.count == 0) != (self.canonical_bytes == 0):
+            raise ValueError("native common-contract inventory count and bytes disagree")
+        minimum_transcript = (
+            len(_COMMON_CONTRACT_RECORD_INVENTORY_DOMAIN_V1)
+            + len(encode_varint(self.count))
+            + self.count
+            + self.canonical_bytes
+        )
+        if self.transcript_bytes < minimum_transcript:
+            raise ValueError("native common-contract inventory transcript is undersized")
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeCommonContractSummaryV1:
+    """Compact ontology-sized digest fence retained by an owner-first load."""
+
+    schema: int
+    document_fingerprint: _NativeCommonContractFingerprintEvidenceV1
+    structural_fingerprint: _NativeCommonContractFingerprintEvidenceV1
+    logical_fingerprint: _NativeCommonContractFingerprintEvidenceV1
+    signature_fingerprint: _NativeCommonContractFingerprintEvidenceV1
+    ontology_annotations: _NativeCommonContractRecordInventoryV1
+    axioms: _NativeCommonContractRecordInventoryV1
+    extensions: _NativeCommonContractRecordInventoryV1
+    signature: _NativeCommonContractRecordInventoryV1
+    root_count: int
+    node_count: int
+
+    def __post_init__(self) -> None:
+        if type(self.schema) is not int or self.schema != 1:
+            raise ValueError("native common-contract summary schema must be exactly one")
+        for fingerprint in (
+            self.document_fingerprint,
+            self.structural_fingerprint,
+            self.logical_fingerprint,
+            self.signature_fingerprint,
+        ):
+            if type(fingerprint) is not _NativeCommonContractFingerprintEvidenceV1:
+                raise ValueError("native common-contract fingerprint evidence has the wrong type")
+        for inventory in (
+            self.ontology_annotations,
+            self.axioms,
+            self.extensions,
+            self.signature,
+        ):
+            if type(inventory) is not _NativeCommonContractRecordInventoryV1:
+                raise ValueError("native common-contract record inventory has the wrong type")
+        if type(self.root_count) is not int or self.root_count < 0:
+            raise ValueError("native common-contract root count must be nonnegative")
+        if type(self.node_count) is not int or self.node_count < self.root_count:
+            raise ValueError("native common-contract node count is smaller than its roots")
+        expected_roots = (
+            self.ontology_annotations.count + self.axioms.count + self.extensions.count
+        )
+        if self.root_count != expected_roots:
+            raise ValueError("native common-contract root count diverges from inventories")
+        if self.signature.count > self.node_count:
+            raise ValueError("native common-contract signature count exceeds its node count")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1676,6 +1769,7 @@ class _NativeSnapshotState:
         "closure_annotations",
         "closure_axioms",
         "closure_extensions",
+        "common_contract_summary",
         "dependents",
         "diagnostics",
         "document_by_key",
@@ -1721,6 +1815,7 @@ class _NativeSnapshotState:
         wire_structural_aliases: bool,
         ingestion_counters: _NativeIngestionCountersV2,
         anonymous_scopes: frozenset[bytes] | None,
+        common_contract_summary: _NativeCommonContractSummaryV1 | None,
     ) -> None:
         from pyowl_core.index.cache import create_index_cache
 
@@ -1756,6 +1851,7 @@ class _NativeSnapshotState:
         self.wire_structural_aliases = wire_structural_aliases
         self.ingestion_counters = ingestion_counters
         self.anonymous_scopes = anonymous_scopes
+        self.common_contract_summary = common_contract_summary
         self.identity_metadata = _identity_metadata_from_manifest(
             import_manifest,
             diagnostics,
@@ -2239,6 +2335,18 @@ class _NativeOntologySnapshot(OntologySnapshot):
         self._check_open()
         return self._native_snapshot_state.ingestion_counters
 
+    def _native_common_contract_summary_v1(self) -> _NativeCommonContractSummaryV1:
+        """Return the retained digest fence without paging or structural materialization."""
+
+        self._check_open()
+        summary = self._native_snapshot_state.common_contract_summary
+        if summary is None:
+            raise BackendProtocolError(
+                "native snapshot has no retained common-contract summary",
+                code="NATIVE_COMMON_CONTRACT_SUMMARY",
+            )
+        return summary
+
     def _native_wire_structural_aliases_v1(self) -> bool:
         """Report an internally attested raw/effective/closure root alias."""
 
@@ -2325,6 +2433,7 @@ def ontology_snapshot_from_native_publication_v2(
     _wire_structural_aliases: object | None = None,
     _ingestion_counters: _NativeIngestionCountersV2 | None = None,
     _anonymous_scope_evidence: object | None = None,
+    _common_contract_summary: _NativeCommonContractSummaryV1 | None = None,
 ) -> OntologySnapshot:
     """Publish a lazy public snapshot without materializing retained roots."""
 
@@ -2347,6 +2456,10 @@ def ontology_snapshot_from_native_publication_v2(
         anonymous_scopes = frozenset()
     else:
         raise TypeError("_anonymous_scope_evidence carries an invalid internal seal")
+    if _common_contract_summary is not None and type(
+        _common_contract_summary
+    ) is not _NativeCommonContractSummaryV1:
+        raise TypeError("_common_contract_summary has the wrong internal type")
     selected = require_native_facade_publication_v2(publication)
     shared = _NativeSharedState(selected)
     sidecars = selected.diagnostic_reference_sidecars
@@ -2516,6 +2629,31 @@ def ontology_snapshot_from_native_publication_v2(
 
         snapshot_owner = _NativeOwnerState(selected.handle, shared)
         closure = selected.facade_cardinality_summary.closure
+        if _common_contract_summary is not None:
+            if len(selected.documents) != 1:
+                raise BackendProtocolError(
+                    "native common-contract summary requires one document",
+                    code="NATIVE_COMMON_CONTRACT_SUMMARY",
+                )
+            summary = _common_contract_summary
+            document = selected.documents[0]
+            if (
+                summary.document_fingerprint.sha256 != document.document_fingerprint.digest
+                or summary.structural_fingerprint.sha256
+                != selected.report.structural_fingerprint.digest
+                or summary.logical_fingerprint.sha256
+                != selected.report.logical_fingerprint.digest
+                or summary.signature_fingerprint.sha256
+                != selected.report.signature_fingerprint.digest
+                or summary.ontology_annotations.count
+                != closure.effective_annotation_count
+                or summary.axioms.count != closure.effective_axiom_count
+                or summary.extensions.count != closure.effective_extension_count
+            ):
+                raise BackendProtocolError(
+                    "native common-contract summary diverges from publication metadata",
+                    code="NATIVE_COMMON_CONTRACT_SUMMARY",
+                )
         if wire_structural_aliases:
             if len(selected.documents) != 1:
                 raise BackendProtocolError(
@@ -2672,6 +2810,7 @@ def ontology_snapshot_from_native_publication_v2(
             wire_structural_aliases=wire_structural_aliases,
             ingestion_counters=ingestion_counters,
             anonymous_scopes=anonymous_scopes,
+            common_contract_summary=_common_contract_summary,
         )
         result = _NativeOntologySnapshot(snapshot_state)
         shared.publication_object()
