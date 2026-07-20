@@ -1634,18 +1634,11 @@ fn retain_source_tables_v2(
             ..RetainedSourceTablesV2::default()
         });
     };
-    if source_map.entries.windows(2).any(|pair| {
-        let left_occurrence = pair[0]
-            .get(32..40)
-            .and_then(|value| value.try_into().ok())
-            .map(u64::from_le_bytes);
-        let right_occurrence = pair[1]
-            .get(32..40)
-            .and_then(|value| value.try_into().ok())
-            .map(u64::from_le_bytes);
-        pair[0].get(..32) > pair[1].get(..32)
-            || (pair[0].get(..32) == pair[1].get(..32) && left_occurrence >= right_occurrence)
-    }) || source_map.entries.iter().any(|row| row.len() < 43)
+    if source_map
+        .entries
+        .windows(2)
+        .any(|pair| pair[0].get(..32) > pair[1].get(..32))
+        || source_map.entries.iter().any(|row| row.len() < 43)
     {
         return Err(NativeError::protocol(
             "typed V2 retained source-map rows are malformed or unordered",

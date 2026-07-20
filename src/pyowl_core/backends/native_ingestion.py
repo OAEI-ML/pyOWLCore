@@ -1185,9 +1185,10 @@ def _publish_retained_snapshot_v2(
     options.limits.enforce(
         "max_source_map_entries", prepared.source_map_rows_retained
     )
-    if prepared.source_map_rows_retained != (
-        seed.structural_occurrence_rows_scanned if options.preserve_source_map else 0
-    ):
+    if (
+        options.preserve_source_map
+        and prepared.source_map_rows_retained < seed.structural_occurrence_rows_scanned
+    ) or (not options.preserve_source_map and prepared.source_map_rows_retained != 0):
         raise BackendProtocolError(
             "native retained source-map count diverges from parser metadata",
             code="NATIVE_PARSE_MODEL",

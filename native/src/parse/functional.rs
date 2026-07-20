@@ -1,6 +1,7 @@
 //! Complete OWL 2 Functional-Style parser for the advertised native capability.
 
 use std::collections::BTreeMap;
+use std::mem::size_of;
 
 use crate::canonical::{anonymous, canonical_set, entity, iri, literal, Field, Node};
 use crate::error::{NativeError, NativeResult};
@@ -51,6 +52,7 @@ impl Token {
 pub(super) fn parse_functional(
     data: &[u8],
     allow_swrl: bool,
+    collect_language_spellings: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<ParsedDocument> {
     let text = std::str::from_utf8(data).map_err(|_| {
@@ -63,7 +65,14 @@ pub(super) fn parse_functional(
     let decoded_codepoints = u64::try_from(text.chars().count())
         .map_err(|_| NativeError::limit("native decoded source length exceeds u64"))?;
     let tokens = tokenize(text, session)?;
-    Parser::new(tokens, allow_swrl, session, decoded_codepoints).parse()
+    Parser::new(
+        tokens,
+        allow_swrl,
+        collect_language_spellings,
+        session,
+        decoded_codepoints,
+    )
+    .parse()
 }
 
 fn tokenize(text: &str, session: &mut Session<'_>) -> NativeResult<Vec<Token>> {
@@ -236,11 +245,7 @@ fn lex_language(
             end += 1;
         }
     }
-    Ok((
-        Kind::Language,
-        text[start + 1..end].to_ascii_lowercase(),
-        end,
-    ))
+    Ok((Kind::Language, text[start + 1..end].to_owned(), end))
 }
 
 fn lex_word(
@@ -321,6 +326,8 @@ struct Parser<'a, 'b> {
     index: usize,
     depth: u64,
     allow_swrl: bool,
+    collect_language_spellings: bool,
+    language_spellings: Vec<String>,
     prefixes: BTreeMap<String, String>,
     decoded_codepoints: u64,
     session: &'a mut Session<'b>,
@@ -330,6 +337,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn new(
         tokens: Vec<Token>,
         allow_swrl: bool,
+        collect_language_spellings: bool,
         session: &'a mut Session<'b>,
         decoded_codepoints: u64,
     ) -> Self {
@@ -350,6 +358,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             index: 0,
             depth: 0,
             allow_swrl,
+            collect_language_spellings,
+            language_spellings: Vec::new(),
             prefixes,
             decoded_codepoints,
             session,
@@ -357,7 +367,6 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn parse(mut self) -> NativeResult<ParsedDocument> {
-        let has_language_tags = self.tokens.iter().any(|token| token.kind == Kind::Language);
         while self.word("Prefix") {
             self.parse_prefix()?;
         }
@@ -425,7 +434,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             extensions,
             prefixes: self.prefixes.into_iter().collect(),
             decoded_codepoints: self.decoded_codepoints,
-            has_language_tags,
+            language_spellings: self.language_spellings,
         })
     }
 
@@ -879,7 +888,15 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn parse_literal(&mut self) -> NativeResult<Node> {
         let lexical = self.expect(Kind::String)?.value;
         if self.at(Kind::Language) {
-            let language = self.take()?.value;
+            let spelling = self.take()?.value;
+            let language = spelling.to_ascii_lowercase();
+            if self.collect_language_spellings {
+                self.session.reserve_bytes(size_of::<String>())?;
+                self.language_spellings.try_reserve(1).map_err(|_| {
+                    NativeError::limit("native language spelling allocation failed")
+                })?;
+                self.language_spellings.push(spelling);
+            }
             return literal(
                 lexical,
                 entity("datatype", iri(RDF_PLAIN_LITERAL.into())?)?,

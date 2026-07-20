@@ -466,10 +466,17 @@ def test_functional_source_map_stays_in_parser_owned_storage_until_access(
     assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
-def test_language_tagged_source_map_uses_exact_complete_fallback(
+def test_language_tagged_source_map_stays_owner_first_with_exact_lexical_rows(
     monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
 ) -> None:
-    source = b'Ontology(<urn:retained-language> AnnotationAssertion(<urn:p> <urn:s> "hi"@EN))'
+    source = (
+        b"Ontology(<urn:retained-language> "
+        b"DataPropertyRange(<urn:p> DataOneOf("
+        b'"v10"@EN "v09"@eN "v08"@En "v07"@en "v06"@EN "v05"@eN '
+        b'"v04"@En "v03"@en "v02"@EN "v01"@eN "v00"@En)) '
+        b'DataPropertyRange(<urn:q> DataOneOf("same"@PT-br "same"@pt-BR)))'
+    )
     options = LoadOptions(
         format=DocumentFormat.FUNCTIONAL,
         imports=ImportPolicy.IGNORE,
@@ -481,21 +488,57 @@ def test_language_tagged_source_map_uses_exact_complete_fallback(
         source,
         options=replace(options, backend=BackendPreference.PYTHON),
     )
-    decode = native._decode_parsed_functional
-    calls = 0
 
-    def counted(data: bytes, limits: object) -> object:
-        nonlocal calls
-        calls += 1
-        return decode(data, cast(Any, limits))
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("language source map crossed the complete model decoder")
 
-    monkeypatch.setattr(native, "_decode_parsed_functional", counted)
+    monkeypatch.setattr(native, "_decode_parsed_functional", unexpected)
     selected = load_snapshot(source, options=options)
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    before_native = cast(Any, raw_owner)._publication_counters_v2()
 
-    assert type(selected).__name__ == "OntologySnapshot"
-    assert selected.capabilities.backend == "python"
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.capabilities.backend == "native"
+    assert handle.attestation.capability_bits == 15
+    assert before_native.retained_source_map_rows == 14
+    assert before_native.source_map_rows_emitted == 0
     assert selected.root.source_map == reference.root.source_map
-    assert calls == 1
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+    assert selected.root.source_map is not None
+    first_axiom = next(reference.iter_axioms())
+    lexical = selected.root.source_map.occurrences_for(first_axiom)[0].lexical
+    assert lexical == {
+        "language-tag": "EN",
+        "language-tag:2": "eN",
+        "language-tag:3": "En",
+        "language-tag:4": "en",
+        "language-tag:5": "EN",
+        "language-tag:6": "eN",
+        "language-tag:7": "En",
+        "language-tag:8": "en",
+        "language-tag:9": "EN",
+        "language-tag:10": "eN",
+        "language-tag:11": "En",
+    }
+    after_native = cast(Any, raw_owner)._publication_counters_v2()
+    assert after_native.source_map_rows_emitted > before_native.source_map_rows_emitted
+
+
+def test_language_source_map_limit_counts_literal_rows() -> None:
+    source = b'Ontology(AnnotationAssertion(<urn:p> <urn:s> "hi"@EN))'
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=False,
+        preserve_source_map=True,
+        limits=replace(ParseLimits(), max_source_map_entries=1),
+    )
+
+    with pytest.raises(ResourceLimitError):
+        load_snapshot(source, options=options)
 
 
 def test_native_source_map_limit_fails_before_publication() -> None:

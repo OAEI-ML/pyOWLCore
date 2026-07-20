@@ -4,6 +4,7 @@
 //! preimages to Python.  It returns bounded metadata, then streams canonical
 //! temporaries from the retained component arena into native digest state.
 
+use std::collections::{BTreeMap, VecDeque};
 use std::mem::size_of;
 
 use crate::cancel::{Cancellation, InterruptSlot};
@@ -60,11 +61,18 @@ pub(crate) struct FingerprintEvidenceV2 {
     pub(crate) digest: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct RetainedOccurrenceV2 {
     digest: [u8; 32],
     span: Option<Span>,
     source_order: u64,
+    language_details: Vec<RetainedLanguageDetailV2>,
+}
+
+#[derive(Clone, Debug)]
+struct RetainedLanguageDetailV2 {
+    digest: [u8; 32],
+    spelling: String,
 }
 
 #[derive(Debug)]
@@ -217,40 +225,56 @@ impl PreparedRetainedPublicationV2 {
 
 impl RetainedParseMetadataV2 {
     pub(crate) fn retained_bytes(&self) -> NativeResult<usize> {
-        let occurrences = self
+        let mut retained = self
             .occurrences
             .capacity()
             .checked_mul(size_of::<RetainedOccurrenceV2>())
             .ok_or_else(|| NativeError::limit("native retained parser metadata overflow"))?;
-        self.source_prefixes
-            .as_ref()
-            .map_or(Ok(occurrences), |rows| {
-                rows.iter().try_fold(
-                    occurrences
-                        .checked_add(
-                            rows.capacity()
-                                .checked_mul(size_of::<(String, String)>())
-                                .ok_or_else(|| {
-                                    NativeError::limit(
-                                        "native retained source-prefix metadata overflow",
-                                    )
-                                })?,
-                        )
+        for occurrence in &self.occurrences {
+            retained = retained
+                .checked_add(
+                    occurrence
+                        .language_details
+                        .capacity()
+                        .checked_mul(size_of::<RetainedLanguageDetailV2>())
                         .ok_or_else(|| {
-                            NativeError::limit("native retained source-prefix metadata overflow")
+                            NativeError::limit("native retained language metadata overflow")
                         })?,
-                    |total, (prefix, iri)| {
-                        total
-                            .checked_add(prefix.capacity())
-                            .and_then(|value| value.checked_add(iri.capacity()))
+                )
+                .ok_or_else(|| NativeError::limit("native retained language metadata overflow"))?;
+            for detail in &occurrence.language_details {
+                retained = retained
+                    .checked_add(detail.spelling.capacity())
+                    .ok_or_else(|| {
+                        NativeError::limit("native retained language spelling overflow")
+                    })?;
+            }
+        }
+        self.source_prefixes.as_ref().map_or(Ok(retained), |rows| {
+            rows.iter().try_fold(
+                retained
+                    .checked_add(
+                        rows.capacity()
+                            .checked_mul(size_of::<(String, String)>())
                             .ok_or_else(|| {
                                 NativeError::limit(
                                     "native retained source-prefix metadata overflow",
                                 )
-                            })
-                    },
-                )
-            })
+                            })?,
+                    )
+                    .ok_or_else(|| {
+                        NativeError::limit("native retained source-prefix metadata overflow")
+                    })?,
+                |total, (prefix, iri)| {
+                    total
+                        .checked_add(prefix.capacity())
+                        .and_then(|value| value.checked_add(iri.capacity()))
+                        .ok_or_else(|| {
+                            NativeError::limit("native retained source-prefix metadata overflow")
+                        })
+                },
+            )
+        })
     }
 }
 
@@ -372,15 +396,22 @@ pub(crate) fn contains_anonymous(parsed: &ParsedDocument, limits: &Limits) -> Na
 }
 
 pub(crate) fn build_seed(
-    parsed: ParsedDocument,
+    mut parsed: ParsedDocument,
     collect_provenance: bool,
     preserve_source_map: bool,
+    limits: &Limits,
+    cancellation: &Cancellation,
 ) -> NativeResult<RetainedSeedV2> {
     let occurrence_count = total_occurrences(&parsed)?;
+    let language_spellings = std::mem::take(&mut parsed.language_spellings);
     let occurrences = retained_occurrences(
         &parsed,
         occurrence_count,
         collect_provenance || preserve_source_map,
+        preserve_source_map,
+        language_spellings,
+        limits,
+        cancellation,
     )?;
     let ParsedDocument {
         ontology_iri,
@@ -391,7 +422,7 @@ pub(crate) fn build_seed(
         extensions,
         prefixes,
         decoded_codepoints,
-        has_language_tags: _,
+        language_spellings: _,
     } = parsed;
     let raw_import_count = imports.len();
     imports.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
@@ -509,7 +540,7 @@ pub(crate) fn prepare_publication(
                 "native retained publication exceeds max_origin_entries",
             ));
         }
-        if preserve_source_map && metadata.occurrence_count > limits.max_source_map_entries {
+        if preserve_source_map && source_map_row_count(metadata)? > limits.max_source_map_entries {
             return Err(NativeError::limit(
                 "native retained publication exceeds max_source_map_entries",
             ));
@@ -924,6 +955,10 @@ fn retained_occurrences(
     parsed: &ParsedDocument,
     count: u64,
     collect: bool,
+    preserve_source_map: bool,
+    language_spellings: Vec<String>,
+    limits: &Limits,
+    cancellation: &Cancellation,
 ) -> NativeResult<Vec<RetainedOccurrenceV2>> {
     if !collect {
         return Ok(Vec::new());
@@ -946,6 +981,7 @@ fn retained_occurrences(
             span: Some(value.span),
             source_order: u64::try_from(source_order)
                 .map_err(|_| NativeError::limit("native occurrence ordinal exceeds u64"))?,
+            language_details: Vec::new(),
         });
     }
     result.sort_unstable_by_key(|value| {
@@ -955,7 +991,287 @@ fn retained_occurrences(
                 (span.byte_start, span.byte_end, value.source_order)
             })
     });
+    if preserve_source_map {
+        attach_language_details(
+            parsed,
+            &mut result,
+            language_spellings,
+            limits,
+            cancellation,
+        )?;
+    } else if !language_spellings.is_empty() {
+        return Err(NativeError::protocol(
+            "native retained language spellings were captured while disabled",
+        ));
+    }
     Ok(result)
+}
+
+fn attach_language_details(
+    parsed: &ParsedDocument,
+    occurrences: &mut [RetainedOccurrenceV2],
+    language_spellings: Vec<String>,
+    limits: &Limits,
+    cancellation: &Cancellation,
+) -> NativeResult<()> {
+    let mut by_language: BTreeMap<String, VecDeque<String>> = BTreeMap::new();
+    for spelling in language_spellings {
+        by_language
+            .entry(spelling.to_ascii_lowercase())
+            .or_default()
+            .push_back(spelling);
+    }
+    let values: Vec<&SpannedNode> = parsed
+        .annotations
+        .iter()
+        .chain(&parsed.axioms)
+        .chain(&parsed.extensions)
+        .collect();
+    if values.len() != occurrences.len() {
+        return Err(NativeError::protocol(
+            "native retained occurrence roots diverge from source metadata",
+        ));
+    }
+    let mut terms = 0_u64;
+    let mut source_rows = u64::try_from(occurrences.len())
+        .map_err(|_| NativeError::limit("native source-map count exceeds u64"))?;
+    if source_rows > limits.max_source_map_entries {
+        return Err(NativeError::limit(
+            "native retained publication exceeds max_source_map_entries",
+        ));
+    }
+    for occurrence in occurrences {
+        cancellation.checkpoint()?;
+        let source_order = usize::try_from(occurrence.source_order)
+            .map_err(|_| NativeError::limit("native source order exceeds usize"))?;
+        let row = values.get(source_order).ok_or_else(|| {
+            NativeError::protocol("native retained source order is out of bounds")
+        })?;
+        let literals =
+            canonical_language_literals(row.node.as_bytes(), limits, cancellation, &mut terms)?;
+        occurrence
+            .language_details
+            .try_reserve_exact(literals.len())
+            .map_err(|_| NativeError::limit("native language detail allocation failed"))?;
+        for (digest, language) in literals {
+            let Some(spelling) = by_language.get_mut(language).and_then(VecDeque::pop_front) else {
+                continue;
+            };
+            source_rows = source_rows
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native source-map count overflow"))?;
+            if source_rows > limits.max_source_map_entries {
+                return Err(NativeError::limit(
+                    "native retained publication exceeds max_source_map_entries",
+                ));
+            }
+            occurrence
+                .language_details
+                .push(RetainedLanguageDetailV2 { digest, spelling });
+        }
+    }
+    Ok(())
+}
+
+fn canonical_language_literals<'a>(
+    row: &'a [u8],
+    limits: &Limits,
+    cancellation: &Cancellation,
+    terms: &mut u64,
+) -> NativeResult<Vec<([u8; 32], &'a str)>> {
+    if u64::try_from(row.len()).map_or(true, |size| size > limits.max_canonical_work) {
+        return Err(NativeError::limit(
+            "native source-map scan exceeds max_canonical_work",
+        ));
+    }
+    let mut result = Vec::new();
+    let end = scan_language_node(
+        row,
+        0,
+        row.len(),
+        0,
+        limits,
+        cancellation,
+        terms,
+        &mut result,
+    )?;
+    if end != row.len() {
+        return Err(NativeError::protocol(
+            "native source-map canonical row has trailing bytes",
+        ));
+    }
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scan_language_node<'a>(
+    data: &'a [u8],
+    start: usize,
+    bound: usize,
+    depth: u32,
+    limits: &Limits,
+    cancellation: &Cancellation,
+    terms: &mut u64,
+    result: &mut Vec<([u8; 32], &'a str)>,
+) -> NativeResult<usize> {
+    cancellation.checkpoint()?;
+    *terms = terms
+        .checked_add(1)
+        .ok_or_else(|| NativeError::limit("native source-map term count overflow"))?;
+    if depth > limits.max_nesting_depth.min(1024) || *terms > limits.max_terms {
+        return Err(NativeError::limit(
+            "native source-map canonical scan exceeds model limits",
+        ));
+    }
+    let (tag, mut offset) = read_varint(data, start)?;
+    let field_count = canonical_field_count(
+        u16::try_from(tag).map_err(|_| NativeError::protocol("canonical tag exceeds u16"))?,
+    )
+    .ok_or_else(|| NativeError::protocol("canonical source-map tag is unknown"))?;
+    let mut language = None;
+    for field in 0..field_count {
+        let marker = *data
+            .get(offset)
+            .filter(|_| offset < bound)
+            .ok_or_else(|| NativeError::protocol("canonical source-map component is truncated"))?;
+        offset = offset
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("canonical source-map offset overflow"))?;
+        match marker {
+            0 => {}
+            1 => {
+                let (length, child_start) = read_varint(data, offset)?;
+                let child_end = bounded_end(child_start, length, bound)?;
+                let observed = scan_language_node(
+                    data,
+                    child_start,
+                    child_end,
+                    depth.saturating_add(1),
+                    limits,
+                    cancellation,
+                    terms,
+                    result,
+                )?;
+                if observed != child_end {
+                    return Err(NativeError::protocol(
+                        "canonical source-map child frame is invalid",
+                    ));
+                }
+                offset = child_end;
+            }
+            2 | 3 | 5 => {
+                let (length, value_start) = read_varint(data, offset)?;
+                let value_end = bounded_end(value_start, length, bound)?;
+                if tag == 4 && field == 2 {
+                    if marker != 2 {
+                        return Err(NativeError::protocol(
+                            "canonical literal language has the wrong marker",
+                        ));
+                    }
+                    language = Some(std::str::from_utf8(&data[value_start..value_end]).map_err(
+                        |_| NativeError::protocol("canonical literal language is not UTF-8"),
+                    )?);
+                }
+                offset = value_end;
+            }
+            4 => {
+                offset = read_varint(data, offset)?.1;
+            }
+            6 => {
+                let (count, after_count) = read_varint(data, offset)?;
+                if count > limits.max_sequence_arity {
+                    return Err(NativeError::limit(
+                        "canonical source-map set exceeds max_sequence_arity",
+                    ));
+                }
+                offset = after_count;
+                for _ in 0..count {
+                    let (length, child_start) = read_varint(data, offset)?;
+                    let child_end = bounded_end(child_start, length, bound)?;
+                    let observed = scan_language_node(
+                        data,
+                        child_start,
+                        child_end,
+                        depth.saturating_add(1),
+                        limits,
+                        cancellation,
+                        terms,
+                        result,
+                    )?;
+                    if observed != child_end {
+                        return Err(NativeError::protocol(
+                            "canonical source-map set frame is invalid",
+                        ));
+                    }
+                    offset = child_end;
+                }
+            }
+            7 => {
+                let (count, after_count) = read_varint(data, offset)?;
+                if count > limits.max_sequence_arity {
+                    return Err(NativeError::limit(
+                        "canonical source-map sequence exceeds max_sequence_arity",
+                    ));
+                }
+                offset = after_count;
+                for _ in 0..count {
+                    if data.get(offset) != Some(&1) {
+                        return Err(NativeError::protocol(
+                            "canonical source-map sequence item is not a node",
+                        ));
+                    }
+                    offset = offset.checked_add(1).ok_or_else(|| {
+                        NativeError::limit("canonical source-map offset overflow")
+                    })?;
+                    let (length, child_start) = read_varint(data, offset)?;
+                    let child_end = bounded_end(child_start, length, bound)?;
+                    let observed = scan_language_node(
+                        data,
+                        child_start,
+                        child_end,
+                        depth.saturating_add(1),
+                        limits,
+                        cancellation,
+                        terms,
+                        result,
+                    )?;
+                    if observed != child_end {
+                        return Err(NativeError::protocol(
+                            "canonical source-map sequence frame is invalid",
+                        ));
+                    }
+                    offset = child_end;
+                }
+            }
+            _ => {
+                return Err(NativeError::protocol(
+                    "canonical source-map component marker is unknown",
+                ));
+            }
+        }
+    }
+    if offset != bound {
+        return Err(NativeError::protocol(
+            "canonical source-map node frame is invalid",
+        ));
+    }
+    if let Some(language) = language {
+        result
+            .try_reserve(1)
+            .map_err(|_| NativeError::limit("native language literal allocation failed"))?;
+        result.push((structural_digest_v1(&data[start..offset]), language));
+    }
+    Ok(offset)
+}
+
+fn bounded_end(start: usize, length: u64, bound: usize) -> NativeResult<usize> {
+    start
+        .checked_add(
+            usize::try_from(length)
+                .map_err(|_| NativeError::limit("canonical source-map frame exceeds usize"))?,
+        )
+        .filter(|end| *end <= bound)
+        .ok_or_else(|| NativeError::protocol("canonical source-map frame is truncated"))
 }
 
 fn rdfxml_retained_occurrences(
@@ -978,6 +1294,7 @@ fn rdfxml_retained_occurrences(
             span: None,
             source_order: u64::try_from(source_order)
                 .map_err(|_| NativeError::limit("native RDF/XML occurrence ordinal exceeds u64"))?,
+            language_details: Vec::new(),
         });
     }
     Ok(result)
@@ -1042,33 +1359,62 @@ fn encode_source_map_rows(
     limits: &Limits,
     cancellation: &Cancellation,
 ) -> NativeResult<TypedSourceMapRowsV2> {
+    let row_count = source_map_row_count(metadata)?;
     let mut keyed = Vec::new();
     keyed
-        .try_reserve_exact(metadata.occurrences.len())
+        .try_reserve_exact(
+            usize::try_from(row_count)
+                .map_err(|_| NativeError::limit("native source-map count exceeds usize"))?,
+        )
         .map_err(|_| NativeError::limit("native source-map table allocation failed"))?;
+    let mut producer_order = 0_u64;
     for (occurrence, value) in metadata.occurrences.iter().enumerate() {
         cancellation.checkpoint()?;
         let occurrence = u64::try_from(occurrence)
             .map_err(|_| NativeError::limit("native source-map occurrence exceeds u64"))?;
-        let row = encode_source_map_row(value.digest, occurrence, value.span)?;
+        let mut root_lexical = Vec::new();
+        root_lexical
+            .try_reserve_exact(value.language_details.len())
+            .map_err(|_| NativeError::limit("native source-map lexical allocation failed"))?;
+        for (index, detail) in value.language_details.iter().enumerate() {
+            let key = if index == 0 {
+                "language-tag".to_owned()
+            } else {
+                format!("language-tag:{}", index + 1)
+            };
+            root_lexical.push((key, detail.spelling.as_str()));
+        }
+        root_lexical.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+        let row = encode_source_map_row(value.digest, occurrence, value.span, &root_lexical)?;
         if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
             return Err(NativeError::limit(
                 "native retained source-map row exceeds max_wire_bytes",
             ));
         }
-        keyed.push((value.digest, occurrence, row));
+        keyed.push((value.digest, producer_order, row));
+        producer_order = producer_order
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native source-map producer order overflow"))?;
+        for detail in &value.language_details {
+            let lexical = [("language-tag".to_owned(), detail.spelling.as_str())];
+            let row = encode_source_map_row(detail.digest, occurrence, value.span, &lexical)?;
+            if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
+                return Err(NativeError::limit(
+                    "native retained source-map row exceeds max_wire_bytes",
+                ));
+            }
+            keyed.push((detail.digest, producer_order, row));
+            producer_order = producer_order
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native source-map producer order overflow"))?;
+        }
     }
-    keyed.sort_unstable_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| left.1.cmp(&right.1))
-            .then_with(|| left.2.cmp(&right.2))
-    });
+    keyed.sort_unstable_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
     let mut entries = Vec::new();
     entries
         .try_reserve_exact(keyed.len())
         .map_err(|_| NativeError::limit("native source-map row allocation failed"))?;
-    entries.extend(keyed.into_iter().map(|(_digest, _occurrence, row)| row));
+    entries.extend(keyed.into_iter().map(|(_digest, _producer_order, row)| row));
 
     let selected_prefixes = metadata.source_prefixes.as_deref().ok_or_else(|| {
         NativeError::protocol("native retained source-map prefixes are unavailable")
@@ -1101,9 +1447,31 @@ fn encode_source_map_row(
     digest: [u8; 32],
     occurrence: u64,
     span: Option<Span>,
+    lexical: &[(String, &str)],
 ) -> NativeResult<Vec<u8>> {
+    let lexical_count = u16::try_from(lexical.len())
+        .map_err(|_| NativeError::limit("native source-map lexical count exceeds u16"))?;
+    let mut previous: Option<&[u8]> = None;
+    let lexical_size = lexical.iter().try_fold(0_usize, |total, (key, value)| {
+        if key.is_empty() || previous.is_some_and(|selected| selected >= key.as_bytes()) {
+            return Err(NativeError::protocol(
+                "native source-map lexical keys are not canonical",
+            ));
+        }
+        previous = Some(key.as_bytes());
+        u32::try_from(key.len())
+            .map_err(|_| NativeError::limit("native source-map lexical key exceeds u32"))?;
+        u32::try_from(value.len())
+            .map_err(|_| NativeError::limit("native source-map lexical value exceeds u32"))?;
+        total
+            .checked_add(8)
+            .and_then(|selected| selected.checked_add(key.len()))
+            .and_then(|selected| selected.checked_add(value.len()))
+            .ok_or_else(|| NativeError::limit("native source-map lexical size overflow"))
+    })?;
     let size = 32_usize
         .checked_add(8 + 1 + usize::from(span.is_some()) * 4 * 8 + 2)
+        .and_then(|value| value.checked_add(lexical_size))
         .ok_or_else(|| NativeError::limit("native source-map row size overflow"))?;
     let mut row = Vec::new();
     row.try_reserve_exact(size)
@@ -1111,8 +1479,36 @@ fn encode_source_map_row(
     row.extend_from_slice(&digest);
     row.extend_from_slice(&occurrence.to_le_bytes());
     encode_source_span(span, &mut row);
-    row.extend_from_slice(&0_u16.to_le_bytes());
+    row.extend_from_slice(&lexical_count.to_le_bytes());
+    for (key, value) in lexical {
+        encode_source_text(key, &mut row)?;
+        encode_source_text(value, &mut row)?;
+    }
     Ok(row)
+}
+
+fn source_map_row_count(metadata: &RetainedParseMetadataV2) -> NativeResult<u64> {
+    metadata
+        .occurrences
+        .iter()
+        .try_fold(0_u64, |total, occurrence| {
+            total
+                .checked_add(1)
+                .and_then(|selected| {
+                    u64::try_from(occurrence.language_details.len())
+                        .ok()
+                        .and_then(|count| selected.checked_add(count))
+                })
+                .ok_or_else(|| NativeError::limit("native source-map count overflow"))
+        })
+}
+
+fn encode_source_text(value: &str, row: &mut Vec<u8>) -> NativeResult<()> {
+    let length = u32::try_from(value.len())
+        .map_err(|_| NativeError::limit("native source-map text exceeds u32"))?;
+    row.extend_from_slice(&length.to_le_bytes());
+    row.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 fn encode_source_prefix_row(prefix: &str, iri: &str) -> NativeResult<Vec<u8>> {
@@ -1651,4 +2047,86 @@ fn append_text64(output: &mut Vec<u8>, value: &str) -> NativeResult<()> {
 fn checked_add(left: u64, right: u64, message: &'static str) -> NativeResult<u64> {
     left.checked_add(right)
         .ok_or_else(|| NativeError::limit(message))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::canonical::{canonical_set, entity, literal, Field};
+
+    #[test]
+    fn language_details_follow_canonical_walk_and_source_spelling_queues() {
+        let datatype = entity(
+            "datatype",
+            iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral".into())
+                .expect("plain literal IRI"),
+        )
+        .expect("datatype");
+        let values = canonical_set(
+            vec![
+                literal("z".into(), datatype.clone(), Some("en".into())).expect("literal"),
+                literal("a".into(), datatype, Some("en".into())).expect("literal"),
+            ],
+            1,
+            None,
+        )
+        .expect("canonical values");
+        let expected_digests = values
+            .iter()
+            .map(|value| structural_digest_v1(value.as_bytes()))
+            .collect::<Vec<_>>();
+        let root = Node::build(24, vec![Field::Set(values)]).expect("data enumeration");
+        let span = Span {
+            byte_start: 1,
+            byte_end: 2,
+            line: 1,
+            column: 1,
+        };
+        let parsed = ParsedDocument {
+            ontology_iri: None,
+            version_iri: None,
+            imports: Vec::new(),
+            annotations: Vec::new(),
+            axioms: vec![SpannedNode {
+                node: root.clone(),
+                span,
+            }],
+            extensions: Vec::new(),
+            prefixes: Vec::new(),
+            decoded_codepoints: 0,
+            language_spellings: Vec::new(),
+        };
+        let mut occurrences = vec![RetainedOccurrenceV2 {
+            digest: structural_digest_v1(root.as_bytes()),
+            span: Some(span),
+            source_order: 0,
+            language_details: Vec::new(),
+        }];
+
+        attach_language_details(
+            &parsed,
+            &mut occurrences,
+            vec!["EN".into(), "eN".into()],
+            &Limits::default(),
+            &Cancellation::with_duration(None),
+        )
+        .expect("language details");
+
+        assert_eq!(
+            occurrences[0]
+                .language_details
+                .iter()
+                .map(|detail| detail.digest)
+                .collect::<Vec<_>>(),
+            expected_digests
+        );
+        assert_eq!(
+            occurrences[0]
+                .language_details
+                .iter()
+                .map(|detail| detail.spelling.as_str())
+                .collect::<Vec<_>>(),
+            ["EN", "eN"]
+        );
+    }
 }

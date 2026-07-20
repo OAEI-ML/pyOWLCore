@@ -50,7 +50,7 @@ pub(crate) struct ParsedDocument {
     pub(crate) extensions: Vec<SpannedNode>,
     pub(crate) prefixes: Vec<(String, String)>,
     pub(crate) decoded_codepoints: u64,
-    pub(crate) has_language_tags: bool,
+    pub(crate) language_spellings: Vec<String>,
 }
 
 pub(crate) struct RetainedParseOutcome {
@@ -196,7 +196,8 @@ pub(crate) fn parse(
     request: SourceRequest<'_>,
     session: &mut Session<'_>,
 ) -> NativeResult<Vec<u8>> {
-    functional::parse_functional(request.source, request.allow_swrl, session)?.encode(session)
+    functional::parse_functional(request.source, request.allow_swrl, false, session)?
+        .encode(session)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -213,7 +214,12 @@ pub(crate) fn parse_retained(
     require_empty_imports: bool,
 ) -> NativeResult<RetainedParseOutcome> {
     let parse_started = Instant::now();
-    let parsed = functional::parse_functional(request.source, request.allow_swrl, session)?;
+    let parsed = functional::parse_functional(
+        request.source,
+        request.allow_swrl,
+        preserve_source_map,
+        session,
+    )?;
     let syntax_parse_ns = elapsed_ns(parse_started)?;
 
     let import_diagnostics_exceed_publication_limit = record_unresolved
@@ -221,7 +227,6 @@ pub(crate) fn parse_retained(
             count > limits.value(LimitKey::MaxDiagnostics) / 2
         });
     let requires_full_result = retained::contains_anonymous(&parsed, &limits)?
-        || (preserve_source_map && parsed.has_language_tags)
         || import_diagnostics_exceed_publication_limit
         || (require_empty_imports && !parsed.imports.is_empty());
     let encode_started = Instant::now();
@@ -231,8 +236,13 @@ pub(crate) fn parse_retained(
         (encoded, None, rows)
     } else {
         parsed.validate(session)?;
-        let (encoded, metadata, rows) =
-            retained::build_seed(parsed, collect_provenance, preserve_source_map)?;
+        let (encoded, metadata, rows) = retained::build_seed(
+            parsed,
+            collect_provenance,
+            preserve_source_map,
+            &limits,
+            &cancellation,
+        )?;
         session.finish()?;
         (encoded, Some(metadata), rows)
     };
