@@ -206,6 +206,7 @@ pub(crate) fn parse_retained(
     input_bytes: usize,
     collect_provenance: bool,
     record_unresolved: bool,
+    require_empty_imports: bool,
 ) -> NativeResult<RetainedParseOutcome> {
     let parse_started = Instant::now();
     let parsed = functional::parse_functional(request.source, request.allow_swrl, session)?;
@@ -216,7 +217,8 @@ pub(crate) fn parse_retained(
             count > limits.value(LimitKey::MaxDiagnostics) / 2
         });
     let requires_full_result = retained::contains_anonymous(&parsed, &limits)?
-        || import_diagnostics_exceed_publication_limit;
+        || import_diagnostics_exceed_publication_limit
+        || (require_empty_imports && !parsed.imports.is_empty());
     let encode_started = Instant::now();
     let (encoded, metadata, rows) = if requires_full_result {
         let encoded = parsed.encode(session)?;

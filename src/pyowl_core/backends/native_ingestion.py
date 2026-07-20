@@ -827,14 +827,19 @@ def publish_retained_functional_snapshot_v2(
         raise TypeError("retained parser publication received invalid source metadata")
     if (
         options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
-        or options.imports not in {ImportPolicy.IGNORE, ImportPolicy.RECORD_UNRESOLVED}
-        or (options.imports is ImportPolicy.RECORD_UNRESOLVED and resolver is not None)
         or options.preserve_source_map
         or options.validate_owl2_dl
         or detection.format is not DocumentFormat.FUNCTIONAL
     ):
         raise AssertionError("retained Functional publication was invoked for an ineligible load")
     seed = _decode_retained_functional_seed_v2(summary, options.limits)
+    if seed.imports and (
+        options.imports in {ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT}
+        or (options.imports is ImportPolicy.RECORD_UNRESOLVED and resolver is not None)
+    ):
+        raise AssertionError(
+            "retained Functional publication cannot bypass resolver-backed imports"
+        )
     if cancellation_token is not None:
         cancellation_token.check()
     options.limits.enforce("max_documents", 1)
@@ -892,7 +897,7 @@ def publish_retained_functional_snapshot_v2(
         )
         public_diagnostics = ()
         resolution_attempts = 0
-    else:
+    elif direct_imports:
         edges, public_diagnostics, resolution_attempts = (
             _record_unresolved_without_resolver(
                 document_key,
@@ -901,6 +906,10 @@ def publish_retained_functional_snapshot_v2(
                 options,
             )
         )
+    else:
+        edges = ()
+        public_diagnostics = ()
+        resolution_attempts = 0
     manifest = ImportManifest(
         options.imports,
         options.offline,

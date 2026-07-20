@@ -109,6 +109,7 @@ def _parse_functional_retained_v2(
     config: object,
     collect_provenance: bool,
     record_unresolved: bool,
+    require_empty_imports: bool,
     cancel: _Cancellation | None = None,
 ) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int]]: ...
 def _prepare_parsed_structural_snapshot_v2(

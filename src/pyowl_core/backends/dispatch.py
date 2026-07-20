@@ -102,6 +102,7 @@ def _parse_functional_native_retained_v2(
     allow_swrl: bool,
     collect_provenance: bool,
     record_unresolved: bool,
+    require_empty_imports: bool,
     cancellation_token: CancellationToken | None,
 ) -> _NativeRetainedFunctionalParseV2:
     """Execute the unadvertised parser-to-retained-arena construction seam."""
@@ -112,6 +113,7 @@ def _parse_functional_native_retained_v2(
         allow_swrl=allow_swrl,
         collect_provenance=collect_provenance,
         record_unresolved=record_unresolved,
+        require_empty_imports=require_empty_imports,
         cancellation_token=cancellation_token,
     )
 

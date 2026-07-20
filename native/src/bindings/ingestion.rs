@@ -71,13 +71,21 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
 /// metadata and fingerprint evidence; canonical ontology rows remain solely
 /// in the native component owner.
 #[pyfunction]
-#[pyo3(signature = (source, config, collect_provenance, record_unresolved, cancel=None))]
+#[pyo3(signature = (
+    source,
+    config,
+    collect_provenance,
+    record_unresolved,
+    require_empty_imports,
+    cancel=None
+))]
 fn _parse_functional_retained_v2<'py>(
     py: Python<'py>,
     source: &Bound<'py, PyAny>,
     config: &Bound<'py, PyAny>,
     collect_provenance: bool,
     record_unresolved: bool,
+    require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<RetainedParseBindingResult> {
     let limits = crate::limits_from_python(config)?;
@@ -104,6 +112,7 @@ fn _parse_functional_retained_v2<'py>(
             input_size,
             collect_provenance,
             record_unresolved,
+            require_empty_imports,
         )?;
         Ok((outcome, parser_bytes))
     })?;

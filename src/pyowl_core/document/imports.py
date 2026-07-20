@@ -327,16 +327,9 @@ _DEFAULT_ACQUISITION_CACHE = AcquisitionCache()
 _DEFAULT_DOCUMENT_CACHE = ParsedDocumentCache()
 
 
-def _prepare_retained_native_root(
-    options: LoadOptions,
-    resolver: ImportResolver | None,
-) -> bool:
+def _prepare_retained_native_root(options: LoadOptions) -> bool:
     return (
         options.backend in {BackendPreference.AUTO, BackendPreference.NATIVE}
-        and (
-            options.imports is ImportPolicy.IGNORE
-            or (options.imports is ImportPolicy.RECORD_UNRESOLVED and resolver is None)
-        )
         and not options.preserve_source_map
         and not options.validate_owl2_dl
         and options.format in {None, DocumentFormat.FUNCTIONAL}
@@ -395,7 +388,7 @@ class SnapshotLoader:
         if isinstance(source, OntologyDocument):
             root = source
             root_cache_hit = False
-        elif _prepare_retained_native_root(selected, resolver):
+        elif _prepare_retained_native_root(selected):
             from pyowl_core.backends.python.parser import _parse_document_for_retained_load
 
             parsed = _parse_document_for_retained_load(

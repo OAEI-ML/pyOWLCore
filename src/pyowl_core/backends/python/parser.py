@@ -169,6 +169,14 @@ class PythonParser:
             record_unresolved=(
                 selected_options.imports is ImportPolicy.RECORD_UNRESOLVED
             ),
+            require_empty_imports=(
+                selected_options.imports
+                in {ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT}
+                or (
+                    selected_options.imports is ImportPolicy.RECORD_UNRESOLVED
+                    and retained_resolver is not None
+                )
+            ),
         )
         if parsed_result.native_summary is not None:
             if (
@@ -439,6 +447,7 @@ def _parse_payload(
     retain_native_storage: bool,
     collect_provenance: bool,
     record_unresolved: bool,
+    require_empty_imports: bool,
 ) -> _ParsedPayloadResult:
     from pyowl_core.limits import ParseLimits
 
@@ -459,6 +468,7 @@ def _parse_payload(
                         allow_swrl=allow_swrl,
                         collect_provenance=collect_provenance,
                         record_unresolved=record_unresolved,
+                        require_empty_imports=require_empty_imports,
                     )
                     return _ParsedPayloadResult(
                         ontology=retained.parsed,

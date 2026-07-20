@@ -115,6 +115,7 @@ class _Extension(Protocol):
         config: object,
         collect_provenance: bool,
         record_unresolved: bool,
+        require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
     ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
 
@@ -311,6 +312,7 @@ def _parse_functional_retained_v2(
     allow_swrl: bool = False,
     collect_provenance: bool = True,
     record_unresolved: bool = False,
+    require_empty_imports: bool = False,
     cancellation_token: CancellationToken | None = None,
 ) -> _NativeRetainedFunctionalParseV2:
     """Parse once and retain the parser-built structural arena when available."""
@@ -337,6 +339,8 @@ def _parse_functional_retained_v2(
         raise TypeError("collect_provenance must be bool")
     if not isinstance(record_unresolved, bool):
         raise TypeError("record_unresolved must be bool")
+    if not isinstance(require_empty_imports, bool):
+        raise TypeError("require_empty_imports must be bool")
     selected.enforce("max_source_bytes", len(data))
     request = (
         _PARSE_REQUEST.pack(
@@ -356,6 +360,7 @@ def _parse_functional_retained_v2(
                 config,
                 collect_provenance,
                 record_unresolved,
+                require_empty_imports,
                 cancel,
             ),
         )
