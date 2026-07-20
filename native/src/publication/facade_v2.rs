@@ -16,8 +16,10 @@ use pyo3::exceptions::{PyMemoryError, PyRuntimeError, PyTypeError, PyValueError}
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyBytes, PyDict, PyInt, PyModule, PyTuple, PyType};
 
-use crate::cancel::Cancellation;
+use crate::cancel::{Cancellation, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
+use crate::limits::Limits;
+use crate::model::EncodedStructuralColumnsV1;
 
 use super::records::Digest;
 use super::{
@@ -164,6 +166,7 @@ const CLOSE_REQUESTS: usize = 79;
 const CLOSE_TRANSITIONS: usize = 80;
 const FORK_REINITIALIZATIONS: usize = 81;
 const FACADE_CACHE_CURRENT_BYTES: usize = 83;
+const ENCODED_VIEW_REQUESTS: usize = 85;
 
 #[cfg(feature = "test-hooks")]
 type SignatureEntitiesV2 = HashMap<Vec<u8>, (SignatureKindV2, bool)>;
@@ -746,7 +749,7 @@ impl CounterStateV2 {
 }
 
 #[derive(Debug)]
-pub(super) struct PublicationStorageV2 {
+pub(crate) struct PublicationStorageV2 {
     attestation: NativeSnapshotAttestationV2,
     effective_tables: Vec<FacadeTableV2>,
     raw_document_tables: Option<Vec<FacadeTableV2>>,
@@ -945,6 +948,30 @@ impl PublicationStorageV2 {
             .getattr("NativeFacadeCountersV2")?
             .call((), Some(&kwargs))?
             .unbind())
+    }
+
+    pub(crate) fn encoded_structural_columns(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> NativeResult<EncodedStructuralColumnsV1> {
+        let typed = self.typed_structural.as_deref().ok_or_else(|| {
+            NativeError::protocol("native V2 publication has no typed structural owner")
+        })?;
+        let columns = typed.encoded_structural_columns(
+            scope,
+            document_ordinal,
+            raw_document_owner,
+            limits,
+            cancellation,
+            interrupt,
+        )?;
+        self.counters.add_pairs(&[(ENCODED_VIEW_REQUESTS, 1)])?;
+        Ok(columns)
     }
 
     /// Attach the production typed structural owner without retaining a
@@ -2710,12 +2737,16 @@ mod tests {
         .to_vec()
     }
 
-    fn typed_extension(value: &str) -> Vec<u8> {
+    fn typed_extension() -> Vec<u8> {
         Node::build(
-            140,
-            vec![Field::Node(iri(value.into()).expect("SWRL variable IRI"))],
+            148,
+            vec![
+                Field::Set(Vec::new()),
+                Field::Set(Vec::new()),
+                Field::Set(Vec::new()),
+            ],
         )
-        .expect("SWRL variable")
+        .expect("SWRL rule")
         .as_bytes()
         .to_vec()
     }
@@ -2880,7 +2911,7 @@ mod tests {
         let annotation_b = typed_annotation("urn:typed:annotation-b");
         let axiom_a = typed_declaration("urn:typed:axiom-a");
         let axiom_b = typed_declaration("urn:typed:axiom-b");
-        let extension = typed_extension("urn:typed:variable");
+        let extension = typed_extension();
         let limits = Limits::default();
         let mut builder =
             TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
@@ -2932,9 +2963,26 @@ mod tests {
         attestation.extension_count = 1;
         let storage = PublicationStorageV2::from_typed_structural(attestation, typed)
             .expect("count-aligned typed publication");
-        let counters = storage.counters.snapshot();
-        assert_eq!(counters[47], 0);
-        assert_eq!(counters[48], 0);
+        let before = storage.counters.snapshot();
+        assert_eq!(before[47], 0);
+        assert_eq!(before[48], 0);
+        assert_eq!(before[ENCODED_VIEW_REQUESTS], 0);
+        let columns = storage
+            .encoded_structural_columns(
+                TypedFacadeScopeV2::Closure,
+                None,
+                false,
+                &limits,
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("direct closure columns");
+        assert_eq!(columns.counters().root_rows, 5);
+        let after = storage.counters.snapshot();
+        assert_eq!(after[ENCODED_VIEW_REQUESTS], 1);
+        assert_eq!(&after[84..89], &[0, 1, 0, 0, 0]);
+        assert_eq!(after[47], 0);
+        assert_eq!(after[48], 0);
     }
 
     #[test]

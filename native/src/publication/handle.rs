@@ -88,6 +88,13 @@ impl NativeDocumentHandle {
     pub(crate) fn close(&self) -> bool {
         self.lifecycle.close()
     }
+
+    pub(crate) fn encoded_storage_v2(&self, py: Python<'_>) -> PyResult<Arc<PublicationStorageV2>> {
+        self.require_open_v2(py, "native V2 document handle is closed")?;
+        self.storage_v2.as_ref().cloned().ok_or_else(|| {
+            PyRuntimeError::new_err("native document owner has no typed V2 publication")
+        })
+    }
 }
 
 #[pymethods]
@@ -218,6 +225,13 @@ impl NativeSnapshotHandle {
 
     pub(crate) fn storage(&self) -> Option<&PublicationStorageV1> {
         self.storage_v1.as_deref()
+    }
+
+    pub(crate) fn encoded_storage_v2(&self, py: Python<'_>) -> PyResult<Arc<PublicationStorageV2>> {
+        self.require_open_v2(py, "native V2 snapshot handle is closed")?;
+        self.storage_v2.as_ref().cloned().ok_or_else(|| {
+            PyRuntimeError::new_err("native snapshot owner has no typed V2 publication")
+        })
     }
 }
 

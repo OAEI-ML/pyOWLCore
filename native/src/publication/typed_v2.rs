@@ -51,6 +51,18 @@ impl TypedFacadeCollectionV2 {
             Self::OntologyAnnotations | Self::Axioms | Self::Extensions
         )
     }
+
+    const fn accepts_root_tag(self, tag: u16) -> bool {
+        match self {
+            Self::OntologyAnnotations => tag == 5,
+            Self::Axioms => matches!(
+                tag,
+                60..=64 | 70..=82 | 90..=95 | 100..=101 | 110..=116 | 120..=123
+            ),
+            Self::Extensions => tag == 148,
+            Self::Signature => tag == 2,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -896,9 +908,14 @@ fn validate_table(
     let mut validation = TableValidationV2::default();
     for identifier in &table.roots {
         cancellation.checkpoint()?;
-        if arena.category(*identifier)? != expected {
+        if arena.category(*identifier)? != expected
+            || !table
+                .coordinate
+                .collection
+                .accepts_root_tag(arena.tag(*identifier)?)
+        {
             return Err(NativeError::protocol(
-                "typed V2 root category is inconsistent with its collection",
+                "typed V2 root constructor is inconsistent with its collection",
             ));
         }
         let prior_bytes = previous.as_ref().map_or(0, Vec::capacity);
@@ -1182,6 +1199,14 @@ mod tests {
         result
     }
 
+    fn swrl_variable(value: &str) -> Vec<u8> {
+        let iri = iri(value);
+        let mut result = varint(140);
+        result.push(1);
+        result.extend(frame(&iri));
+        result
+    }
+
     fn frozen_axioms(rows: &[Vec<u8>]) -> (NativeComponentArena, Vec<ComponentId>, ComponentId) {
         let limits = Limits::default();
         let mut builder = NativeComponentBuilder::new(&limits).expect("builder");
@@ -1390,6 +1415,28 @@ mod tests {
         )
         .expect_err("wrong category");
         assert_eq!(wrong_category.code, "NATIVE_PROTOCOL");
+
+        let limits = Limits::default();
+        let mut builder = NativeComponentBuilder::new(&limits).expect("builder");
+        let variable = builder
+            .intern_canonical(&swrl_variable("urn:typed:variable"))
+            .expect("SWRL variable");
+        let frozen = builder.freeze().expect("freeze variable");
+        let variable = frozen.resolve(variable).expect("variable root");
+        let wrong_extension_root = TypedFacadeStorageV2::freeze(
+            frozen.into_arena(),
+            vec![table(
+                TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Extensions),
+                vec![variable],
+            )],
+            Vec::new(),
+            1,
+            limits,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect_err("non-rule SWRL extension root");
+        assert_eq!(wrong_extension_root.code, "NATIVE_PROTOCOL");
 
         let reversed = TypedFacadeStorageV2::freeze(
             witness.clone(),
