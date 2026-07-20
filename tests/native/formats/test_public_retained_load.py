@@ -286,6 +286,44 @@ def test_record_unresolved_tight_diagnostic_limit_falls_back_before_publication(
     assert selected.signature_fingerprint == reference.signature_fingerprint
 
 
+@pytest.mark.parametrize(
+    "policy",
+    (ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT),
+)
+def test_empty_resolver_backed_policy_retains_owner_first(
+    policy: ImportPolicy,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=policy,
+            backend=backend,
+            collect_provenance=True,
+        )
+
+    reference = load_snapshot(SOURCE, options=options(BackendPreference.PYTHON))
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("empty import closure crossed the complete model decoder")
+
+    monkeypatch.setattr(native, "_decode_parsed_functional", unexpected)
+    selected = load_snapshot(SOURCE, options=options(BackendPreference.NATIVE))
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.import_manifest.policy is policy
+    assert selected.import_manifest.edges == ()
+    assert selected.report.resolution_attempts == 0
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    ingestion = cast(Any, selected)._native_ingestion_counters_v2()
+    assert ingestion.parser_result_bytes_scanned == 0
+    assert ingestion.canonical_bytes_copied_to_python == 0
+
+
 def test_owner_first_fingerprint_inputs_cover_annotations_and_nested_entities(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
