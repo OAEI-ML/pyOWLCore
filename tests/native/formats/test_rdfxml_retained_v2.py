@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import gc
 import io
+import mmap
 import time
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -18,20 +21,23 @@ from pyowl_core import (
     ImportResolver,
     ImportStatus,
     LoadOptions,
+    MappedOntologySnapshot,
     OntologySyntaxError,
     OperationCancelledError,
     ParseLimits,
     ResourceLimitError,
     UnresolvedImportWarning,
     canonical_bytes,
+    decode_snapshot,
     encode_snapshot,
     load_snapshot,
+    open_snapshot,
 )
 from pyowl_core.backends import native
 from pyowl_core.backends.native_ingestion import publish_retained_rdfxml_snapshot_v2
 from pyowl_core.cancellation import CancellationToken
-from pyowl_core.exceptions import UnsupportedSyntaxError
-from pyowl_core.index import AxiomTypeIndex
+from pyowl_core.exceptions import SnapshotInUseError, UnsupportedSyntaxError
+from pyowl_core.index import AxiomTypeIndex, OntologyIdentityIndex
 from pyowl_core.io.formats.detection import detect_format
 from pyowl_core.io.source import acquire_source
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
@@ -388,6 +394,116 @@ def test_private_record_unresolved_policy_matches_python_without_resolver() -> N
     assert selected.signature_fingerprint == reference.signature_fingerprint
     assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
     assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_private_rdfxml_identity_wire_and_mmap_owners_avoid_scalar_materialization(
+    tmp_path: Path,
+) -> None:
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.RECORD_UNRESOLVED,
+            backend=backend,
+            collect_provenance=False,
+        )
+
+    with pytest.warns(UnresolvedImportWarning):
+        reference = load_snapshot(
+            SOURCE,
+            document_iri=DOCUMENT_IRI,
+            options=options(BackendPreference.PYTHON),
+        )
+    with pytest.warns(UnresolvedImportWarning):
+        selected = cast(
+            Any,
+            _retained_snapshot(options=options(BackendPreference.NATIVE)),
+        )
+
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    before_owner = raw_owner._publication_counters_v2()
+    before_python = selected._native_python_counters()
+    selected_identity = selected.view(OntologyIdentityIndex)
+    reference_identity = reference.view(OntologyIdentityIndex)
+    after_identity_owner = raw_owner._publication_counters_v2()
+    after_identity_python = selected._native_python_counters()
+
+    assert selected_identity.documents == reference_identity.documents
+    assert selected_identity.import_manifest_digest == reference_identity.import_manifest_digest
+    assert (
+        selected_identity.loader_diagnostics_digest
+        == reference_identity.loader_diagnostics_digest
+    )
+    assert selected_identity.is_complete is reference_identity.is_complete is False
+    assert after_identity_owner == before_owner
+    assert after_identity_python == before_python
+
+    scalar_error = AssertionError("retained RDF/XML wire crossed scalar traversal")
+    with (
+        patch.object(type(selected), "iter_axioms", side_effect=scalar_error),
+        patch.object(type(selected), "iter_extensions", side_effect=scalar_error),
+        patch.object(type(selected), "ontology_annotations", side_effect=scalar_error),
+        patch.object(type(selected), "signature", side_effect=scalar_error),
+    ):
+        encoded = encode_snapshot(selected)
+    after_wire_owner = raw_owner._publication_counters_v2()
+    after_wire_python = selected._native_python_counters()
+
+    assert encoded == encode_snapshot(reference)
+    assert after_wire_owner.encoded_view_requests == before_owner.encoded_view_requests + 1
+    assert after_wire_owner.page_requests == before_owner.page_requests
+    assert after_wire_owner.rows_emitted == before_owner.rows_emitted
+    assert after_wire_python.model_rows_materialized == before_python.model_rows_materialized
+
+    decoded = decode_snapshot(encoded)
+    decoded_identity = decoded.view(OntologyIdentityIndex)
+    assert decoded_identity.documents == reference_identity.documents
+    assert decoded_identity.import_manifest_digest == reference_identity.import_manifest_digest
+    assert (
+        decoded_identity.loader_diagnostics_digest
+        == reference_identity.loader_diagnostics_digest
+    )
+
+    path = tmp_path / "retained-rdfxml.pyocore"
+    path.write_bytes(encoded)
+    mapped = open_snapshot(path, mmap=True, verify=True)
+    assert isinstance(mapped, MappedOntologySnapshot)
+    assert mapped._mapped_state.decoded is None
+    mapped_identity = mapped.view(OntologyIdentityIndex)
+    assert mapped_identity.documents == reference_identity.documents
+    assert mapped_identity.import_manifest_digest == reference_identity.import_manifest_digest
+    assert (
+        mapped_identity.loader_diagnostics_digest
+        == reference_identity.loader_diagnostics_digest
+    )
+    assert mapped._mapped_state.decoded is None
+
+    mapped_view = mapped.view(EncodedStructuralView)
+    expected_roots = tuple(
+        (kind, canonical_bytes(value))
+        for kind, values in (
+            (1, reference.root.ontology_annotations),
+            (2, reference.root.axioms),
+            (3, reference.root.extension_components),
+        )
+        for value in values
+    )
+    assert decode_root_canonical_bytes(mapped_view.buffers) == expected_roots
+    assert len({id(value.obj) for value in mapped_view.buffers.values()}) == 1
+    assert all(type(value.obj) is mmap.mmap for value in mapped_view.buffers.values())
+    assert all(value.readonly for value in mapped_view.buffers.values())
+    assert mapped._mapped_state.decoded is None
+
+    with pytest.raises(SnapshotInUseError):
+        mapped.close()
+    del mapped_view
+    gc.collect()
+    mapped.close()
+    assert mapped.closed
+    assert mapped_identity.documents == reference_identity.documents
+
+    selected.close()
+    assert selected.closed
+    assert selected_identity.documents == reference_identity.documents
 
 
 @pytest.mark.parametrize(
