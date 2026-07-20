@@ -174,6 +174,13 @@ and traversal costs, may be used for the `<= 1.10` aggregate gate. Direct
 engine and installed-wheel lanes, resident-byte and file lanes, and fresh- and
 steady-process modes remain separate datasets.
 
+The common-contract provenance fence is deliberately parser-neutral. It
+retains every structural digest, document key, occurrence ordinal, source byte
+count, and document count, while publishing `span = null` for every occurrence.
+Byte/line spans remain available through the ordinary pyowl-core provenance
+APIs, but are not comparator equality fields because independent parsers expose
+different source-location models.
+
 For the Python lane, retained-handle/facade publication is `n/a`: the ordinary
 Python snapshot and its common-contract ledger still complete inside the
 timer, but that completion is not a native publication capability. The

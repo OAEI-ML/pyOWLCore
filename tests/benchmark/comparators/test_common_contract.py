@@ -185,6 +185,16 @@ def test_core_common_contract_reconstructs_all_four_fingerprint_preimages() -> N
     assert all(value["preimage_bytes"] > 0 for value in fingerprints.values())
     assert contract["ledger"]["inventories"]["axioms"]["count"] == 15
     assert contract["ledger"]["diagnostic_count"] == 0
+    assert any(
+        occurrence.span is not None
+        for occurrences in snapshot.origin_index.entries.values()
+        for occurrence in occurrences
+    )
+    assert all(
+        occurrence["span"] is None
+        for origin in contract["provenance"]["origins"]
+        for occurrence in origin["occurrences"]
+    )
 
 
 def test_encoded_common_contract_matches_scalar_without_model_callbacks(

@@ -837,6 +837,14 @@ def _identity_inventory(snapshot: OntologySnapshot) -> dict[str, object]:
 
 
 def _provenance_inventory(snapshot: OntologySnapshot) -> dict[str, object]:
+    """Return the parser-neutral provenance fence used across implementations.
+
+    Byte/line spans are intentionally excluded: independently implemented
+    parsers expose different location models, and source coordinates are not a
+    semantic ontology result. The fence still retains every structural digest,
+    document key, and occurrence ordinal, plus exact source/document counts.
+    """
+
     origins: list[dict[str, object]] = []
     for digest, occurrences in sorted(snapshot.origin_index.entries.items()):
         origins.append(
@@ -846,7 +854,7 @@ def _provenance_inventory(snapshot: OntologySnapshot) -> dict[str, object]:
                     {
                         "document_key": item.document_key,
                         "occurrence": item.occurrence,
-                        "span": None if item.span is None else item.span.to_dict(),
+                        "span": None,
                     }
                     for item in occurrences
                 ],
@@ -913,7 +921,7 @@ def _encoded_provenance_inventory(
             {
                 "document_key": document_key,
                 "occurrence": occurrence,
-                "span": None if span is None else span.to_dict(),
+                "span": None,
             }
         )
         row_count += 1
