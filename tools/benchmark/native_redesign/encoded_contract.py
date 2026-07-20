@@ -95,6 +95,7 @@ class EncodedTraversalEvidence:
     referenced_buffer_bytes: int
     referenced_buffer_copy_bytes: int = 0
     provenance_rows_streamed: int = 0
+    native_common_contract_summary_count: int = 0
     scalar_traversal_calls: int = 0
     structural_nodes_materialized: int = 0
 
@@ -107,6 +108,9 @@ class EncodedTraversalEvidence:
             "encoded_referenced_buffer_bytes": self.referenced_buffer_bytes,
             "encoded_referenced_buffer_copy_bytes": self.referenced_buffer_copy_bytes,
             "encoded_provenance_rows_streamed": self.provenance_rows_streamed,
+            "native_common_contract_summary_count": (
+                self.native_common_contract_summary_count
+            ),
             "encoded_scalar_traversal_calls": self.scalar_traversal_calls,
             "encoded_structural_nodes_materialized": self.structural_nodes_materialized,
         }

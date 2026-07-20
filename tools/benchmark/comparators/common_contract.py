@@ -25,6 +25,11 @@ from pyowl_core import (
     SourceSpan,
     canonical_bytes,
 )
+from pyowl_core.document.native_storage import (
+    _NativeCommonContractFingerprintEvidenceV1,
+    _NativeCommonContractRecordInventoryV1,
+    _NativeCommonContractSummaryV1,
+)
 from pyowl_core.model import LOGICAL_AXIOM_TYPES, Entity, StructuralNode, encode_varint
 from pyowl_core.model.axioms import AxiomNode
 
@@ -38,6 +43,7 @@ from ..native_redesign.encoded_contract import (
 
 COMMON_CONTRACT_SCHEMA = "pyowl-core/comparator-common-contract/v1"
 _SHA256 = frozenset("0123456789abcdef")
+_RECORD_INVENTORY_DOMAIN = b"pyowl-core:comparator-record-inventory:v1\x00"
 
 
 class CommonContractError(ValueError):
@@ -162,94 +168,126 @@ def build_encoded_core_common_contract(
     _require_digest(options_sha256, "options_sha256")
 
     manifest = snapshot.import_manifest
-    closure = EncodedStructuralTraversal.from_snapshot(
-        snapshot,
-        scope=AxiomScope.CLOSURE,
-        require_native_direct=require_native_direct,
-    )
-    document_rows = (
-        ((manifest.documents[0], closure),)
+    native_summary = (
+        _native_common_contract_summary(snapshot)
         if len(manifest.documents) == 1
-        else tuple(
-            (
-                record,
-                EncodedStructuralTraversal.from_snapshot(
-                    snapshot,
-                    scope=AxiomScope.DOCUMENT,
-                    document_key=record.document_key,
-                    require_native_direct=require_native_direct,
-                ),
-            )
-            for record in manifest.documents
-        )
+        else None
     )
-    root_record, root_traversal = next(
-        row for row in document_rows if row[0].document_key == snapshot.root_document_key
-    )
-    direct_imports = tuple(
-        sorted(
-            {
-                canonical_bytes(edge.import_iri)
-                for edge in manifest.edges
-                if edge.importing_document_key == root_record.document_key
-            }
+    closure: EncodedStructuralTraversal | None = None
+    encoded_inventories: Mapping[str, dict[str, object]] | None
+    if native_summary is not None:
+        root_record = manifest.documents[0]
+        fingerprints, encoded_inventories = _native_summary_contract_components(
+            native_summary,
+            document_fingerprint=root_record.document_fingerprint.hex,
+            structural_fingerprint=snapshot.structural_fingerprint.hex,
+            logical_fingerprint=snapshot.logical_fingerprint.hex,
+            signature_fingerprint=snapshot.signature_fingerprint.hex,
         )
-    )
-
-    if len(document_rows) == 1:
-        combined = closure.single_document_contract_digests(
-            ontology_iri=_optional_canonical_bytes(root_record.ontology_id.ontology_iri),
-            version_iri=_optional_canonical_bytes(root_record.ontology_id.version_iri),
-            direct_imports=direct_imports,
-            manifest_bytes=manifest.canonical_bytes(),
-            document_key=root_record.document_key,
+        traversal_evidence = EncodedTraversalEvidence(
+            view_count=0,
+            document_view_count=0,
+            node_count=native_summary.node_count,
+            root_count=native_summary.root_count,
+            referenced_buffer_bytes=0,
+            native_common_contract_summary_count=1,
         )
-        fingerprints = {
-            "document": _encoded_fingerprint_evidence(
-                combined.document,
-                root_record.document_fingerprint.hex,
-            ),
-            "structural": _encoded_fingerprint_evidence(
-                combined.structural,
-                snapshot.structural_fingerprint.hex,
-            ),
-            "logical": _encoded_fingerprint_evidence(
-                combined.logical,
-                snapshot.logical_fingerprint.hex,
-            ),
-            "signature": _encoded_fingerprint_evidence(
-                combined.signature,
-                snapshot.signature_fingerprint.hex,
-            ),
-        }
-        encoded_inventories: Mapping[str, dict[str, object]] | None = combined.inventories
     else:
-        fingerprints = {
-            "document": _encoded_fingerprint_evidence(
-                root_traversal.document_preimage(
-                    ontology_iri=_optional_canonical_bytes(root_record.ontology_id.ontology_iri),
-                    version_iri=_optional_canonical_bytes(root_record.ontology_id.version_iri),
-                    direct_imports=direct_imports,
+        closure = EncodedStructuralTraversal.from_snapshot(
+            snapshot,
+            scope=AxiomScope.CLOSURE,
+            require_native_direct=require_native_direct,
+        )
+        document_rows = (
+            ((manifest.documents[0], closure),)
+            if len(manifest.documents) == 1
+            else tuple(
+                (
+                    record,
+                    EncodedStructuralTraversal.from_snapshot(
+                        snapshot,
+                        scope=AxiomScope.DOCUMENT,
+                        document_key=record.document_key,
+                        require_native_direct=require_native_direct,
+                    ),
+                )
+                for record in manifest.documents
+            )
+        )
+        root_record, root_traversal = next(
+            row for row in document_rows if row[0].document_key == snapshot.root_document_key
+        )
+        direct_imports = tuple(
+            sorted(
+                {
+                    canonical_bytes(edge.import_iri)
+                    for edge in manifest.edges
+                    if edge.importing_document_key == root_record.document_key
+                }
+            )
+        )
+
+        if len(document_rows) == 1:
+            combined = closure.single_document_contract_digests(
+                ontology_iri=_optional_canonical_bytes(root_record.ontology_id.ontology_iri),
+                version_iri=_optional_canonical_bytes(root_record.ontology_id.version_iri),
+                direct_imports=direct_imports,
+                manifest_bytes=manifest.canonical_bytes(),
+                document_key=root_record.document_key,
+            )
+            fingerprints = {
+                "document": _encoded_fingerprint_evidence(
+                    combined.document,
+                    root_record.document_fingerprint.hex,
                 ),
-                root_record.document_fingerprint.hex,
-            ),
-            "structural": _encoded_fingerprint_evidence(
-                EncodedStructuralTraversal.structural_preimage(
-                    manifest.canonical_bytes(),
-                    tuple((record.document_key, traversal) for record, traversal in document_rows),
+                "structural": _encoded_fingerprint_evidence(
+                    combined.structural,
+                    snapshot.structural_fingerprint.hex,
                 ),
-                snapshot.structural_fingerprint.hex,
-            ),
-            "logical": _encoded_fingerprint_evidence(
-                closure.logical_preimage(),
-                snapshot.logical_fingerprint.hex,
-            ),
-            "signature": _encoded_fingerprint_evidence(
-                closure.signature_preimage(),
-                snapshot.signature_fingerprint.hex,
-            ),
-        }
-        encoded_inventories = None
+                "logical": _encoded_fingerprint_evidence(
+                    combined.logical,
+                    snapshot.logical_fingerprint.hex,
+                ),
+                "signature": _encoded_fingerprint_evidence(
+                    combined.signature,
+                    snapshot.signature_fingerprint.hex,
+                ),
+            }
+            encoded_inventories = combined.inventories
+        else:
+            fingerprints = {
+                "document": _encoded_fingerprint_evidence(
+                    root_traversal.document_preimage(
+                        ontology_iri=_optional_canonical_bytes(root_record.ontology_id.ontology_iri),
+                        version_iri=_optional_canonical_bytes(root_record.ontology_id.version_iri),
+                        direct_imports=direct_imports,
+                    ),
+                    root_record.document_fingerprint.hex,
+                ),
+                "structural": _encoded_fingerprint_evidence(
+                    EncodedStructuralTraversal.structural_preimage(
+                        manifest.canonical_bytes(),
+                        tuple(
+                            (record.document_key, traversal)
+                            for record, traversal in document_rows
+                        ),
+                    ),
+                    snapshot.structural_fingerprint.hex,
+                ),
+                "logical": _encoded_fingerprint_evidence(
+                    closure.logical_preimage(),
+                    snapshot.logical_fingerprint.hex,
+                ),
+                "signature": _encoded_fingerprint_evidence(
+                    closure.signature_preimage(),
+                    snapshot.signature_fingerprint.hex,
+                ),
+            }
+            encoded_inventories = None
+        traversal_evidence = combine_traversal_evidence(
+            closure,
+            tuple(traversal for _record, traversal in document_rows),
+        )
 
     diagnostic_rows = [value.to_dict() for value in snapshot.diagnostics]
     diagnostics_bytes = _canonical_json(diagnostic_rows)
@@ -261,20 +299,22 @@ def build_encoded_core_common_contract(
     provenance_bytes = _canonical_json(provenance)
     identity = _identity_inventory(snapshot)
     identity_bytes = _canonical_json(identity)
-    inventories = (
-        {
+    if encoded_inventories is not None:
+        inventories = {
             **encoded_inventories,
             "documents": _document_inventory(snapshot),
         }
-        if encoded_inventories is not None
-        else {
+    else:
+        # ``None`` is produced only by the multi-document encoded fallback.
+        if closure is None:  # pragma: no cover - guarded by the branches above
+            raise CommonContractError("encoded inventory traversal was not initialized")
+        inventories = {
             "ontology_annotations": closure.record_inventory(1),
             "axioms": closure.record_inventory(2),
             "extensions": closure.record_inventory(3),
             "signature": closure.signature_inventory(),
             "documents": _document_inventory(snapshot),
         }
-    )
     ledger = {
         "inventories": inventories,
         "identity_sha256": hashlib.sha256(identity_bytes).hexdigest(),
@@ -303,10 +343,7 @@ def build_encoded_core_common_contract(
     return EncodedCommonContractResult(
         payload,
         replace(
-            combine_traversal_evidence(
-                closure,
-                tuple(traversal for _record, traversal in document_rows),
-            ),
+            traversal_evidence,
             provenance_rows_streamed=provenance_rows_streamed,
         ),
     )
@@ -511,6 +548,146 @@ def _encoded_fingerprint_evidence(preimage: DigestResult, expected: str) -> dict
     }
 
 
+def _native_common_contract_summary(
+    snapshot: OntologySnapshot,
+) -> _NativeCommonContractSummaryV1 | None:
+    exporter = getattr(snapshot, "_native_common_contract_summary_v1", None)
+    if not callable(exporter):
+        return None
+    summary = exporter()
+    if type(summary) is not _NativeCommonContractSummaryV1:
+        raise CommonContractError(
+            "native common-contract summary has the wrong exact type"
+        )
+    return summary
+
+
+def _native_summary_contract_components(
+    summary: _NativeCommonContractSummaryV1,
+    *,
+    document_fingerprint: str,
+    structural_fingerprint: str,
+    logical_fingerprint: str,
+    signature_fingerprint: str,
+) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
+    """Validate and publish one compact Rust-owned contract summary."""
+
+    if type(summary) is not _NativeCommonContractSummaryV1:
+        raise CommonContractError("native common-contract summary has the wrong exact type")
+    if type(summary.schema) is not int or summary.schema != 1:
+        raise CommonContractError("native common-contract summary schema differs")
+
+    expected_fingerprints = {
+        "document": (summary.document_fingerprint, document_fingerprint),
+        "structural": (summary.structural_fingerprint, structural_fingerprint),
+        "logical": (summary.logical_fingerprint, logical_fingerprint),
+        "signature": (summary.signature_fingerprint, signature_fingerprint),
+    }
+    fingerprints: dict[str, dict[str, object]] = {}
+    for name, (fingerprint_evidence, expected) in expected_fingerprints.items():
+        if type(fingerprint_evidence) is not _NativeCommonContractFingerprintEvidenceV1:
+            raise CommonContractError(
+                f"native common-contract {name} fingerprint has the wrong exact type"
+            )
+        if (
+            type(fingerprint_evidence.preimage_bytes) is not int
+            or not 0 < fingerprint_evidence.preimage_bytes < 2**64
+        ):
+            raise CommonContractError(
+                f"native common-contract {name} preimage length is not a positive u64"
+            )
+        if (
+            type(fingerprint_evidence.sha256) is not bytes
+            or len(fingerprint_evidence.sha256) != 32
+        ):
+            raise CommonContractError(
+                f"native common-contract {name} fingerprint is not exact bytes32"
+            )
+        observed = fingerprint_evidence.sha256.hex()
+        if observed != expected:
+            raise CommonContractError(
+                f"native common-contract {name} fingerprint disagrees with publication metadata"
+            )
+        fingerprints[name] = {
+            "algorithm": "sha256",
+            "schema": 1,
+            "preimage_bytes": fingerprint_evidence.preimage_bytes,
+            "preimage_sha256": observed,
+            "digest": expected,
+        }
+
+    expected_inventories = {
+        "ontology_annotations": summary.ontology_annotations,
+        "axioms": summary.axioms,
+        "extensions": summary.extensions,
+        "signature": summary.signature,
+    }
+    inventories: dict[str, dict[str, object]] = {}
+    for name, inventory in expected_inventories.items():
+        if type(inventory) is not _NativeCommonContractRecordInventoryV1:
+            raise CommonContractError(
+                f"native common-contract {name} inventory has the wrong exact type"
+            )
+        scalars = (
+            inventory.count,
+            inventory.canonical_bytes,
+            inventory.transcript_bytes,
+        )
+        if any(type(item) is not int or not 0 <= item < 2**64 for item in scalars):
+            raise CommonContractError(
+                f"native common-contract {name} inventory contains a non-u64 scalar"
+            )
+        if (inventory.count == 0) != (inventory.canonical_bytes == 0):
+            raise CommonContractError(
+                f"native common-contract {name} inventory count and bytes disagree"
+            )
+        minimum_transcript = (
+            len(_RECORD_INVENTORY_DOMAIN)
+            + len(encode_varint(inventory.count))
+            + inventory.count
+            + inventory.canonical_bytes
+        )
+        if inventory.transcript_bytes < minimum_transcript:
+            raise CommonContractError(
+                f"native common-contract {name} inventory transcript is undersized"
+            )
+        if type(inventory.sha256) is not bytes or len(inventory.sha256) != 32:
+            raise CommonContractError(
+                f"native common-contract {name} inventory digest is not exact bytes32"
+            )
+        inventories[name] = {
+            "count": inventory.count,
+            "canonical_bytes": inventory.canonical_bytes,
+            "transcript_bytes": inventory.transcript_bytes,
+            "sha256": inventory.sha256.hex(),
+        }
+
+    if (
+        type(summary.root_count) is not int
+        or not 0 <= summary.root_count < 2**64
+        or type(summary.node_count) is not int
+        or not 0 <= summary.node_count < 2**64
+    ):
+        raise CommonContractError("native common-contract graph counts are not exact u64 values")
+    inventory_roots = sum(
+        value.count
+        for value in (
+            summary.ontology_annotations,
+            summary.axioms,
+            summary.extensions,
+        )
+    )
+    if summary.root_count != inventory_roots:
+        raise CommonContractError(
+            "native common-contract root count diverges from record inventories"
+        )
+    if summary.node_count < summary.root_count or summary.signature.count > summary.node_count:
+        raise CommonContractError(
+            "native common-contract node count is inconsistent with its inventories"
+        )
+    return fingerprints, inventories
+
+
 def _document_preimage_parts(document: OntologyDocument) -> Iterable[bytes]:
     yield b"pyowl-core:document-fingerprint:v1\x00"
     ontology_id = document.ontology_id
@@ -592,7 +769,7 @@ def _collection_parts(values: Iterable[StructuralNode]) -> list[bytes]:
 def _record_inventory(values: Iterable[StructuralNode]) -> dict[str, object]:
     encoded = tuple(sorted({canonical_bytes(value) for value in values}))
     transcript = (
-        b"pyowl-core:comparator-record-inventory:v1\x00"
+        _RECORD_INVENTORY_DOMAIN
         + encode_varint(len(encoded))
         + b"".join(_frame(value) for value in encoded)
     )

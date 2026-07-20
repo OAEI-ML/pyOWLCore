@@ -228,6 +228,7 @@ def test_encoded_common_contract_matches_scalar_without_model_callbacks(
     assert encoded.evidence.document_view_count == 0
     assert encoded.evidence.referenced_buffer_bytes > 0
     assert encoded.evidence.referenced_buffer_copy_bytes == 0
+    assert encoded.evidence.native_common_contract_summary_count == 0
     assert encoded.evidence.scalar_traversal_calls == 0
     assert encoded.evidence.structural_nodes_materialized == 0
 
@@ -320,7 +321,13 @@ def test_retained_native_encoded_contract_matches_scalar_without_model_callbacks
 
     before = cast(Any, selected)._native_python_counters()
     monkeypatch.setattr(native_views_module, "decode_canonical", unexpected)
-    for name in ("iter_axioms", "iter_extensions", "ontology_annotations", "signature"):
+    for name in (
+        "iter_axioms",
+        "iter_extensions",
+        "ontology_annotations",
+        "signature",
+        "view",
+    ):
         monkeypatch.setattr(type(selected), name, unexpected)
     encoded = build_encoded_core_common_contract(
         selected,
@@ -331,10 +338,11 @@ def test_retained_native_encoded_contract_matches_scalar_without_model_callbacks
     after = cast(Any, selected)._native_python_counters()
 
     assert encoded.contract == reference
-    assert encoded.evidence.view_count == 1
+    assert encoded.evidence.view_count == 0
     assert encoded.evidence.document_view_count == 0
-    assert encoded.evidence.referenced_buffer_bytes > 0
+    assert encoded.evidence.referenced_buffer_bytes == 0
     assert encoded.evidence.referenced_buffer_copy_bytes == 0
+    assert encoded.evidence.native_common_contract_summary_count == 1
     assert encoded.evidence.provenance_rows_streamed == sum(
         len(row["occurrences"]) for row in reference["provenance"]["origins"]
     )
@@ -342,6 +350,39 @@ def test_retained_native_encoded_contract_matches_scalar_without_model_callbacks
     assert encoded.evidence.structural_nodes_materialized == 0
     assert after.model_rows_materialized == before.model_rows_materialized
     assert after.auxiliary_rows_decoded == before.auxiliary_rows_decoded
+
+
+def test_retained_native_common_contract_rejects_tampered_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probe = native.probe(refresh=True)
+    if not probe.available or "parse-functional-v1" not in probe.features:
+        pytest.skip(probe.reason or "native Functional parser capability is unavailable")
+    source = b"Ontology(<urn:native-contract-tamper> Declaration(Class(<urn:A>)))"
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=True,
+    )
+    selected = load_snapshot(source, options=options)
+    summary = copy.copy(cast(Any, selected)._native_common_contract_summary_v1())
+    document_fingerprint = copy.copy(summary.document_fingerprint)
+    object.__setattr__(document_fingerprint, "sha256", b"\x00" * 32)
+    object.__setattr__(summary, "document_fingerprint", document_fingerprint)
+    monkeypatch.setattr(
+        type(selected),
+        "_native_common_contract_summary_v1",
+        lambda _self: summary,
+    )
+
+    with pytest.raises(CommonContractError, match="document fingerprint disagrees"):
+        build_encoded_core_common_contract(
+            selected,
+            corpus_id="native-retained-contract-tamper",
+            source_sha256=hashlib.sha256(source).hexdigest(),
+            options_sha256=options_digest(options),
+        )
 
 
 def test_common_contract_is_deterministic_for_identical_bytes_and_options() -> None:
