@@ -4,6 +4,8 @@ mod functional;
 mod retained;
 
 pub(crate) use retained::{
+    build_rdfxml_seed as build_retained_rdfxml_seed_v2,
+    contains_anonymous_rows as retained_rows_contain_anonymous_v2,
     prepare_publication as prepare_retained_publication_v2, PreparedRetainedPublicationV2,
     RetainedParseMetadataV2,
 };

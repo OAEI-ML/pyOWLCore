@@ -1,6 +1,7 @@
 //! Production Rust-to-Rust handoff from mapped documents to retained V2 roots.
 
 use std::mem::size_of;
+use std::time::Instant;
 
 use crate::cancel::{Cancellation, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
@@ -8,6 +9,12 @@ use crate::limits::Limits;
 use crate::publication::{TypedFacadeBuilderV2, TypedFacadeStorageV2};
 
 use super::CanonicalDocument;
+
+pub(super) struct PublishedV2 {
+    pub(super) storage: TypedFacadeStorageV2,
+    pub(super) arena_construction_ns: u64,
+    pub(super) freeze_ns: u64,
+}
 
 pub(super) fn publish(
     documents: &[CanonicalDocument],
@@ -18,10 +25,32 @@ pub(super) fn publish(
     interrupt: Option<InterruptSlot>,
     caller_external_bytes: usize,
 ) -> NativeResult<TypedFacadeStorageV2> {
+    Ok(publish_timed(
+        documents,
+        effective_documents,
+        closure_documents,
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+    )?
+    .storage)
+}
+
+pub(super) fn publish_timed(
+    documents: &[CanonicalDocument],
+    effective_documents: &[Vec<u64>],
+    closure_documents: &[u64],
+    limits: Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    caller_external_bytes: usize,
+) -> NativeResult<PublishedV2> {
     let mapped_document_bytes = mapped_document_bytes(documents)?;
     let external_bytes = caller_external_bytes
         .checked_add(mapped_document_bytes)
         .ok_or_else(|| NativeError::limit("native V2 ingestion memory accounting overflow"))?;
+    let arena_started = Instant::now();
     let mut builder = TypedFacadeBuilderV2::new(limits, cancellation, interrupt, external_bytes)?;
     for document in documents {
         builder.add_document(
@@ -30,7 +59,20 @@ pub(super) fn publish(
             &document.extensions,
         )?;
     }
-    builder.freeze(effective_documents, closure_documents)
+    let arena_construction_ns = elapsed_ns(arena_started)?;
+    let freeze_started = Instant::now();
+    let storage = builder.freeze(effective_documents, closure_documents)?;
+    let freeze_ns = elapsed_ns(freeze_started)?;
+    Ok(PublishedV2 {
+        storage,
+        arena_construction_ns,
+        freeze_ns,
+    })
+}
+
+fn elapsed_ns(started: Instant) -> NativeResult<u64> {
+    u64::try_from(started.elapsed().as_nanos())
+        .map_err(|_| NativeError::limit("native RDF/XML phase time exceeds u64"))
 }
 
 fn mapped_document_bytes(documents: &[CanonicalDocument]) -> NativeResult<usize> {

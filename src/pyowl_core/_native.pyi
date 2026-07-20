@@ -112,6 +112,15 @@ def _parse_functional_retained_v2(
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
 ) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int]]: ...
+def _parse_rdfxml_retained_v2(
+    source: object,
+    document_iri: str | None,
+    config: object,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    require_empty_imports: bool,
+    cancel: _Cancellation | None = None,
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int]]: ...
 def _prepare_parsed_structural_snapshot_v2(
     parsed: _NativeParsedStructuralStorageV2,
     manifest: bytes,

@@ -7,7 +7,7 @@
 use std::mem::size_of;
 
 use crate::cancel::{Cancellation, InterruptSlot};
-use crate::canonical::Node;
+use crate::canonical::{iri, Node};
 use crate::error::{NativeError, NativeResult};
 use crate::hash::Sha256;
 use crate::limits::{LimitKey, Limits};
@@ -22,6 +22,7 @@ use crate::publication::{
 use super::{ParsedDocument, Span, SpannedNode};
 
 pub(crate) const RETAINED_SEED_MAGIC_V2: &[u8; 8] = b"PYNFRS2\0";
+pub(crate) const RETAINED_RDFXML_SEED_MAGIC_V2: &[u8; 8] = b"PYNRRS2\0";
 pub(crate) const RETAINED_PREPARED_MAGIC_V2: &[u8; 8] = b"PYNFPP2\0";
 const RETAINED_SEED_SCHEMA_V2: u16 = 1;
 const RETAINED_PREPARED_SCHEMA_V2: u16 = 2;
@@ -169,6 +170,104 @@ impl RetainedParseMetadataV2 {
             .checked_mul(size_of::<RetainedOccurrenceV2>())
             .ok_or_else(|| NativeError::limit("native retained parser metadata overflow"))
     }
+}
+
+/// Build bounded publication evidence from canonical rows produced by a
+/// non-Functional native mapper. Structural rows stay in Rust and only this
+/// compact seed crosses the Python boundary.
+pub(crate) fn build_rdfxml_seed(
+    ontology_iri: Option<&str>,
+    version_iri: Option<&str>,
+    imports: &[String],
+    rows: [&[Vec<u8>]; 3],
+    decoded_codepoints: u64,
+    total_triples: u64,
+) -> NativeResult<(Vec<u8>, RetainedParseMetadataV2)> {
+    let ontology_node = ontology_iri
+        .map(|value| iri(value.to_owned()))
+        .transpose()?;
+    let version_node = version_iri.map(|value| iri(value.to_owned())).transpose()?;
+    let mut import_nodes = imports
+        .iter()
+        .map(|value| iri(value.clone()))
+        .collect::<NativeResult<Vec<_>>>()?;
+    import_nodes.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    import_nodes.dedup_by(|left, right| left.as_bytes() == right.as_bytes());
+    let document_fingerprint =
+        document_fingerprint_slices(&ontology_node, &version_node, &import_nodes, rows)?;
+    let root_counts = [
+        u64::try_from(rows[0].len())
+            .map_err(|_| NativeError::limit("native RDF/XML annotation count exceeds u64"))?,
+        u64::try_from(rows[1].len())
+            .map_err(|_| NativeError::limit("native RDF/XML axiom count exceeds u64"))?,
+        u64::try_from(rows[2].len())
+            .map_err(|_| NativeError::limit("native RDF/XML extension count exceeds u64"))?,
+    ];
+    let occurrence_count = root_counts.into_iter().try_fold(0_u64, |total, count| {
+        checked_add(
+            total,
+            count,
+            "native RDF/XML structural occurrence count overflow",
+        )
+    })?;
+    let metadata_iri_objects = u64::from(ontology_iri.is_some())
+        .checked_add(u64::from(version_iri.is_some()))
+        .and_then(|value| value.checked_add(u64::try_from(import_nodes.len()).ok()?))
+        .ok_or_else(|| NativeError::limit("native RDF/XML metadata IRI count overflow"))?;
+    let canonical_rows_scanned = occurrence_count
+        .checked_add(metadata_iri_objects)
+        .ok_or_else(|| NativeError::limit("native RDF/XML canonical row count overflow"))?;
+
+    let mut encoded = Vec::new();
+    append(&mut encoded, RETAINED_RDFXML_SEED_MAGIC_V2)?;
+    append(&mut encoded, &RETAINED_SEED_SCHEMA_V2.to_le_bytes())?;
+    append(&mut encoded, &0_u16.to_le_bytes())?;
+    for value in [
+        decoded_codepoints,
+        canonical_rows_scanned,
+        occurrence_count,
+        root_counts[0],
+        root_counts[1],
+        root_counts[2],
+        metadata_iri_objects,
+        document_fingerprint.preimage_bytes,
+    ] {
+        append_u64(&mut encoded, value)?;
+    }
+    append(&mut encoded, &document_fingerprint.digest)?;
+    append_optional_text(&mut encoded, ontology_iri)?;
+    append_optional_text(&mut encoded, version_iri)?;
+    append_u64(
+        &mut encoded,
+        u64::try_from(import_nodes.len())
+            .map_err(|_| NativeError::limit("native RDF/XML import count exceeds u64"))?,
+    )?;
+    for value in &import_nodes {
+        append_text64(&mut encoded, iri_text(value.as_bytes())?)?;
+    }
+    append_u64(&mut encoded, total_triples)?;
+    Ok((
+        encoded,
+        RetainedParseMetadataV2 {
+            document_fingerprint,
+            occurrence_count,
+            root_counts,
+            occurrences: Vec::new(),
+        },
+    ))
+}
+
+pub(crate) fn contains_anonymous_rows(
+    rows: [&[Vec<u8>]; 3],
+    limits: &Limits,
+) -> NativeResult<bool> {
+    let mut budget = ScanBudget::from_limits(limits);
+    for row in rows.into_iter().flatten() {
+        if canonical_contains_tag(row, &mut budget, 3)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub(crate) fn contains_anonymous(parsed: &ParsedDocument, limits: &Limits) -> NativeResult<bool> {
@@ -639,6 +738,20 @@ fn document_fingerprint(
     version_iri: &Option<Node>,
     imports: &[Node],
     rows: &[Vec<Vec<u8>>; 3],
+) -> NativeResult<FingerprintEvidenceV2> {
+    document_fingerprint_slices(
+        ontology_iri,
+        version_iri,
+        imports,
+        [&rows[0], &rows[1], &rows[2]],
+    )
+}
+
+fn document_fingerprint_slices(
+    ontology_iri: &Option<Node>,
+    version_iri: &Option<Node>,
+    imports: &[Node],
+    rows: [&[Vec<u8>]; 3],
 ) -> NativeResult<FingerprintEvidenceV2> {
     let mut hasher = MeasuredSha256::new();
     hasher.update(DOCUMENT_FINGERPRINT_DOMAIN_V1)?;

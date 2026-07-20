@@ -8,18 +8,13 @@
 #[path = "../ingestion/mod.rs"]
 mod engine;
 
-use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyModule, PyTuple};
-use std::time::Instant;
-
-#[cfg(feature = "test-hooks")]
 use pyo3::buffer::PyBuffer;
-#[cfg(feature = "test-hooks")]
-use pyo3::types::PyString;
+use pyo3::prelude::*;
+use pyo3::types::{PyAny, PyBytes, PyModule, PyString, PyTuple};
+use std::time::Instant;
 
 use crate::cancel::Guard;
 use crate::error::NativeError;
-#[cfg(feature = "test-hooks")]
 use crate::error::NativeResult;
 use crate::limits::{LimitKey, Limits};
 use crate::publication::{NativeSnapshotHandle, TypedFacadeBuilderV2, TypedFacadeStorageV2};
@@ -51,6 +46,7 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     _module.add_class::<NativeParsedStructuralStorageV2>()?;
     _module.add_function(wrap_pyfunction!(_retain_structural_snapshot_v2, _module)?)?;
     _module.add_function(wrap_pyfunction!(_parse_functional_retained_v2, _module)?)?;
+    _module.add_function(wrap_pyfunction!(_parse_rdfxml_retained_v2, _module)?)?;
     _module.add_function(wrap_pyfunction!(
         _prepare_parsed_structural_snapshot_v2,
         _module
@@ -62,6 +58,94 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     #[cfg(feature = "test-hooks")]
     _module.add_function(wrap_pyfunction!(_ingest_rdfxml_slice_v1, _module)?)?;
     Ok(())
+}
+
+/// Parse one complete RDF/XML document and retain its canonical structural
+/// roots in the typed V2 owner. This production seam stays private and absent
+/// from the capability ledger until the full forced-native format matrix is
+/// complete.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    source,
+    document_iri,
+    config,
+    collect_provenance,
+    allow_partial_rdf_mapping,
+    require_empty_imports,
+    cancel=None
+))]
+fn _parse_rdfxml_retained_v2<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    document_iri: Option<&Bound<'py, PyAny>>,
+    config: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    require_empty_imports: bool,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<RetainedParseBindingResult> {
+    if collect_provenance || allow_partial_rdf_mapping {
+        return Err(crate::python_error(NativeError::new(
+            "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
+            "native retained RDF/XML publication does not yet support provenance or partial mapping",
+        )));
+    }
+    let limits = crate::limits_from_python(config)?;
+    let cancellation = crate::cancellation_or_default(cancel);
+    let document_iri = owned_document_iri(py, document_iri, &limits)?;
+    let document_iri_size = document_iri.as_ref().map_or(0, String::len);
+    let owned = owned_source(py, source, document_iri_size, &limits, &cancellation)?;
+    let input_size = owned.len();
+    let accounted_input =
+        accounted_input_bytes(input_size, document_iri_size).map_err(crate::python_error)?;
+    let (outcome, parser_bytes) = crate::run_detached(py, move |interrupt| {
+        let mut guard = Guard::with_interrupt(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+            interrupt.clone(),
+        );
+        let mut session = Session::new(&mut guard, &limits, accounted_input)?;
+        let outcome = engine::parse_rdfxml_retained_v2(
+            &owned,
+            document_iri.as_deref(),
+            &mut session,
+            limits,
+            cancellation,
+            Some(interrupt),
+            accounted_input,
+            require_empty_imports,
+        )?;
+        let parser_bytes = u64::try_from(input_size)
+            .map_err(|_| NativeError::limit("native RDF/XML source exceeds u64"))?;
+        Ok((outcome, parser_bytes))
+    })?;
+    crate::contain(|| limits.check_output_size(input_size, outcome.encoded.len()))
+        .map_err(crate::python_error)?;
+    let phases = (
+        outcome.phases.syntax_parse_ns,
+        outcome.phases.result_encode_ns,
+        outcome.phases.arena_construction_ns,
+        outcome.phases.freeze_ns,
+    );
+    let encoded = PyBytes::new_with(py, outcome.encoded.len(), |buffer| {
+        buffer.copy_from_slice(&outcome.encoded);
+        Ok(())
+    })?
+    .unbind();
+    Ok((
+        encoded,
+        NativeParsedStructuralStorageV2 {
+            storage: Some(outcome.storage),
+            metadata: Some(outcome.metadata),
+            prepared: None,
+            prepared_summary: None,
+            limits,
+            parser_bytes,
+        },
+        phases,
+    ))
 }
 
 /// Parse one Functional document and construct its typed structural arena in
@@ -612,7 +696,6 @@ fn _ingest_rdfxml_slice_v1<'py>(
     Ok((outcome.publication.into_handle(), observation))
 }
 
-#[cfg(feature = "test-hooks")]
 fn owned_source(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -654,7 +737,6 @@ fn owned_source(
     Ok(result)
 }
 
-#[cfg(feature = "test-hooks")]
 fn owned_document_iri(
     py: Python<'_>,
     value: Option<&Bound<'_, PyAny>>,
@@ -707,7 +789,6 @@ fn owned_document_iri(
     Ok(Some(result))
 }
 
-#[cfg(feature = "test-hooks")]
 fn accounted_input_bytes(source: usize, document_iri: usize) -> NativeResult<usize> {
     source
         .checked_mul(2)
@@ -719,7 +800,6 @@ fn accounted_input_bytes(source: usize, document_iri: usize) -> NativeResult<usi
         .ok_or_else(|| NativeError::limit("native RDF/XML boundary memory accounting overflow"))
 }
 
-#[cfg(feature = "test-hooks")]
 fn contain_source_size(
     size: usize,
     document_iri_bytes: usize,

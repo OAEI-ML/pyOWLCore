@@ -45,6 +45,7 @@ _PARSE_RESULT_HEADER = struct.Struct("<8sHHQ")
 _PARSE_REQUEST_MAGIC = b"PYNFSS1\0"
 _PARSE_RESULT_MAGIC = b"PYNFSSR1"
 _RETAINED_FUNCTIONAL_SEED_MAGIC_V2 = b"PYNFRS2\0"
+_RETAINED_RDFXML_SEED_MAGIC_V2 = b"PYNRRS2\0"
 _RETAINED_FUNCTIONAL_PREPARED_MAGIC_V2 = b"PYNFPP2\0"
 _INDEX_SOURCE_HEADER = struct.Struct("<8sHHQ")
 _INDEX_RESULT_HEADER = struct.Struct("<8sHHQ")
@@ -115,6 +116,17 @@ class _Extension(Protocol):
         config: object,
         collect_provenance: bool,
         record_unresolved: bool,
+        require_empty_imports: bool,
+        cancel: _NativeCancellation | None = None,
+    ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
+
+    def _parse_rdfxml_retained_v2(
+        self,
+        data: object,
+        document_iri: str | None,
+        config: object,
+        collect_provenance: bool,
+        allow_partial_rdf_mapping: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
     ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
@@ -416,6 +428,106 @@ def _parse_functional_retained_v2(
     raise BackendProtocolError(
         "native retained parser returned an unknown result framing",
         code="NATIVE_PARSE_VERSION",
+    )
+
+
+def _parse_rdfxml_retained_v2(
+    data: bytes,
+    *,
+    document_iri: str | None,
+    limits: ParseLimits | None = None,
+    collect_provenance: bool = False,
+    allow_partial_rdf_mapping: bool = False,
+    require_empty_imports: bool = False,
+    cancellation_token: CancellationToken | None = None,
+) -> _NativeRetainedFunctionalParseV2:
+    """Use the private, unadvertised retained RDF/XML production seam."""
+
+    runtime = _runtime()
+    extension = runtime.extension
+    if not runtime.probe.available or extension is None:
+        raise BackendUnavailableError(
+            "native backend unavailable: "
+            f"{runtime.probe.reason or 'unknown compatibility failure'}",
+            code="NATIVE_BACKEND_UNAVAILABLE",
+        )
+    hook = getattr(extension, "_parse_rdfxml_retained_v2", None)
+    if not callable(hook):
+        raise BackendUnavailableError(
+            "native backend lacks the private retained RDF/XML ingestion seam",
+            code="NATIVE_CAPABILITY_UNAVAILABLE",
+        )
+    selected = _coerce_limits(limits)
+    if not isinstance(data, bytes):
+        raise TypeError("native RDF/XML source must be bytes")
+    if document_iri is not None and not isinstance(document_iri, str):
+        raise TypeError("document_iri must be str or None")
+    for name, value in (
+        ("collect_provenance", collect_provenance),
+        ("allow_partial_rdf_mapping", allow_partial_rdf_mapping),
+        ("require_empty_imports", require_empty_imports),
+    ):
+        if not isinstance(value, bool):
+            raise TypeError(f"{name} must be bool")
+    selected.enforce("max_source_bytes", len(data))
+    config = _encode_config(selected, cancellation_token, verify=False)
+    with _relay(extension, selected, cancellation_token) as cancel:
+        result = _call_parse_value(
+            extension,
+            lambda: hook(
+                data,
+                document_iri,
+                config,
+                collect_provenance,
+                allow_partial_rdf_mapping,
+                require_empty_imports,
+                cancel,
+            ),
+        )
+    if type(result) is not tuple or len(result) != 3:
+        raise BackendProtocolError(
+            "native retained RDF/XML parser returned invalid result framing",
+            code="NATIVE_RESULT_TYPE",
+        )
+    framing, storage, phases = result
+    storage_type = getattr(extension, "_NativeParsedStructuralStorageV2", None)
+    if (
+        not isinstance(framing, bytes)
+        or not isinstance(storage_type, type)
+        or type(storage) is not storage_type
+    ):
+        raise BackendProtocolError(
+            "native retained RDF/XML parser returned invalid result members",
+            code="NATIVE_RESULT_TYPE",
+        )
+    if (
+        type(phases) is not tuple
+        or len(phases) != 4
+        or not all(type(value) is int and value >= 0 for value in phases)
+    ):
+        raise BackendProtocolError(
+            "native retained RDF/XML parser returned invalid phase counters",
+            code="NATIVE_RESULT_TYPE",
+        )
+    if not framing.startswith(_RETAINED_RDFXML_SEED_MAGIC_V2):
+        raise BackendProtocolError(
+            "native retained RDF/XML parser returned unknown metadata",
+            code="NATIVE_PARSE_VERSION",
+        )
+    names = (
+        "native_rdfxml_parse_mapping_seconds",
+        "native_result_encode_seconds",
+        "native_arena_construction_seconds",
+        "native_freeze_seconds",
+    )
+    return _NativeRetainedFunctionalParseV2(
+        None,
+        storage,
+        tuple(
+            (name, value / 1_000_000_000)
+            for name, value in zip(names, phases, strict=True)
+        ),
+        summary=framing,
     )
 
 

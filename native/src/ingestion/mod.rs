@@ -15,9 +15,12 @@ mod v2_adapter;
 use crate::error::{NativeError, NativeResult};
 use crate::hash::sha256;
 use crate::limits::LimitKey;
+use crate::limits::Limits;
 #[cfg(feature = "test-hooks")]
 use crate::publication::NativeSnapshotPublicationV1;
 use crate::session::Session;
+use crate::{cancel::Cancellation, publication::TypedFacadeStorageV2};
+use std::time::Instant;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MappingEvidence {
@@ -39,6 +42,13 @@ pub(super) struct CanonicalDocument {
     pub(super) byte_length: u64,
     pub(super) decoded_codepoints: u64,
     pub(super) mapping: MappingEvidence,
+}
+
+pub(super) struct RetainedRdfXmlOutcomeV2 {
+    pub(super) encoded: Vec<u8>,
+    pub(super) storage: TypedFacadeStorageV2,
+    pub(super) metadata: crate::parse::RetainedParseMetadataV2,
+    pub(super) phases: crate::parse::RetainedParsePhases,
 }
 
 #[cfg(feature = "test-hooks")]
@@ -68,6 +78,75 @@ fn parse_rdfxml(
     document.byte_length = u64::try_from(source.len())
         .map_err(|_| NativeError::limit("native RDF/XML source length exceeds u64"))?;
     Ok(document)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn parse_rdfxml_retained_v2(
+    source: &[u8],
+    document_iri: Option<&str>,
+    session: &mut Session<'_>,
+    limits: Limits,
+    cancellation: Cancellation,
+    interrupt: Option<crate::cancel::InterruptSlot>,
+    caller_external_bytes: usize,
+    require_empty_imports: bool,
+) -> NativeResult<RetainedRdfXmlOutcomeV2> {
+    let parse_started = Instant::now();
+    let document = parse_rdfxml(source, document_iri, session)?;
+    let syntax_parse_ns = elapsed_ns(parse_started)?;
+    if require_empty_imports && !document.imports.is_empty() {
+        return Err(NativeError::new(
+            "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
+            "native retained RDF/XML publication cannot bypass resolver-backed imports",
+        ));
+    }
+    let rows = [
+        document.ontology_annotations.as_slice(),
+        document.axioms.as_slice(),
+        document.extensions.as_slice(),
+    ];
+    if crate::parse::retained_rows_contain_anonymous_v2(rows, &limits)? {
+        return Err(NativeError::new(
+            "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
+            "native retained RDF/XML publication does not yet own anonymous re-scoping",
+        ));
+    }
+    let encode_started = Instant::now();
+    let (encoded, metadata) = crate::parse::build_retained_rdfxml_seed_v2(
+        document.ontology_iri.as_deref(),
+        document.version_iri.as_deref(),
+        &document.imports,
+        rows,
+        document.decoded_codepoints,
+        document.mapping.total_triples,
+    )?;
+    let result_encode_ns = elapsed_ns(encode_started)?;
+    session.finish()?;
+    let published = v2_adapter::publish_timed(
+        std::slice::from_ref(&document),
+        &[vec![0]],
+        &[0],
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+    )?;
+    Ok(RetainedRdfXmlOutcomeV2 {
+        encoded,
+        storage: published.storage,
+        metadata,
+        phases: crate::parse::RetainedParsePhases {
+            syntax_parse_ns,
+            result_encode_ns,
+            arena_construction_ns: published.arena_construction_ns,
+            freeze_ns: published.freeze_ns,
+        },
+    })
+}
+
+fn elapsed_ns(started: Instant) -> NativeResult<u64> {
+    u64::try_from(started.elapsed().as_nanos())
+        .map_err(|_| NativeError::limit("native RDF/XML phase time exceeds u64"))
 }
 
 fn owned_text(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
@@ -160,6 +239,81 @@ mod tests {
         assert_eq!(document.source_sha256, sha256(source));
         assert_eq!(document.byte_length, source.len() as u64);
         assert_eq!(document.axioms.len(), 1);
+    }
+
+    #[test]
+    fn production_rdfxml_result_retains_typed_rows_and_bounded_seed() {
+        let source = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:owl="http://www.w3.org/2002/07/owl#">
+          <owl:Ontology rdf:about="urn:o"/>
+          <owl:Class rdf:about="urn:C"/>
+        </rdf:RDF>"#;
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
+        let outcome = parse_rdfxml_retained_v2(
+            source,
+            Some("urn:document"),
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            source.len(),
+            false,
+        )
+        .expect("retained RDF/XML outcome");
+        assert_eq!(outcome.encoded.get(..8), Some(b"PYNRRS2\0".as_slice()));
+        let counts = outcome.storage.structural_counts().expect("counts");
+        assert_eq!(counts.ontology_annotations, 0);
+        assert_eq!(counts.stored_axioms, 1);
+        assert_eq!(counts.effective_axioms, 1);
+        assert_eq!(counts.extensions, 0);
+        assert!(outcome.phases.syntax_parse_ns > 0);
+        assert!(outcome.phases.result_encode_ns > 0);
+        assert!(outcome.phases.arena_construction_ns > 0);
+        assert!(outcome.phases.freeze_ns > 0);
+    }
+
+    #[test]
+    fn retained_rdfxml_rejects_anonymous_scope_and_resolver_bypass() {
+        let anonymous = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#">
+          <rdf:Description rdf:nodeID="anonymous"><rdfs:comment rdf:resource="urn:value"/></rdf:Description>
+        </rdf:RDF>"#;
+        let imported = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:owl="http://www.w3.org/2002/07/owl#">
+          <owl:Ontology rdf:about="urn:o"><owl:imports rdf:resource="urn:i"/></owl:Ontology>
+        </rdf:RDF>"#;
+        for (source, require_empty_imports) in
+            [(anonymous.as_slice(), false), (imported.as_slice(), true)]
+        {
+            let limits = Limits::default();
+            let cancellation = Cancellation::with_duration(None);
+            let mut guard = Guard::new(
+                cancellation.clone(),
+                limits.deadline,
+                limits.cancellation_stride,
+            );
+            let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
+            let error = parse_rdfxml_retained_v2(
+                source,
+                None,
+                &mut session,
+                limits,
+                cancellation,
+                None,
+                source.len(),
+                require_empty_imports,
+            )
+            .err()
+            .expect("unsupported retained shape");
+            assert_eq!(error.code, "NATIVE_RDFXML_RETAINED_UNSUPPORTED");
+        }
     }
 
     #[test]
