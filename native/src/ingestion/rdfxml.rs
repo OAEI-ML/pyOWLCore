@@ -1283,22 +1283,28 @@ fn map_graph(
     )?;
     map_negative_property_assertions(
         &list_graph,
+        &triples,
         &mut consumed,
         &mut expressions,
+        &mut axiom_annotations,
         &mut axioms,
         session,
     )?;
     map_all_different(
         &list_graph,
+        &triples,
         &mut consumed,
         &mut expressions,
+        &mut axiom_annotations,
         &mut axioms,
         session,
     )?;
     map_all_disjoint_collections(
         &list_graph,
+        &triples,
         &mut consumed,
         &mut expressions,
+        &mut axiom_annotations,
         &mut axioms,
         session,
     )?;
@@ -1690,10 +1696,66 @@ fn map_ontology_annotations<'view, 'graph>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn annotations_on_structural_node<'view, 'graph>(
+    subject: ListResource<'graph>,
+    metadata: &[&str],
+    triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<Node>> {
+    if triples.len() != source_triples.len() {
+        return Err(NativeError::protocol(
+            "native RDF graph views have different lengths",
+        ));
+    }
+    let mut annotations = Vec::new();
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if triple.subject != subject || metadata.contains(&triple.predicate) {
+            continue;
+        }
+        let nested =
+            reifications.nested_annotations_for(index, source_triples, expressions, session)?;
+        let annotation = annotation_node(index, triple, expressions, nested, session)?;
+        enforce_usize(
+            annotations.len().saturating_add(1),
+            session.limits().value(LimitKey::MaxAnnotations),
+            "native RDF structural-node annotations exceed max_annotations",
+        )?;
+        reserve_vec_item(&mut annotations, session)?;
+        annotations.push(annotation);
+    }
+    canonical_set(annotations, 0, None)
+}
+
+fn consume_subject_indexes<'graph>(
+    subject: ListResource<'graph>,
+    triples: &[ListTriple<'graph>],
+    consumed: &mut [bool],
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if triple.subject == subject {
+            let value = consumed.get_mut(index).ok_or_else(|| {
+                NativeError::protocol("native RDF consumed ledger is shorter than graph")
+            })?;
+            *value = true;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn map_negative_property_assertions<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -1705,22 +1767,7 @@ fn map_negative_property_assertions<'view, 'graph>(
         {
             continue;
         }
-        for candidate in triples {
-            session.step(1)?;
-            if candidate.subject == triple.subject
-                && !matches!(
-                    candidate.predicate,
-                    RDF_TYPE
-                        | OWL_SOURCE_INDIVIDUAL
-                        | OWL_ASSERTION_PROPERTY
-                        | OWL_TARGET_INDIVIDUAL
-                        | OWL_TARGET_VALUE
-                )
-            {
-                return Err(mapping_incomplete());
-            }
-        }
-        let (source_index, source) = required_metadata_edge(
+        let (_source_index, source) = required_metadata_edge(
             triples,
             triple.subject,
             OWL_SOURCE_INDIVIDUAL,
@@ -1728,7 +1775,7 @@ fn map_negative_property_assertions<'view, 'graph>(
             "native negative property assertion has more than one source individual",
             session,
         )?;
-        let (property_index, property) = required_metadata_edge(
+        let (_property_index, property) = required_metadata_edge(
             triples,
             triple.subject,
             OWL_ASSERTION_PROPERTY,
@@ -1761,9 +1808,22 @@ fn map_negative_property_assertions<'view, 'graph>(
             ListTerm::Literal(_) => return Err(rdf_mapping_type()),
         };
         let source = expressions.decode_individual(source, session)?;
-        let (axiom, target_index, property_consumed) = if let Some((target_index, target)) =
-            target_individual
-        {
+        let annotations = annotations_on_structural_node(
+            triple.subject,
+            &[
+                RDF_TYPE,
+                OWL_SOURCE_INDIVIDUAL,
+                OWL_ASSERTION_PROPERTY,
+                OWL_TARGET_INDIVIDUAL,
+                OWL_TARGET_VALUE,
+            ],
+            triples,
+            source_triples,
+            expressions,
+            reifications,
+            session,
+        )?;
+        let (axiom, property_consumed) = if let Some((_target_index, target)) = target_individual {
             let target = match target {
                 ListTerm::Iri(value) => ListTerm::Iri(value),
                 ListTerm::Blank(value) => ListTerm::Blank(value),
@@ -1785,11 +1845,10 @@ fn map_negative_property_assertions<'view, 'graph>(
                         Field::Node(property),
                         Field::Node(source),
                         Field::Node(expressions.decode_individual(target, session)?),
-                        Field::Set(Vec::new()),
+                        Field::Set(annotations),
                     ],
                     session,
                 )?,
-                target_index,
                 property_consumed,
             )
         } else {
@@ -1808,18 +1867,15 @@ fn map_negative_property_assertions<'view, 'graph>(
                         Field::Node(named_entity("data_property", property, session)?),
                         Field::Node(source),
                         Field::Node(expressions.decode_literal(target_index, session)?),
-                        Field::Set(Vec::new()),
+                        Field::Set(annotations),
                     ],
                     session,
                 )?,
-                target_index,
                 Vec::new(),
             )
         };
         consume_collection_indexes(property_consumed, consumed, session)?;
-        for index in [type_index, source_index, property_index, target_index] {
-            consumed[index] = true;
-        }
+        consume_subject_indexes(triple.subject, triples, consumed, session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -1857,10 +1913,13 @@ fn metadata_edge<'graph>(
     Ok(selected)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_all_different<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -1872,7 +1931,7 @@ fn map_all_different<'view, 'graph>(
         {
             continue;
         }
-        let (distinct_index, head) = collection_head(
+        let (_distinct_index, head) = collection_head(
             triples,
             triple.subject,
             OWL_DISTINCT_MEMBERS,
@@ -1885,23 +1944,34 @@ fn map_all_different<'view, 'graph>(
             consumed: collection_consumed,
         } = expressions.decode_individual_collection(head, session)?;
         let individuals = canonical_set(individuals, 2, None)?;
+        let annotations = annotations_on_structural_node(
+            triple.subject,
+            &[RDF_TYPE, OWL_DISTINCT_MEMBERS],
+            triples,
+            source_triples,
+            expressions,
+            reifications,
+            session,
+        )?;
         let axiom = build_node(
             111,
-            [Field::Set(individuals), Field::Set(Vec::new())],
+            [Field::Set(individuals), Field::Set(annotations)],
             session,
         )?;
         consume_collection_indexes(collection_consumed, consumed, session)?;
-        consumed[type_index] = true;
-        consumed[distinct_index] = true;
+        consume_subject_indexes(triple.subject, triples, consumed, session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_all_disjoint_collections<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
+    source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -1915,12 +1985,21 @@ fn map_all_disjoint_collections<'view, 'graph>(
             ListTerm::Iri(OWL_ALL_DISJOINT_PROPERTIES) => "properties",
             ListTerm::Iri(_) | ListTerm::Blank(_) | ListTerm::Literal(_) => continue,
         };
-        let (members_index, head) = collection_head(
+        let (_members_index, head) = collection_head(
             triples,
             triple.subject,
             OWL_MEMBERS,
             "native all-disjoint axiom has no members list",
             "native all-disjoint axiom has more than one members list",
+            session,
+        )?;
+        let annotations = annotations_on_structural_node(
+            triple.subject,
+            &[RDF_TYPE, OWL_MEMBERS],
+            triples,
+            source_triples,
+            expressions,
+            reifications,
             session,
         )?;
         let (axiom, collection_consumed) = if kind == "classes" {
@@ -1938,7 +2017,7 @@ fn map_all_disjoint_collections<'view, 'graph>(
                             NativeError::protocol("native RDF all-disjoint class ledger is empty")
                         })?),
                         Field::Node(named_entity("class", OWL_NOTHING, session)?),
-                        Field::Set(Vec::new()),
+                        Field::Set(annotations),
                     ],
                     session,
                 )?
@@ -1946,7 +2025,7 @@ fn map_all_disjoint_collections<'view, 'graph>(
                 let expressions_set = canonical_set(expressions_set, 2, None)?;
                 build_node(
                     63,
-                    [Field::Set(expressions_set), Field::Set(Vec::new())],
+                    [Field::Set(expressions_set), Field::Set(annotations)],
                     session,
                 )?
             };
@@ -1962,15 +2041,14 @@ fn map_all_disjoint_collections<'view, 'graph>(
             (
                 build_node(
                     tag,
-                    [Field::Set(properties), Field::Set(Vec::new())],
+                    [Field::Set(properties), Field::Set(annotations)],
                     session,
                 )?,
                 consumed,
             )
         };
         consume_collection_indexes(collection_consumed, consumed, session)?;
-        consumed[type_index] = true;
-        consumed[members_index] = true;
+        consume_subject_indexes(triple.subject, triples, consumed, session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -5450,11 +5528,48 @@ mod tests {
         }
 
         let annotated = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:NegativePropertyAssertion><owl:sourceIndividual rdf:resource=\"urn:s\"/><owl:assertionProperty rdf:resource=\"urn:p\"/><owl:targetIndividual rdf:resource=\"urn:t\"/><e:note>annotation</e:note></owl:NegativePropertyAssertion></rdf:RDF>"
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:NegativePropertyAssertion rdf:nodeID=\"negative\"><owl:sourceIndividual rdf:resource=\"urn:s\"/><owl:assertionProperty rdf:resource=\"urn:p\"/><owl:targetIndividual rdf:resource=\"urn:t\"/><e:note rdf:resource=\"urn:annotation\"/></owl:NegativePropertyAssertion><owl:Annotation rdf:nodeID=\"nested\"><owl:annotatedSource rdf:nodeID=\"negative\"/><owl:annotatedProperty rdf:resource=\"urn:note\"/><owl:annotatedTarget rdf:resource=\"urn:annotation\"/><e:detail rdf:resource=\"urn:nested\"/></owl:Annotation></rdf:RDF>"
         );
+        let annotated = mapped(annotated.as_bytes(), None).expect("annotated negative assertion");
+        let annotation_property = |value: &str| {
+            entity(
+                "annotation_property",
+                iri(value.to_owned()).expect("annotation property IRI"),
+            )
+            .expect("annotation property")
+        };
+        let detail = Node::build(
+            5,
+            vec![
+                Field::Node(annotation_property("urn:detail")),
+                Field::Node(iri("urn:nested".to_owned()).expect("nested value")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("nested annotation");
+        let note = Node::build(
+            5,
+            vec![
+                Field::Node(annotation_property("urn:note")),
+                Field::Node(iri("urn:annotation".to_owned()).expect("annotation value")),
+                Field::Set(vec![detail]),
+            ],
+        )
+        .expect("negative assertion annotation");
+        let expected = Node::build(
+            114,
+            vec![
+                Field::Node(property("object_property", "urn:p")),
+                Field::Node(named_individual_node("urn:s")),
+                Field::Node(named_individual_node("urn:t")),
+                Field::Set(vec![note]),
+            ],
+        )
+        .expect("annotated negative assertion");
+        assert_eq!(annotated.axioms, [expected.as_bytes().to_vec()]);
         assert_eq!(
-            mapped(annotated.as_bytes(), None).unwrap_err().code,
-            "NATIVE_RDF_MAPPING_INCOMPLETE",
+            annotated.mapping.total_triples,
+            annotated.mapping.consumed_triples,
         );
     }
 
@@ -5563,17 +5678,39 @@ mod tests {
     #[test]
     fn all_different_collection_maps_exactly_and_validates_cardinality() {
         let source = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"axiom\"><rdf:type rdf:resource=\"{OWL}AllDifferent\"/><owl:distinctMembers rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:a\"/><rdf:Description rdf:nodeID=\"anonymous\"/><rdf:Description rdf:about=\"urn:b\"/></owl:distinctMembers></rdf:Description></rdf:RDF>"
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><rdf:Description rdf:nodeID=\"axiom\"><rdf:type rdf:resource=\"{OWL}AllDifferent\"/><owl:distinctMembers rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:a\"/><rdf:Description rdf:nodeID=\"anonymous\"/><rdf:Description rdf:about=\"urn:b\"/></owl:distinctMembers><e:note rdf:resource=\"urn:value\"/></rdf:Description></rdf:RDF>"
         );
         let document = mapped(source.as_bytes(), None).expect("AllDifferent");
-        let expected = individual_set_axiom(
-            111,
+        let individuals = canonical_set(
             vec![
                 named_individual_node("urn:a"),
                 crate::canonical::anonymous("anonymous").expect("anonymous individual"),
                 named_individual_node("urn:b"),
             ],
-        );
+            2,
+            None,
+        )
+        .expect("different individuals");
+        let annotation = Node::build(
+            5,
+            vec![
+                Field::Node(
+                    entity(
+                        "annotation_property",
+                        iri("urn:note".to_owned()).expect("annotation property IRI"),
+                    )
+                    .expect("annotation property"),
+                ),
+                Field::Node(iri("urn:value".to_owned()).expect("annotation value")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("all-different annotation");
+        let expected = Node::build(
+            111,
+            vec![Field::Set(individuals), Field::Set(vec![annotation])],
+        )
+        .expect("annotated all-different axiom");
         assert!(document
             .axioms
             .iter()
@@ -5613,9 +5750,24 @@ mod tests {
     #[test]
     fn all_disjoint_collections_map_classes_and_properties_exactly() {
         let source = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:DatatypeProperty rdf:about=\"urn:d\"/><owl:DatatypeProperty rdf:about=\"urn:e\"/><owl:ObjectProperty rdf:about=\"urn:p\"/><owl:ObjectProperty rdf:about=\"urn:q\"/><rdf:Description rdf:nodeID=\"classes\"><rdf:type rdf:resource=\"{OWL}AllDisjointClasses\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:B\"/><rdf:Description rdf:about=\"urn:C\"/></owl:unionOf></rdf:Description></owl:members></rdf:Description><rdf:Description rdf:nodeID=\"data\"><rdf:type rdf:resource=\"{OWL}AllDisjointProperties\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:d\"/><rdf:Description rdf:about=\"urn:e\"/></owl:members></rdf:Description><rdf:Description rdf:nodeID=\"objects\"><rdf:type rdf:resource=\"{OWL}AllDisjointProperties\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:p\"/><rdf:Description><owl:inverseOf rdf:resource=\"urn:q\"/></rdf:Description></owl:members></rdf:Description></rdf:RDF>"
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:DatatypeProperty rdf:about=\"urn:d\"/><owl:DatatypeProperty rdf:about=\"urn:e\"/><owl:ObjectProperty rdf:about=\"urn:p\"/><owl:ObjectProperty rdf:about=\"urn:q\"/><rdf:Description rdf:nodeID=\"classes\"><rdf:type rdf:resource=\"{OWL}AllDisjointClasses\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:B\"/><rdf:Description rdf:about=\"urn:C\"/></owl:unionOf></rdf:Description></owl:members><e:note rdf:resource=\"urn:value\"/></rdf:Description><rdf:Description rdf:nodeID=\"data\"><rdf:type rdf:resource=\"{OWL}AllDisjointProperties\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:d\"/><rdf:Description rdf:about=\"urn:e\"/></owl:members></rdf:Description><rdf:Description rdf:nodeID=\"objects\"><rdf:type rdf:resource=\"{OWL}AllDisjointProperties\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:p\"/><rdf:Description><owl:inverseOf rdf:resource=\"urn:q\"/></rdf:Description></owl:members></rdf:Description></rdf:RDF>"
         );
         let document = mapped(source.as_bytes(), None).expect("all-disjoint collections");
+        let annotation = Node::build(
+            5,
+            vec![
+                Field::Node(
+                    entity(
+                        "annotation_property",
+                        iri("urn:note".to_owned()).expect("annotation property IRI"),
+                    )
+                    .expect("annotation property"),
+                ),
+                Field::Node(iri("urn:value".to_owned()).expect("annotation value")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("all-disjoint annotation");
         let disjoint_classes = Node::build(
             63,
             vec![
@@ -5627,7 +5779,7 @@ mod tests {
                     )
                     .expect("disjoint classes"),
                 ),
-                Field::Set(Vec::new()),
+                Field::Set(vec![annotation]),
             ],
         )
         .expect("disjoint classes axiom");
