@@ -60,11 +60,25 @@ def test_generated_syntaxes_match_all_authoritative_preimage_bytes(
     format: DocumentFormat,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = load_snapshot(
-        equivalent_source(format, 4),
-        options=default_options(format),
+    source = equivalent_source(format, 4)
+    options = default_options(format)
+    snapshot = load_snapshot(source, options=options)
+
+    reference = build_core_common_contract(
+        snapshot,
+        corpus_id=f"generated-{format.value}",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        options_sha256=options_digest(options),
+    )
+    encoded = build_encoded_core_common_contract(
+        snapshot,
+        corpus_id=f"generated-{format.value}",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        options_sha256=options_digest(options),
+        require_native_direct=False,
     )
 
+    assert encoded.contract == reference
     _assert_all_preimages_match(snapshot, monkeypatch)
 
 
@@ -110,11 +124,14 @@ def test_annotated_swrl_logical_preimage_matches_authoritative_bytes(
         imports=ImportPolicy.IGNORE,
         backend=BackendPreference.PYTHON,
     )
-    document = PythonParser().parse(
+    source = (
         b"Prefix(:=<urn:test#>) Ontology(<urn:rule> "
         b"SWRLRule(Annotation(:p :note) "
         b"(ClassAtom(:A Variable(:x)))"
-        b"(ClassAtom(:B Variable(:x)))))",
+        b"(ClassAtom(:B Variable(:x)))))"
+    )
+    document = PythonParser().parse(
+        source,
         options=options,
         allow_swrl=True,
     )
@@ -128,6 +145,20 @@ def test_annotated_swrl_logical_preimage_matches_authoritative_bytes(
         lambda: logical_fingerprint(axioms, extensions),
     )
     assert b"".join(_logical_preimage_parts(axioms, extensions)) == expected
+    reference = build_core_common_contract(
+        snapshot,
+        corpus_id="annotated-swrl",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        options_sha256=options_digest(options),
+    )
+    encoded = build_encoded_core_common_contract(
+        snapshot,
+        corpus_id="annotated-swrl",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        options_sha256=options_digest(options),
+        require_native_direct=False,
+    )
+    assert encoded.contract == reference
 
 
 def test_core_common_contract_reconstructs_all_four_fingerprint_preimages() -> None:
