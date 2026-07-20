@@ -1,6 +1,6 @@
 {
   "schema": "pyowl-core.native-redesign-release-evidence/1",
-  "core_revision": "142b037524834c98c89feee460ffb0e9d4a9a7b7",
+  "core_revision": "4608cc4e934c05df6d3f0c55c1fceec33e43b042",
   "core_gates": [
     {
       "id": "semantic-differential-conformance",
@@ -84,8 +84,8 @@
       "id": "projector",
       "role": "encoded-native-compiler",
       "status": "not-run",
-      "revision": "9d49cc5463a1e47eaf9d376a030f4d8df84e25d2",
-      "reason": "the private Rust compiler covers the first named class-axiom slice with exact counters, but the production structural compiler remains incomplete and unadvertised",
+      "revision": "be301790f323bab46998300d975d1d72cae005b4",
+      "reason": "the private Rust compiler covers named class/property/assertion and aggregate class-expression slices with exact counters, but the production structural compiler remains incomplete and unadvertised",
       "evidence": ["pyOwl2Vec-Star-projector/reports/p7/encoded-native-compiler.md"]
     },
     {
@@ -100,8 +100,8 @@
       "id": "pyhermit",
       "role": "encoded-native-compiler",
       "status": "not-run",
-      "revision": "3010425af937a950929e48186f8f2dfc2e976407",
-      "reason": "the encoded compiler preserves annotated role-characteristic provenance, but is still closing structural constructor coverage and remains unadvertised",
+      "revision": "911cf751441a0f6e54697629048f86205760a2d1",
+      "reason": "the encoded compiler preserves annotated role constraints, characteristics, and named object assertions, but is still closing structural constructor coverage and remains unadvertised",
       "evidence": ["pyHermiT/specs/workpackages/WP18-native-structural-compiler.md"]
     }
   ]
