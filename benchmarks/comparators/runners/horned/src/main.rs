@@ -5,6 +5,9 @@
 //! built inside the measured envelope; transport decoding and prepared-file
 //! creation are deliberately outside it.
 
+mod canonical;
+mod common;
+
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Cursor, Read, Write};
@@ -26,19 +29,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-const LANE: &str = "horned-owl-raw";
 const IMPLEMENTATION: &str = "horned-owl";
-const BOUNDARY: &str = "horned-model-ready";
 const ENGINE_VERSION: &str = "1.4.0";
 const ENGINE_REVISION: &str = "crates.io horned-owl 1.4.0 (2026-01-09)";
 const ENGINE_ARTIFACT: &str = "crates.io horned-owl-1.4.0.crate";
 const ENGINE_SHA256: &str = "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e";
 const ALLOCATOR: &str = "Rust system allocator";
 const THREAD_CEILING: u64 = 1;
-const RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v1";
+const RAW_RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v2";
+const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v1";
 
 const ADAPTER_REQUEST_SCHEMA: &str = "pyowl-core/comparator-adapter-request/v2";
 const ADAPTER_RESULT_SCHEMA: &str = "pyowl-core/comparator-adapter-result/v1";
+const TIMED_VALIDATION_SCHEMA: &str = "pyowl-core/comparator-timed-validation/v1";
 const RAW_INVENTORY_SCHEMA: &str = "pyowl-core/comparator-raw-inventory/v1";
 const RAW_INVENTORY_DOMAIN: &[u8] = b"pyowl-core:comparator-raw-inventory:v1\0";
 const PERSISTENT_PROTOCOL_SCHEMA: &str = "pyowl-core/comparator-persistent-runner/v1";
@@ -61,6 +64,12 @@ const HORNED_LOCK_STANZA: &str = concat!(
 );
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct FunctionalEdit {
+    start: usize,
+    end: usize,
+    replacement: &'static [u8],
+}
 
 #[derive(Debug)]
 struct RunnerError(String);
@@ -172,6 +181,50 @@ enum Format {
     Turtle,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Lane {
+    Raw,
+    Common,
+}
+
+impl Lane {
+    fn parse(value: &str) -> Result<Self, RunnerError> {
+        match value {
+            "horned-owl-raw" => Ok(Self::Raw),
+            "horned-owl-common" => Ok(Self::Common),
+            _ => Err(RunnerError::new("runner lane is unsupported")),
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Raw => "horned-owl-raw",
+            Self::Common => "horned-owl-common",
+        }
+    }
+
+    fn boundary(self) -> &'static str {
+        match self {
+            Self::Raw => "horned-model-ready",
+            Self::Common => "common-contract-ready",
+        }
+    }
+
+    fn features(self) -> &'static [&'static str] {
+        match self {
+            Self::Raw => &["default"],
+            Self::Common => &["default", "independent-common-contract-v1"],
+        }
+    }
+
+    fn runner_revision(self) -> &'static str {
+        match self {
+            Self::Raw => RAW_RUNNER_REVISION,
+            Self::Common => COMMON_RUNNER_REVISION,
+        }
+    }
+}
+
 impl Format {
     fn parse(value: &str) -> Result<Self, RunnerError> {
         match value {
@@ -191,6 +244,15 @@ impl Format {
             Self::Turtle => "ttl",
         }
     }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Functional => "functional",
+            Self::OwlXml => "owlxml",
+            Self::RdfXml => "rdfxml",
+            Self::Turtle => "turtle",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -198,10 +260,13 @@ struct ValidatedRequest {
     corpus_id: String,
     source: Vec<u8>,
     source_sha256: String,
+    document_iri: String,
     format: Format,
     options_sha256: String,
     input_mode: String,
     process_mode: String,
+    max_canonical_work: u64,
+    max_terms: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -211,7 +276,7 @@ struct Artifact {
     revision: &'static str,
     artifact: &'static str,
     artifact_sha256: &'static str,
-    features: [&'static str; 1],
+    features: Vec<&'static str>,
     allocator: &'static str,
     thread_ceiling: u64,
     runner_revision: &'static str,
@@ -361,17 +426,18 @@ fn expected_options_sha256(format: Format) -> &'static str {
 fn validate_request(
     request: AdapterRequest,
     protocol_mode: &str,
+    lane: Lane,
 ) -> Result<ValidatedRequest, RunnerError> {
     let runner_sha256 = runner_sha256()?;
     let expected_scalars = [
         ("schema", request.schema.as_str(), ADAPTER_REQUEST_SCHEMA),
-        ("lane", request.lane.as_str(), LANE),
+        ("lane", request.lane.as_str(), lane.id()),
         (
             "implementation",
             request.implementation.as_str(),
             IMPLEMENTATION,
         ),
-        ("boundary", request.boundary.as_str(), BOUNDARY),
+        ("boundary", request.boundary.as_str(), lane.boundary()),
         (
             "expected_artifact_sha256",
             request.expected_artifact_sha256.as_str(),
@@ -385,7 +451,7 @@ fn validate_request(
         (
             "expected_runner_revision",
             request.expected_runner_revision.as_str(),
-            RUNNER_REVISION,
+            lane.runner_revision(),
         ),
         (
             "expected_runner_sha256",
@@ -400,7 +466,13 @@ fn validate_request(
             )));
         }
     }
-    if request.expected_features != ["default"] {
+    if request
+        .expected_features
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        != lane.features()
+    {
         return Err(RunnerError::new(
             "adapter request features differ from runner pin",
         ));
@@ -463,37 +535,67 @@ fn validate_request(
         corpus_id: request.corpus_id,
         source,
         source_sha256: request.source_sha256,
+        document_iri: request.document_iri,
         format,
         options_sha256: request.options_sha256,
         input_mode: request.input_mode,
         process_mode: request.process_mode,
+        max_canonical_work: request.options.limits.max_canonical_work,
+        max_terms: request.options.limits.max_terms,
     })
 }
 
-fn run_request(request: AdapterRequest, protocol_mode: &str) -> Value {
+fn run_request(request: AdapterRequest, protocol_mode: &str, lane: Lane) -> Value {
     let fallback = request_identity(&request);
     match panic::catch_unwind(AssertUnwindSafe(|| {
-        let validated = validate_request(request, protocol_mode)?;
+        let validated = validate_request(request, protocol_mode, lane)?;
         if matches!(validated.format, Format::Turtle) {
             return Ok(status_result(
                 &validated,
+                lane,
                 "ineligible",
                 "horned-owl 1.4.0 exposes no Turtle reader in the pinned API",
             ));
         }
-        execute_raw(validated)
+        if lane == Lane::Common
+            && matches!(validated.format, Format::Functional)
+            && functional_has_nested_annotations(&validated.source)
+        {
+            return Ok(status_result(
+                &validated,
+                lane,
+                "ineligible",
+                "horned-owl 1.4.0 discards nested Functional Syntax annotations",
+            ));
+        }
+        if lane == Lane::Common
+            && matches!(validated.format, Format::OwlXml)
+            && owlxml_has_nested_annotations(&validated.source)
+        {
+            return Ok(status_result(
+                &validated,
+                lane,
+                "ineligible",
+                "horned-owl 1.4.0 cannot retain every nested OWL/XML annotation",
+            ));
+        }
+        match lane {
+            Lane::Raw => execute_raw(validated, lane),
+            Lane::Common => execute_common(validated, lane),
+        }
     })) {
         Ok(Ok(result)) => result,
-        Ok(Err(error)) => fallback_status_result(&fallback, "error", &safe_reason(&error)),
+        Ok(Err(error)) => fallback_status_result(&fallback, lane, "error", &safe_reason(&error)),
         Err(_) => fallback_status_result(
             &fallback,
+            lane,
             "error",
             "Horned parser panicked while processing the bounded request",
         ),
     }
 }
 
-fn execute_raw(request: ValidatedRequest) -> Result<Value, RunnerError> {
+fn execute_raw(request: ValidatedRequest, lane: Lane) -> Result<Value, RunnerError> {
     let prepared = if request.input_mode == "file" {
         Some(prepare_file(
             &request.source,
@@ -514,14 +616,17 @@ fn execute_raw(request: ValidatedRequest) -> Result<Value, RunnerError> {
     let cpu_before = cpu_time_ns()?;
     let wall_started = Instant::now();
     let load_started = Instant::now();
+    let rewrite_swrl = matches!(request.format, Format::Functional)
+        && !functional_swrl_edits(&request.source)?.is_empty();
     let (ontology, diagnostic_count) = match prepared.as_ref() {
         Some(file) => {
             let stream = File::open(&file.path)?;
-            parse_ontology(BufReader::new(stream), request.format)?
+            parse_ontology(BufReader::new(stream), request.format, rewrite_swrl)?
         }
         None => parse_ontology(
             BufReader::new(Cursor::new(request.source.as_slice())),
             request.format,
+            rewrite_swrl,
         )?,
     };
     let load_ns = elapsed_ns(load_started);
@@ -538,9 +643,9 @@ fn execute_raw(request: ValidatedRequest) -> Result<Value, RunnerError> {
 
     Ok(json!({
         "schema": ADAPTER_RESULT_SCHEMA,
-        "lane": LANE,
+        "lane": lane.id(),
         "implementation": IMPLEMENTATION,
-        "boundary": BOUNDARY,
+        "boundary": lane.boundary(),
         "status": "ok",
         "reason": Value::Null,
         "corpus_id": request.corpus_id,
@@ -565,20 +670,463 @@ fn execute_raw(request: ValidatedRequest) -> Result<Value, RunnerError> {
             },
         },
         "timed_validation": Value::Null,
-        "artifact": artifact()?,
+        "artifact": artifact(lane)?,
     }))
+}
+
+fn execute_common(request: ValidatedRequest, lane: Lane) -> Result<Value, RunnerError> {
+    let prepared = if request.input_mode == "file" {
+        Some(prepare_file(
+            &request.source,
+            &request.source_sha256,
+            request.format,
+        )?)
+    } else {
+        None
+    };
+    let temporary_bytes = if prepared.is_some() {
+        usize_to_u64(request.source.len(), "source size")?
+    } else {
+        0
+    };
+    let rss_before = rss_peak_bytes()?;
+    let cpu_before = cpu_time_ns()?;
+    let wall_started = Instant::now();
+    let load_started = Instant::now();
+    let rewrite_swrl = matches!(request.format, Format::Functional)
+        && !functional_swrl_edits(&request.source)?.is_empty();
+    let (ontology, diagnostic_count) = match prepared.as_ref() {
+        Some(file) => {
+            let stream = File::open(&file.path)?;
+            parse_ontology(BufReader::new(stream), request.format, rewrite_swrl)?
+        }
+        None => parse_ontology(
+            BufReader::new(Cursor::new(request.source.as_slice())),
+            request.format,
+            rewrite_swrl,
+        )?,
+    };
+    let load_ns = elapsed_ns(load_started);
+    if diagnostic_count != 0 {
+        return Ok(status_result(
+            &request,
+            lane,
+            "ineligible",
+            "Horned RDF mapping is incomplete for the requested common contract",
+        ));
+    }
+    let common_started = Instant::now();
+    let built = common::build_common_contract(&ontology, &request, diagnostic_count)?;
+    let common_adapter_ns = elapsed_ns(common_started);
+    let contract = built.contract;
+    let validation_ns = built.validation_ns;
+    let contract_sha256 = contract["contract_sha256"]
+        .as_str()
+        .ok_or_else(|| RunnerError::new("common contract digest is missing"))?
+        .to_owned();
+    let object_count = usize_to_u64(
+        common::object_count(&ontology, &contract),
+        "common object count",
+    )?;
+    let rss_after = rss_peak_bytes()?;
+    let wall_ns = elapsed_ns(wall_started);
+    let cpu_after = cpu_time_ns()?;
+    Ok(json!({
+        "schema": ADAPTER_RESULT_SCHEMA,
+        "lane": lane.id(),
+        "implementation": IMPLEMENTATION,
+        "boundary": lane.boundary(),
+        "status": "ok",
+        "reason": Value::Null,
+        "corpus_id": request.corpus_id,
+        "source_sha256": request.source_sha256,
+        "options_sha256": request.options_sha256,
+        "input_mode": request.input_mode,
+        "process_mode": request.process_mode,
+        "contract": contract,
+        "raw_inventory": Value::Null,
+        "metrics": {
+            "wall_ns": wall_ns,
+            "cpu_ns": cpu_after.saturating_sub(cpu_before),
+            "load_ns": load_ns,
+            "common_adapter_ns": common_adapter_ns,
+            "rss_peak_before_bytes": rss_before,
+            "rss_peak_after_bytes": rss_after,
+            "rss_peak_increment_bytes": rss_after.saturating_sub(rss_before),
+            "temporary_bytes": temporary_bytes,
+            "object_count": object_count,
+            "phase_ns": {
+                "horned_engine_load": load_ns,
+                "common_contract": common_adapter_ns.saturating_sub(validation_ns),
+                "contract_validation": validation_ns,
+            },
+        },
+        "timed_validation": {
+            "schema": TIMED_VALIDATION_SCHEMA,
+            "inside_timed_envelope": true,
+            "full_contract_validation": true,
+            "contract_sha256": contract_sha256,
+            "validation_ns": validation_ns,
+        },
+        "artifact": artifact(lane)?,
+    }))
+}
+
+fn functional_has_nested_annotations(source: &[u8]) -> bool {
+    let Ok(source) = std::str::from_utf8(source) else {
+        return false;
+    };
+    let bytes = source.as_bytes();
+    let mut stack = Vec::new();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        match bytes[offset] {
+            b'#' => {
+                offset += 1;
+                while offset < bytes.len() && !matches!(bytes[offset], b'\r' | b'\n') {
+                    offset += 1;
+                }
+            }
+            b'<' => {
+                offset += 1;
+                while offset < bytes.len() {
+                    match bytes[offset] {
+                        b'\\' => offset = offset.saturating_add(2),
+                        b'>' => {
+                            offset += 1;
+                            break;
+                        }
+                        _ => offset += 1,
+                    }
+                }
+            }
+            b'"' => {
+                offset += 1;
+                while offset < bytes.len() {
+                    match bytes[offset] {
+                        b'\\' => offset = offset.saturating_add(2),
+                        b'"' => {
+                            offset += 1;
+                            break;
+                        }
+                        _ => offset += 1,
+                    }
+                }
+            }
+            b'(' => {
+                stack.push(false);
+                offset += 1;
+            }
+            b')' => {
+                stack.pop();
+                offset += 1;
+            }
+            byte if byte.is_ascii_alphabetic() => {
+                let start = offset;
+                offset += 1;
+                while offset < bytes.len()
+                    && (bytes[offset].is_ascii_alphanumeric()
+                        || matches!(bytes[offset], b'_' | b'-'))
+                {
+                    offset += 1;
+                }
+                if &source[start..offset] != "Annotation" {
+                    continue;
+                }
+                let mut lookahead = offset;
+                loop {
+                    while lookahead < bytes.len() && bytes[lookahead].is_ascii_whitespace() {
+                        lookahead += 1;
+                    }
+                    if bytes.get(lookahead) != Some(&b'#') {
+                        break;
+                    }
+                    while lookahead < bytes.len() && !matches!(bytes[lookahead], b'\r' | b'\n') {
+                        lookahead += 1;
+                    }
+                }
+                if bytes.get(lookahead) == Some(&b'(') {
+                    if stack.iter().any(|is_annotation| *is_annotation) {
+                        return true;
+                    }
+                    stack.push(true);
+                    offset = lookahead + 1;
+                }
+            }
+            _ => offset += 1,
+        }
+    }
+    false
+}
+
+fn find_bytes(source: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+    source
+        .get(start..)?
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .and_then(|offset| start.checked_add(offset))
+}
+
+fn xml_markup_end(source: &[u8], mut offset: usize) -> usize {
+    let mut quote = None;
+    while offset < source.len() {
+        match (quote, source[offset]) {
+            (Some(selected), byte) if byte == selected => quote = None,
+            (None, byte @ (b'\'' | b'"')) => quote = Some(byte),
+            (None, b'>') => return offset + 1,
+            _ => {}
+        }
+        offset += 1;
+    }
+    offset
+}
+
+fn owlxml_has_nested_annotations(source: &[u8]) -> bool {
+    let mut annotation_depth = 0_u64;
+    let mut offset = 0;
+    while let Some(open) = find_bytes(source, offset, b"<") {
+        if source.get(open..open.saturating_add(4)) == Some(b"<!--") {
+            offset = find_bytes(source, open + 4, b"-->")
+                .map_or(source.len(), |end| end.saturating_add(3));
+            continue;
+        }
+        if source.get(open..open.saturating_add(9)) == Some(b"<![CDATA[") {
+            offset = find_bytes(source, open + 9, b"]]>")
+                .map_or(source.len(), |end| end.saturating_add(3));
+            continue;
+        }
+        let end = xml_markup_end(source, open + 1);
+        if end <= open + 1 || end > source.len() {
+            break;
+        }
+        let mut name_start = open + 1;
+        let closing = source.get(name_start) == Some(&b'/');
+        if closing {
+            name_start += 1;
+        }
+        if matches!(source.get(name_start), Some(b'!' | b'?')) {
+            offset = end;
+            continue;
+        }
+        let mut name_end = name_start;
+        while name_end < end
+            && !source[name_end].is_ascii_whitespace()
+            && !matches!(source[name_end], b'/' | b'>')
+        {
+            name_end += 1;
+        }
+        let local_start = source[name_start..name_end]
+            .iter()
+            .rposition(|byte| *byte == b':')
+            .map_or(name_start, |colon| name_start + colon + 1);
+        if source.get(local_start..name_end) == Some(b"Annotation".as_slice()) {
+            if closing {
+                annotation_depth = annotation_depth.saturating_sub(1);
+            } else {
+                if annotation_depth > 0 {
+                    return true;
+                }
+                let self_closing = source[open + 1..end - 1]
+                    .iter()
+                    .rev()
+                    .find(|byte| !byte.is_ascii_whitespace())
+                    == Some(&b'/');
+                if !self_closing {
+                    annotation_depth += 1;
+                }
+            }
+        }
+        offset = end;
+    }
+    false
+}
+
+fn skip_functional_trivia(source: &[u8], mut offset: usize) -> usize {
+    loop {
+        while offset < source.len() && source[offset].is_ascii_whitespace() {
+            offset += 1;
+        }
+        if source.get(offset) != Some(&b'#') {
+            return offset;
+        }
+        while offset < source.len() && !matches!(source[offset], b'\r' | b'\n') {
+            offset += 1;
+        }
+    }
+}
+
+fn skip_functional_delimited(source: &[u8], mut offset: usize, terminal: u8) -> usize {
+    offset += 1;
+    while offset < source.len() {
+        match source[offset] {
+            b'\\' => offset = offset.saturating_add(2),
+            byte if byte == terminal => return offset + 1,
+            _ => offset += 1,
+        }
+    }
+    offset
+}
+
+fn functional_matching_parenthesis(source: &[u8], open: usize) -> Option<usize> {
+    if source.get(open) != Some(&b'(') {
+        return None;
+    }
+    let mut depth = 0_u64;
+    let mut offset = open;
+    while offset < source.len() {
+        match source[offset] {
+            b'#' => offset = skip_functional_trivia(source, offset),
+            b'<' => offset = skip_functional_delimited(source, offset, b'>'),
+            b'"' => offset = skip_functional_delimited(source, offset, b'"'),
+            b'(' => {
+                depth = depth.checked_add(1)?;
+                offset += 1;
+            }
+            b')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(offset);
+                }
+                offset += 1;
+            }
+            _ => offset += 1,
+        }
+    }
+    None
+}
+
+fn functional_word_end(source: &[u8], start: usize) -> usize {
+    let mut offset = start;
+    while offset < source.len()
+        && (source[offset].is_ascii_alphanumeric() || matches!(source[offset], b'_' | b'-'))
+    {
+        offset += 1;
+    }
+    offset
+}
+
+fn functional_swrl_edits(source: &[u8]) -> Result<Vec<FunctionalEdit>, RunnerError> {
+    let mut edits = Vec::new();
+    let mut offset = 0;
+    while offset < source.len() {
+        match source[offset] {
+            b'#' => offset = skip_functional_trivia(source, offset),
+            b'<' => offset = skip_functional_delimited(source, offset, b'>'),
+            b'"' => offset = skip_functional_delimited(source, offset, b'"'),
+            byte if byte.is_ascii_alphabetic() => {
+                let start = offset;
+                offset = functional_word_end(source, offset);
+                if &source[start..offset] == b"SWRLRule" {
+                    let outer_open = skip_functional_trivia(source, offset);
+                    if source.get(outer_open) != Some(&b'(') {
+                        continue;
+                    }
+                    let mut cursor = skip_functional_trivia(source, outer_open + 1);
+                    loop {
+                        let annotation_end = functional_word_end(source, cursor);
+                        if source.get(cursor..annotation_end) != Some(b"Annotation".as_slice()) {
+                            break;
+                        }
+                        let annotation_open = skip_functional_trivia(source, annotation_end);
+                        if source.get(annotation_open) != Some(&b'(') {
+                            break;
+                        }
+                        let annotation_close =
+                            functional_matching_parenthesis(source, annotation_open).ok_or_else(
+                                || RunnerError::new("Functional SWRL annotation is unterminated"),
+                            )?;
+                        cursor = skip_functional_trivia(source, annotation_close + 1);
+                    }
+                    let body_open = cursor;
+                    let body_close = functional_matching_parenthesis(source, body_open)
+                        .ok_or_else(|| RunnerError::new("Functional SWRL body is malformed"))?;
+                    let head_open = skip_functional_trivia(source, body_close + 1);
+                    let head_close = functional_matching_parenthesis(source, head_open)
+                        .ok_or_else(|| RunnerError::new("Functional SWRL head is malformed"))?;
+                    let outer_close = skip_functional_trivia(source, head_close + 1);
+                    if source.get(outer_close) != Some(&b')') {
+                        return Err(RunnerError::new(
+                            "Functional SWRL rule has trailing structural content",
+                        ));
+                    }
+                    edits.extend([
+                        FunctionalEdit {
+                            start,
+                            end: offset,
+                            replacement: b"DLSafeRule",
+                        },
+                        FunctionalEdit {
+                            start: body_open,
+                            end: body_open,
+                            replacement: b"Body",
+                        },
+                        FunctionalEdit {
+                            start: head_open,
+                            end: head_open,
+                            replacement: b"Head",
+                        },
+                    ]);
+                    offset = outer_close + 1;
+                }
+            }
+            _ => offset += 1,
+        }
+    }
+    Ok(edits)
+}
+
+fn functional_swrl_source(source: &[u8]) -> Result<Option<Vec<u8>>, RunnerError> {
+    let edits = functional_swrl_edits(source)?;
+    if edits.is_empty() {
+        return Ok(None);
+    }
+    let additional = edits
+        .iter()
+        .try_fold(0_usize, |total, edit| {
+            total.checked_add(
+                edit.replacement
+                    .len()
+                    .saturating_sub(edit.end.saturating_sub(edit.start)),
+            )
+        })
+        .ok_or_else(|| RunnerError::new("Functional SWRL adaptation length overflows usize"))?;
+    let mut output = Vec::with_capacity(source.len().saturating_add(additional));
+    let mut retained = 0;
+    for edit in edits {
+        if edit.start < retained || edit.end < edit.start || edit.end > source.len() {
+            return Err(RunnerError::new("Functional SWRL adaptations overlap"));
+        }
+        output.extend_from_slice(&source[retained..edit.start]);
+        output.extend_from_slice(edit.replacement);
+        retained = edit.end;
+    }
+    output.extend_from_slice(&source[retained..]);
+    Ok(Some(output))
 }
 
 fn parse_ontology<R: BufRead>(
     mut reader: R,
     format: Format,
+    rewrite_swrl: bool,
 ) -> Result<(RcIRIMappedOntology, u64), RunnerError> {
     match format {
         Format::Functional => {
-            let (ontology, _): (RcIRIMappedOntology, _) =
-                horned_io::ofn::reader::read(reader, ParserConfiguration::default()).map_err(
-                    |error| RunnerError::new(format!("Horned Functional parse failed: {error}")),
-                )?;
+            let parsed = if rewrite_swrl {
+                let mut source = Vec::new();
+                reader.read_to_end(&mut source)?;
+                let adapted = functional_swrl_source(&source)?.ok_or_else(|| {
+                    RunnerError::new("Functional SWRL adaptation was requested without a rule")
+                })?;
+                horned_io::ofn::reader::read(
+                    BufReader::new(Cursor::new(adapted)),
+                    ParserConfiguration::default(),
+                )
+            } else {
+                horned_io::ofn::reader::read(reader, ParserConfiguration::default())
+            };
+            let (ontology, _): (RcIRIMappedOntology, _) = parsed.map_err(|error| {
+                RunnerError::new(format!("Horned Functional parse failed: {error}"))
+            })?;
             Ok((ontology, 0))
         }
         Format::OwlXml => {
@@ -664,7 +1212,7 @@ fn build_inventory(
     );
     Ok(RawInventory {
         schema: RAW_INVENTORY_SCHEMA,
-        model_kind: BOUNDARY,
+        model_kind: "horned-model-ready",
         axiom_count,
         annotation_count,
         import_count,
@@ -762,7 +1310,7 @@ fn fallback_identity() -> Value {
     })
 }
 
-fn status_result(request: &ValidatedRequest, status: &str, reason: &str) -> Value {
+fn status_result(request: &ValidatedRequest, lane: Lane, status: &str, reason: &str) -> Value {
     let identity = json!({
         "corpus_id": request.corpus_id,
         "source_sha256": request.source_sha256,
@@ -770,15 +1318,15 @@ fn status_result(request: &ValidatedRequest, status: &str, reason: &str) -> Valu
         "input_mode": request.input_mode,
         "process_mode": request.process_mode,
     });
-    fallback_status_result(&identity, status, reason)
+    fallback_status_result(&identity, lane, status, reason)
 }
 
-fn fallback_status_result(identity: &Value, status: &str, reason: &str) -> Value {
+fn fallback_status_result(identity: &Value, lane: Lane, status: &str, reason: &str) -> Value {
     json!({
         "schema": ADAPTER_RESULT_SCHEMA,
-        "lane": LANE,
+        "lane": lane.id(),
         "implementation": IMPLEMENTATION,
-        "boundary": BOUNDARY,
+        "boundary": lane.boundary(),
         "status": status,
         "reason": bounded_reason(reason),
         "corpus_id": identity["corpus_id"],
@@ -790,32 +1338,32 @@ fn fallback_status_result(identity: &Value, status: &str, reason: &str) -> Value
         "raw_inventory": Value::Null,
         "metrics": {},
         "timed_validation": Value::Null,
-        "artifact": artifact().unwrap_or_else(|_| json!({
+        "artifact": artifact(lane).unwrap_or_else(|_| json!({
             "pin_state": "complete",
             "version": ENGINE_VERSION,
             "revision": ENGINE_REVISION,
             "artifact": ENGINE_ARTIFACT,
             "artifact_sha256": ENGINE_SHA256,
-            "features": ["default"],
+            "features": lane.features(),
             "allocator": ALLOCATOR,
             "thread_ceiling": THREAD_CEILING,
-            "runner_revision": RUNNER_REVISION,
+            "runner_revision": lane.runner_revision(),
             "runner_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
         })),
     })
 }
 
-fn artifact() -> Result<Value, RunnerError> {
+fn artifact(lane: Lane) -> Result<Value, RunnerError> {
     serde_json::to_value(Artifact {
         pin_state: "complete",
         version: ENGINE_VERSION,
         revision: ENGINE_REVISION,
         artifact: ENGINE_ARTIFACT,
         artifact_sha256: ENGINE_SHA256,
-        features: ["default"],
+        features: lane.features().to_vec(),
         allocator: ALLOCATOR,
         thread_ceiling: THREAD_CEILING,
-        runner_revision: RUNNER_REVISION,
+        runner_revision: lane.runner_revision(),
         runner_sha256: runner_sha256()?,
     })
     .map_err(|_| RunnerError::new("could not serialize artifact evidence"))
@@ -840,11 +1388,14 @@ fn runner_sha256() -> Result<String, RunnerError> {
     Ok(hex_digest(hasher.finalize().as_slice()))
 }
 
-fn verify_environment() -> Result<String, RunnerError> {
+fn verify_environment() -> Result<(String, Lane), RunnerError> {
+    let lane = Lane::parse(
+        &std::env::var("PYOWL_CORE_COMPARATOR_LANE")
+            .map_err(|_| RunnerError::new("runner lane is missing"))?,
+    )?;
     for (name, expected) in [
-        ("PYOWL_CORE_COMPARATOR_LANE", LANE),
         ("PYOWL_CORE_COMPARATOR_IMPLEMENTATION", IMPLEMENTATION),
-        ("PYOWL_CORE_COMPARATOR_BOUNDARY", BOUNDARY),
+        ("PYOWL_CORE_COMPARATOR_BOUNDARY", lane.boundary()),
         ("RAYON_NUM_THREADS", "1"),
     ] {
         if std::env::var(name).ok().as_deref() != Some(expected) {
@@ -864,10 +1415,10 @@ fn verify_environment() -> Result<String, RunnerError> {
         return Err(RunnerError::new("runner protocol mode is unsupported"));
     }
     runner_sha256()?;
-    Ok(protocol_mode)
+    Ok((protocol_mode, lane))
 }
 
-fn fresh_main() -> Result<(), RunnerError> {
+fn fresh_main(lane: Lane) -> Result<(), RunnerError> {
     let mut body = Vec::new();
     io::stdin()
         .lock()
@@ -876,14 +1427,16 @@ fn fresh_main() -> Result<(), RunnerError> {
     let result = if body.len() > MAX_REQUEST_BYTES {
         fallback_status_result(
             &fallback_identity(),
+            lane,
             "error",
             "adapter request exceeds size limit",
         )
     } else {
         match serde_json::from_slice::<AdapterRequest>(&body) {
-            Ok(request) => run_request(request, "fresh"),
+            Ok(request) => run_request(request, "fresh", lane),
             Err(_) => fallback_status_result(
                 &fallback_identity(),
+                lane,
                 "error",
                 "adapter request is not valid strict schema-v2 JSON",
             ),
@@ -896,19 +1449,19 @@ fn fresh_main() -> Result<(), RunnerError> {
     Ok(())
 }
 
-fn persistent_main() -> Result<(), RunnerError> {
+fn persistent_main(lane: Lane) -> Result<(), RunnerError> {
     let pid = u64::from(process::id());
     write_frame(&json!({
         "schema": PERSISTENT_HANDSHAKE_SCHEMA,
         "protocol": PERSISTENT_PROTOCOL_SCHEMA,
-        "lane": LANE,
+        "lane": lane.id(),
         "implementation": IMPLEMENTATION,
-        "boundary": BOUNDARY,
+        "boundary": lane.boundary(),
         "pid": pid,
         "request_schema": ADAPTER_REQUEST_SCHEMA,
         "result_schema": ADAPTER_RESULT_SCHEMA,
         "fresh_ontology_per_request": true,
-        "artifact": artifact()?,
+        "artifact": artifact(lane)?,
     }))?;
     let mut input = BufReader::new(io::stdin().lock());
     let mut instance_counter = 0_u64;
@@ -949,7 +1502,7 @@ fn persistent_main() -> Result<(), RunnerError> {
                 "persistent request sequence is nonmonotonic",
             ));
         }
-        let result = run_request(envelope.request, "persistent");
+        let result = run_request(envelope.request, "persistent", lane);
         let instance_preimage = format!("{pid}:{instance_counter}:{}", envelope.sequence);
         write_frame(&json!({
             "schema": PERSISTENT_RESPONSE_SCHEMA,
@@ -1143,10 +1696,10 @@ fn safe_reason(error: &RunnerError) -> String {
 
 fn run() -> Result<(), RunnerError> {
     panic::set_hook(Box::new(|_| {}));
-    let protocol_mode = verify_environment()?;
+    let (protocol_mode, lane) = verify_environment()?;
     match protocol_mode.as_str() {
-        "fresh" => fresh_main(),
-        "persistent" => persistent_main(),
+        "fresh" => fresh_main(lane),
+        "persistent" => persistent_main(lane),
         _ => Err(RunnerError::new("runner protocol mode is unsupported")),
     }
 }
@@ -1179,5 +1732,66 @@ mod tests {
     fn strict_digest_validation_rejects_uppercase() {
         assert!(is_sha256(&"a".repeat(64)));
         assert!(!is_sha256(&"A".repeat(64)));
+    }
+
+    #[test]
+    fn functional_nested_annotation_detection_is_syntax_aware() {
+        assert!(functional_has_nested_annotations(
+            br#"Ontology(Annotation(Annotation(<urn:q> "nested") <urn:p> "outer"))"#,
+        ));
+        assert!(functional_has_nested_annotations(
+            br#"Ontology(SubClassOf(Annotation(Annotation(<urn:q> <urn:v>) <urn:p> <urn:v>) <urn:A> <urn:B>))"#,
+        ));
+        assert!(!functional_has_nested_annotations(
+            br#"Ontology(AnnotationAssertion(Annotation(<urn:q> "v") <urn:p> <urn:s> "Annotation(ignored)"))"#,
+        ));
+        assert!(!functional_has_nested_annotations(
+            b"Ontology(# Annotation(Annotation(<urn:q> <urn:v>) <urn:p> <urn:v>)\n)",
+        ));
+        assert!(!functional_has_nested_annotations(
+            b"Ontology(Declaration(Class(<urn:Annotation(Annotation)>)))",
+        ));
+    }
+
+    #[test]
+    fn functional_swrl_adaptation_only_rewrites_syntax_tokens() {
+        let source = br#"Ontology(
+            # SWRLRule((ClassAtom(<urn:A> Variable(<urn:x>)))())
+            AnnotationAssertion(<urn:p> <urn:s> "SWRLRule(ignored)")
+            AnnotationAssertion(<urn:p> <urn:s> <urn:SWRLRule(ignored)>)
+            SWRLRule((ClassAtom(<urn:A> Variable(<urn:x>)))())
+        )"#;
+        let adapted = functional_swrl_source(source).unwrap().unwrap();
+        assert_eq!(
+            adapted
+                .windows(b"DLSafeRule".len())
+                .filter(|window| *window == b"DLSafeRule")
+                .count(),
+            1
+        );
+        assert_eq!(
+            adapted
+                .windows(b"SWRLRule".len())
+                .filter(|window| *window == b"SWRLRule")
+                .count(),
+            3
+        );
+        assert!(functional_swrl_source(b"Ontology()").unwrap().is_none());
+    }
+
+    #[test]
+    fn owlxml_nested_annotation_detection_ignores_non_markup_content() {
+        assert!(owlxml_has_nested_annotations(
+            br#"<Ontology><Annotation><Annotation/></Annotation></Ontology>"#,
+        ));
+        assert!(owlxml_has_nested_annotations(
+            br#"<owl:Ontology><owl:Annotation><owl:Annotation></owl:Annotation></owl:Annotation></owl:Ontology>"#,
+        ));
+        assert!(!owlxml_has_nested_annotations(
+            br#"<Ontology><!-- <Annotation><Annotation/></Annotation> --><Annotation><Literal>&lt;Annotation&gt;</Literal></Annotation></Ontology>"#,
+        ));
+        assert!(!owlxml_has_nested_annotations(
+            br#"<Ontology><AnnotationProperty IRI="urn:Annotation"/><Annotation data="&lt;Annotation&gt;"/></Ontology>"#,
+        ));
     }
 }
