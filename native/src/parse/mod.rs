@@ -2,10 +2,15 @@
 
 mod functional;
 
+use std::mem::size_of;
+use std::time::Instant;
+
+use crate::cancel::{Cancellation, InterruptSlot};
 use crate::canonical::{encode_frame, Node};
 use crate::error::{NativeError, NativeResult};
-use crate::limits::LimitKey;
+use crate::limits::{LimitKey, Limits};
 use crate::model::{scan_canonical, Category, ScanBudget};
+use crate::publication::{TypedFacadeBuilderV2, TypedFacadeStorageV2};
 use crate::session::Session;
 use crate::source::SourceRequest;
 
@@ -39,8 +44,22 @@ pub(crate) struct ParsedDocument {
     pub(crate) decoded_codepoints: u64,
 }
 
+pub(crate) struct RetainedParseOutcome {
+    pub(crate) encoded: Vec<u8>,
+    pub(crate) storage: TypedFacadeStorageV2,
+    pub(crate) phases: RetainedParsePhases,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RetainedParsePhases {
+    pub(crate) syntax_parse_ns: u64,
+    pub(crate) result_encode_ns: u64,
+    pub(crate) arena_construction_ns: u64,
+    pub(crate) freeze_ns: u64,
+}
+
 impl ParsedDocument {
-    pub(crate) fn encode(self, session: &mut Session<'_>) -> NativeResult<Vec<u8>> {
+    pub(crate) fn encode(&self, session: &mut Session<'_>) -> NativeResult<Vec<u8>> {
         self.validate(session)?;
         let output_size = self.encoded_size()?;
         if u64::try_from(output_size).map_or(true, |value| {
@@ -59,18 +78,18 @@ impl ParsedDocument {
         output.extend_from_slice(&RESULT_SCHEMA.to_le_bytes());
         output.extend_from_slice(&FORMAT_FUNCTIONAL.to_le_bytes());
         output.extend_from_slice(&self.decoded_codepoints.to_le_bytes());
-        encode_optional(self.ontology_iri, &mut output)?;
-        encode_optional(self.version_iri, &mut output)?;
-        encode_nodes(self.imports, &mut output)?;
-        encode_spanned(self.annotations, &mut output)?;
-        encode_spanned(self.axioms, &mut output)?;
-        encode_spanned(self.extensions, &mut output)?;
+        encode_optional(self.ontology_iri.as_ref(), &mut output)?;
+        encode_optional(self.version_iri.as_ref(), &mut output)?;
+        encode_nodes(&self.imports, &mut output)?;
+        encode_spanned(&self.annotations, &mut output)?;
+        encode_spanned(&self.axioms, &mut output)?;
+        encode_spanned(&self.extensions, &mut output)?;
         output.extend_from_slice(
             &u64::try_from(self.prefixes.len())
                 .map_err(|_| NativeError::limit("native prefix count exceeds u64"))?
                 .to_le_bytes(),
         );
-        for (prefix, iri) in self.prefixes {
+        for (prefix, iri) in &self.prefixes {
             encode_frame(prefix.as_bytes(), &mut output)?;
             encode_frame(iri.as_bytes(), &mut output)?;
         }
@@ -81,6 +100,14 @@ impl ParsedDocument {
         }
         session.finish()?;
         Ok(output)
+    }
+
+    fn into_structural_rows(self) -> [Vec<Vec<u8>>; 3] {
+        [
+            canonical_root_rows(self.annotations),
+            canonical_root_rows(self.axioms),
+            canonical_root_rows(self.extensions),
+        ]
     }
 
     fn validate(&self, session: &mut Session<'_>) -> NativeResult<()> {
@@ -162,7 +189,46 @@ pub(crate) fn parse(
     functional::parse_functional(request.source, request.allow_swrl, session)?.encode(session)
 }
 
-fn encode_optional(value: Option<Node>, output: &mut Vec<u8>) -> NativeResult<()> {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn parse_retained(
+    request: SourceRequest<'_>,
+    session: &mut Session<'_>,
+    limits: Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    input_bytes: usize,
+) -> NativeResult<RetainedParseOutcome> {
+    let parse_started = Instant::now();
+    let parsed = functional::parse_functional(request.source, request.allow_swrl, session)?;
+    let syntax_parse_ns = elapsed_ns(parse_started)?;
+
+    let encode_started = Instant::now();
+    let encoded = parsed.encode(session)?;
+    let result_encode_ns = elapsed_ns(encode_started)?;
+    let rows = parsed.into_structural_rows();
+    let external_bytes = retained_parse_external_bytes(input_bytes, encoded.capacity(), &rows)?;
+
+    let arena_started = Instant::now();
+    let mut builder = TypedFacadeBuilderV2::new(limits, cancellation, interrupt, external_bytes)?;
+    builder.add_document(&rows[0], &rows[1], &rows[2])?;
+    let arena_construction_ns = elapsed_ns(arena_started)?;
+
+    let freeze_started = Instant::now();
+    let storage = builder.freeze(&[vec![0]], &[0])?;
+    let freeze_ns = elapsed_ns(freeze_started)?;
+    Ok(RetainedParseOutcome {
+        encoded,
+        storage,
+        phases: RetainedParsePhases {
+            syntax_parse_ns,
+            result_encode_ns,
+            arena_construction_ns,
+            freeze_ns,
+        },
+    })
+}
+
+fn encode_optional(value: Option<&Node>, output: &mut Vec<u8>) -> NativeResult<()> {
     match value {
         Some(node) => {
             output.push(1);
@@ -175,7 +241,7 @@ fn encode_optional(value: Option<Node>, output: &mut Vec<u8>) -> NativeResult<()
     }
 }
 
-fn encode_nodes(values: Vec<Node>, output: &mut Vec<u8>) -> NativeResult<()> {
+fn encode_nodes(values: &[Node], output: &mut Vec<u8>) -> NativeResult<()> {
     output.extend_from_slice(
         &u64::try_from(values.len())
             .map_err(|_| NativeError::limit("native parser row count exceeds u64"))?
@@ -187,7 +253,7 @@ fn encode_nodes(values: Vec<Node>, output: &mut Vec<u8>) -> NativeResult<()> {
     Ok(())
 }
 
-fn encode_spanned(values: Vec<SpannedNode>, output: &mut Vec<u8>) -> NativeResult<()> {
+fn encode_spanned(values: &[SpannedNode], output: &mut Vec<u8>) -> NativeResult<()> {
     output.extend_from_slice(
         &u64::try_from(values.len())
             .map_err(|_| NativeError::limit("native parser row count exceeds u64"))?
@@ -201,6 +267,42 @@ fn encode_spanned(values: Vec<SpannedNode>, output: &mut Vec<u8>) -> NativeResul
         encode_frame(value.node.as_bytes(), output)?;
     }
     Ok(())
+}
+
+fn canonical_root_rows(values: Vec<SpannedNode>) -> Vec<Vec<u8>> {
+    let mut rows: Vec<Vec<u8>> = values
+        .into_iter()
+        .map(|value| value.node.into_bytes())
+        .collect();
+    rows.sort_unstable();
+    rows.dedup();
+    rows
+}
+
+fn retained_parse_external_bytes(
+    input_bytes: usize,
+    encoded_capacity: usize,
+    rows: &[Vec<Vec<u8>>; 3],
+) -> NativeResult<usize> {
+    let mut total = checked_add(input_bytes, encoded_capacity)?;
+    for collection in rows {
+        total = checked_add(
+            total,
+            collection
+                .capacity()
+                .checked_mul(size_of::<Vec<u8>>())
+                .ok_or_else(|| NativeError::limit("native retained parser metadata overflow"))?,
+        )?;
+        for row in collection {
+            total = checked_add(total, row.capacity())?;
+        }
+    }
+    Ok(total)
+}
+
+fn elapsed_ns(started: Instant) -> NativeResult<u64> {
+    u64::try_from(started.elapsed().as_nanos())
+        .map_err(|_| NativeError::limit("native parser phase duration exceeds u64"))
 }
 
 fn validate_category(node: &Node, expected: Category, budget: &mut ScanBudget) -> NativeResult<()> {

@@ -64,6 +64,10 @@ impl Node {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.encoded
     }
+
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        self.encoded
+    }
 }
 
 pub(crate) fn iri(value: String) -> NativeResult<Node> {

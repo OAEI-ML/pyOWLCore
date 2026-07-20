@@ -167,6 +167,7 @@ const CLOSE_REQUESTS: usize = 79;
 const CLOSE_TRANSITIONS: usize = 80;
 const FORK_REINITIALIZATIONS: usize = 81;
 const FACADE_CACHE_CURRENT_BYTES: usize = 83;
+const PARSER_BYTES: usize = 84;
 const ENCODED_VIEW_REQUESTS: usize = 85;
 
 #[cfg(feature = "test-hooks")]
@@ -1031,21 +1032,28 @@ impl PublicationStorageV2 {
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
     ) -> NativeResult<Arc<Self>> {
-        Self::from_typed_structural_parts(attestation, typed_structural, None)
+        Self::from_typed_structural_parts(attestation, typed_structural, None, 0)
     }
 
     pub(super) fn from_typed_structural_with_origins(
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
         origin_rows: Vec<Vec<u8>>,
+        parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
-        Self::from_typed_structural_parts(attestation, typed_structural, Some(origin_rows))
+        Self::from_typed_structural_parts(
+            attestation,
+            typed_structural,
+            Some(origin_rows),
+            parser_bytes,
+        )
     }
 
     fn from_typed_structural_parts(
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
         origin_rows: Option<Vec<Vec<u8>>>,
+        parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
         if attestation.version != PUBLICATION_VERSION_V2
             || attestation.ledger_sha256 != PUBLICATION_LEDGER_SHA256_V2
@@ -1104,8 +1112,14 @@ impl PublicationStorageV2 {
                 "typed V2 origin attachment currently requires one document",
             ));
         }
+        if parser_bytes != 0 && parser_bytes != attestation.total_source_bytes {
+            return Err(NativeError::protocol(
+                "typed V2 parser byte count diverges from its attestation",
+            ));
+        }
         let typed_structural = Arc::new(typed_structural);
         let mut initial = typed_initial_counters(&typed_structural, &attestation)?;
+        initial[PARSER_BYTES] = parser_bytes;
         let retained_origins = retain_origin_tables_v2(origins)?;
         if retains_origins {
             initial[RETAINED_ROW_FIRST + 5] = origin_count
@@ -3131,6 +3145,7 @@ mod tests {
             attestation,
             typed,
             vec![origin.clone()],
+            0,
         )
         .expect("typed publication with origins");
 

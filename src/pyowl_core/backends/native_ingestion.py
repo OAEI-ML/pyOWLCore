@@ -23,6 +23,7 @@ class NativeIngestionExtension(Protocol):
 
 class _RetainedStructuralExtension(NativeIngestionExtension, Protocol):
     _retain_structural_snapshot_v2: Callable[..., object]
+    _finalize_parsed_structural_snapshot_v2: Callable[..., object]
 
 
 def require_ingestion_binding(capability: str) -> NativeIngestionExtension:
@@ -41,6 +42,7 @@ def retain_forced_native_snapshot_v2(
     snapshot: OntologySnapshot,
     *,
     cancellation_token: CancellationToken | None = None,
+    parsed_native_storage: object | None = None,
 ) -> OntologySnapshot:
     """Promote one narrowly eligible forced-native load into the typed V2 owner.
 
@@ -50,11 +52,12 @@ def retain_forced_native_snapshot_v2(
     either publishes the retained owner or fails without fallback.
     """
 
-    from pyowl_core.config import BackendPreference, DocumentFormat
+    from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy
 
     if (
         snapshot.load_options.backend is not BackendPreference.NATIVE
         or len(snapshot.documents) != 1
+        or snapshot.load_options.imports is not ImportPolicy.IGNORE
         or snapshot.root.provenance.backend != "native"
         or snapshot.root.provenance.format is not DocumentFormat.FUNCTIONAL
         or snapshot.load_options.preserve_source_map
@@ -64,13 +67,20 @@ def retain_forced_native_snapshot_v2(
     ):
         return snapshot
     extension = native.require("parse-functional-v1")
-    hook = getattr(extension, "_retain_structural_snapshot_v2", None)
-    if not callable(hook):
-        return snapshot
+    if parsed_native_storage is None:
+        hook = getattr(extension, "_retain_structural_snapshot_v2", None)
+        if not callable(hook):
+            return snapshot
+    elif not callable(getattr(extension, "_finalize_parsed_structural_snapshot_v2", None)):
+        raise BackendProtocolError(
+            "native parser-built storage has no final publication boundary",
+            code="NATIVE_INGESTION_REGISTRATION",
+        )
     return _publish_structural_snapshot_v2(
         snapshot,
         extension,
         cancellation_token,
+        parsed_native_storage,
     )
 
 
@@ -78,6 +88,7 @@ def _publish_structural_snapshot_v2(
     snapshot: OntologySnapshot,
     extension: native._Extension,
     cancellation_token: CancellationToken | None,
+    parsed_native_storage: object | None,
 ) -> OntologySnapshot:
     from dataclasses import fields
 
@@ -121,11 +132,6 @@ def _publish_structural_snapshot_v2(
 
     document = snapshot.root
     record = snapshot.import_manifest.documents[0]
-    raw_rows = (
-        tuple(canonical_bytes(value) for value in document.ontology_annotations),
-        tuple(canonical_bytes(value) for value in document.axioms),
-        tuple(canonical_bytes(value) for value in document.extension_components),
-    )
     effective_rows = (
         tuple(
             canonical_bytes(value)
@@ -149,10 +155,20 @@ def _publish_structural_snapshot_v2(
             )
         ),
     )
-    # Typed V2 currently has no anonymous re-scope sidecar.  Never publish a
-    # raw-document owner whose roots would silently differ from Python.
-    if raw_rows != effective_rows:
-        return snapshot
+    if parsed_native_storage is None:
+        raw_rows = (
+            tuple(canonical_bytes(value) for value in document.ontology_annotations),
+            tuple(canonical_bytes(value) for value in document.axioms),
+            tuple(canonical_bytes(value) for value in document.extension_components),
+        )
+        # Typed V2 currently has no anonymous re-scope sidecar. Never publish a
+        # raw-document owner whose roots would silently differ from Python.
+        if raw_rows != effective_rows:
+            return snapshot
+    else:
+        # The parser orchestration discards parser-built storage before this
+        # point whenever anonymous canonical re-scoping changes the roots.
+        raw_rows = effective_rows
 
     origin_items: list[tuple[tuple[object, ...], bytes]] = []
     for digest, occurrences in snapshot.origin_index.entries.items():
@@ -372,23 +388,34 @@ def _publish_structural_snapshot_v2(
         max_facade_row_bytes=max_facade_row_bytes,
         owl2_dl_report_summary=None,
     )
-    config = native._encode_config(
-        snapshot.load_options.limits,
-        cancellation_token,
-        verify=False,
-    )
     with native._relay(extension, snapshot.load_options.limits, cancellation_token) as cancel:
-        retain = cast(_RetainedStructuralExtension, extension)._retain_structural_snapshot_v2
-        raw_owner = native._call(
-            extension,
-            lambda: retain(
-                (raw_rows,),
-                origin_rows,
-                attestation,
-                config,
-                cancel,
-            ),
-        )
+        selected_extension = cast(_RetainedStructuralExtension, extension)
+        if parsed_native_storage is None:
+            config = native._encode_config(
+                snapshot.load_options.limits,
+                cancellation_token,
+                verify=False,
+            )
+            raw_owner = native._call(
+                extension,
+                lambda: selected_extension._retain_structural_snapshot_v2(
+                    (raw_rows,),
+                    origin_rows,
+                    attestation,
+                    config,
+                    cancel,
+                ),
+            )
+        else:
+            raw_owner = native._call(
+                extension,
+                lambda: selected_extension._finalize_parsed_structural_snapshot_v2(
+                    parsed_native_storage,
+                    origin_rows,
+                    attestation,
+                    cancel,
+                ),
+            )
     values: dict[str, object] = {
         "version": NATIVE_SNAPSHOT_PUBLICATION_VERSION_V2,
         "ledger_sha256": NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2,

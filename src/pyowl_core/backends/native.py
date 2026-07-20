@@ -84,6 +84,7 @@ class _Extension(Protocol):
     INGESTION_FEATURES: tuple[str, ...]
     VIEW_FEATURES: tuple[str, ...]
     _NativeError: type[Exception]
+    _NativeParsedStructuralStorageV2: type[object]
     _Cancellation: Callable[[float | None], _NativeCancellation]
 
     def version(self) -> tuple[str, int]: ...
@@ -105,6 +106,10 @@ class _Extension(Protocol):
     def parse_document(
         self, data: object, config: object, cancel: _NativeCancellation | None = None
     ) -> bytes: ...
+
+    def _parse_functional_retained_v2(
+        self, data: object, config: object, cancel: _NativeCancellation | None = None
+    ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
 
     def build_index(
         self, data: object, request: object, cancel: _NativeCancellation | None = None
@@ -139,6 +144,13 @@ class NativeValidation:
 class NativeAxiomPartition:
     postings: dict[type[AxiomNode], tuple[AxiomNode, ...]]
     canonical_sizes: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeRetainedFunctionalParseV2:
+    parsed: ParsedOntology
+    storage: object | None
+    phase_timings: tuple[tuple[str, float], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +293,88 @@ def parse_functional(
             lambda: extension.parse_document(request, config, cancel),
         )
     return _decode_parsed_functional(result, selected)
+
+
+def _parse_functional_retained_v2(
+    data: bytes,
+    *,
+    limits: ParseLimits | None = None,
+    allow_swrl: bool = False,
+    cancellation_token: CancellationToken | None = None,
+) -> _NativeRetainedFunctionalParseV2:
+    """Parse once and retain the parser-built structural arena when available."""
+
+    extension = require("parse-functional-v1")
+    hook = getattr(extension, "_parse_functional_retained_v2", None)
+    if not callable(hook):
+        return _NativeRetainedFunctionalParseV2(
+            parse_functional(
+                data,
+                limits=limits,
+                allow_swrl=allow_swrl,
+                cancellation_token=cancellation_token,
+            ),
+            None,
+            (),
+        )
+    selected = _coerce_limits(limits)
+    if not isinstance(data, bytes):
+        raise TypeError("native Functional Syntax source must be bytes")
+    if not isinstance(allow_swrl, bool):
+        raise TypeError("allow_swrl must be bool")
+    selected.enforce("max_source_bytes", len(data))
+    request = (
+        _PARSE_REQUEST.pack(
+            _PARSE_REQUEST_MAGIC,
+            1,
+            int(allow_swrl),
+            len(data),
+        )
+        + data
+    )
+    config = _encode_config(selected, cancellation_token, verify=False)
+    with _relay(extension, selected, cancellation_token) as cancel:
+        result = _call_parse_value(
+            extension,
+            lambda: hook(request, config, cancel),
+        )
+    if type(result) is not tuple or len(result) != 3:
+        raise BackendProtocolError(
+            "native retained parser returned invalid result framing",
+            code="NATIVE_RESULT_TYPE",
+        )
+    encoded, storage, phases = result
+    storage_type = getattr(extension, "_NativeParsedStructuralStorageV2", None)
+    if not isinstance(encoded, bytes) or not isinstance(storage_type, type):
+        raise BackendProtocolError(
+            "native retained parser returned invalid result members",
+            code="NATIVE_RESULT_TYPE",
+        )
+    if type(storage) is not storage_type:
+        raise BackendProtocolError(
+            "native retained parser returned an invalid storage owner",
+            code="NATIVE_RESULT_TYPE",
+        )
+    if (
+        type(phases) is not tuple
+        or len(phases) != 4
+        or not all(type(value) is int and value >= 0 for value in phases)
+    ):
+        raise BackendProtocolError(
+            "native retained parser returned invalid phase counters",
+            code="NATIVE_RESULT_TYPE",
+        )
+    names = (
+        "native_syntax_parse_seconds",
+        "native_result_encode_seconds",
+        "native_arena_construction_seconds",
+        "native_freeze_seconds",
+    )
+    return _NativeRetainedFunctionalParseV2(
+        _decode_parsed_functional(encoded, selected),
+        storage,
+        tuple((name, value / 1_000_000_000) for name, value in zip(names, phases, strict=True)),
+    )
 
 
 def partition_axioms(
@@ -657,7 +751,7 @@ def _call(extension: _Extension, operation: Callable[[], T]) -> T:
         raise BackendProtocolError(message, code=code) from error
 
 
-def _call_parse(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
+def _call_parse_value(extension: _Extension, operation: Callable[[], object]) -> object:
     try:
         result = operation()
     except (MemoryError, KeyboardInterrupt, SystemExit):
@@ -681,6 +775,11 @@ def _call_parse(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
         if code == "NATIVE_CAPABILITY_UNAVAILABLE":
             raise BackendUnavailableError(message, code=code) from error
         raise BackendProtocolError(message, code=code) from error
+    return result
+
+
+def _call_parse(extension: _Extension, operation: Callable[[], bytes]) -> bytes:
+    result = _call_parse_value(extension, operation)
     if not isinstance(result, bytes):
         raise BackendProtocolError(
             "native parser returned a non-bytes result",

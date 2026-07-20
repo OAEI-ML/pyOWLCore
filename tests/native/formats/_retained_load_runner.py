@@ -185,6 +185,8 @@ def main() -> None:
                 "mapped_exporter_type": type(exporters[0]).__name__ if exporters else None,
                 "origin_parity": origin_parity,
                 "package_file": pyowl_core.__file__,
+                "parser_bytes": before_native.parser_bytes,
+                "phase_timings": dict(selected.report.timings),
                 "reference_origin_rows": reference_origin_rows,
                 "retained_origin_rows": retained_origin_rows,
                 "selected_closed": selected.closed,

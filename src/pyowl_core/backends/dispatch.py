@@ -16,6 +16,7 @@ from pyowl_core.limits import ParseLimits
 from . import native
 
 if TYPE_CHECKING:
+    from pyowl_core.backends.native import _NativeRetainedFunctionalParseV2
     from pyowl_core.io.formats.common import ParsedOntology
 
 BackendName = Literal["python", "native"]
@@ -87,6 +88,23 @@ def parse_functional_native(
     """Execute the selected native parser without a reverse backend dependency."""
 
     return native.parse_functional(
+        data,
+        limits=limits,
+        allow_swrl=allow_swrl,
+        cancellation_token=cancellation_token,
+    )
+
+
+def _parse_functional_native_retained_v2(
+    data: bytes,
+    *,
+    limits: ParseLimits,
+    allow_swrl: bool,
+    cancellation_token: CancellationToken | None,
+) -> _NativeRetainedFunctionalParseV2:
+    """Execute the unadvertised parser-to-retained-arena construction seam."""
+
+    return native._parse_functional_retained_v2(
         data,
         limits=limits,
         allow_swrl=allow_swrl,

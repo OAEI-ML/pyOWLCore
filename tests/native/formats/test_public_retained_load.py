@@ -74,6 +74,7 @@ def test_public_forced_native_load_publishes_real_typed_owner_without_scalar_fal
     raw_owner = object.__getattribute__(handle, "_owner_v2")
     assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
     before = cast(Any, raw_owner)._publication_counters_v2()
+    assert before.parser_bytes == len(SOURCE)
     assert before.retained_origin_rows == 2 * sum(
         len(rows) for rows in reference.origin_index.entries.values()
     )
@@ -100,6 +101,54 @@ def test_public_forced_native_load_publishes_real_typed_owner_without_scalar_fal
     assert after.encoded_view_requests == before.encoded_view_requests + 1
     assert after.page_requests == before.page_requests
     assert after.rows_emitted == before.rows_emitted
+
+    for phase in (
+        "native_syntax_parse_seconds",
+        "native_result_encode_seconds",
+        "native_arena_construction_seconds",
+        "native_freeze_seconds",
+        "root_parse_seconds",
+    ):
+        assert selected.report.timings[phase] >= 0
+
+
+def test_parser_built_storage_bypasses_the_python_row_retention_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    def unexpected(*_arguments: object) -> object:
+        raise AssertionError("parser-built storage crossed the Python row retention bridge")
+
+    monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", unexpected)
+    selected = load_snapshot(SOURCE, options=_options(BackendPreference.NATIVE))
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    counters = cast(Any, raw_owner)._publication_counters_v2()
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert counters.parser_bytes == len(SOURCE)
+    assert counters.canonical_input_rows == 3
+
+
+def test_parser_built_storage_deduplicates_roots_but_preserves_origin_occurrences(
+    extension: NativeTestExtension,
+) -> None:
+    source = (
+        b"Ontology(<urn:retained-duplicate> "
+        b"Declaration(Class(<urn:retained-duplicate:C>)) "
+        b"Declaration(Class(<urn:retained-duplicate:C>)))"
+    )
+    reference = load_snapshot(source, options=_options(BackendPreference.PYTHON))
+    selected = load_snapshot(source, options=_options(BackendPreference.NATIVE))
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    counters = cast(Any, raw_owner)._publication_counters_v2()
+
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert counters.parser_bytes == len(source)
+    assert counters.canonical_input_rows == 1
+    assert sum(len(rows) for rows in selected.origin_index.entries.values()) == 2
 
 
 def test_retained_wire_reuses_columns_and_pages_origins_once(
@@ -259,20 +308,19 @@ def test_eligible_owner_construction_failure_propagates_without_fallback(
     extension: NativeTestExtension,
 ) -> None:
     calls = 0
-    retain = cast(Any, extension)._retain_structural_snapshot_v2
+    finalize = cast(Any, extension)._finalize_parsed_structural_snapshot_v2
 
     def fail(
-        _documents: object,
+        parsed: object,
         _origins: object,
         attestation: object,
-        config: object,
         cancel: object,
     ) -> object:
         nonlocal calls
         calls += 1
-        return retain((((b"",), (), ()),), (), attestation, config, cancel)
+        return finalize(parsed, (b"",), attestation, cancel)
 
-    monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", fail)
+    monkeypatch.setattr(cast(Any, extension), "_finalize_parsed_structural_snapshot_v2", fail)
     with pytest.raises(BackendProtocolError) as raised:
         load_snapshot(SOURCE, options=_options(BackendPreference.NATIVE))
     assert raised.value.code == "NATIVE_EXCEPTION"
@@ -308,6 +356,19 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["wire_python_parity"] is True
     assert observed["wire_differing_sections"] == []
     assert observed["origin_parity"] is True
+    assert observed["parser_bytes"] == len(
+        b"Ontology(<urn:retained-installed> "
+        b"Declaration(Class(<urn:retained-installed:C>)) "
+        b"Declaration(Class(<urn:retained-installed:D>)) "
+        b"SubClassOf(<urn:retained-installed:C> <urn:retained-installed:D>))"
+    )
+    assert {
+        "native_syntax_parse_seconds",
+        "native_result_encode_seconds",
+        "native_arena_construction_seconds",
+        "native_freeze_seconds",
+        "root_parse_seconds",
+    } <= observed["phase_timings"].keys()
     assert observed["retained_origin_rows"] == observed["reference_origin_rows"]
     assert observed["mapped_root_parity"] is True
     assert observed["mapped_fingerprint_parity"] is True

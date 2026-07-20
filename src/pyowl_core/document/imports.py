@@ -327,6 +327,17 @@ _DEFAULT_ACQUISITION_CACHE = AcquisitionCache()
 _DEFAULT_DOCUMENT_CACHE = ParsedDocumentCache()
 
 
+def _prepare_retained_native_root(options: LoadOptions) -> bool:
+    return (
+        options.backend is BackendPreference.NATIVE
+        and options.imports is ImportPolicy.IGNORE
+        and not options.preserve_source_map
+        and options.collect_provenance
+        and not options.validate_owl2_dl
+        and options.format in {None, DocumentFormat.FUNCTIONAL}
+    )
+
+
 class SnapshotLoader:
     """Reusable loader whose mutable state is limited to atomic content caches."""
 
@@ -373,8 +384,24 @@ class SnapshotLoader:
             )
         started = time.monotonic()
         _check_operation(cancellation_token, started, selected)
+        native_storage: object | None = None
+        native_phase_timings: tuple[tuple[str, float], ...] = ()
+        root_parse_started = time.monotonic()
         if isinstance(source, OntologyDocument):
             root = source
+            root_cache_hit = False
+        elif _prepare_retained_native_root(selected):
+            from pyowl_core.backends.python.parser import _parse_document_for_retained_load
+
+            parsed = _parse_document_for_retained_load(
+                source,
+                document_iri=document_iri,
+                options=selected,
+                cancellation_token=cancellation_token,
+            )
+            root = parsed.document
+            native_storage = parsed.native_storage
+            native_phase_timings = parsed.phase_timings
             root_cache_hit = False
         else:
             from pyowl_core.backends.python import parse_document
@@ -386,6 +413,7 @@ class SnapshotLoader:
                 cancellation_token=cancellation_token,
             )
             root_cache_hit = False
+        root_parse_seconds = time.monotonic() - root_parse_started
         root_node = _node(root, DocumentStatus.ROOT)
         nodes: dict[str, _Node] = {root_node.key: root_node}
         source_identity: dict[tuple[bytes, bytes], _Node] = {_source_identity(root): root_node}
@@ -509,6 +537,10 @@ class SnapshotLoader:
             nodes[record.document_key].document for record in manifest.documents
         )
         elapsed = time.monotonic() - started
+        timings = {"load_seconds": elapsed}
+        if native_storage is not None:
+            timings["root_parse_seconds"] = root_parse_seconds
+            timings.update(native_phase_timings)
         snapshot = OntologySnapshot(
             root,
             ordered_documents,
@@ -516,7 +548,7 @@ class SnapshotLoader:
             root_node.key,
             selected,
             diagnostics=tuple(diagnostics),
-            timings={"load_seconds": elapsed},
+            timings=timings,
             resolution_attempts=counters["resolver_attempts"],
             acquisition_cache_hits=counters["acquisition_cache_hits"],
             document_cache_hits=counters["document_cache_hits"],
@@ -527,6 +559,7 @@ class SnapshotLoader:
             snapshot = retain_forced_native_snapshot_v2(
                 snapshot,
                 cancellation_token=cancellation_token,
+                parsed_native_storage=native_storage,
             )
         for diagnostic in diagnostics:
             warnings.warn(diagnostic.message, UnresolvedImportWarning, stacklevel=3)

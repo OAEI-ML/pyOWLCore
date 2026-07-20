@@ -16,23 +16,138 @@ use pyo3::buffer::PyBuffer;
 #[cfg(feature = "test-hooks")]
 use pyo3::types::PyString;
 
-#[cfg(feature = "test-hooks")]
 use crate::cancel::Guard;
 use crate::error::NativeError;
 #[cfg(feature = "test-hooks")]
 use crate::error::NativeResult;
 use crate::limits::{LimitKey, Limits};
-use crate::publication::{NativeSnapshotHandle, TypedFacadeBuilderV2};
-#[cfg(feature = "test-hooks")]
+use crate::publication::{NativeSnapshotHandle, TypedFacadeBuilderV2, TypedFacadeStorageV2};
 use crate::session::Session;
 
 pub(super) const FEATURES: &[&str] = &[];
 
+#[pyclass(
+    module = "pyowl_core._native",
+    name = "_NativeParsedStructuralStorageV2",
+    skip_from_py_object
+)]
+struct NativeParsedStructuralStorageV2 {
+    storage: Option<TypedFacadeStorageV2>,
+    limits: Limits,
+    parser_bytes: u64,
+}
+
+type RetainedParseBindingResult = (
+    Py<PyBytes>,
+    NativeParsedStructuralStorageV2,
+    (u64, u64, u64, u64),
+);
+
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
+    _module.add_class::<NativeParsedStructuralStorageV2>()?;
     _module.add_function(wrap_pyfunction!(_retain_structural_snapshot_v2, _module)?)?;
+    _module.add_function(wrap_pyfunction!(_parse_functional_retained_v2, _module)?)?;
+    _module.add_function(wrap_pyfunction!(
+        _finalize_parsed_structural_snapshot_v2,
+        _module
+    )?)?;
     #[cfg(feature = "test-hooks")]
     _module.add_function(wrap_pyfunction!(_ingest_rdfxml_slice_v1, _module)?)?;
     Ok(())
+}
+
+/// Parse one Functional document and construct its typed structural arena in
+/// the same detached native operation.
+///
+/// The result framing remains byte-for-byte identical to `parse_document` so
+/// the existing complete Python contract decoder can validate parity while
+/// WP16 incrementally removes that transitional model reconstruction.  The
+/// opaque storage state never advertises a capability and can only be consumed
+/// once by the final attested publication boundary below.
+#[pyfunction]
+#[pyo3(signature = (source, config, cancel=None))]
+fn _parse_functional_retained_v2<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<RetainedParseBindingResult> {
+    let limits = crate::limits_from_python(config)?;
+    let owned = crate::owned_source_request(py, source, &limits)?;
+    let input_size = owned.len();
+    let cancellation = crate::cancellation_or_default(cancel);
+    let (outcome, parser_bytes) = crate::run_detached(py, move |interrupt| {
+        let mut guard = Guard::with_interrupt(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+            interrupt.clone(),
+        );
+        let request = crate::source::SourceRequest::decode(&owned, &limits)?;
+        let parser_bytes = u64::try_from(request.source.len())
+            .map_err(|_| NativeError::limit("native parser source exceeds u64"))?;
+        let mut session = Session::new(&mut guard, &limits, input_size)?;
+        let outcome = crate::parse::parse_retained(
+            request,
+            &mut session,
+            limits,
+            cancellation,
+            Some(interrupt),
+            input_size,
+        )?;
+        Ok((outcome, parser_bytes))
+    })?;
+    crate::contain(|| limits.check_output_size(input_size, outcome.encoded.len()))
+        .map_err(crate::python_error)?;
+    let phases = (
+        outcome.phases.syntax_parse_ns,
+        outcome.phases.result_encode_ns,
+        outcome.phases.arena_construction_ns,
+        outcome.phases.freeze_ns,
+    );
+    let encoded = PyBytes::new_with(py, outcome.encoded.len(), |buffer| {
+        buffer.copy_from_slice(&outcome.encoded);
+        Ok(())
+    })?
+    .unbind();
+    Ok((
+        encoded,
+        NativeParsedStructuralStorageV2 {
+            storage: Some(outcome.storage),
+            limits,
+            parser_bytes,
+        },
+        phases,
+    ))
+}
+
+/// Attach immutable metadata/origin attestations to parser-built storage.
+#[pyfunction]
+#[pyo3(signature = (parsed, origins, attestation, cancel=None))]
+fn _finalize_parsed_structural_snapshot_v2<'py>(
+    py: Python<'py>,
+    mut parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
+    origins: &Bound<'py, PyAny>,
+    attestation: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<NativeSnapshotHandle> {
+    let cancellation = crate::cancellation_or_default(cancel);
+    let limits = parsed.limits;
+    let parser_bytes = parsed.parser_bytes;
+    let storage = parsed.storage.take().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "native parsed structural storage was already consumed",
+        )
+    })?;
+    let mut external_bytes = 0_usize;
+    let retained_origins =
+        owned_origin_rows(py, origins, &limits, &cancellation, &mut external_bytes)?;
+    crate::publication::typed_structural_handle_v2(
+        attestation,
+        storage,
+        retained_origins,
+        parser_bytes,
+    )
 }
 
 /// Freeze one already-validated document into the real typed V2 owner.
@@ -70,7 +185,7 @@ fn _retain_structural_snapshot_v2<'py>(
         }
         Ok((builder.freeze(&[vec![0]], &[0])?, owned_origins))
     })?;
-    crate::publication::typed_structural_handle_v2(attestation, storage, retained_origins)
+    crate::publication::typed_structural_handle_v2(attestation, storage, retained_origins, 0)
 }
 
 type OwnedStructuralDocument = [Vec<Vec<u8>>; 3];

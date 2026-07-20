@@ -5,12 +5,13 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from collections import defaultdict, deque
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.config import BackendPreference, DocumentFormat, LoadOptions
 from pyowl_core.document import OntologyDocument
-from pyowl_core.document.document import freeze_document_anonymous
+from pyowl_core.document.document import freeze_document_anonymous, provisional_label
 from pyowl_core.document.provenance import (
     DocumentProvenance,
     OriginIndexBuilder,
@@ -28,9 +29,30 @@ from pyowl_core.io.formats.owlxml import parse_owlxml
 from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.io.formats.turtle import TurtleLexer, parse_turtle
 from pyowl_core.io.source import DocumentSource, acquire_source
-from pyowl_core.model import IRI, Literal, StructuralNode, structural_digest, walk
+from pyowl_core.model import (
+    IRI,
+    AnonymousIndividual,
+    Literal,
+    StructuralNode,
+    structural_digest,
+    walk,
+)
 
 _NATIVE_AUTO_MIN_SOURCE_BYTES = 256 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedPayloadResult:
+    ontology: ParsedOntology
+    native_storage: object | None = None
+    phase_timings: tuple[tuple[str, float], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedDocumentResult:
+    document: OntologyDocument
+    native_storage: object | None = None
+    phase_timings: tuple[tuple[str, float], ...] = ()
 
 
 class PythonParser:
@@ -50,6 +72,31 @@ class PythonParser:
         allow_swrl: bool = False,
         cancellation_token: CancellationToken | None = None,
     ) -> OntologyDocument:
+        return self._parse(
+            source,
+            format=format,
+            document_iri=document_iri,
+            options=options,
+            media_type=media_type,
+            allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+            allow_swrl=allow_swrl,
+            cancellation_token=cancellation_token,
+            retain_native_storage=False,
+        ).document
+
+    def _parse(
+        self,
+        source: DocumentSource,
+        *,
+        format: DocumentFormat | str | None = None,
+        document_iri: IRI | str | None = None,
+        options: LoadOptions | None = None,
+        media_type: str | None = None,
+        allow_partial_rdf_mapping: bool = False,
+        allow_swrl: bool = False,
+        cancellation_token: CancellationToken | None = None,
+        retain_native_storage: bool,
+    ) -> _ParsedDocumentResult:
         selected_options = LoadOptions() if options is None else options
         if not isinstance(selected_options, LoadOptions):
             raise TypeError("options must be LoadOptions or None")
@@ -94,7 +141,7 @@ class PythonParser:
                 capability=f"parse-{detection.format.value}-v1",
                 operation=f"{detection.format.value} document parse",
             ).backend
-        parsed = _parse_payload(
+        parsed_result = _parse_payload(
             payload.data,
             detection.format,
             limits=selected_options.limits,
@@ -103,7 +150,9 @@ class PythonParser:
             allow_partial_rdf_mapping=allow_partial_rdf_mapping,
             allow_swrl=allow_swrl,
             backend=selected_backend,
+            retain_native_storage=retain_native_storage,
         )
+        parsed = parsed_result.ontology
         imports, annotations, axioms, extensions = freeze_document_anonymous(
             parsed.ontology_id,
             parsed.imports,
@@ -189,7 +238,7 @@ class PythonParser:
             frozen, digest = matcher.match(original)
             if frozen is not None:
                 origin_builder.add_digest(digest, occurrence, span)
-        return OntologyDocument(
+        document = OntologyDocument(
             parsed.ontology_id,
             effective_iri,
             imports,
@@ -200,6 +249,14 @@ class PythonParser:
             source_map,
             origin_builder.freeze(),
             parsed.rdf_mapping_report,
+        )
+        native_storage = parsed_result.native_storage
+        if native_storage is not None and _has_provisional_anonymous(parsed):
+            native_storage = None
+        return _ParsedDocumentResult(
+            document,
+            native_storage,
+            parsed_result.phase_timings if native_storage is not None else (),
         )
 
 
@@ -219,6 +276,24 @@ def parse_document(
         document_iri=document_iri,
         options=options,
         cancellation_token=cancellation_token,
+    )
+
+
+def _parse_document_for_retained_load(
+    source: DocumentSource,
+    *,
+    document_iri: IRI | str | None,
+    options: LoadOptions,
+    cancellation_token: CancellationToken | None,
+) -> _ParsedDocumentResult:
+    """Parse a root while retaining an unadvertised native structural owner."""
+
+    return PythonParser()._parse(
+        source,
+        document_iri=document_iri,
+        options=options,
+        cancellation_token=cancellation_token,
+        retain_native_storage=True,
     )
 
 
@@ -289,7 +364,8 @@ def _parse_payload(
     allow_partial_rdf_mapping: bool,
     allow_swrl: bool,
     backend: str,
-) -> ParsedOntology:
+    retain_native_storage: bool,
+) -> _ParsedPayloadResult:
     from pyowl_core.limits import ParseLimits
 
     if not isinstance(limits, ParseLimits):
@@ -297,37 +373,63 @@ def _parse_payload(
     try:
         if format is DocumentFormat.FUNCTIONAL:
             if backend == "native":
+                if retain_native_storage:
+                    from pyowl_core.backends.dispatch import (
+                        _parse_functional_native_retained_v2,
+                    )
+
+                    retained = _parse_functional_native_retained_v2(
+                        data,
+                        limits=limits,
+                        cancellation_token=cancellation_token,
+                        allow_swrl=allow_swrl,
+                    )
+                    return _ParsedPayloadResult(
+                        retained.parsed,
+                        retained.storage,
+                        retained.phase_timings,
+                    )
                 from pyowl_core.backends.dispatch import parse_functional_native
 
-                return parse_functional_native(
+                return _ParsedPayloadResult(
+                    parse_functional_native(
+                        data,
+                        limits=limits,
+                        cancellation_token=cancellation_token,
+                        allow_swrl=allow_swrl,
+                    )
+                )
+            return _ParsedPayloadResult(
+                parse_functional(
                     data,
                     limits=limits,
                     cancellation_token=cancellation_token,
                     allow_swrl=allow_swrl,
                 )
-            return parse_functional(
-                data,
-                limits=limits,
-                cancellation_token=cancellation_token,
-                allow_swrl=allow_swrl,
             )
         if format is DocumentFormat.OWL_XML:
-            return parse_owlxml(data, limits=limits, cancellation_token=cancellation_token)
+            return _ParsedPayloadResult(
+                parse_owlxml(data, limits=limits, cancellation_token=cancellation_token)
+            )
         if format is DocumentFormat.TURTLE:
-            return parse_turtle(
-                data,
-                limits=limits,
-                document_iri=document_iri,
-                cancellation_token=cancellation_token,
-                allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+            return _ParsedPayloadResult(
+                parse_turtle(
+                    data,
+                    limits=limits,
+                    document_iri=document_iri,
+                    cancellation_token=cancellation_token,
+                    allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+                )
             )
         if format is DocumentFormat.RDF_XML:
-            return parse_rdfxml(
-                data,
-                limits=limits,
-                document_iri=document_iri,
-                cancellation_token=cancellation_token,
-                allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+            return _ParsedPayloadResult(
+                parse_rdfxml(
+                    data,
+                    limits=limits,
+                    document_iri=document_iri,
+                    cancellation_token=cancellation_token,
+                    allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+                )
             )
     except PyOWLCoreError:
         raise
@@ -339,6 +441,14 @@ def _parse_payload(
             code="ONTOLOGY_STRUCTURE_INVALID",
         ) from error
     raise AssertionError((format, backend))
+
+
+def _has_provisional_anonymous(parsed: ParsedOntology) -> bool:
+    for root in (*parsed.annotations, *parsed.axioms, *parsed.extensions):
+        for value in walk(root):
+            if isinstance(value, AnonymousIndividual) and provisional_label(value) is not None:
+                return True
+    return False
 
 
 def _coerce_iri(value: IRI | str | None) -> IRI | None:
