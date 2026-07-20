@@ -200,10 +200,26 @@ def test_encoded_common_contract_matches_scalar_without_model_callbacks(
     assert encoded.evidence.structural_nodes_materialized == 0
 
 
-def test_encoded_common_contract_fails_closed_for_annotated_logical_roots() -> None:
+def test_encoded_common_contract_requires_one_retained_exporter_by_default() -> None:
+    corpus = load_manifest().by_id("generated-tiny-functional")
+    source = generated_bytes(corpus)
+    options = default_options(corpus.format)
+
+    with pytest.raises(EncodedContractUnavailable, match="retained immutable"):
+        build_encoded_core_common_contract(
+            load_snapshot(source, options=options),
+            corpus_id=corpus.id,
+            source_sha256=corpus.sha256,
+            options_sha256=options_digest(options),
+        )
+
+
+def test_encoded_common_contract_normalizes_and_deduplicates_annotated_logical_roots() -> None:
     source = (
         b"Ontology(<urn:annotated-contract> "
-        b"SubClassOf(Annotation(<urn:note> <urn:evidence>) <urn:A> <urn:B>))"
+        b"SubClassOf(<urn:A> <urn:B>) "
+        b"SubClassOf(Annotation(<urn:note> <urn:evidence-1>) <urn:A> <urn:B>) "
+        b"SubClassOf(Annotation(<urn:note> <urn:evidence-2>) <urn:A> <urn:B>))"
     )
     options = LoadOptions(
         format=DocumentFormat.FUNCTIONAL,
@@ -211,15 +227,23 @@ def test_encoded_common_contract_fails_closed_for_annotated_logical_roots() -> N
         backend=BackendPreference.PYTHON,
     )
     snapshot = load_snapshot(source, options=options)
+    reference = build_core_common_contract(
+        snapshot,
+        corpus_id="annotated-logical",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        options_sha256=options_digest(options),
+    )
 
-    with pytest.raises(EncodedContractUnavailable, match="annotated roots"):
-        build_encoded_core_common_contract(
-            snapshot,
-            corpus_id="annotated-logical",
-            source_sha256=hashlib.sha256(source).hexdigest(),
-            options_sha256=options_digest(options),
-            require_native_direct=False,
-        )
+    encoded = build_encoded_core_common_contract(
+        snapshot,
+        corpus_id="annotated-logical",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        options_sha256=options_digest(options),
+        require_native_direct=False,
+    )
+
+    assert encoded.contract == reference
+    assert encoded.contract["ledger"]["inventories"]["axioms"]["count"] == 3
 
 
 def test_retained_native_encoded_contract_matches_scalar_without_model_callbacks(
@@ -232,7 +256,9 @@ def test_retained_native_encoded_contract_matches_scalar_without_model_callbacks
         b"Ontology(<urn:native-contract> "
         b"Declaration(Class(<urn:native-contract:A>)) "
         b"Declaration(Class(<urn:native-contract:B>)) "
-        b"SubClassOf(<urn:native-contract:A> <urn:native-contract:B>))"
+        b"SubClassOf(<urn:native-contract:A> <urn:native-contract:B>) "
+        b"SubClassOf(Annotation(<urn:note> <urn:evidence>) "
+        b"<urn:native-contract:A> <urn:native-contract:B>))"
     )
     python_options = LoadOptions(
         format=DocumentFormat.FUNCTIONAL,

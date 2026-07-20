@@ -288,27 +288,19 @@ class EncodedStructuralTraversal:
         return sink.finish()
 
     def logical_preimage(self) -> DigestResult:
-        logical_count = 0
-        for node_id in self._roots(_ROOT_AXIOM):
-            spec = _SPECS_BY_TAG[self._tag(node_id)]
-            if spec.category == "logical_axiom":
-                self._require_empty_top_annotations(node_id)
-                logical_count += 1
-        extension_count = self._root_count(_ROOT_EXTENSION)
-        for node_id in self._roots(_ROOT_EXTENSION):
-            self._require_empty_top_annotations(node_id)
+        logical_count = sum(1 for _node_id in self._normalized_logical_roots())
+        extension_count = sum(1 for _node_id in self._normalized_extension_roots())
 
         sink = _DigestSink()
         sink.update(b"pyowl-core:snapshot-logical:v1\x00")
         sink.update(b"datatype-policy:owl2-v1\x00")
         sink.update(encode_varint(logical_count))
-        for node_id in self._roots(_ROOT_AXIOM):
-            if _SPECS_BY_TAG[self._tag(node_id)].category == "logical_axiom":
-                self._write_framed_node(sink, node_id)
+        for node_id in self._normalized_logical_roots():
+            self._write_framed_normalized_root(sink, node_id)
         sink.update(encode_varint(extension_count))
-        for node_id in self._roots(_ROOT_EXTENSION):
+        for node_id in self._normalized_extension_roots():
             sink.update(b"E")
-            self._write_framed_node(sink, node_id)
+            self._write_framed_normalized_root(sink, node_id)
         return sink.finish()
 
     def signature_preimage(self) -> DigestResult:
@@ -452,6 +444,24 @@ class EncodedStructuralTraversal:
             if self._tag(node_id) == 2:
                 self._write_framed_node(sink, node_id)
 
+    def _normalized_logical_roots(self) -> Iterator[int]:
+        previous: int | None = None
+        for node_id in self._roots(_ROOT_AXIOM):
+            if _SPECS_BY_TAG[self._tag(node_id)].category != "logical_axiom":
+                continue
+            self._annotations_field(node_id)
+            if previous is None or not self._same_without_top_annotations(previous, node_id):
+                yield node_id
+                previous = node_id
+
+    def _normalized_extension_roots(self) -> Iterator[int]:
+        previous: int | None = None
+        for node_id in self._roots(_ROOT_EXTENSION):
+            self._annotations_field(node_id)
+            if previous is None or not self._same_without_top_annotations(previous, node_id):
+                yield node_id
+                previous = node_id
+
     def _root_count(self, root_kind: int) -> int:
         return sum(self._root_kinds[index] == root_kind for index in range(self.root_count))
 
@@ -576,7 +586,7 @@ class EncodedStructuralTraversal:
             else:
                 self._write_component(sink, item_kind, item_value, item_length)
 
-    def _require_empty_top_annotations(self, node_id: int) -> None:
+    def _annotations_field(self, node_id: int) -> int:
         spec = _SPECS_BY_TAG[self._tag(node_id)]
         if not spec.fields or spec.fields[-1] != "annotations":
             raise EncodedContractError("logical root has no annotations field in schema v1")
@@ -584,10 +594,100 @@ class EncodedStructuralTraversal:
         field_index = end - 1
         if self._field_kinds[field_index] != _SET:
             raise EncodedContractError("logical root annotations field is not a canonical set")
-        if self._field_lengths[field_index] != 0:
-            raise EncodedContractUnavailable(
-                "bulk logical fingerprint normalization for annotated roots is not implemented"
+        return field_index
+
+    def _same_without_top_annotations(self, first: int, second: int) -> bool:
+        if self._tag(first) != self._tag(second):
+            return False
+        first_start, first_end = self._field_range(first)
+        second_start, second_end = self._field_range(second)
+        if first_end - first_start != second_end - second_start:
+            raise EncodedContractError("equal-tag encoded nodes have different field counts")
+        for first_index, second_index in zip(
+            range(first_start, first_end - 1),
+            range(second_start, second_end - 1),
+            strict=True,
+        ):
+            if not self._same_component(first_index, second_index):
+                return False
+        return True
+
+    def _same_component(self, first_index: int, second_index: int) -> bool:
+        return self._same_component_values(
+            self._field_kinds[first_index],
+            self._field_values[first_index],
+            self._field_lengths[first_index],
+            self._field_kinds[second_index],
+            self._field_values[second_index],
+            self._field_lengths[second_index],
+        )
+
+    def _same_component_values(
+        self,
+        first_kind: int,
+        first_value: int,
+        first_length: int,
+        second_kind: int,
+        second_value: int,
+        second_length: int,
+    ) -> bool:
+        if first_kind != second_kind or first_length != second_length:
+            return False
+        if first_kind == _NONE:
+            return True
+        if first_kind == _NODE:
+            return first_value == second_value
+        if first_kind in {_TEXT, _BYTES, _INTEGER, _ENUM}:
+            return self._scalar_range(first_value, first_length) == self._scalar_range(
+                second_value, second_length
             )
+        if first_kind not in {_SET, _SEQUENCE}:
+            raise EncodedContractError("encoded component kind is outside schema v1")
+        for offset in range(first_length):
+            first_index = first_value + offset
+            second_index = second_value + offset
+            if first_index >= len(self._item_kinds) or second_index >= len(self._item_kinds):
+                raise EncodedContractError("encoded item range exceeds its columns")
+            if not self._same_component_values(
+                self._item_kinds[first_index],
+                self._item_values[first_index],
+                self._item_lengths[first_index],
+                self._item_kinds[second_index],
+                self._item_values[second_index],
+                self._item_lengths[second_index],
+            ):
+                return False
+        return True
+
+    def _normalized_node_length(self, node_id: int) -> int:
+        annotations_index = self._annotations_field(node_id)
+        start, _end = self._field_range(node_id)
+        return (
+            len(encode_varint(self._tag(node_id)))
+            + sum(
+                self._component_length(
+                    self._field_kinds[index],
+                    self._field_values[index],
+                    self._field_lengths[index],
+                )
+                for index in range(start, annotations_index)
+            )
+            + 2
+        )
+
+    def _write_framed_normalized_root(self, sink: _Sink, node_id: int) -> None:
+        sink.update(encode_varint(self._normalized_node_length(node_id)))
+        annotations_index = self._annotations_field(node_id)
+        start, _end = self._field_range(node_id)
+        sink.update(encode_varint(self._tag(node_id)))
+        for index in range(start, annotations_index):
+            self._write_component(
+                sink,
+                self._field_kinds[index],
+                self._field_values[index],
+                self._field_lengths[index],
+            )
+        sink.update(bytes((_SET, 0)))
 
 
 def combine_traversal_evidence(
