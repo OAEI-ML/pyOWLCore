@@ -2034,7 +2034,20 @@ fn class_expression_axiom<'view, 'graph>(
                 return Ok(None);
             }
             if triple.predicate == RDFS_RANGE && has_kind(kinds, property, "data_property") {
-                return Ok(None);
+                let DecodedDataRange {
+                    node: data_range,
+                    consumed: range_consumed,
+                } = expressions.decode_data_term(object.as_term(), session)?;
+                consume_collection_indexes(range_consumed, consumed, session)?;
+                return Ok(Some(build_node(
+                    94,
+                    [
+                        Field::Node(named_entity("data_property", property, session)?),
+                        Field::Node(data_range),
+                        Field::Set(Vec::new()),
+                    ],
+                    session,
+                )?));
             }
             let (tag, property_kind) = if has_kind(kinds, property, "data_property") {
                 (93, "data_property")
@@ -4807,6 +4820,51 @@ mod tests {
         assert_eq!(
             mapped(literal.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+    }
+
+    #[test]
+    fn structural_data_property_ranges_map_exactly() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><owl:DatatypeProperty rdf:about=\"urn:d\"><rdfs:range><rdfs:Datatype><owl:datatypeComplementOf rdf:resource=\"urn:Base\"/></rdfs:Datatype></rdfs:range></owl:DatatypeProperty></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("structural data range");
+        let datatype = |value: &str| {
+            entity("datatype", iri(value.to_owned()).expect("datatype IRI")).expect("datatype")
+        };
+        let complement =
+            Node::build(23, vec![Field::Node(datatype("urn:Base"))]).expect("data complement");
+        let expected = Node::build(
+            94,
+            vec![
+                Field::Node(
+                    entity(
+                        "data_property",
+                        iri("urn:d".to_owned()).expect("property IRI"),
+                    )
+                    .expect("data property"),
+                ),
+                Field::Node(complement),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("data property range");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let literal = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><owl:DatatypeProperty rdf:about=\"urn:d\"><rdfs:range>not-a-range</rdfs:range></owl:DatatypeProperty></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(literal.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
         );
     }
 
