@@ -40,6 +40,8 @@ const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
 const OWL_EQUIVALENT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#equivalentProperty";
 const OWL_PROPERTY_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#propertyDisjointWith";
 const OWL_INVERSE_OF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
+const OWL_SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
+const OWL_DIFFERENT_FROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1258,6 +1260,13 @@ fn map_graph(
         &mut axioms,
         session,
     )?;
+    map_same_individual_components(
+        &list_graph,
+        &mut consumed,
+        &mut expressions,
+        &mut axioms,
+        session,
+    )?;
     for (index, triple) in triples.iter().enumerate() {
         if consumed[index] {
             continue;
@@ -1384,6 +1393,36 @@ fn has_kind(kinds: &[KindRecord<'_>], value: &str, kind: &str) -> bool {
 enum ClassTerm<'graph> {
     Iri(&'graph str),
     Blank(&'graph str),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IndividualTerm<'graph> {
+    Iri(&'graph str),
+    Blank(&'graph str),
+}
+
+impl<'graph> IndividualTerm<'graph> {
+    fn from_resource(value: ListResource<'graph>) -> Self {
+        match value {
+            ListResource::Iri(value) => Self::Iri(value),
+            ListResource::Blank(value) => Self::Blank(value),
+        }
+    }
+
+    fn from_term(value: ListTerm<'graph>) -> Option<Self> {
+        match value {
+            ListTerm::Iri(value) => Some(Self::Iri(value)),
+            ListTerm::Blank(value) => Some(Self::Blank(value)),
+            ListTerm::Literal(_) => None,
+        }
+    }
+
+    fn as_term(self) -> ListTerm<'graph> {
+        match self {
+            Self::Iri(value) => ListTerm::Iri(value),
+            Self::Blank(value) => ListTerm::Blank(value),
+        }
+    }
 }
 
 impl<'graph> ClassTerm<'graph> {
@@ -1738,6 +1777,87 @@ fn equivalent_property_member_supported(value: &str, kinds: &[KindRecord<'_>]) -
     !has_kind(kinds, value, "annotation_property")
 }
 
+fn map_same_individual_components<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for start in 0..triples.len() {
+        if consumed[start] {
+            continue;
+        }
+        let Some((left, right)) = individual_edge(&triples[start], OWL_SAME_AS) else {
+            continue;
+        };
+        let mut members = Vec::new();
+        add_individual_member(&mut members, left, session)?;
+        add_individual_member(&mut members, right, session)?;
+        consumed[start] = true;
+        loop {
+            let mut changed = false;
+            for (index, triple) in triples.iter().enumerate() {
+                session.step(1)?;
+                if consumed[index] {
+                    continue;
+                }
+                let Some((edge_left, edge_right)) = individual_edge(triple, OWL_SAME_AS) else {
+                    continue;
+                };
+                if members.contains(&edge_left) || members.contains(&edge_right) {
+                    add_individual_member(&mut members, edge_left, session)?;
+                    add_individual_member(&mut members, edge_right, session)?;
+                    consumed[index] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut nodes = reserved_vec(members.len(), session)?;
+        for member in members {
+            nodes.push(expressions.decode_individual(member.as_term(), session)?);
+        }
+        session.finish()?;
+        let nodes = canonical_set(nodes, 2, None)?;
+        let axiom = build_node(110, [Field::Set(nodes), Field::Set(Vec::new())], session)?;
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
+fn individual_edge<'graph>(
+    triple: &ListTriple<'graph>,
+    predicate: &str,
+) -> Option<(IndividualTerm<'graph>, IndividualTerm<'graph>)> {
+    if triple.predicate != predicate {
+        return None;
+    }
+    Some((
+        IndividualTerm::from_resource(triple.subject),
+        IndividualTerm::from_term(triple.object)?,
+    ))
+}
+
+fn add_individual_member<'graph>(
+    members: &mut Vec<IndividualTerm<'graph>>,
+    value: IndividualTerm<'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session
+        .step(u64::try_from(members.len()).map_err(|_| {
+            NativeError::limit("native RDF individual component work exceeds u64")
+        })?)?;
+    if !members.contains(&value) {
+        reserve_vec_item(members, session)?;
+        members.push(value);
+    }
+    Ok(())
+}
+
 fn named_edge<'a>(triple: &'a Triple, predicate: &str) -> Option<(&'a str, &'a str)> {
     if triple.predicate != predicate {
         return None;
@@ -1771,6 +1891,26 @@ fn assertion_axiom<'view, 'graph>(
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
     session: &mut Session<'_>,
 ) -> NativeResult<Option<Node>> {
+    if triple.predicate == OWL_DIFFERENT_FROM {
+        let object = match &triple.object {
+            Term::Iri(value) => ListTerm::Iri(value),
+            Term::Blank(value) => ListTerm::Blank(value),
+            Term::Literal { .. } => return Ok(None),
+        };
+        let subject = match &triple.subject {
+            Resource::Iri(value) => ListTerm::Iri(value),
+            Resource::Blank(value) => ListTerm::Blank(value),
+        };
+        let mut individuals = reserved_vec(2, session)?;
+        individuals.push(expressions.decode_individual(subject, session)?);
+        individuals.push(expressions.decode_individual(object, session)?);
+        let individuals = canonical_set(individuals, 2, None)?;
+        return Ok(Some(build_node(
+            111,
+            [Field::Set(individuals), Field::Set(Vec::new())],
+            session,
+        )?));
+    }
     if is_annotation_property(&triple.predicate, kinds)
         || is_assertion_structural_predicate(&triple.predicate)
     {
@@ -2923,6 +3063,25 @@ mod tests {
         entity("class", iri(value.to_owned()).expect("IRI node")).expect("class node")
     }
 
+    fn named_individual_node(value: &str) -> Node {
+        entity(
+            "named_individual",
+            iri(value.to_owned()).expect("individual IRI"),
+        )
+        .expect("named individual")
+    }
+
+    fn individual_set_axiom(tag: u64, individuals: Vec<Node>) -> Node {
+        Node::build(
+            tag,
+            vec![
+                Field::Set(canonical_set(individuals, 2, None).expect("individual set")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("individual axiom")
+    }
+
     fn boolean_node(tag: u64, values: &[&str]) -> Node {
         let operands = values.iter().map(|value| class_node(value)).collect();
         Node::build(
@@ -3799,6 +3958,60 @@ mod tests {
                 .code,
             "NATIVE_RDF_MAPPING_INCOMPLETE",
         );
+    }
+
+    #[test]
+    fn same_and_different_individual_axioms_map_exactly() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:NamedIndividual rdf:about=\"urn:a\"><owl:sameAs rdf:resource=\"urn:b\"/><owl:differentFrom rdf:nodeID=\"other\"/></owl:NamedIndividual><rdf:Description rdf:about=\"urn:b\"><owl:sameAs rdf:nodeID=\"anonymous\"/></rdf:Description><rdf:Description rdf:about=\"urn:x\"><owl:sameAs rdf:resource=\"urn:y\"/></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("individual axioms");
+        let same_connected = individual_set_axiom(
+            110,
+            vec![
+                named_individual_node("urn:a"),
+                named_individual_node("urn:b"),
+                crate::canonical::anonymous("anonymous").expect("anonymous individual"),
+            ],
+        );
+        let same_pair = individual_set_axiom(
+            110,
+            vec![
+                named_individual_node("urn:x"),
+                named_individual_node("urn:y"),
+            ],
+        );
+        let different = individual_set_axiom(
+            111,
+            vec![
+                named_individual_node("urn:a"),
+                crate::canonical::anonymous("other").expect("anonymous individual"),
+            ],
+        );
+        for expected in [same_connected, same_pair, different] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        for predicate in ["sameAs", "differentFrom"] {
+            let literal = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:about=\"urn:a\"><owl:{predicate}>literal</owl:{predicate}></rdf:Description></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(literal.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            );
+            let reflexive = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:about=\"urn:a\"><owl:{predicate} rdf:resource=\"urn:a\"/></rdf:Description></rdf:RDF>"
+            );
+            assert!(mapped(reflexive.as_bytes(), None).is_err());
+        }
     }
 
     #[test]
