@@ -49,6 +49,12 @@ pub(crate) struct DecodedClassExpression {
     pub(crate) consumed: Vec<usize>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DecodedIndividualCollection {
+    pub(crate) individuals: Vec<Node>,
+    pub(crate) consumed: Vec<usize>,
+}
+
 /// Retains recursion and RDF-list ownership state across every expression
 /// decoded from one source graph.
 pub(crate) struct RdfClassExpressionDecoder<'graph, 'data> {
@@ -1030,6 +1036,26 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             }
             RdfTerm::Literal(_) => Err(unsupported("native RDF individual must be a resource")),
         }
+    }
+
+    pub(crate) fn decode_individual_collection(
+        &mut self,
+        head: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<DecodedIndividualCollection> {
+        let decoded = self.lists.decode(head, session)?;
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        let mut individuals = reserved_vec(decoded.items.len(), session)?;
+        for item in decoded.items {
+            individuals.push(self.decode_individual(item, session)?);
+        }
+        session.finish()?;
+        Ok(DecodedIndividualCollection {
+            individuals,
+            consumed: decoded.consumed,
+        })
     }
 
     pub(crate) fn decode_literal(

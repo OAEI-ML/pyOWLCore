@@ -11,7 +11,9 @@ use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
 use crate::session::Session;
 
-use super::rdf_class_expressions::{DecodedClassExpression, RdfClassExpressionDecoder};
+use super::rdf_class_expressions::{
+    DecodedClassExpression, DecodedIndividualCollection, RdfClassExpressionDecoder,
+};
 use super::rdf_lists::{RdfResource as ListResource, RdfTerm as ListTerm, RdfTriple as ListTriple};
 use super::{CanonicalDocument, MappingEvidence};
 
@@ -42,6 +44,8 @@ const OWL_PROPERTY_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#property
 const OWL_INVERSE_OF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
 const OWL_SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
 const OWL_DIFFERENT_FROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
+const OWL_ALL_DIFFERENT: &str = "http://www.w3.org/2002/07/owl#AllDifferent";
+const OWL_DISTINCT_MEMBERS: &str = "http://www.w3.org/2002/07/owl#distinctMembers";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1244,6 +1248,13 @@ fn map_graph(
             )?;
         }
     }
+    map_all_different(
+        &list_graph,
+        &mut consumed,
+        &mut expressions,
+        &mut axioms,
+        session,
+    )?;
     map_equivalent_class_components(
         &list_graph,
         &mut consumed,
@@ -1447,6 +1458,72 @@ impl<'graph> ClassTerm<'graph> {
             Self::Blank(value) => ListTerm::Blank(value),
         }
     }
+}
+
+fn map_all_different<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (type_index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[type_index]
+            || triple.predicate != RDF_TYPE
+            || triple.object != ListTerm::Iri(OWL_ALL_DIFFERENT)
+        {
+            continue;
+        }
+        let mut distinct = None;
+        for (index, candidate) in triples.iter().enumerate() {
+            session.step(1)?;
+            if candidate.subject != triple.subject || candidate.predicate != OWL_DISTINCT_MEMBERS {
+                continue;
+            }
+            if distinct.replace((index, candidate.object)).is_some() {
+                return Err(rdf_mapping_cardinality(
+                    "native owl:AllDifferent has more than one distinctMembers list",
+                ));
+            }
+        }
+        let (distinct_index, head) = distinct.ok_or_else(|| {
+            rdf_mapping_cardinality("native owl:AllDifferent has no distinctMembers list")
+        })?;
+        let DecodedIndividualCollection {
+            individuals,
+            consumed: collection_consumed,
+        } = expressions.decode_individual_collection(head, session)?;
+        let individuals = canonical_set(individuals, 2, None)?;
+        let axiom = build_node(
+            111,
+            [Field::Set(individuals), Field::Set(Vec::new())],
+            session,
+        )?;
+        consume_collection_indexes(collection_consumed, consumed, session)?;
+        consumed[type_index] = true;
+        consumed[distinct_index] = true;
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
+fn consume_collection_indexes(
+    indexes: Vec<usize>,
+    consumed: &mut [bool],
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session.step(
+        u64::try_from(indexes.len())
+            .map_err(|_| NativeError::limit("native RDF consumed work exceeds u64"))?,
+    )?;
+    for index in indexes {
+        let value = consumed
+            .get_mut(index)
+            .ok_or_else(|| NativeError::protocol("native RDF consumed index exceeds graph"))?;
+        *value = true;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2890,6 +2967,10 @@ fn rdf_mapping_type() -> NativeError {
     )
 }
 
+fn rdf_mapping_cardinality(message: &'static str) -> NativeError {
+    NativeError::new("NATIVE_RDF_MAPPING_CARDINALITY", message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4012,6 +4093,56 @@ mod tests {
             );
             assert!(mapped(reflexive.as_bytes(), None).is_err());
         }
+    }
+
+    #[test]
+    fn all_different_collection_maps_exactly_and_validates_cardinality() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"axiom\"><rdf:type rdf:resource=\"{OWL}AllDifferent\"/><owl:distinctMembers rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:a\"/><rdf:Description rdf:nodeID=\"anonymous\"/><rdf:Description rdf:about=\"urn:b\"/></owl:distinctMembers></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("AllDifferent");
+        let expected = individual_set_axiom(
+            111,
+            vec![
+                named_individual_node("urn:a"),
+                crate::canonical::anonymous("anonymous").expect("anonymous individual"),
+                named_individual_node("urn:b"),
+            ],
+        );
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        for members in [
+            "",
+            "<rdf:Description rdf:about=\"urn:a\"/>",
+            "<rdf:Description rdf:about=\"urn:a\"/><rdf:Description rdf:about=\"urn:a\"/>",
+        ] {
+            let invalid = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"axiom\"><rdf:type rdf:resource=\"{OWL}AllDifferent\"/><owl:distinctMembers rdf:parseType=\"Collection\">{members}</owl:distinctMembers></rdf:Description></rdf:RDF>"
+            );
+            assert!(mapped(invalid.as_bytes(), None).is_err());
+        }
+
+        let missing = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><rdf:type rdf:resource=\"{OWL}AllDifferent\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(missing.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+        let multiple = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><rdf:type rdf:resource=\"{OWL}AllDifferent\"/><owl:distinctMembers rdf:resource=\"{RDF_NIL}\"/><owl:distinctMembers rdf:nodeID=\"other-list\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(multiple.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
     }
 
     #[test]
