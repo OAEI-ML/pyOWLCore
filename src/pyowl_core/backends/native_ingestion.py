@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from collections.abc import Callable
+from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Protocol, cast
 
 from pyowl_core.exceptions import BackendProtocolError
@@ -14,7 +16,13 @@ if TYPE_CHECKING:
     from pyowl_core.backends.native_handoff import NativeDiagnosticPublicationV1
     from pyowl_core.backends.native_handoff_v2 import NativeDiagnosticReferenceKindsV2
     from pyowl_core.cancellation import CancellationToken
+    from pyowl_core.config import LoadOptions
     from pyowl_core.document.snapshot import OntologySnapshot
+    from pyowl_core.io.formats.detection import FormatDetection
+    from pyowl_core.io.resolver import ImportResolver
+    from pyowl_core.io.source import SourcePayload
+    from pyowl_core.limits import ParseLimits
+    from pyowl_core.model import IRI
 
 
 class NativeIngestionExtension(Protocol):
@@ -36,6 +44,911 @@ def require_ingestion_binding(capability: str) -> NativeIngestionExtension:
             code="NATIVE_INGESTION_REGISTRATION",
         )
     return cast(NativeIngestionExtension, extension)
+
+
+@dataclass(frozen=True, slots=True)
+class _CanonicalOccurrenceV2:
+    encoded: bytes
+    byte_start: int
+    byte_end: int
+    line: int
+    column: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ScannedFunctionalResultV2:
+    ontology_iri: IRI | None
+    ontology_iri_row: bytes | None
+    version_iri: IRI | None
+    version_iri_row: bytes | None
+    imports: tuple[tuple[bytes, IRI], ...]
+    rows: tuple[tuple[bytes, ...], tuple[bytes, ...], tuple[bytes, ...]]
+    occurrences: tuple[_CanonicalOccurrenceV2, ...]
+    logical_axioms: tuple[bytes, ...]
+    logical_extensions: tuple[bytes, ...]
+    signature_entities: tuple[bytes, ...]
+    decoded_codepoint_length: int
+    canonical_rows_scanned: int
+    structural_occurrence_rows_scanned: int
+    metadata_iri_objects_materialized: int
+    has_anonymous: bool
+
+
+class _CanonicalResultScannerV2:
+    """Validate canonical rows and collect fingerprint inputs without models."""
+
+    __slots__ = (
+        "_cancel",
+        "_limits",
+        "_started",
+        "_terms",
+        "anonymous",
+        "entities",
+        "rows",
+    )
+
+    def __init__(self, limits: object, cancellation_token: CancellationToken | None) -> None:
+        from pyowl_core.limits import ParseLimits
+
+        if not isinstance(limits, ParseLimits):
+            raise TypeError("limits must be ParseLimits")
+        self._limits = limits
+        self._cancel = cancellation_token
+        self._started = time.monotonic()
+        self._terms = 0
+        self.anonymous = False
+        self.entities: set[bytes] = set()
+        self.rows = 0
+
+    def scan(self, payload: bytes) -> tuple[int, tuple[tuple[int, int], ...]]:
+        if type(payload) is not bytes:
+            raise BackendProtocolError(
+                "native parser returned a non-bytes canonical row",
+                code="NATIVE_PARSE_MODEL",
+            )
+        self.rows += 1
+        tag, end, components = self._node(payload, 0, 0)
+        if end != len(payload):
+            raise BackendProtocolError(
+                "native parser returned trailing canonical model data",
+                code="NATIVE_PARSE_MODEL",
+            )
+        return tag, components
+
+    def _node(
+        self,
+        data: bytes,
+        offset: int,
+        depth: int,
+    ) -> tuple[int, int, tuple[tuple[int, int], ...]]:
+        from pyowl_core.model.registry import SPEC_BY_TAG
+
+        self._check(depth)
+        node_start = offset
+        tag, offset = _canonical_varint_v2(data, offset)
+        spec = SPEC_BY_TAG.get(tag)
+        if spec is None:
+            raise BackendProtocolError(
+                "native parser returned an unknown canonical model tag",
+                code="NATIVE_PARSE_MODEL",
+            )
+        components: list[tuple[int, int]] = []
+        for _field in spec.fields:
+            component_start = offset
+            offset = self._component(data, offset, depth + 1)
+            components.append((component_start, offset))
+        encoded = data[node_start:offset]
+        if spec.tag_name == "ENTITY":
+            self.entities.add(encoded)
+        elif spec.tag_name == "ANONYMOUS_INDIVIDUAL":
+            self.anonymous = True
+        return tag, offset, tuple(components)
+
+    def _component(
+        self,
+        data: bytes,
+        offset: int,
+        depth: int,
+        *,
+        allow_collections: bool = True,
+    ) -> int:
+        if offset >= len(data):
+            raise BackendProtocolError(
+                "native parser returned a truncated canonical component",
+                code="NATIVE_PARSE_MODEL",
+            )
+        marker = data[offset]
+        offset += 1
+        if marker == 0:
+            return offset
+        if marker in {2, 3, 5}:
+            payload, offset = _canonical_frame_v2(data, offset)
+            if marker in {2, 5}:
+                try:
+                    payload.decode("utf-8" if marker == 2 else "ascii")
+                except UnicodeError as error:
+                    raise BackendProtocolError(
+                        "native parser returned invalid canonical text",
+                        code="NATIVE_PARSE_MODEL",
+                    ) from error
+            return offset
+        if marker == 4:
+            _value, offset = _canonical_varint_v2(data, offset)
+            return offset
+        if marker == 1:
+            payload, offset = _canonical_frame_v2(data, offset)
+            _tag, consumed, _components = self._node(payload, 0, depth)
+            if consumed != len(payload):
+                raise BackendProtocolError(
+                    "native parser returned trailing nested canonical data",
+                    code="NATIVE_PARSE_MODEL",
+                )
+            return offset
+        if marker not in {6, 7} or not allow_collections:
+            raise BackendProtocolError(
+                "native parser returned an unknown canonical component marker",
+                code="NATIVE_PARSE_MODEL",
+            )
+        size, offset = _canonical_varint_v2(data, offset)
+        self._limits.enforce("max_sequence_arity", size)
+        previous: bytes | None = None
+        for _ in range(size):
+            if marker == 6:
+                payload, offset = _canonical_frame_v2(data, offset)
+                _tag, consumed, _components = self._node(payload, 0, depth)
+                if consumed != len(payload):
+                    raise BackendProtocolError(
+                        "native parser returned trailing canonical set data",
+                        code="NATIVE_PARSE_MODEL",
+                    )
+                if previous is not None and payload <= previous:
+                    raise BackendProtocolError(
+                        "native parser returned a noncanonical structural set",
+                        code="NATIVE_PARSE_MODEL",
+                    )
+                previous = payload
+            else:
+                offset = self._component(
+                    data,
+                    offset,
+                    depth,
+                    allow_collections=False,
+                )
+        return offset
+
+    def _check(self, depth: int) -> None:
+        self._terms += 1
+        self._limits.enforce("max_terms", self._terms)
+        self._limits.enforce("max_nesting_depth", depth)
+        if self._cancel is not None and (
+            self._terms % self._limits.cancellation_check_interval == 0
+        ):
+            self._cancel.check()
+        deadline = self._limits.deadline_seconds
+        if deadline is not None:
+            elapsed = time.monotonic() - self._started
+            if elapsed >= deadline:
+                from pyowl_core.exceptions import ResourceLimitError
+
+                raise ResourceLimitError(
+                    "resource limit deadline_seconds exceeded",
+                    limit="deadline_seconds",
+                    observed=elapsed,
+                    allowed=deadline,
+                )
+
+
+def _canonical_varint_v2(data: bytes, offset: int) -> tuple[int, int]:
+    from pyowl_core.model import encode_varint
+
+    start = offset
+    value = 0
+    shift = 0
+    while offset < len(data):
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            if data[start:offset] != encode_varint(value):
+                raise BackendProtocolError(
+                    "native parser returned a nonminimal canonical integer",
+                    code="NATIVE_PARSE_MODEL",
+                )
+            return value, offset
+        shift += 7
+        if shift > 1_000_000:
+            raise BackendProtocolError(
+                "native parser returned an unreasonably large canonical integer",
+                code="NATIVE_PARSE_MODEL",
+            )
+    raise BackendProtocolError(
+        "native parser returned a truncated canonical integer",
+        code="NATIVE_PARSE_MODEL",
+    )
+
+
+def _canonical_frame_v2(data: bytes, offset: int) -> tuple[bytes, int]:
+    length, offset = _canonical_varint_v2(data, offset)
+    end = offset + length
+    if end < offset or end > len(data):
+        raise BackendProtocolError(
+            "native parser returned a truncated canonical frame",
+            code="NATIVE_PARSE_MODEL",
+        )
+    return data[offset:end], end
+
+
+def _iri_from_canonical_v2(
+    payload: bytes,
+    scanner: _CanonicalResultScannerV2,
+) -> IRI:
+    from pyowl_core.exceptions import ModelError
+    from pyowl_core.model import IRI
+    from pyowl_core.model.registry import SPEC_BY_TAG
+
+    tag, components = scanner.scan(payload)
+    spec = SPEC_BY_TAG[tag]
+    if spec.tag_name != "IRI" or len(components) != 1:
+        raise BackendProtocolError(
+            "native parser returned a non-IRI metadata row",
+            code="NATIVE_PARSE_MODEL",
+        )
+    start, end = components[0]
+    if start >= end or payload[start] != 2:
+        raise BackendProtocolError(
+            "native parser returned an invalid canonical IRI",
+            code="NATIVE_PARSE_MODEL",
+        )
+    value, consumed = _canonical_frame_v2(payload, start + 1)
+    if consumed != end:
+        raise BackendProtocolError(
+            "native parser returned trailing canonical IRI data",
+            code="NATIVE_PARSE_MODEL",
+        )
+    scanner._limits.enforce("max_iri_bytes", len(value))
+    try:
+        return IRI(value.decode("utf-8"))
+    except (UnicodeError, ModelError) as error:
+        raise BackendProtocolError(
+            "native parser returned invalid UTF-8 in an IRI",
+            code="NATIVE_PARSE_MODEL",
+        ) from error
+
+
+def _without_top_level_annotations_v2(
+    payload: bytes,
+    tag: int,
+    components: tuple[tuple[int, int], ...],
+) -> bytes:
+    from pyowl_core.model.registry import SPEC_BY_TAG
+
+    spec = SPEC_BY_TAG[tag]
+    try:
+        ordinal = spec.fields.index("annotations")
+    except ValueError:
+        return payload
+    start, end = components[ordinal]
+    empty = bytes((6, 0))
+    if payload[start:end] == empty:
+        return payload
+    return payload[:start] + empty + payload[end:]
+
+
+def _scan_functional_result_v2(
+    encoded: bytes,
+    *,
+    limits: ParseLimits,
+    cancellation_token: CancellationToken | None,
+    collect_provenance: bool,
+) -> _ScannedFunctionalResultV2:
+    from pyowl_core.extensions.swrl import SWRLRule
+    from pyowl_core.model.axioms import AxiomNode
+    from pyowl_core.model.registry import SPEC_BY_TAG
+
+    reader = native._ResultReader(encoded)
+    magic, schema, format_tag, decoded_codepoints = native._PARSE_RESULT_HEADER.unpack(
+        reader.take(native._PARSE_RESULT_HEADER.size)
+    )
+    if magic != native._PARSE_RESULT_MAGIC or schema != 1 or format_tag != 4:
+        raise BackendProtocolError(
+            "native parser result has incompatible metadata",
+            code="NATIVE_PARSE_VERSION",
+        )
+    scanner = _CanonicalResultScannerV2(limits, cancellation_token)
+    metadata_objects = 0
+
+    def optional_iri() -> tuple[IRI | None, bytes | None]:
+        nonlocal metadata_objects
+        marker = reader.u8()
+        if marker == 0:
+            return None, None
+        if marker != 1:
+            raise BackendProtocolError(
+                "native parser returned an invalid optional value",
+                code="NATIVE_PARSE_FRAMING",
+            )
+        row = reader.frame()
+        value = _iri_from_canonical_v2(row, scanner)
+        metadata_objects += 1
+        return value, row
+
+    ontology_iri, ontology_iri_row = optional_iri()
+    version_iri, version_iri_row = optional_iri()
+    if version_iri is not None and ontology_iri is None:
+        raise BackendProtocolError(
+            "native parser returned a version IRI without an ontology IRI",
+            code="NATIVE_PARSE_MODEL",
+        )
+    import_count = reader.u64()
+    reader.require_count(import_count, 1)
+    import_rows: dict[bytes, IRI] = {}
+    for _ in range(import_count):
+        row = reader.frame()
+        import_rows[row] = _iri_from_canonical_v2(row, scanner)
+        metadata_objects += 1
+
+    rows: list[list[bytes]] = [[], [], []]
+    occurrences: list[_CanonicalOccurrenceV2] = []
+    logical_axioms: set[bytes] = set()
+    logical_extensions: set[bytes] = set()
+    structural_occurrence_rows = 0
+
+    def spanned(partition: int) -> None:
+        nonlocal structural_occurrence_rows
+        count = reader.u64()
+        structural_occurrence_rows += count
+        reader.require_count(count, 33)
+        if partition == 0:
+            limits.enforce("max_annotations", count)
+        elif partition == 1:
+            limits.enforce("max_axioms", count)
+        for _ in range(count):
+            byte_start = reader.u64()
+            byte_end = reader.u64()
+            line = reader.u64()
+            column = reader.u64()
+            if byte_end < byte_start or line < 1 or column < 1:
+                raise BackendProtocolError(
+                    "native parser returned an invalid source span",
+                    code="NATIVE_PARSE_FRAMING",
+                )
+            row = reader.frame()
+            tag, components = scanner.scan(row)
+            spec = SPEC_BY_TAG[tag]
+            if partition == 0:
+                valid = spec.tag_name == "ANNOTATION"
+            elif partition == 1:
+                valid = issubclass(spec.constructor, AxiomNode)
+            else:
+                valid = spec.constructor is SWRLRule
+            if not valid:
+                raise BackendProtocolError(
+                    "native parser returned a value in the wrong result partition",
+                    code="NATIVE_PARSE_MODEL",
+                )
+            rows[partition].append(row)
+            if collect_provenance:
+                occurrences.append(_CanonicalOccurrenceV2(row, byte_start, byte_end, line, column))
+            if partition == 1 and spec.category == "logical_axiom":
+                logical_axioms.add(_without_top_level_annotations_v2(row, tag, components))
+            elif partition == 2:
+                logical_extensions.add(_without_top_level_annotations_v2(row, tag, components))
+
+    spanned(0)
+    spanned(1)
+    spanned(2)
+    prefix_count = reader.u64()
+    reader.require_count(prefix_count, 2)
+    limits.enforce("max_prefixes", prefix_count)
+    previous_prefix: tuple[str, str] | None = None
+    for _ in range(prefix_count):
+        selected_prefix = (reader.text(), reader.text())
+        if previous_prefix is not None and selected_prefix <= previous_prefix:
+            raise BackendProtocolError(
+                "native parser prefixes are not canonical",
+                code="NATIVE_PARSE_FRAMING",
+            )
+        previous_prefix = selected_prefix
+    reader.finish()
+    occurrences.sort(key=lambda item: (item.byte_start, item.byte_end))
+    return _ScannedFunctionalResultV2(
+        ontology_iri,
+        ontology_iri_row,
+        version_iri,
+        version_iri_row,
+        tuple(sorted(import_rows.items())),
+        cast(
+            tuple[tuple[bytes, ...], tuple[bytes, ...], tuple[bytes, ...]],
+            tuple(tuple(sorted(set(values))) for values in rows),
+        ),
+        tuple(occurrences),
+        tuple(sorted(logical_axioms)),
+        tuple(sorted(logical_extensions)),
+        tuple(sorted(scanner.entities)),
+        decoded_codepoints,
+        scanner.rows,
+        structural_occurrence_rows,
+        metadata_objects,
+        scanner.anonymous,
+    )
+
+
+def _frame_v2(value: bytes) -> bytes:
+    from pyowl_core.model import encode_varint
+
+    return encode_varint(len(value)) + value
+
+
+def _collection_preimage_v2(rows: tuple[bytes, ...]) -> bytes:
+    from pyowl_core.model import encode_varint
+
+    return encode_varint(len(rows)) + b"".join(_frame_v2(row) for row in rows)
+
+
+def _fingerprint_preimages_v2(
+    scanned: _ScannedFunctionalResultV2,
+    manifest: object,
+    document_key: str,
+) -> tuple[bytes, bytes, bytes, bytes]:
+    from pyowl_core.document.imports import ImportManifest
+    from pyowl_core.model import encode_varint
+
+    if not isinstance(manifest, ImportManifest):
+        raise TypeError("manifest must be ImportManifest")
+    optional_identifiers = []
+    for row in (scanned.ontology_iri_row, scanned.version_iri_row):
+        optional_identifiers.append(b"0" if row is None else b"1" + _frame_v2(row))
+    import_rows = tuple(row for row, _iri in scanned.imports)
+    document = b"".join(
+        (
+            b"pyowl-core:document-fingerprint:v1\x00",
+            *optional_identifiers,
+            _collection_preimage_v2(import_rows),
+            *(_collection_preimage_v2(rows) for rows in scanned.rows),
+        )
+    )
+    structural = b"".join(
+        (
+            b"pyowl-core:snapshot-structural:v1\x00",
+            _frame_v2(manifest.canonical_bytes()),
+            _frame_v2(document_key.encode("ascii")),
+            *(_collection_preimage_v2(rows) for rows in scanned.rows),
+        )
+    )
+    logical = b"".join(
+        (
+            b"pyowl-core:snapshot-logical:v1\x00",
+            b"datatype-policy:owl2-v1\x00",
+            encode_varint(len(scanned.logical_axioms)),
+            *(_frame_v2(row) for row in scanned.logical_axioms),
+            encode_varint(len(scanned.logical_extensions)),
+            *(b"E" + _frame_v2(row) for row in scanned.logical_extensions),
+        )
+    )
+    signature = b"".join(
+        (
+            b"pyowl-core:snapshot-signature:v1\x00",
+            b"\x01",
+            encode_varint(len(scanned.signature_entities)),
+            *(_frame_v2(row) for row in scanned.signature_entities),
+        )
+    )
+    return document, structural, logical, signature
+
+
+def _document_key_v2(
+    ontology_iri: IRI | None,
+    version_iri: IRI | None,
+    document_fingerprint: bytes,
+) -> str:
+    if ontology_iri is None:
+        payload = b"anonymous" + document_fingerprint
+    else:
+        identity = (
+            ("ontology", ontology_iri.value)
+            if version_iri is None
+            else ("version", ontology_iri.value, version_iri.value)
+        )
+        payload = b"named" + b"".join(_frame_v2(item.encode("utf-8")) for item in identity)
+    digest = hashlib.sha256(b"pyowl-core:document-key:v1\x00" + payload).hexdigest()
+    return f"d1:{digest}"
+
+
+def _structural_digest_v2(row: bytes) -> bytes:
+    from pyowl_core.model import encode_varint
+
+    return hashlib.sha256(b"pyowl-core:structural-value:v1\x00" + encode_varint(1) + row).digest()
+
+
+def publish_retained_functional_snapshot_v2(
+    encoded: bytes,
+    *,
+    parsed_native_storage: object,
+    phase_timings: tuple[tuple[str, float], ...],
+    payload: SourcePayload,
+    detection: FormatDetection,
+    document_iri: IRI | None,
+    media_type: str | None,
+    options: LoadOptions,
+    resolver: ImportResolver | None,
+    cancellation_token: CancellationToken | None,
+    load_started: float,
+    root_parse_started: float,
+) -> OntologySnapshot | None:
+    """Publish one parser-owned Functional load without eager model decoding.
+
+    Returning ``None`` is a narrow eligibility result: anonymous individuals
+    still require the existing document-scope rewrite and therefore fall back
+    to the authoritative model path. Protocol and attestation failures raise.
+    """
+
+    from pyowl_core.backends.native_handoff import (
+        NativeDocumentPublicationV1,
+        NativeLoadReportPublicationV1,
+        freeze_native_import_manifest_publication_v1,
+        freeze_native_provenance_publication_v1,
+    )
+    from pyowl_core.backends.native_handoff_v2 import (
+        NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2,
+        NATIVE_SNAPSHOT_PUBLICATION_VERSION_V2,
+        NativeClosureFacadeCardinalitiesV2,
+        NativeDiagnosticReferenceSidecarsV2,
+        NativeDocumentFacadeCardinalitiesV2,
+        NativeFacadeCardinalitySummaryV2,
+        NativeFacadeCollectionV2,
+        NativeFacadeScopeV2,
+        NativeFingerprintEvidenceV2,
+        NativeOriginRowV2,
+        NativeSignatureKindV2,
+        _seal_native_snapshot_owner_v2,
+        encode_native_auxiliary_row_v2,
+        freeze_native_snapshot_publication_v2,
+        native_snapshot_content_digests_v2,
+        native_snapshot_publication_attestation_v2,
+    )
+    from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy, LoadOptions
+    from pyowl_core.diagnostics import SourceSpan
+    from pyowl_core.document import Fingerprint, OntologyID
+    from pyowl_core.document.imports import (
+        DocumentRecord,
+        DocumentStatus,
+        ImportEdge,
+        ImportManifest,
+        ImportStatus,
+    )
+    from pyowl_core.document.native_storage import (
+        _NO_ANONYMOUS_SCOPES_SEAL_V2,
+        _WIRE_STRUCTURAL_ALIAS_SEAL_V1,
+        _NativeIngestionCountersV2,
+        ontology_snapshot_from_native_publication_v2,
+    )
+    from pyowl_core.document.provenance import DocumentProvenance
+    from pyowl_core.io.formats.detection import FormatDetection
+    from pyowl_core.io.resolver import resolver_configuration_fingerprint
+    from pyowl_core.io.source import SourcePayload
+
+    if not isinstance(options, LoadOptions):
+        raise TypeError("options must be LoadOptions")
+    if not isinstance(payload, SourcePayload) or not isinstance(detection, FormatDetection):
+        raise TypeError("retained parser publication received invalid source metadata")
+    if (
+        options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
+        or options.imports is not ImportPolicy.IGNORE
+        or options.preserve_source_map
+        or options.validate_owl2_dl
+        or detection.format is not DocumentFormat.FUNCTIONAL
+    ):
+        raise AssertionError("retained Functional publication was invoked for an ineligible load")
+    scanned = _scan_functional_result_v2(
+        encoded,
+        limits=options.limits,
+        cancellation_token=cancellation_token,
+        collect_provenance=options.collect_provenance,
+    )
+    if scanned.has_anonymous:
+        return None
+    if cancellation_token is not None:
+        cancellation_token.check()
+    options.limits.enforce("max_documents", 1)
+    options.limits.enforce("max_total_source_bytes", payload.byte_length)
+    for _row, _iri in scanned.imports:
+        options.limits.enforce("max_import_depth", 1)
+
+    ontology_id = OntologyID(scanned.ontology_iri, scanned.version_iri)
+    direct_imports = tuple(iri for _row, iri in scanned.imports)
+    provisional_document_preimage = b"".join(
+        (
+            b"pyowl-core:document-fingerprint:v1\x00",
+            b"0"
+            if scanned.ontology_iri_row is None
+            else b"1" + _frame_v2(scanned.ontology_iri_row),
+            b"0" if scanned.version_iri_row is None else b"1" + _frame_v2(scanned.version_iri_row),
+            _collection_preimage_v2(tuple(row for row, _iri in scanned.imports)),
+            *(_collection_preimage_v2(rows) for rows in scanned.rows),
+        )
+    )
+    document_fingerprint = Fingerprint(
+        "sha256", 1, hashlib.sha256(provisional_document_preimage).digest()
+    )
+    document_key = _document_key_v2(
+        scanned.ontology_iri,
+        scanned.version_iri,
+        document_fingerprint.digest,
+    )
+    provenance = DocumentProvenance(
+        payload.source_sha256,
+        payload.digest_kind,
+        payload.byte_length,
+        (
+            payload.decoded_codepoint_length
+            if payload.decoded_codepoint_length is not None
+            else scanned.decoded_codepoint_length
+        ),
+        document_iri,
+        payload.locator,
+        detection.format,
+        detection.basis,
+        media_type,
+        parser="pyowl_core.backends.native",
+        backend="native",
+    )
+    record = DocumentRecord(
+        document_key,
+        ontology_id,
+        document_iri,
+        payload.source_sha256,
+        document_fingerprint,
+        detection.format,
+        DocumentStatus.ROOT,
+    )
+    edges = tuple(ImportEdge(document_key, iri, ImportStatus.IGNORED) for iri in direct_imports)
+    manifest = ImportManifest(
+        options.imports,
+        options.offline,
+        resolver_configuration_fingerprint(resolver),
+        (record,),
+        edges,
+    )
+    preimages = _fingerprint_preimages_v2(scanned, manifest, document_key)
+    if preimages[0] != provisional_document_preimage:
+        raise AssertionError("document fingerprint preimage construction diverged")
+    fingerprints = tuple(
+        Fingerprint("sha256", 1, hashlib.sha256(value).digest()) for value in preimages
+    )
+
+    origin_items: list[tuple[tuple[object, ...], bytes]] = []
+    if options.collect_provenance:
+        options.limits.enforce("max_origin_entries", len(scanned.occurrences))
+        for occurrence_ordinal, occurrence in enumerate(scanned.occurrences):
+            digest = _structural_digest_v2(occurrence.encoded)
+            origin = NativeOriginRowV2(
+                digest=digest,
+                document_key=document_key,
+                occurrence=occurrence_ordinal,
+                span=SourceSpan(
+                    byte_start=occurrence.byte_start,
+                    byte_end=occurrence.byte_end,
+                    line_start=occurrence.line,
+                    column_start=occurrence.column,
+                ),
+            )
+            collection, origin_row = encode_native_auxiliary_row_v2(
+                origin,
+                max_row_bytes=options.limits.max_wire_bytes,
+            )
+            if collection is not NativeFacadeCollectionV2.ORIGIN_ENTRIES:
+                raise AssertionError(collection)
+            origin_items.append(
+                (
+                    (
+                        digest,
+                        document_key.encode("utf-8"),
+                        occurrence_ordinal,
+                        origin_row,
+                    ),
+                    origin_row,
+                )
+            )
+    origin_items.sort(key=lambda item: item[0])
+    origin_rows = tuple(item[1] for item in origin_items)
+    if len(set(origin_rows)) != len(origin_rows):
+        raise BackendProtocolError(
+            "native parser publication produced duplicate origin rows",
+            code="NATIVE_PARSE_MODEL",
+        )
+
+    documents = (
+        NativeDocumentPublicationV1(
+            document_key=document_key,
+            ontology_id=ontology_id,
+            document_iri=document_iri,
+            direct_imports=direct_imports,
+            provenance=freeze_native_provenance_publication_v1(provenance),
+            document_fingerprint=fingerprints[0],
+            diagnostics=(),
+            ontology_annotation_count=len(scanned.rows[0]),
+            axiom_count=len(scanned.rows[1]),
+            extension_count=len(scanned.rows[2]),
+            source_map_entry_count=0,
+            origin_entry_count=len(origin_rows),
+            rdf_mapping_conformant=None,
+            rdf_mapping_report_sha256=None,
+        ),
+    )
+    timings = {
+        "load_seconds": time.monotonic() - load_started,
+        "root_parse_seconds": time.monotonic() - root_parse_started,
+    }
+    timings.update(phase_timings)
+    report = NativeLoadReportPublicationV1(
+        backend="native",
+        api_version=(0, 1),
+        model_schema=1,
+        document_count=1,
+        total_source_bytes=payload.byte_length,
+        effective_axiom_count=len(scanned.rows[1]),
+        resolution_attempts=0,
+        acquisition_cache_hits=0,
+        document_cache_hits=0,
+        timings=tuple(sorted(timings.items(), key=lambda item: item[0].encode("utf-8"))),
+        structural_fingerprint=fingerprints[1],
+        logical_fingerprint=fingerprints[2],
+        signature_fingerprint=fingerprints[3],
+        owl2_dl_validated=False,
+        owl2_dl_conforms=None,
+        owl2_dl_report_sha256=None,
+    )
+    capability_bits = 7 | (16 if options.collect_provenance else 0)
+    import_manifest = freeze_native_import_manifest_publication_v1(manifest)
+    sidecars = NativeDiagnosticReferenceSidecarsV2(
+        snapshot=(),
+        documents=((),),
+        import_edges=tuple(None for _edge in import_manifest.edges),
+    )
+    facade_summary = NativeFacadeCardinalitySummaryV2(
+        documents=(
+            NativeDocumentFacadeCardinalitiesV2(
+                document_key=document_key,
+                effective_annotation_count=len(scanned.rows[0]),
+                effective_axiom_count=len(scanned.rows[1]),
+                effective_extension_count=len(scanned.rows[2]),
+                effective_origin_count=len(origin_rows),
+                raw_source_prefix_count=0,
+                rdf_unconsumed_triple_count=0,
+                rdf_rule_count=0,
+                rdf_diagnostic_count=0,
+            ),
+        ),
+        closure=NativeClosureFacadeCardinalitiesV2(
+            effective_annotation_count=len(scanned.rows[0]),
+            effective_axiom_count=len(scanned.rows[1]),
+            effective_extension_count=len(scanned.rows[2]),
+            effective_origin_count=len(origin_rows),
+        ),
+    )
+    collections = {
+        (collection, scope, ordinal, NativeSignatureKindV2.ALL, True): values
+        for collection, values in zip(
+            (
+                NativeFacadeCollectionV2.ONTOLOGY_ANNOTATIONS,
+                NativeFacadeCollectionV2.AXIOMS,
+                NativeFacadeCollectionV2.EXTENSIONS,
+            ),
+            scanned.rows,
+            strict=True,
+        )
+        for scope, ordinal in (
+            (NativeFacadeScopeV2.DOCUMENT, 0),
+            (NativeFacadeScopeV2.CLOSURE, None),
+        )
+    }
+    for scope, ordinal in (
+        (NativeFacadeScopeV2.DOCUMENT, 0),
+        (NativeFacadeScopeV2.CLOSURE, None),
+    ):
+        collections[
+            (
+                NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+                scope,
+                ordinal,
+                NativeSignatureKindV2.ALL,
+                True,
+            )
+        ] = origin_rows
+    evidence = tuple(
+        NativeFingerprintEvidenceV2(
+            tag=tag,
+            document_key=document_key if tag == 1 else None,
+            preimage_byte_length=len(preimage),
+            fingerprint_schema=fingerprint.schema,
+            digest=hashlib.sha256(preimage).digest(),
+        )
+        for tag, preimage, fingerprint in zip((1, 2, 3, 4), preimages, fingerprints, strict=True)
+    )
+    max_facade_row_bytes = max(
+        (
+            1,
+            *(len(row) for roots in scanned.rows for row in roots),
+            *(len(row) for row in origin_rows),
+        )
+    )
+    content = native_snapshot_content_digests_v2(
+        documents=documents,
+        report=report,
+        root_document_key=document_key,
+        load_options=options,
+        capability_bits=capability_bits,
+        collections=collections,
+        fingerprint_evidence=evidence,
+        fingerprint_preimages=preimages,
+        owl2_dl_report_summary=None,
+        facade_cardinality_summary=facade_summary,
+    )
+    attestation = native_snapshot_publication_attestation_v2(
+        documents=documents,
+        import_manifest=import_manifest,
+        root_document_key=document_key,
+        load_options=options,
+        diagnostics=(),
+        diagnostic_reference_sidecars=sidecars,
+        facade_cardinality_summary=facade_summary,
+        report=report,
+        capability_bits=capability_bits,
+        content_digests=content,
+        max_facade_row_bytes=max_facade_row_bytes,
+        owl2_dl_report_summary=None,
+    )
+    extension = native.require("parse-functional-v1")
+    hook = getattr(extension, "_finalize_parsed_structural_snapshot_v2", None)
+    if not callable(hook):
+        raise BackendProtocolError(
+            "native parser-built storage has no final publication boundary",
+            code="NATIVE_INGESTION_REGISTRATION",
+        )
+    with native._relay(extension, options.limits, cancellation_token) as cancel:
+        raw_owner = native._call(
+            extension,
+            lambda: hook(
+                parsed_native_storage,
+                origin_rows if options.collect_provenance else None,
+                attestation,
+                cancel,
+            ),
+        )
+    values: dict[str, object] = {
+        "version": NATIVE_SNAPSHOT_PUBLICATION_VERSION_V2,
+        "ledger_sha256": NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2,
+        "handle": _seal_native_snapshot_owner_v2(raw_owner),
+        "documents": documents,
+        "import_manifest": import_manifest,
+        "root_document_key": document_key,
+        "load_options": options,
+        "diagnostics": (),
+        "diagnostic_reference_sidecars": sidecars,
+        "facade_cardinality_summary": facade_summary,
+        "report": report,
+        "capability_bits": capability_bits,
+        "max_facade_row_bytes": max_facade_row_bytes,
+        "owl2_dl_report_summary": None,
+    }
+    for field in fields(content):
+        values[field.name] = getattr(content, field.name)
+    publication = freeze_native_snapshot_publication_v2(values)
+    ingestion_counters = _NativeIngestionCountersV2(
+        parser_result_bytes_scanned=len(encoded),
+        canonical_rows_scanned=scanned.canonical_rows_scanned,
+        structural_occurrence_rows_scanned=scanned.structural_occurrence_rows_scanned,
+        structural_root_rows_published=sum(len(rows) for rows in scanned.rows),
+        eager_structural_objects_materialized=0,
+        metadata_iri_objects_materialized=scanned.metadata_iri_objects_materialized,
+        provenance_occurrence_records_materialized=len(scanned.occurrences),
+    )
+    return ontology_snapshot_from_native_publication_v2(
+        publication,
+        _wire_structural_aliases=_WIRE_STRUCTURAL_ALIAS_SEAL_V1,
+        _ingestion_counters=ingestion_counters,
+        _anonymous_scope_evidence=_NO_ANONYMOUS_SCOPES_SEAL_V2,
+    )
 
 
 def retain_native_snapshot_v2(

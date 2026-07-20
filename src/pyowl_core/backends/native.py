@@ -148,9 +148,10 @@ class NativeAxiomPartition:
 
 @dataclass(frozen=True, slots=True)
 class _NativeRetainedFunctionalParseV2:
-    parsed: ParsedOntology
+    parsed: ParsedOntology | None
     storage: object | None
     phase_timings: tuple[tuple[str, float], ...]
+    encoded: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,9 +372,10 @@ def _parse_functional_retained_v2(
         "native_freeze_seconds",
     )
     return _NativeRetainedFunctionalParseV2(
-        _decode_parsed_functional(encoded, selected),
+        None,
         storage,
         tuple((name, value / 1_000_000_000) for name, value in zip(names, phases, strict=True)),
+        encoded,
     )
 
 

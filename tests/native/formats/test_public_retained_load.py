@@ -135,6 +135,87 @@ def test_parser_built_storage_bypasses_the_python_row_retention_bridge(
     assert counters.canonical_input_rows == 3
 
 
+def test_owner_first_publication_skips_eager_structural_model_decoding(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(SOURCE, options=_options(BackendPreference.PYTHON))
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("eligible retained load crossed the complete model decoder")
+
+    monkeypatch.setattr(native, "_decode_parsed_functional", unexpected)
+    selected = load_snapshot(SOURCE, options=_options(BackendPreference.NATIVE))
+    ingestion = cast(Any, selected)._native_ingestion_counters_v2()
+    before = cast(Any, selected)._native_python_counters()
+
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert ingestion.parser_result_bytes_scanned > 0
+    assert ingestion.canonical_rows_scanned == 4  # ontology IRI plus three root rows
+    assert ingestion.structural_occurrence_rows_scanned == 3
+    assert ingestion.structural_root_rows_published == 3
+    assert ingestion.eager_structural_objects_materialized == 0
+    assert ingestion.metadata_iri_objects_materialized == 1
+    assert ingestion.provenance_occurrence_records_materialized == 3
+    assert before.model_rows_materialized == 0
+
+    assert tuple(selected.iter_axioms()) == tuple(reference.iter_axioms())
+    after = cast(Any, selected)._native_python_counters()
+    assert after.model_rows_materialized == 3
+    assert cast(Any, selected)._native_ingestion_counters_v2() == ingestion
+
+
+def test_owner_first_fingerprint_inputs_cover_annotations_and_nested_entities(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    source = (
+        b"Ontology(<urn:retained-annotated> "
+        b'Annotation(<urn:label> "ontology") '
+        b"Declaration(Class(<urn:retained-annotated:C>)) "
+        b"SubClassOf(Annotation(<urn:note> <urn:evidence>) "
+        b"<urn:retained-annotated:C> ObjectSomeValuesFrom("
+        b"<urn:retained-annotated:p> <urn:retained-annotated:D>)))"
+    )
+    reference = load_snapshot(source, options=_options(BackendPreference.PYTHON))
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("annotated retained load crossed the complete model decoder")
+
+    monkeypatch.setattr(native, "_decode_parsed_functional", unexpected)
+    selected = load_snapshot(source, options=_options(BackendPreference.NATIVE))
+
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert cast(Any, selected)._native_python_counters().model_rows_materialized == 0
+
+
+def test_anonymous_re_scope_uses_the_authoritative_model_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    source = b"Ontology(<urn:retained-anonymous> ClassAssertion(<urn:C> _:person))"
+    decode = native._decode_parsed_functional
+    calls = 0
+
+    def counted(data: bytes, limits: object) -> object:
+        nonlocal calls
+        calls += 1
+        return decode(data, cast(Any, limits))
+
+    monkeypatch.setattr(native, "_decode_parsed_functional", counted)
+    selected = load_snapshot(source, options=_options(BackendPreference.NATIVE))
+
+    assert selected.capabilities.backend == "python"
+    assert type(selected).__name__ == "OntologySnapshot"
+    assert calls == 1
+
+
 def test_parser_built_storage_deduplicates_roots_but_preserves_origin_occurrences(
     extension: NativeTestExtension,
 ) -> None:
@@ -261,6 +342,7 @@ def test_provenance_disabled_load_retains_parser_arena_without_origin_capability
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
     raw_owner = object.__getattribute__(handle, "_owner_v2")
     counters = cast(Any, raw_owner)._publication_counters_v2()
+    ingestion = cast(Any, selected)._native_ingestion_counters_v2()
 
     assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
     assert selected.capabilities.backend == "native"
@@ -271,6 +353,9 @@ def test_provenance_disabled_load_retains_parser_arena_without_origin_capability
     assert counters.parser_bytes == len(SOURCE)
     assert counters.retained_origin_rows == 0
     assert counters.retained_origin_bytes == 0
+    assert ingestion.structural_occurrence_rows_scanned == 3
+    assert ingestion.eager_structural_objects_materialized == 0
+    assert ingestion.provenance_occurrence_records_materialized == 0
     assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
@@ -449,6 +534,12 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["direct_root_parity"] is True
     assert observed["direct_owner_identity"] is True
     assert observed["direct_encoded_view_requests"] == 1
+    assert observed["ingestion_parser_result_bytes"] > 0
+    assert observed["ingestion_canonical_rows_scanned"] == 4
+    assert observed["ingestion_structural_occurrence_rows_scanned"] == 3
+    assert observed["ingestion_structural_rows_published"] == 3
+    assert observed["ingestion_eager_structural_objects"] == 0
+    assert observed["ingestion_provenance_occurrence_records"] == 3
     assert observed["decoded_parity"] is True
     assert len(observed["wire_sha256"]) == 64
     assert len(observed["wire_python_sha256"]) == 64
@@ -482,6 +573,13 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["mapped_closed"] is True
     assert observed["direct_survives_owner_close"] is True
     assert observed["selected_closed"] is True
+    assert observed["auto_backend"] == "native"
+    assert observed["auto_retained_parity"] is True
+    assert observed["auto_ignored_manifest_parity"] is True
+    assert observed["auto_ingestion_eager_structural_objects"] == 0
+    assert observed["auto_parser_bytes"] == observed["auto_source_bytes"] == 262281
+    assert observed["auto_direct_survives_owner_close"] is True
+    assert observed["auto_closed"] is True
     assert observed["ingestion_features"] == []
     assert observed["view_features"] == []
     assert observed["encoded_view_schemas"] == {}

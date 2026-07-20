@@ -123,6 +123,34 @@ _MISSING = object()
 _REPLACE_ERROR = "native ontology facades cannot be replaced; materialize them first"
 _EMPTY_CACHE_BYTES = sys.getsizeof(OrderedDict())
 _WIRE_STRUCTURAL_ALIAS_SEAL_V1 = object()
+_NO_ANONYMOUS_SCOPES_SEAL_V2 = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeIngestionCountersV2:
+    """Private evidence for the bounded retained-parser publication seam."""
+
+    parser_result_bytes_scanned: int = 0
+    canonical_rows_scanned: int = 0
+    structural_occurrence_rows_scanned: int = 0
+    structural_root_rows_published: int = 0
+    eager_structural_objects_materialized: int = 0
+    metadata_iri_objects_materialized: int = 0
+    provenance_occurrence_records_materialized: int = 0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "parser_result_bytes_scanned",
+            "canonical_rows_scanned",
+            "structural_occurrence_rows_scanned",
+            "structural_root_rows_published",
+            "eager_structural_objects_materialized",
+            "metadata_iri_objects_materialized",
+            "provenance_occurrence_records_materialized",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a nonnegative integer")
 
 
 def _deep_size(value: object, seen: set[int] | None = None) -> int:
@@ -1660,6 +1688,7 @@ def _document_fingerprint_parts(document: OntologyDocument) -> Iterator[bytes]:
 class _NativeSnapshotState:
     __slots__ = (
         "annotations_by_key",
+        "anonymous_scopes",
         "axioms_by_key",
         "capabilities",
         "closure_annotations",
@@ -1673,6 +1702,7 @@ class _NativeSnapshotState:
         "identity_metadata",
         "import_manifest",
         "index_cache",
+        "ingestion_counters",
         "load_options",
         "lock",
         "logical_fingerprint",
@@ -1707,6 +1737,8 @@ class _NativeSnapshotState:
         capabilities: CoreCapabilities,
         report: LoadReport,
         wire_structural_aliases: bool,
+        ingestion_counters: _NativeIngestionCountersV2,
+        anonymous_scopes: frozenset[bytes] | None,
     ) -> None:
         from pyowl_core.index.cache import create_index_cache
 
@@ -1740,6 +1772,8 @@ class _NativeSnapshotState:
         self.signature_fingerprint = report.signature_fingerprint
         self.report = report
         self.wire_structural_aliases = wire_structural_aliases
+        self.ingestion_counters = ingestion_counters
+        self.anonymous_scopes = anonymous_scopes
         self.identity_metadata = _identity_metadata_from_manifest(
             import_manifest,
             diagnostics,
@@ -1979,6 +2013,9 @@ class _NativeOntologySnapshot(OntologySnapshot):
 
     def _anonymous_document_scopes(self) -> frozenset[bytes]:
         self._check_open()
+        retained = self._native_snapshot_state.anonymous_scopes
+        if retained is not None:
+            return retained
         scopes: set[bytes] = set()
         collections: tuple[Mapping[str, CanonicalSet[StructuralNode]], ...] = (
             cast(Mapping[str, CanonicalSet[StructuralNode]], self._annotations_by_key),
@@ -2214,6 +2251,12 @@ class _NativeOntologySnapshot(OntologySnapshot):
     def _native_python_counters(self) -> NativePythonFacadeCountersV2:
         return self._native_snapshot_state.owner.shared.counters()
 
+    def _native_ingestion_counters_v2(self) -> _NativeIngestionCountersV2:
+        """Return immutable counters for eager retained-parser publication work."""
+
+        self._check_open()
+        return self._native_snapshot_state.ingestion_counters
+
     def _native_wire_structural_aliases_v1(self) -> bool:
         """Report an internally attested raw/effective/closure root alias."""
 
@@ -2275,6 +2318,8 @@ def ontology_snapshot_from_native_publication_v2(
     /,
     *,
     _wire_structural_aliases: object | None = None,
+    _ingestion_counters: _NativeIngestionCountersV2 | None = None,
+    _anonymous_scope_evidence: object | None = None,
 ) -> OntologySnapshot:
     """Publish a lazy public snapshot without materializing retained roots."""
 
@@ -2284,6 +2329,19 @@ def ontology_snapshot_from_native_publication_v2(
     ):
         raise TypeError("_wire_structural_aliases carries an invalid internal seal")
     wire_structural_aliases = _wire_structural_aliases is _WIRE_STRUCTURAL_ALIAS_SEAL_V1
+    if _ingestion_counters is None:
+        ingestion_counters = _NativeIngestionCountersV2()
+    elif type(_ingestion_counters) is _NativeIngestionCountersV2:
+        ingestion_counters = _ingestion_counters
+    else:
+        raise TypeError("_ingestion_counters has the wrong internal type")
+    anonymous_scopes: frozenset[bytes] | None
+    if _anonymous_scope_evidence is None:
+        anonymous_scopes = None
+    elif _anonymous_scope_evidence is _NO_ANONYMOUS_SCOPES_SEAL_V2:
+        anonymous_scopes = frozenset()
+    else:
+        raise TypeError("_anonymous_scope_evidence carries an invalid internal seal")
     selected = require_native_facade_publication_v2(publication)
     shared = _NativeSharedState(selected)
     sidecars = selected.diagnostic_reference_sidecars
@@ -2607,6 +2665,8 @@ def ontology_snapshot_from_native_publication_v2(
             capabilities=_capabilities(selected),
             report=report,
             wire_structural_aliases=wire_structural_aliases,
+            ingestion_counters=ingestion_counters,
+            anonymous_scopes=anonymous_scopes,
         )
         result = _NativeOntologySnapshot(snapshot_state)
         shared.publication_object()

@@ -54,6 +54,11 @@ def main() -> None:
         )
 
     reference = load_snapshot(source, options=options(BackendPreference.PYTHON))
+
+    def unexpected_model_decode(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("installed retained path crossed the complete model decoder")
+
+    native._decode_parsed_functional = unexpected_model_decode  # type: ignore[assignment]
     selected = load_snapshot(source, options=options(BackendPreference.NATIVE))
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
     raw_owner = object.__getattribute__(handle, "_owner_v2")
@@ -66,6 +71,11 @@ def main() -> None:
     expected_roots = tuple((2, canonical_bytes(value)) for value in reference.iter_axioms())
     before_native = raw_owner._publication_counters_v2()
     before_python = cast(Any, selected)._native_python_counters()
+    ingestion = cast(Any, selected)._native_ingestion_counters_v2()
+    if ingestion.eager_structural_objects_materialized != 0:
+        raise AssertionError("retained publication eagerly materialized structural objects")
+    if before_python.model_rows_materialized != 0:
+        raise AssertionError("retained publication eagerly materialized facade model rows")
     direct = selected.view(EncodedStructuralView)
     after_direct_native = raw_owner._publication_counters_v2()
     after_direct_python = cast(Any, selected)._native_python_counters()
@@ -166,6 +176,7 @@ def main() -> None:
     auto_owner = object.__getattribute__(auto_handle, "_owner_v2")
     auto_before_native = auto_owner._publication_counters_v2()
     auto_before_python = cast(Any, auto_selected)._native_python_counters()
+    auto_ingestion = cast(Any, auto_selected)._native_ingestion_counters_v2()
     auto_direct = auto_selected.view(EncodedStructuralView)
     auto_after_direct_native = auto_owner._publication_counters_v2()
     auto_after_direct_python = cast(Any, auto_selected)._native_python_counters()
@@ -248,6 +259,9 @@ def main() -> None:
                 "auto_ignored_manifest_parity": (
                     auto_selected.import_manifest == auto_reference.import_manifest
                 ),
+                "auto_ingestion_eager_structural_objects": (
+                    auto_ingestion.eager_structural_objects_materialized
+                ),
                 "auto_parser_bytes": auto_before_native.parser_bytes,
                 "auto_retained_parity": auto_parity,
                 "auto_source_bytes": len(auto_source),
@@ -266,6 +280,18 @@ def main() -> None:
                     and selected.signature_fingerprint == reference.signature_fingerprint
                 ),
                 "ingestion_features": list(extension.INGESTION_FEATURES),
+                "ingestion_canonical_rows_scanned": ingestion.canonical_rows_scanned,
+                "ingestion_eager_structural_objects": (
+                    ingestion.eager_structural_objects_materialized
+                ),
+                "ingestion_parser_result_bytes": ingestion.parser_result_bytes_scanned,
+                "ingestion_provenance_occurrence_records": (
+                    ingestion.provenance_occurrence_records_materialized
+                ),
+                "ingestion_structural_occurrence_rows_scanned": (
+                    ingestion.structural_occurrence_rows_scanned
+                ),
+                "ingestion_structural_rows_published": (ingestion.structural_root_rows_published),
                 "mapped_closed": mapped_closed,
                 "mapped_close_blocked": mapped_close_blocked,
                 "mapped_fingerprint_parity": mapped_fingerprint_parity,

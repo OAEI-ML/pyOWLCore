@@ -396,8 +396,15 @@ class SnapshotLoader:
                 source,
                 document_iri=document_iri,
                 options=selected,
+                resolver=resolver,
                 cancellation_token=cancellation_token,
+                load_started=started,
+                root_parse_started=root_parse_started,
             )
+            if parsed.snapshot is not None:
+                return parsed.snapshot
+            if parsed.document is None:
+                raise AssertionError("retained root parse did not publish a document")
             root = parsed.document
             native_storage = parsed.native_storage
             native_phase_timings = parsed.phase_timings

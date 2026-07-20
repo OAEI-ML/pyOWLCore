@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.config import BackendPreference, DocumentFormat, LoadOptions
@@ -40,19 +41,25 @@ from pyowl_core.model import (
 
 _NATIVE_AUTO_MIN_SOURCE_BYTES = 256 * 1024
 
+if TYPE_CHECKING:
+    from pyowl_core.document.snapshot import OntologySnapshot
+    from pyowl_core.io.resolver import ImportResolver
+
 
 @dataclass(frozen=True, slots=True)
 class _ParsedPayloadResult:
-    ontology: ParsedOntology
+    ontology: ParsedOntology | None
     native_storage: object | None = None
     phase_timings: tuple[tuple[str, float], ...] = ()
+    native_encoded: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _ParsedDocumentResult:
-    document: OntologyDocument
+    document: OntologyDocument | None
     native_storage: object | None = None
     phase_timings: tuple[tuple[str, float], ...] = ()
+    snapshot: OntologySnapshot | None = None
 
 
 class PythonParser:
@@ -72,7 +79,7 @@ class PythonParser:
         allow_swrl: bool = False,
         cancellation_token: CancellationToken | None = None,
     ) -> OntologyDocument:
-        return self._parse(
+        result = self._parse(
             source,
             format=format,
             document_iri=document_iri,
@@ -82,7 +89,10 @@ class PythonParser:
             allow_swrl=allow_swrl,
             cancellation_token=cancellation_token,
             retain_native_storage=False,
-        ).document
+        )
+        if result.document is None:
+            raise AssertionError("single-document parsing did not publish a document")
+        return result.document
 
     def _parse(
         self,
@@ -96,6 +106,9 @@ class PythonParser:
         allow_swrl: bool = False,
         cancellation_token: CancellationToken | None = None,
         retain_native_storage: bool,
+        retained_resolver: ImportResolver | None = None,
+        retained_load_started: float | None = None,
+        retained_root_parse_started: float | None = None,
     ) -> _ParsedDocumentResult:
         selected_options = LoadOptions() if options is None else options
         if not isinstance(selected_options, LoadOptions):
@@ -152,7 +165,45 @@ class PythonParser:
             backend=selected_backend,
             retain_native_storage=retain_native_storage,
         )
-        parsed = parsed_result.ontology
+        if parsed_result.native_encoded is not None:
+            if (
+                not retain_native_storage
+                or parsed_result.native_storage is None
+                or retained_load_started is None
+                or retained_root_parse_started is None
+            ):
+                raise AssertionError("retained native result has no publication context")
+            from pyowl_core.backends.native_ingestion import (
+                publish_retained_functional_snapshot_v2,
+            )
+
+            snapshot = publish_retained_functional_snapshot_v2(
+                parsed_result.native_encoded,
+                parsed_native_storage=parsed_result.native_storage,
+                phase_timings=parsed_result.phase_timings,
+                payload=payload,
+                detection=detection,
+                document_iri=effective_iri,
+                media_type=media_type,
+                options=selected_options,
+                resolver=retained_resolver,
+                cancellation_token=cancellation_token,
+                load_started=retained_load_started,
+                root_parse_started=retained_root_parse_started,
+            )
+            if snapshot is not None:
+                return _ParsedDocumentResult(None, snapshot=snapshot)
+            from pyowl_core.backends.native import _decode_parsed_functional
+
+            parsed = _decode_parsed_functional(
+                parsed_result.native_encoded,
+                selected_options.limits,
+            )
+        else:
+            selected_parsed = parsed_result.ontology
+            if selected_parsed is None:
+                raise AssertionError("parser returned neither a model nor retained framing")
+            parsed = selected_parsed
         imports, annotations, axioms, extensions = freeze_document_anonymous(
             parsed.ontology_id,
             parsed.imports,
@@ -294,7 +345,10 @@ def _parse_document_for_retained_load(
     *,
     document_iri: IRI | str | None,
     options: LoadOptions,
+    resolver: ImportResolver | None,
     cancellation_token: CancellationToken | None,
+    load_started: float,
+    root_parse_started: float,
 ) -> _ParsedDocumentResult:
     """Parse a root while retaining an unadvertised native structural owner."""
 
@@ -304,6 +358,9 @@ def _parse_document_for_retained_load(
         options=options,
         cancellation_token=cancellation_token,
         retain_native_storage=True,
+        retained_resolver=resolver,
+        retained_load_started=load_started,
+        retained_root_parse_started=root_parse_started,
     )
 
 
@@ -398,6 +455,7 @@ def _parse_payload(
                         retained.parsed,
                         retained.storage,
                         retained.phase_timings,
+                        retained.encoded,
                     )
                 from pyowl_core.backends.dispatch import parse_functional_native
 
