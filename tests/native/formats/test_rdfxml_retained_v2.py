@@ -333,33 +333,41 @@ def test_private_rdfxml_axiom_index_builds_over_the_retained_arena(
     with patch.object(native, "partition_axioms", side_effect=unexpected):
         index = selected.view(AxiomTypeIndex)
     reference_index = reference.view(AxiomTypeIndex)
-    after_python = selected._native_python_counters()
+    after_build = selected._native_python_counters()
 
     native_owner = cast(Any, index)._native_owner
     expected_owner_type = cast(Any, extension)._NativeRetainedAxiomTypeIndexV1
     assert type(native_owner) is expected_owner_type
-    tags, offsets, category_codes, category_offsets, postings, counters = (
-        native_owner._layout_v1()
-    )
+    tags, offsets, category_codes, category_offsets, postings, counters = native_owner._layout_v1()
     assert counters["axiom_rows"] == len(reference.root.axioms)
     assert counters["constructor_groups"] == len(tags)
     assert counters["category_groups"] == len(category_codes)
     assert counters["retained_buffer_bytes"] > 0
     assert counters["peak_owned_bytes"] >= counters["retained_buffer_bytes"]
     assert counters["complete_root_encode_calls"] == 0
+    assert native_owner._canonical_sizes_v1() == tuple(
+        len(canonical_bytes(value)) for value in reference_index.iter_all()
+    )
     assert offsets[0] == category_offsets[0] == 0
     assert offsets[-1] == category_offsets[-1] == len(postings)
     assert postings == tuple(range(len(reference.root.axioms)))
     assert index.report.tables == reference_index.report.tables
+    assert after_build.model_rows_materialized - before_python.model_rows_materialized == 0
     assert tuple(canonical_bytes(value) for value in index.iter_all()) == tuple(
         canonical_bytes(value) for value in reference_index.iter_all()
     )
-    assert after_python.model_rows_materialized - before_python.model_rows_materialized == len(
+    after_iteration = selected._native_python_counters()
+    assert after_iteration.model_rows_materialized - before_python.model_rows_materialized == len(
         reference.root.axioms
     )
+    assert native_owner._layout_v1()[-1]["complete_root_encode_calls"] == len(reference.root.axioms)
 
+    before_close_calls = native_owner._layout_v1()[-1]["complete_root_encode_calls"]
     selected.close()
     assert tuple(index.iter_all()) == tuple(reference_index.iter_all())
+    assert native_owner._layout_v1()[-1]["complete_root_encode_calls"] == (
+        before_close_calls + len(reference.root.axioms)
+    )
 
 
 def test_private_record_unresolved_policy_matches_python_without_resolver() -> None:

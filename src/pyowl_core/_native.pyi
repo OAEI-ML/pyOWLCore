@@ -58,6 +58,8 @@ class _NativeSnapshotHandle:
 class _NativeParsedStructuralStorageV2: ...
 
 class _NativeRetainedAxiomTypeIndexV1:
+    def _binding_v1(self) -> tuple[bytes, bytes]: ...
+    def _canonical_sizes_v1(self) -> tuple[int, ...]: ...
     def _layout_v1(
         self,
     ) -> tuple[
@@ -68,6 +70,15 @@ class _NativeRetainedAxiomTypeIndexV1:
         tuple[int, ...],
         dict[str, int],
     ]: ...
+    def _page_v1(
+        self,
+        tag: int,
+        start: int,
+        max_rows: int,
+        max_bytes: int,
+        config: object,
+        cancel: _Cancellation | None = None,
+    ) -> tuple[tuple[bytes, ...], int, int | None]: ...
 
 class _NativeRetainedSignatureIndexV1:
     def _layout_v1(

@@ -70,32 +70,89 @@ def test_full_build_routes_once_and_matches_python_exactly(
     extension: NativeTestExtension,
 ) -> None:
     python_snapshot = _snapshot("partition", BackendPreference.PYTHON)
-    native_snapshot = _snapshot("partition", BackendPreference.NATIVE)
+    native_snapshot = cast(Any, _snapshot("partition", BackendPreference.NATIVE))
+    before_python = native_snapshot._native_python_counters()
     unexpected = AssertionError("retained index crossed coarse canonical rows")
-    with patch("pyowl_core.backends.native.partition_axioms", side_effect=unexpected):
+    with (
+        patch("pyowl_core.backends.native.partition_axioms", side_effect=unexpected),
+        patch.object(type(native_snapshot), "iter_axioms", side_effect=unexpected),
+    ):
         selected = native_snapshot.view(AxiomTypeIndex)
     reference = python_snapshot.view(AxiomTypeIndex)
+    after_build = native_snapshot._native_python_counters()
     owner = cast(Any, selected)._native_owner
     assert type(owner) is cast(Any, extension)._NativeRetainedAxiomTypeIndexV1
-    *_layout, counters = owner._layout_v1()
+    _, _, _, _, postings, counters = owner._layout_v1()
+    attestation = native_snapshot._native_snapshot_state.owner.handle._attestation_v2()
+    assert owner._binding_v1() == (
+        attestation.root_table_sha256,
+        attestation.effective_root_table_sha256,
+    )
+    expected_rows = tuple(reference.iter_all())
+    assert owner._canonical_sizes_v1() == tuple(
+        len(canonical_bytes(value)) for value in expected_rows
+    )
     assert counters["axiom_rows"] == len(tuple(reference.iter_all()))
     assert counters["complete_root_encode_calls"] == 0
+    assert postings == tuple(range(len(expected_rows)))
+    assert after_build.model_rows_materialized == before_python.model_rows_materialized
     assert selected.report.strategy is ViewBuildStrategy.FULL_BUILD
     assert selected.report.row_count == reference.report.row_count
     assert selected.report.tables == reference.report.tables
+
+    selected_count = selected.count(SubClassOf)
+    assert selected_count == reference.count(SubClassOf)
+    assert owner._layout_v1()[-1]["complete_root_encode_calls"] == 0
+    assert (
+        native_snapshot._native_python_counters().model_rows_materialized
+        == before_python.model_rows_materialized
+    )
+    assert selected.tuple(SubClassOf, limit=0) == ()
+    assert owner._layout_v1()[-1]["complete_root_encode_calls"] == 0
+    assert selected.tuple(SubClassOf, limit=1) == reference.tuple(SubClassOf, limit=1)
+    assert owner._layout_v1()[-1]["complete_root_encode_calls"] == 1
+    subclass_rows = selected.tuple(SubClassOf)
+    assert subclass_rows == reference.tuple(SubClassOf)
+    assert owner._layout_v1()[-1]["complete_root_encode_calls"] == selected_count + 1
+    assert (
+        native_snapshot._native_python_counters().model_rows_materialized
+        - before_python.model_rows_materialized
+        == selected_count
+    )
     assert _rows(selected) == _rows(reference)
     for constructor in AXIOM_TYPES:
         assert selected.tuple(constructor) == reference.tuple(constructor)
+
+    before_close_calls = owner._layout_v1()[-1]["complete_root_encode_calls"]
+    native_snapshot.close()
+    assert native_snapshot.closed
+    assert selected.tuple(SubClassOf) == reference.tuple(SubClassOf)
+    assert owner._layout_v1()[-1]["complete_root_encode_calls"] == (
+        before_close_calls + selected_count
+    )
 
 
 def test_retained_owner_protocol_failure_does_not_fall_back(
     extension: NativeTestExtension,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = _snapshot("invalid-retained-owner", BackendPreference.NATIVE)
+    snapshot = cast(Any, _snapshot("invalid-retained-owner", BackendPreference.NATIVE))
+    foreign = cast(Any, _snapshot("foreign-retained-owner", BackendPreference.NATIVE))
+    operation = cast(Any, extension)._retained_axiom_type_index_v1
+    foreign_raw_owner = object.__getattribute__(
+        foreign._native_snapshot_state.owner.handle,
+        "_owner_v2",
+    )
+    foreign_owner = operation(
+        foreign_raw_owner,
+        "closure",
+        None,
+        native._encode_config(foreign.load_options.limits, None, verify=False),
+        None,
+    )
 
     def wrong_owner(*_args: object) -> object:
-        return object()
+        return foreign_owner
 
     monkeypatch.setattr(
         cast(Any, extension),

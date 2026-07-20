@@ -810,6 +810,13 @@ impl PublicationStorageV2 {
         )
     }
 
+    pub(crate) const fn retained_axiom_type_binding_v1(&self) -> (&Digest, &Digest) {
+        (
+            &self.attestation.root_table_sha256,
+            &self.attestation.effective_root_table_sha256,
+        )
+    }
+
     pub(super) fn bump_close(&self, transitioned: bool) -> PyResult<()> {
         self.counters
             .close(transitioned)

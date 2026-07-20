@@ -240,7 +240,8 @@ fn _retained_ontology_identity_index_v1(
     skip_from_py_object
 )]
 struct NativeRetainedAxiomTypeIndexV1 {
-    index: crate::index::RetainedAxiomTypeIndexV1,
+    storage: Arc<crate::publication::PublicationStorageV2>,
+    index: Arc<crate::index::RetainedAxiomTypeIndexV1>,
 }
 
 type PyRetainedAxiomTypeLayoutV1 = (
@@ -254,6 +255,19 @@ type PyRetainedAxiomTypeLayoutV1 = (
 
 #[pymethods]
 impl NativeRetainedAxiomTypeIndexV1 {
+    fn _binding_v1<'py>(&self, py: Python<'py>) -> (Py<PyBytes>, Py<PyBytes>) {
+        let (root_table_sha256, effective_root_table_sha256) =
+            self.storage.retained_axiom_type_binding_v1();
+        (
+            PyBytes::new(py, root_table_sha256).unbind(),
+            PyBytes::new(py, effective_root_table_sha256).unbind(),
+        )
+    }
+
+    fn _canonical_sizes_v1<'py>(&self, py: Python<'py>) -> PyResult<Py<PyTuple>> {
+        Ok(PyTuple::new(py, self.index.canonical_sizes().iter().copied())?.unbind())
+    }
+
     fn _layout_v1<'py>(&self, py: Python<'py>) -> PyResult<PyRetainedAxiomTypeLayoutV1> {
         let tags = PyTuple::new(py, self.index.tags().iter().copied())?.unbind();
         let offsets = PyTuple::new(py, self.index.offsets().iter().copied())?.unbind();
@@ -273,7 +287,7 @@ impl NativeRetainedAxiomTypeIndexV1 {
             ("canonical_work", counters.canonical_work),
             (
                 "complete_root_encode_calls",
-                counters.complete_root_encode_calls,
+                self.index.complete_root_encode_calls(),
             ),
         ] {
             observed.set_item(name, value)?;
@@ -286,6 +300,40 @@ impl NativeRetainedAxiomTypeIndexV1 {
             postings,
             observed.unbind(),
         ))
+    }
+
+    #[pyo3(signature = (tag, start, max_rows, max_bytes, config, cancel=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn _page_v1<'py>(
+        &self,
+        py: Python<'py>,
+        tag: u16,
+        start: u64,
+        max_rows: u32,
+        max_bytes: u64,
+        config: &Bound<'py, PyAny>,
+        cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    ) -> PyResult<(Py<PyTuple>, u64, Option<u64>)> {
+        let limits = crate::limits_from_python(config)?;
+        let cancellation = crate::cancellation_or_default(cancel);
+        let index = Arc::clone(&self.index);
+        let page = crate::run_detached(py, move |interrupt| {
+            index.constructor_page(
+                tag,
+                start,
+                max_rows,
+                max_bytes,
+                &limits,
+                cancellation,
+                Some(interrupt),
+            )
+        })?;
+        let rows = PyTuple::new(
+            py,
+            page.rows.iter().map(|row| PyBytes::new(py, row).unbind()),
+        )?
+        .unbind();
+        Ok((rows, page.total_count, page.next_cursor))
     }
 }
 
@@ -313,6 +361,7 @@ fn _retained_axiom_type_index_v1<'py>(
     let cancellation = crate::cancellation_or_default(cancel);
     let storage = handle.encoded_storage_v2(py)?;
     drop(handle);
+    let owner = Arc::clone(&storage);
     let index = crate::run_detached(py, move |interrupt| {
         storage.retained_axiom_type_index(
             selected_scope,
@@ -323,7 +372,10 @@ fn _retained_axiom_type_index_v1<'py>(
             Some(interrupt),
         )
     })?;
-    Ok(NativeRetainedAxiomTypeIndexV1 { index })
+    Ok(NativeRetainedAxiomTypeIndexV1 {
+        storage: owner,
+        index: Arc::new(index),
+    })
 }
 
 /// Exercise raw document-owner selection without relaxing the snapshot

@@ -1,6 +1,7 @@
 //! Direct axiom-constructor postings over retained component identifiers.
 
 use std::mem::size_of;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::cancel::{Cancellation, Guard, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
@@ -25,12 +26,23 @@ pub(crate) struct RetainedAxiomTypeIndexCountersV1 {
 #[derive(Debug)]
 pub(crate) struct RetainedAxiomTypeIndexV1 {
     owner: NativeComponentArena,
+    roots: Vec<ComponentId>,
     tags: Vec<u16>,
     offsets: Vec<u64>,
     category_codes: Vec<u8>,
     category_offsets: Vec<u64>,
     postings: Vec<u64>,
+    canonical_sizes: Vec<u64>,
+    caller_external_bytes: usize,
+    complete_root_encode_calls: AtomicU64,
     counters: RetainedAxiomTypeIndexCountersV1,
+}
+
+#[derive(Debug)]
+pub(crate) struct RetainedAxiomTypePageV1 {
+    pub(crate) total_count: u64,
+    pub(crate) next_cursor: Option<u64>,
+    pub(crate) rows: Vec<Vec<u8>>,
 }
 
 impl RetainedAxiomTypeIndexV1 {
@@ -50,6 +62,10 @@ impl RetainedAxiomTypeIndexV1 {
         &self.postings
     }
 
+    pub(crate) fn canonical_sizes(&self) -> &[u64] {
+        &self.canonical_sizes
+    }
+
     pub(crate) fn category_codes(&self) -> &[u8] {
         &self.category_codes
     }
@@ -61,6 +77,137 @@ impl RetainedAxiomTypeIndexV1 {
     pub(crate) const fn counters(&self) -> &RetainedAxiomTypeIndexCountersV1 {
         &self.counters
     }
+
+    pub(crate) fn complete_root_encode_calls(&self) -> u64 {
+        self.complete_root_encode_calls.load(Ordering::Acquire)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn constructor_page(
+        &self,
+        tag: u16,
+        start: u64,
+        max_rows: u32,
+        max_bytes: u64,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> NativeResult<RetainedAxiomTypePageV1> {
+        if max_rows == 0 || max_rows > 64 || max_bytes == 0 || max_bytes > 8 * 1024 * 1024 {
+            return Err(NativeError::protocol(
+                "retained axiom-type page bounds are invalid",
+            ));
+        }
+        if max_bytes > limits.value(LimitKey::MaxTemporaryBytes) {
+            return Err(NativeError::limit(
+                "retained axiom-type page exceeds max_temporary_bytes",
+            ));
+        }
+        let group = self.tags.binary_search(&tag).ok();
+        let (posting_start, posting_stop) = group.map_or((0_usize, 0_usize), |group| {
+            (
+                usize::try_from(self.offsets[group]).unwrap_or(usize::MAX),
+                usize::try_from(self.offsets[group + 1]).unwrap_or(usize::MAX),
+            )
+        });
+        if posting_start > posting_stop || posting_stop > self.postings.len() {
+            return Err(NativeError::protocol(
+                "retained axiom-type page offsets are invalid",
+            ));
+        }
+        let total_count = u64::try_from(posting_stop - posting_start)
+            .map_err(|_| NativeError::limit("retained axiom-type page total exceeds u64"))?;
+        if start > total_count {
+            return Err(NativeError::protocol(
+                "retained axiom-type page start exceeds its total",
+            ));
+        }
+        let start = usize::try_from(start)
+            .map_err(|_| NativeError::limit("retained axiom-type page start exceeds usize"))?;
+        let available = posting_stop - posting_start - start;
+        let row_count = available.min(max_rows as usize);
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(row_count)
+            .map_err(|_| NativeError::limit("retained axiom-type page allocation failed"))?;
+        let outer_bytes = rows
+            .capacity()
+            .checked_mul(size_of::<Vec<u8>>())
+            .ok_or_else(|| NativeError::limit("retained axiom-type page size overflow"))?;
+        let retained_index_bytes = usize::try_from(self.counters.retained_buffer_bytes)
+            .map_err(|_| NativeError::limit("retained axiom-type buffers exceed usize"))?;
+        let mut payload_bytes = 0_u64;
+        let mut retained_payload_bytes = 0_usize;
+        for position in posting_start + start..posting_start + start + row_count {
+            cancellation.checkpoint()?;
+            let ordinal = usize::try_from(self.postings[position])
+                .map_err(|_| NativeError::limit("retained axiom-type posting exceeds usize"))?;
+            let identifier = self.roots.get(ordinal).copied().ok_or_else(|| {
+                NativeError::protocol("retained axiom-type posting is out of bounds")
+            })?;
+            let row_bytes = *self.canonical_sizes.get(ordinal).ok_or_else(|| {
+                NativeError::protocol("retained axiom-type canonical size is absent")
+            })?;
+            if !rows.is_empty()
+                && payload_bytes
+                    .checked_add(row_bytes)
+                    .is_none_or(|following| following > max_bytes)
+            {
+                break;
+            }
+            let external_bytes = self
+                .caller_external_bytes
+                .checked_add(retained_index_bytes)
+                .and_then(|value| value.checked_add(outer_bytes))
+                .and_then(|value| value.checked_add(retained_payload_bytes))
+                .ok_or_else(|| NativeError::limit("retained axiom-type page memory overflow"))?;
+            let row = self.owner.encode(
+                identifier,
+                limits,
+                cancellation.clone(),
+                interrupt.clone(),
+                external_bytes,
+            )?;
+            if u64::try_from(row.len()) != Ok(row_bytes) {
+                return Err(NativeError::protocol(
+                    "retained axiom-type canonical row size drifted",
+                ));
+            }
+            retained_payload_bytes = retained_payload_bytes
+                .checked_add(row.capacity())
+                .ok_or_else(|| NativeError::limit("retained axiom-type payload overflow"))?;
+            let temporary_bytes = outer_bytes
+                .checked_add(retained_payload_bytes)
+                .ok_or_else(|| NativeError::limit("retained axiom-type page memory overflow"))?;
+            if u64::try_from(temporary_bytes).map_or(true, |value| {
+                value > limits.value(LimitKey::MaxTemporaryBytes)
+            }) {
+                return Err(NativeError::limit(
+                    "retained axiom-type page exceeds max_temporary_bytes",
+                ));
+            }
+            payload_bytes = payload_bytes
+                .checked_add(row_bytes)
+                .ok_or_else(|| NativeError::limit("retained axiom-type page bytes overflow"))?;
+            rows.push(row);
+        }
+        cancellation.checkpoint()?;
+        let emitted = u64::try_from(rows.len())
+            .map_err(|_| NativeError::limit("retained axiom-type emitted rows exceed u64"))?;
+        self.complete_root_encode_calls
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_add(emitted)
+            })
+            .map_err(|_| NativeError::limit("retained axiom-type encode counter overflow"))?;
+        let end = u64::try_from(start)
+            .ok()
+            .and_then(|value| value.checked_add(emitted))
+            .ok_or_else(|| NativeError::limit("retained axiom-type page cursor overflow"))?;
+        Ok(RetainedAxiomTypePageV1 {
+            total_count,
+            next_cursor: (end != total_count).then_some(end),
+            rows,
+        })
+    }
 }
 
 pub(crate) fn build_retained_axiom_type_index_v1(
@@ -71,6 +218,8 @@ pub(crate) fn build_retained_axiom_type_index_v1(
     interrupt: Option<InterruptSlot>,
     caller_external_bytes: usize,
 ) -> NativeResult<RetainedAxiomTypeIndexV1> {
+    let size_cancellation = cancellation.clone();
+    let size_interrupt = interrupt.clone();
     let root_rows = u64::try_from(roots.len())
         .map_err(|_| NativeError::limit("retained axiom-type row count exceeds u64"))?;
     if root_rows > limits.max_axioms || root_rows > limits.value(LimitKey::MaxIndexRows) {
@@ -139,6 +288,8 @@ pub(crate) fn build_retained_axiom_type_index_v1(
         category_groups,
         category_offset_count,
         roots.len(),
+        roots.len(),
+        roots.len(),
     )?;
     check_memory(arena, caller_external_bytes, minimum_buffer_bytes, limits)?;
     work = work
@@ -172,12 +323,23 @@ pub(crate) fn build_retained_axiom_type_index_v1(
     postings
         .try_reserve_exact(roots.len())
         .map_err(|_| NativeError::limit("retained axiom-type posting allocation failed"))?;
+    let mut retained_roots = Vec::new();
+    retained_roots
+        .try_reserve_exact(roots.len())
+        .map_err(|_| NativeError::limit("retained axiom-type root allocation failed"))?;
+    retained_roots.extend_from_slice(roots);
+    let mut canonical_sizes = Vec::new();
+    canonical_sizes
+        .try_reserve_exact(roots.len())
+        .map_err(|_| NativeError::limit("retained axiom-type size allocation failed"))?;
     let buffer_bytes = retained_buffer_bytes(
         tags.capacity(),
         offsets.capacity(),
         category_codes.capacity(),
         category_offsets.capacity(),
         postings.capacity(),
+        retained_roots.capacity(),
+        canonical_sizes.capacity(),
     )?;
     check_memory(arena, caller_external_bytes, buffer_bytes, limits)?;
     let allocation_slack = buffer_bytes
@@ -200,6 +362,22 @@ pub(crate) fn build_retained_axiom_type_index_v1(
     previous_category = None;
     for (ordinal, identifier) in roots.iter().copied().enumerate() {
         step(&mut guard, &mut work, limits)?;
+        canonical_sizes.push(
+            u64::try_from(
+                arena.encoded_len(
+                    identifier,
+                    limits,
+                    size_cancellation.clone(),
+                    size_interrupt.clone(),
+                    caller_external_bytes
+                        .checked_add(buffer_bytes)
+                        .ok_or_else(|| {
+                            NativeError::limit("retained axiom-type size memory overflow")
+                        })?,
+                )?,
+            )
+            .map_err(|_| NativeError::limit("retained axiom-type row size exceeds u64"))?,
+        );
         let tag = arena.tag(identifier)?;
         let category = axiom_category_code(tag).ok_or_else(|| {
             NativeError::protocol("retained axiom-type category changed during construction")
@@ -246,6 +424,9 @@ pub(crate) fn build_retained_axiom_type_index_v1(
         || category_codes.len() != category_groups
         || category_offsets.len() != category_offset_count
         || postings.len() != roots.len()
+        || retained_roots.len() != roots.len()
+        || canonical_sizes.len() != roots.len()
+        || canonical_sizes.contains(&0)
     {
         return Err(NativeError::protocol(
             "retained axiom-type layout accounting drifted",
@@ -266,11 +447,15 @@ pub(crate) fn build_retained_axiom_type_index_v1(
         .map_err(|_| NativeError::limit("retained axiom-type category count exceeds u64"))?;
     Ok(RetainedAxiomTypeIndexV1 {
         owner: arena.clone(),
+        roots: retained_roots,
         tags,
         offsets,
         category_codes,
         category_offsets,
         postings,
+        canonical_sizes,
+        caller_external_bytes,
+        complete_root_encode_calls: AtomicU64::new(0),
         counters: RetainedAxiomTypeIndexCountersV1 {
             axiom_rows: root_rows,
             constructor_groups,
@@ -310,6 +495,8 @@ fn retained_buffer_bytes(
     categories: usize,
     category_offsets: usize,
     postings: usize,
+    roots: usize,
+    canonical_sizes: usize,
 ) -> NativeResult<usize> {
     tags.checked_mul(size_of::<u16>())
         .and_then(|value| {
@@ -325,6 +512,16 @@ fn retained_buffer_bytes(
         })
         .and_then(|value| {
             postings
+                .checked_mul(size_of::<u64>())
+                .and_then(|part| value.checked_add(part))
+        })
+        .and_then(|value| {
+            roots
+                .checked_mul(size_of::<ComponentId>())
+                .and_then(|part| value.checked_add(part))
+        })
+        .and_then(|value| {
+            canonical_sizes
                 .checked_mul(size_of::<u64>())
                 .and_then(|part| value.checked_add(part))
         })
@@ -471,9 +668,131 @@ mod tests {
                     + index.category_codes.capacity()
                     + index.category_offsets.capacity() * size_of::<u64>()
                     + index.postings.capacity() * size_of::<u64>()
+                    + index.roots.capacity() * size_of::<ComponentId>()
+                    + index.canonical_sizes.capacity() * size_of::<u64>()
             )
             .expect("allocated byte count")
         );
+    }
+
+    #[test]
+    fn retained_index_pages_only_the_selected_constructor_with_exact_cursors() {
+        let rows = vec![
+            declaration("urn:a"),
+            declaration("urn:b"),
+            subclass("urn:a", "urn:b"),
+        ];
+        let (arena, roots) = arena(&rows);
+        let index = build_retained_axiom_type_index_v1(
+            &arena,
+            &roots,
+            &Limits::default(),
+            Cancellation::with_duration(None),
+            None,
+            0,
+        )
+        .expect("retained index");
+
+        assert_eq!(
+            index.canonical_sizes(),
+            rows.iter()
+                .map(|row| u64::try_from(row.len()).expect("row size"))
+                .collect::<Vec<_>>()
+        );
+        let first = index
+            .constructor_page(
+                60,
+                0,
+                1,
+                8 * 1024 * 1024,
+                &Limits::default(),
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("first page");
+        assert_eq!(first.rows, rows[..1]);
+        assert_eq!(first.total_count, 2);
+        assert_eq!(first.next_cursor, Some(1));
+        assert_eq!(index.complete_root_encode_calls(), 1);
+
+        let second = index
+            .constructor_page(
+                60,
+                1,
+                64,
+                8 * 1024 * 1024,
+                &Limits::default(),
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("second page");
+        assert_eq!(second.rows, rows[1..2]);
+        assert_eq!(second.total_count, 2);
+        assert_eq!(second.next_cursor, None);
+        assert_eq!(index.complete_root_encode_calls(), 2);
+
+        let absent = index
+            .constructor_page(
+                120,
+                0,
+                64,
+                8 * 1024 * 1024,
+                &Limits::default(),
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("absent constructor");
+        assert!(absent.rows.is_empty());
+        assert_eq!(absent.total_count, 0);
+        assert_eq!(absent.next_cursor, None);
+        assert_eq!(index.complete_root_encode_calls(), 2);
+
+        assert_eq!(
+            index
+                .constructor_page(
+                    60,
+                    3,
+                    64,
+                    8 * 1024 * 1024,
+                    &Limits::default(),
+                    Cancellation::with_duration(None),
+                    None,
+                )
+                .unwrap_err()
+                .code,
+            "NATIVE_PROTOCOL"
+        );
+        assert_eq!(
+            index
+                .constructor_page(
+                    60,
+                    0,
+                    65,
+                    8 * 1024 * 1024,
+                    &Limits::default(),
+                    Cancellation::with_duration(None),
+                    None,
+                )
+                .unwrap_err()
+                .code,
+            "NATIVE_PROTOCOL"
+        );
+        assert_eq!(
+            index
+                .constructor_page(
+                    61,
+                    0,
+                    64,
+                    8 * 1024 * 1024,
+                    &Limits::default(),
+                    Cancellation::with_duration(Some(std::time::Duration::ZERO)),
+                    None,
+                )
+                .unwrap_err()
+                .code,
+            "NATIVE_DEADLINE"
+        );
+        assert_eq!(index.complete_root_encode_calls(), 2);
     }
 
     #[test]

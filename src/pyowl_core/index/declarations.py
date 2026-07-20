@@ -15,6 +15,7 @@ from pyowl_core.document.snapshot import AxiomScope, OntologyView, _is_ontology_
 from pyowl_core.model import Entity, canonical_bytes
 from pyowl_core.model.axioms import Declaration
 
+from .axiom_types import AxiomTypeIndex
 from .cache import (
     IndexBuildBudget,
     ViewBuildReport,
@@ -170,14 +171,27 @@ class DeclarationIndex:
                 ),
             )
         postings: dict[Entity, list[Declaration]] = {}
-        for value in view.iter_axioms(
-            Declaration,
-            scope=options.scope,
-            document_key=options.document_key,
-        ):
-            declaration = cast(Declaration, value)
-            postings.setdefault(declaration.entity, []).append(declaration)
-            budget.add("declarations", bytes_=64 + len(canonical_bytes(declaration)))
+        if getattr(view, "_native_snapshot_state", None) is not None:
+            axiom_index = view.view(
+                AxiomTypeIndex,
+                scope=options.scope,
+                document_key=options.document_key,
+                include_origins=False,
+                cancellation_token=cancellation_token,
+            )
+            declarations: Iterable[Declaration] = axiom_index.iter(Declaration)
+        else:
+            declarations = cast(
+                Iterable[Declaration],
+                view.iter_axioms(
+                    Declaration,
+                    scope=options.scope,
+                    document_key=options.document_key,
+                ),
+            )
+        for value in declarations:
+            postings.setdefault(value.entity, []).append(value)
+            budget.add("declarations", bytes_=64 + len(canonical_bytes(value)))
         return cls(
             view,
             options,

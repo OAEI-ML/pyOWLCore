@@ -10,7 +10,7 @@ import re
 import struct
 import sysconfig
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
@@ -81,6 +81,10 @@ class _NativeCancellation(Protocol):
 
 
 class _NativeRetainedAxiomTypeIndex(Protocol):
+    def _binding_v1(self) -> tuple[bytes, bytes]: ...
+
+    def _canonical_sizes_v1(self) -> tuple[int, ...]: ...
+
     def _layout_v1(
         self,
     ) -> tuple[
@@ -91,6 +95,16 @@ class _NativeRetainedAxiomTypeIndex(Protocol):
         tuple[int, ...],
         dict[str, int],
     ]: ...
+
+    def _page_v1(
+        self,
+        tag: int,
+        start: int,
+        max_rows: int,
+        max_bytes: int,
+        config: object,
+        cancel: _NativeCancellation | None = None,
+    ) -> tuple[tuple[bytes, ...], int, int | None]: ...
 
 
 class _NativeRetainedSignatureIndex(Protocol):
@@ -207,6 +221,7 @@ class NativeRetainedAxiomPartition:
     category_codes: tuple[int, ...]
     category_offsets: tuple[int, ...]
     postings: tuple[int, ...]
+    canonical_sizes: tuple[int, ...]
     axiom_rows: int
     constructor_groups: int
     category_groups: int
@@ -695,7 +710,37 @@ def _retained_axiom_partition_v1(
             "native retained index returned an invalid owner",
             code="NATIVE_INDEX_RESULT",
         )
-    layout = cast(_NativeRetainedAxiomTypeIndex, raw_index)._layout_v1()
+    retained_owner = cast(_NativeRetainedAxiomTypeIndex, raw_index)
+    binding = retained_owner._binding_v1()
+    attestation_method = getattr(handle, "_attestation_v2", None)
+    if (
+        type(binding) is not tuple
+        or len(binding) != 2
+        or any(type(value) is not bytes or len(value) != 32 for value in binding)
+        or not callable(attestation_method)
+    ):
+        raise BackendProtocolError(
+            "native retained index returned an invalid publication binding",
+            code="NATIVE_INDEX_RESULT",
+        )
+    attestation = attestation_method()
+    if binding != (
+        getattr(attestation, "root_table_sha256", None),
+        getattr(attestation, "effective_root_table_sha256", None),
+    ):
+        raise BackendProtocolError(
+            "native retained index belongs to a foreign publication",
+            code="NATIVE_INDEX_RESULT",
+        )
+    canonical_sizes = retained_owner._canonical_sizes_v1()
+    if type(canonical_sizes) is not tuple or any(
+        type(value) is not int or not 0 < value < 1 << 64 for value in canonical_sizes
+    ):
+        raise BackendProtocolError(
+            "native retained index returned invalid canonical sizes",
+            code="NATIVE_INDEX_RESULT",
+        )
+    layout = retained_owner._layout_v1()
     if type(layout) is not tuple or len(layout) != 6:
         raise BackendProtocolError(
             "native retained index returned invalid framing",
@@ -725,8 +770,10 @@ def _retained_axiom_partition_v1(
         "canonical_work",
         "complete_root_encode_calls",
     }
-    if type(counters) is not dict or set(counters) != expected_counter_names or any(
-        type(value) is not int or value < 0 for value in counters.values()
+    if (
+        type(counters) is not dict
+        or set(counters) != expected_counter_names
+        or any(type(value) is not int or value < 0 for value in counters.values())
     ):
         raise BackendProtocolError(
             "native retained index returned invalid counters",
@@ -743,11 +790,9 @@ def _retained_axiom_partition_v1(
         or offsets[-1] != len(postings)
         or category_offsets[-1] != len(postings)
         or any(left > right for left, right in pairwise(offsets))
-        or any(
-            left > right
-            for left, right in pairwise(category_offsets)
-        )
+        or any(left > right for left, right in pairwise(category_offsets))
         or postings != tuple(range(len(postings)))
+        or len(canonical_sizes) != len(postings)
         or counters["axiom_rows"] != len(postings)
         or counters["constructor_groups"] != len(tags)
         or counters["category_groups"] != len(category_codes)
@@ -758,6 +803,39 @@ def _retained_axiom_partition_v1(
             "native retained index layout is internally inconsistent",
             code="NATIVE_INDEX_RESULT",
         )
+    from pyowl_core.model.axioms import AxiomNode
+    from pyowl_core.model.registry import SPEC_BY_TAG
+
+    category_code_by_name = {
+        "declaration_axiom": 1,
+        "logical_axiom": 2,
+        "annotation_axiom": 3,
+    }
+    expected_category_codes: list[int] = []
+    expected_category_offsets = [0]
+    previous_category: int | None = None
+    for group, tag in enumerate(tags):
+        spec = SPEC_BY_TAG.get(tag)
+        category = None if spec is None else category_code_by_name.get(spec.category)
+        if spec is None or not issubclass(spec.constructor, AxiomNode) or category is None:
+            raise BackendProtocolError(
+                "native retained index contains an unknown axiom tag",
+                code="NATIVE_INDEX_RESULT",
+            )
+        if category != previous_category:
+            if previous_category is not None:
+                expected_category_offsets.append(offsets[group])
+            expected_category_codes.append(category)
+            previous_category = category
+    if expected_category_codes:
+        expected_category_offsets.append(len(postings))
+    if category_codes != tuple(expected_category_codes) or category_offsets != tuple(
+        expected_category_offsets
+    ):
+        raise BackendProtocolError(
+            "native retained index category groups diverge from the model schema",
+            code="NATIVE_INDEX_RESULT",
+        )
     return NativeRetainedAxiomPartition(
         cast(_NativeRetainedAxiomTypeIndex, raw_index),
         tags,
@@ -765,6 +843,7 @@ def _retained_axiom_partition_v1(
         category_codes,
         category_offsets,
         postings,
+        canonical_sizes,
         counters["axiom_rows"],
         counters["constructor_groups"],
         counters["category_groups"],
@@ -773,6 +852,126 @@ def _retained_axiom_partition_v1(
         counters["canonical_work"],
         counters["complete_root_encode_calls"],
     )
+
+
+def _iter_retained_axiom_rows_v1(
+    partition: NativeRetainedAxiomPartition,
+    *,
+    tag: int,
+    limits: ParseLimits,
+    cancellation_token: CancellationToken | None = None,
+) -> Iterator[bytes]:
+    """Page one exact constructor directly from a retained arena owner."""
+
+    if type(partition) is not NativeRetainedAxiomPartition:
+        raise TypeError("partition must be NativeRetainedAxiomPartition")
+    if type(tag) is not int or not 0 <= tag <= 0xFFFF:
+        raise ValueError("tag must be an unsigned 16-bit integer")
+    if not isinstance(limits, ParseLimits):
+        raise TypeError("limits must be ParseLimits")
+    try:
+        group = partition.tags.index(tag)
+    except ValueError:
+        expected_total = 0
+        posting_start = 0
+    else:
+        posting_start = partition.offsets[group]
+        expected_total = partition.offsets[group + 1] - posting_start
+    try:
+        extension = cast(_Extension, importlib.import_module(type(partition.owner).__module__))
+    except (ImportError, ValueError) as error:
+        raise BackendProtocolError(
+            "native retained index owner module is unavailable",
+            code="NATIVE_INDEX_RESULT",
+        ) from error
+    operation = getattr(partition.owner, "_page_v1", None)
+    if not callable(operation):
+        raise BackendProtocolError(
+            "native retained index owner has no paging operation",
+            code="NATIVE_INDEX_RESULT",
+        )
+    page_bytes = min(
+        8 * 1024 * 1024,
+        limits.max_temporary_bytes,
+        limits.max_index_bytes,
+        limits.max_wire_bytes,
+        *(() if limits.max_memory_bytes is None else (limits.max_memory_bytes,)),
+    )
+    if page_bytes < 1:
+        raise ResourceLimitError(
+            "retained axiom page has no available temporary budget",
+            limit="max_temporary_bytes",
+            observed=1,
+            allowed=page_bytes,
+        )
+    config = _encode_config(limits, cancellation_token, verify=False)
+    cursor = 0
+    with _relay(extension, limits, cancellation_token) as cancel:
+        while True:
+
+            def page_call(selected_cursor: int = cursor) -> object:
+                return cast(Callable[..., object], operation)(
+                    tag,
+                    selected_cursor,
+                    64,
+                    page_bytes,
+                    config,
+                    cancel,
+                )
+
+            raw_page = _call_index_value(
+                extension,
+                page_call,
+            )
+            if type(raw_page) is not tuple or len(raw_page) != 3:
+                raise BackendProtocolError(
+                    "native retained index returned invalid page framing",
+                    code="NATIVE_INDEX_RESULT",
+                )
+            rows, total_count, next_cursor = raw_page
+            if (
+                type(rows) is not tuple
+                or len(rows) > 64
+                or any(type(row) is not bytes or not row for row in rows)
+                or type(total_count) is not int
+                or total_count != expected_total
+                or (
+                    next_cursor is not None
+                    and (type(next_cursor) is not int or next_cursor <= cursor)
+                )
+                or (not rows and next_cursor is not None)
+            ):
+                raise BackendProtocolError(
+                    "native retained index returned an inconsistent page",
+                    code="NATIVE_INDEX_RESULT",
+                )
+            for offset, row in enumerate(rows):
+                posting_index = posting_start + cursor + offset
+                if posting_index >= len(partition.postings):
+                    raise BackendProtocolError(
+                        "native retained index page exceeds its postings",
+                        code="NATIVE_INDEX_RESULT",
+                    )
+                ordinal = partition.postings[posting_index]
+                if len(row) != partition.canonical_sizes[ordinal]:
+                    raise BackendProtocolError(
+                        "native retained index page row has the wrong size",
+                        code="NATIVE_INDEX_RESULT",
+                    )
+                yield row
+            if next_cursor is None:
+                if cursor + len(rows) != expected_total:
+                    raise BackendProtocolError(
+                        "native retained index terminated before its total",
+                        code="NATIVE_INDEX_RESULT",
+                    )
+                return
+            if next_cursor != cursor + len(rows) or next_cursor >= expected_total:
+                raise BackendProtocolError(
+                    "native retained index returned an invalid next cursor",
+                    code="NATIVE_INDEX_RESULT",
+                )
+            cursor = next_cursor
 
 
 def _retained_signature_counts_v1(

@@ -758,6 +758,8 @@ impl TypedFacadeStorageV2 {
                 .copied()
                 .enumerate()
                 .any(|(ordinal, posting)| u64::try_from(ordinal) != Ok(posting))
+            || index.canonical_sizes().len() != roots.len()
+            || index.canonical_sizes().contains(&0)
             || counters.axiom_rows
                 != u64::try_from(roots.len())
                     .map_err(|_| NativeError::limit("typed V2 axiom-type root count exceeds u64"))?
@@ -770,6 +772,7 @@ impl TypedFacadeStorageV2 {
                     NativeError::limit("typed V2 axiom category group count exceeds u64")
                 })?
             || counters.complete_root_encode_calls != 0
+            || index.complete_root_encode_calls() != 0
         {
             return Err(NativeError::protocol(
                 "typed V2 retained axiom-type layout drifted",
