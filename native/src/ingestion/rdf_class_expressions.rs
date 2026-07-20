@@ -34,20 +34,6 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         }
     }
 
-    pub(crate) fn decode_resource(
-        &mut self,
-        value: RdfResource<'data>,
-        session: &mut Session<'_>,
-    ) -> NativeResult<DecodedClassExpression> {
-        self.decode_term(
-            match value {
-                RdfResource::Iri(value) => RdfTerm::Iri(value),
-                RdfResource::Blank(value) => RdfTerm::Blank(value),
-            },
-            session,
-        )
-    }
-
     pub(crate) fn decode_term(
         &mut self,
         value: RdfTerm<'data>,

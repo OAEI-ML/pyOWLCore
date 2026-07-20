@@ -5,9 +5,7 @@
 //! retained V2 constructor can consume the same `CanonicalDocument` without
 //! replacing the parser.
 
-#[allow(dead_code)]
 mod rdf_class_expressions;
-#[allow(dead_code)]
 mod rdf_lists;
 mod rdfxml;
 #[cfg(any(test, feature = "test-hooks"))]

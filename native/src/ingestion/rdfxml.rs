@@ -1,16 +1,18 @@
-//! Forward-only UTF-8 RDF/XML tokenization and the first closed OWL mapping slice.
+//! Forward-only UTF-8 RDF/XML tokenization and a closed OWL mapping slice.
 //!
 //! This intentionally unadvertised slice accepts ontology headers, imports,
-//! named entity declarations, and the closed named-node axiom subset that does
-//! not require RDF-list or blank-expression decoding. The event/token model is
-//! not tied to that subset: later RDF/XML productions extend the graph sink and
-//! RDF mapper rather than replacing the bounded XML scanner.
+//! named entity declarations, named axioms, and boolean class expressions. The
+//! event/token model is not tied to that subset: later RDF/XML productions
+//! extend the graph sink and RDF mapper rather than replacing the bounded XML
+//! scanner.
 
 use crate::canonical::{canonical_set, entity, iri, Field, Node};
 use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
 use crate::session::Session;
 
+use super::rdf_class_expressions::{DecodedClassExpression, RdfClassExpressionDecoder};
+use super::rdf_lists::{RdfResource as ListResource, RdfTerm as ListTerm, RdfTriple as ListTriple};
 use super::{CanonicalDocument, MappingEvidence};
 
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -1196,8 +1198,11 @@ fn map_graph(
         let Some(kind) = declaration_kind(object) else {
             continue;
         };
+        // A blank `rdf:type owl:Class` is an optional structural-expression
+        // marker rather than an OWL Declaration axiom.  Its owning expression
+        // decoder consumes the exact marker later.
         let Resource::Iri(subject) = &triple.subject else {
-            return Err(rdf_mapping_type());
+            continue;
         };
         super::check_iri(
             subject,
@@ -1215,18 +1220,18 @@ fn map_graph(
         push_axiom(declaration, &mut axioms, session)?;
         consumed[index] = true;
     }
-    map_equivalent_components(
-        OWL_EQUIVALENT_CLASS,
-        EquivalentKind::Class,
-        &triples,
+    let list_graph = list_graph_view(&triples, session)?;
+    let mut expressions = RdfClassExpressionDecoder::new(&list_graph);
+    map_equivalent_class_components(
+        &list_graph,
         &mut consumed,
         &kinds,
+        &mut expressions,
         &mut axioms,
         session,
     )?;
-    map_equivalent_components(
+    map_equivalent_property_components(
         OWL_EQUIVALENT_PROPERTY,
-        EquivalentKind::Property,
         &triples,
         &mut consumed,
         &kinds,
@@ -1238,7 +1243,17 @@ fn map_graph(
             continue;
         }
         session.step(1)?;
-        if let Some(axiom) = named_axiom(triple, &kinds, session)? {
+        let class_axiom = class_expression_axiom(
+            &list_graph[index],
+            &kinds,
+            &mut expressions,
+            &mut consumed,
+            session,
+        )?;
+        if let Some(axiom) = match class_axiom {
+            Some(value) => Some(value),
+            None => named_axiom(triple, &kinds, session)?,
+        } {
             push_axiom(axiom, &mut axioms, session)?;
             consumed[index] = true;
         }
@@ -1273,21 +1288,41 @@ fn map_graph(
                 "OWL2-RDF-REVERSE-HEADER",
                 "OWL2-RDF-REVERSE-DECLARATION",
                 "OWL2-RDF-REVERSE-NAMED-AXIOM",
+                "OWL2-RDF-REVERSE-BOOLEAN-CLASS-EXPRESSION",
             ],
         },
     })
+}
+
+fn list_graph_view<'graph>(
+    triples: &'graph [Triple],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<ListTriple<'graph>>> {
+    let mut output = reserved_vec(triples.len(), session)?;
+    for triple in triples {
+        session.step(1)?;
+        let subject = match &triple.subject {
+            Resource::Iri(value) => ListResource::Iri(value),
+            Resource::Blank(value) => ListResource::Blank(value),
+        };
+        let object = match &triple.object {
+            Term::Iri(value) => ListTerm::Iri(value),
+            Term::Blank(value) => ListTerm::Blank(value),
+            Term::Literal { lexical, .. } => ListTerm::Literal(lexical),
+        };
+        output.push(ListTriple {
+            subject,
+            predicate: &triple.predicate,
+            object,
+        });
+    }
+    Ok(output)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct KindRecord<'a> {
     iri: &'a str,
     kind: &'static str,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EquivalentKind {
-    Class,
-    Property,
 }
 
 fn collect_entity_kinds<'a>(
@@ -1321,10 +1356,297 @@ fn has_kind(kinds: &[KindRecord<'_>], value: &str, kind: &str) -> bool {
         .any(|record| record.iri == value && record.kind == kind)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClassTerm<'graph> {
+    Iri(&'graph str),
+    Blank(&'graph str),
+}
+
+impl<'graph> ClassTerm<'graph> {
+    fn from_resource(value: ListResource<'graph>) -> Self {
+        match value {
+            ListResource::Iri(value) => Self::Iri(value),
+            ListResource::Blank(value) => Self::Blank(value),
+        }
+    }
+
+    fn from_term(value: ListTerm<'graph>) -> Option<Self> {
+        match value {
+            ListTerm::Iri(value) => Some(Self::Iri(value)),
+            ListTerm::Blank(value) => Some(Self::Blank(value)),
+            ListTerm::Literal(_) => None,
+        }
+    }
+
+    fn as_term(self) -> ListTerm<'graph> {
+        match self {
+            Self::Iri(value) => ListTerm::Iri(value),
+            Self::Blank(value) => ListTerm::Blank(value),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn map_equivalent_components(
+fn map_equivalent_class_components<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for start in 0..triples.len() {
+        if consumed[start] {
+            continue;
+        }
+        let Some((left, right)) = class_equivalent_edge(&triples[start]) else {
+            continue;
+        };
+        if !class_member_supported(left, kinds) || !class_member_supported(right, kinds) {
+            continue;
+        }
+        let mut members = Vec::new();
+        add_class_member(&mut members, left, session)?;
+        add_class_member(&mut members, right, session)?;
+        consumed[start] = true;
+        loop {
+            let mut changed = false;
+            for (index, triple) in triples.iter().enumerate() {
+                session.step(1)?;
+                if consumed[index] {
+                    continue;
+                }
+                let Some((edge_left, edge_right)) = class_equivalent_edge(triple) else {
+                    continue;
+                };
+                if !class_member_supported(edge_left, kinds)
+                    || !class_member_supported(edge_right, kinds)
+                {
+                    continue;
+                }
+                if members.contains(&edge_left) || members.contains(&edge_right) {
+                    add_class_member(&mut members, edge_left, session)?;
+                    add_class_member(&mut members, edge_right, session)?;
+                    consumed[index] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut nodes = reserved_vec(members.len(), session)?;
+        for member in members {
+            nodes.push(decode_class_expression(
+                expressions,
+                member.as_term(),
+                consumed,
+                session,
+            )?);
+        }
+        session.finish()?;
+        let nodes = canonical_set(nodes, 2, None)?;
+        let axiom = build_node(62, [Field::Set(nodes), Field::Set(Vec::new())], session)?;
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
+fn class_equivalent_edge<'graph>(
+    triple: &ListTriple<'graph>,
+) -> Option<(ClassTerm<'graph>, ClassTerm<'graph>)> {
+    if triple.predicate != OWL_EQUIVALENT_CLASS {
+        return None;
+    }
+    Some((
+        ClassTerm::from_resource(triple.subject),
+        ClassTerm::from_term(triple.object)?,
+    ))
+}
+
+fn class_member_supported(value: ClassTerm<'_>, kinds: &[KindRecord<'_>]) -> bool {
+    match value {
+        ClassTerm::Iri(value) => !has_kind(kinds, value, "datatype"),
+        ClassTerm::Blank(_) => true,
+    }
+}
+
+fn add_class_member<'graph>(
+    members: &mut Vec<ClassTerm<'graph>>,
+    value: ClassTerm<'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session.step(
+        u64::try_from(members.len())
+            .map_err(|_| NativeError::limit("native RDF class component work exceeds u64"))?,
+    )?;
+    if !members.contains(&value) {
+        reserve_vec_item(members, session)?;
+        members.push(value);
+    }
+    Ok(())
+}
+
+fn decode_class_expression<'view, 'graph>(
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    value: ListTerm<'graph>,
+    consumed: &mut [bool],
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    let decoded = expressions.decode_term(value, session)?;
+    consume_decoded_expression(decoded, consumed, session)
+}
+
+fn consume_decoded_expression(
+    decoded: DecodedClassExpression,
+    consumed: &mut [bool],
+    session: &mut Session<'_>,
+) -> NativeResult<Node> {
+    session.step(
+        u64::try_from(decoded.consumed.len())
+            .map_err(|_| NativeError::limit("native RDF consumed work exceeds u64"))?,
+    )?;
+    for index in decoded.consumed {
+        let value = consumed
+            .get_mut(index)
+            .ok_or_else(|| NativeError::protocol("native RDF consumed index exceeds graph"))?;
+        *value = true;
+    }
+    Ok(decoded.node)
+}
+
+fn class_expression_axiom<'view, 'graph>(
+    triple: &ListTriple<'graph>,
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    consumed: &mut [bool],
+    session: &mut Session<'_>,
+) -> NativeResult<Option<Node>> {
+    let subject = ClassTerm::from_resource(triple.subject);
+    let object = ClassTerm::from_term(triple.object);
+    let axiom = match triple.predicate {
+        RDFS_SUB_CLASS_OF => {
+            let Some(object) = object else {
+                return Ok(None);
+            };
+            build_node(
+                61,
+                [
+                    Field::Node(decode_class_expression(
+                        expressions,
+                        subject.as_term(),
+                        consumed,
+                        session,
+                    )?),
+                    Field::Node(decode_class_expression(
+                        expressions,
+                        object.as_term(),
+                        consumed,
+                        session,
+                    )?),
+                    Field::Set(Vec::new()),
+                ],
+                session,
+            )?
+        }
+        OWL_DISJOINT_WITH => {
+            let Some(object) = object else {
+                return Ok(None);
+            };
+            let mut expressions_set = reserved_vec(2, session)?;
+            expressions_set.push(decode_class_expression(
+                expressions,
+                subject.as_term(),
+                consumed,
+                session,
+            )?);
+            expressions_set.push(decode_class_expression(
+                expressions,
+                object.as_term(),
+                consumed,
+                session,
+            )?);
+            let mut expressions_set = canonical_set(expressions_set, 1, None)?;
+            if expressions_set.len() == 1 {
+                build_node(
+                    61,
+                    [
+                        Field::Node(expressions_set.pop().ok_or_else(|| {
+                            NativeError::protocol("native RDF disjoint ledger is empty")
+                        })?),
+                        Field::Node(named_entity("class", OWL_NOTHING, session)?),
+                        Field::Set(Vec::new()),
+                    ],
+                    session,
+                )?
+            } else {
+                build_node(
+                    63,
+                    [Field::Set(expressions_set), Field::Set(Vec::new())],
+                    session,
+                )?
+            }
+        }
+        RDFS_DOMAIN | RDFS_RANGE => {
+            let (ListResource::Iri(property), Some(object)) = (triple.subject, object) else {
+                return Ok(None);
+            };
+            if has_kind(kinds, property, "annotation_property") {
+                return Ok(None);
+            }
+            if triple.predicate == RDFS_RANGE && has_kind(kinds, property, "data_property") {
+                return Ok(None);
+            }
+            let (tag, property_kind) = if has_kind(kinds, property, "data_property") {
+                (93, "data_property")
+            } else if triple.predicate == RDFS_DOMAIN {
+                (74, "object_property")
+            } else {
+                (75, "object_property")
+            };
+            build_node(
+                tag,
+                [
+                    Field::Node(named_entity(property_kind, property, session)?),
+                    Field::Node(decode_class_expression(
+                        expressions,
+                        object.as_term(),
+                        consumed,
+                        session,
+                    )?),
+                    Field::Set(Vec::new()),
+                ],
+                session,
+            )?
+        }
+        RDF_TYPE if matches!(triple.object, ListTerm::Blank(_)) => {
+            let (ListResource::Iri(individual), Some(class)) = (triple.subject, object) else {
+                return Ok(None);
+            };
+            build_node(
+                112,
+                [
+                    Field::Node(decode_class_expression(
+                        expressions,
+                        class.as_term(),
+                        consumed,
+                        session,
+                    )?),
+                    Field::Node(named_entity("named_individual", individual, session)?),
+                    Field::Set(Vec::new()),
+                ],
+                session,
+            )?
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(axiom))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_equivalent_property_components(
     predicate: &str,
-    equivalent_kind: EquivalentKind,
     triples: &[Triple],
     consumed: &mut [bool],
     kinds: &[KindRecord<'_>],
@@ -1338,8 +1660,8 @@ fn map_equivalent_components(
         let Some((left, right)) = named_edge(&triples[start], predicate) else {
             continue;
         };
-        if !equivalent_member_supported(equivalent_kind, left, kinds)
-            || !equivalent_member_supported(equivalent_kind, right, kinds)
+        if !equivalent_property_member_supported(left, kinds)
+            || !equivalent_property_member_supported(right, kinds)
         {
             continue;
         }
@@ -1357,8 +1679,8 @@ fn map_equivalent_components(
                 let Some((edge_left, edge_right)) = named_edge(triple, predicate) else {
                     continue;
                 };
-                if !equivalent_member_supported(equivalent_kind, edge_left, kinds)
-                    || !equivalent_member_supported(equivalent_kind, edge_right, kinds)
+                if !equivalent_property_member_supported(edge_left, kinds)
+                    || !equivalent_property_member_supported(edge_right, kinds)
                 {
                     continue;
                 }
@@ -1373,16 +1695,13 @@ fn map_equivalent_components(
                 break;
             }
         }
-        let (tag, entity_kind) = match equivalent_kind {
-            EquivalentKind::Class => (62, "class"),
-            EquivalentKind::Property
-                if members
-                    .iter()
-                    .all(|value| has_kind(kinds, value, "data_property")) =>
-            {
-                (91, "data_property")
-            }
-            EquivalentKind::Property => (71, "object_property"),
+        let (tag, entity_kind) = if members
+            .iter()
+            .all(|value| has_kind(kinds, value, "data_property"))
+        {
+            (91, "data_property")
+        } else {
+            (71, "object_property")
         };
         let members = named_set(entity_kind, &members, session)?;
         let axiom = build_node(tag, [Field::Set(members), Field::Set(Vec::new())], session)?;
@@ -1391,15 +1710,8 @@ fn map_equivalent_components(
     Ok(())
 }
 
-fn equivalent_member_supported(
-    equivalent_kind: EquivalentKind,
-    value: &str,
-    kinds: &[KindRecord<'_>],
-) -> bool {
-    match equivalent_kind {
-        EquivalentKind::Class => !has_kind(kinds, value, "datatype"),
-        EquivalentKind::Property => !has_kind(kinds, value, "annotation_property"),
-    }
+fn equivalent_property_member_supported(value: &str, kinds: &[KindRecord<'_>]) -> bool {
+    !has_kind(kinds, value, "annotation_property")
 }
 
 fn named_edge<'a>(triple: &'a Triple, predicate: &str) -> Option<(&'a str, &'a str)> {
@@ -2450,6 +2762,169 @@ mod tests {
         );
         assert_eq!(parser.blank_counter, 0);
         assert!(parser.triples.is_empty());
+    }
+
+    fn class_node(value: &str) -> Node {
+        entity("class", iri(value.to_owned()).expect("IRI node")).expect("class node")
+    }
+
+    fn boolean_node(tag: u64, values: &[&str]) -> Node {
+        let operands = values.iter().map(|value| class_node(value)).collect();
+        Node::build(
+            tag,
+            vec![Field::Set(
+                canonical_set(operands, 2, Some(tag)).expect("boolean operands"),
+            )],
+        )
+        .expect("boolean node")
+    }
+
+    #[test]
+    fn boolean_class_expressions_map_in_axiom_class_positions() {
+        let subclass_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:Class rdf:about=\"urn:A\"><rdfs:subClassOf><rdf:Description><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:B\"/><rdf:Description rdf:about=\"urn:C\"/></owl:intersectionOf></rdf:Description></rdfs:subClassOf></owl:Class></rdf:RDF>"
+        );
+        let subclass = mapped(subclass_source.as_bytes(), None).expect("boolean subclass");
+        let expected_subclass = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(boolean_node(30, &["urn:B", "urn:C"])),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(
+            subclass
+                .axioms
+                .iter()
+                .any(|value| value == expected_subclass.as_bytes()),
+            "subclass expression bytes must match the canonical model",
+        );
+        assert_eq!(
+            subclass.mapping.total_triples,
+            subclass.mapping.consumed_triples
+        );
+
+        let domain_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:ObjectProperty rdf:about=\"urn:p\"><rdfs:domain><rdf:Description><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:unionOf></rdf:Description></rdfs:domain></owl:ObjectProperty></rdf:RDF>"
+        );
+        let domain = mapped(domain_source.as_bytes(), None).expect("boolean domain");
+        let expected_domain = Node::build(
+            74,
+            vec![
+                Field::Node(
+                    entity(
+                        "object_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("property node"),
+                ),
+                Field::Node(boolean_node(31, &["urn:A", "urn:B"])),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("domain node");
+        assert!(
+            domain
+                .axioms
+                .iter()
+                .any(|value| value == expected_domain.as_bytes()),
+            "domain expression bytes must match the canonical model",
+        );
+        assert_eq!(
+            domain.mapping.total_triples,
+            domain.mapping.consumed_triples
+        );
+
+        let assertion_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:about=\"urn:i\"><rdf:type><rdf:Description><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:unionOf></rdf:Description></rdf:type></rdf:Description></rdf:RDF>"
+        );
+        let assertion = mapped(assertion_source.as_bytes(), None).expect("boolean assertion");
+        let expected_assertion = Node::build(
+            112,
+            vec![
+                Field::Node(boolean_node(31, &["urn:A", "urn:B"])),
+                Field::Node(
+                    entity(
+                        "named_individual",
+                        iri("urn:i".to_owned()).expect("individual IRI"),
+                    )
+                    .expect("individual node"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("assertion node");
+        assert!(
+            assertion
+                .axioms
+                .iter()
+                .any(|value| value == expected_assertion.as_bytes()),
+            "class assertion bytes must match the canonical model",
+        );
+        assert_eq!(
+            assertion.mapping.total_triples,
+            assertion.mapping.consumed_triples,
+        );
+
+        let equivalent_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:about=\"urn:A\"><owl:equivalentClass><rdf:Description><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:B\"/><rdf:Description rdf:about=\"urn:C\"/></owl:intersectionOf></rdf:Description></owl:equivalentClass></rdf:Description></rdf:RDF>"
+        );
+        let equivalent = mapped(equivalent_source.as_bytes(), None).expect("boolean equivalence");
+        let expected_equivalent = Node::build(
+            62,
+            vec![
+                Field::Set(
+                    canonical_set(
+                        vec![class_node("urn:A"), boolean_node(30, &["urn:B", "urn:C"])],
+                        2,
+                        None,
+                    )
+                    .expect("equivalent members"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("equivalent node");
+        assert!(
+            equivalent
+                .axioms
+                .iter()
+                .any(|value| value == expected_equivalent.as_bytes()),
+            "equivalent expression bytes must match the canonical model",
+        );
+        assert_eq!(
+            equivalent.mapping.total_triples,
+            equivalent.mapping.consumed_triples,
+        );
+    }
+
+    #[test]
+    fn malformed_collection_reached_through_class_mapping_fails_closed() {
+        let cyclic = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf rdf:nodeID=\"e\"/></rdf:Description><rdf:Description rdf:nodeID=\"e\"><owl:intersectionOf rdf:nodeID=\"h\"/></rdf:Description><rdf:Description rdf:nodeID=\"h\"><rdf:first rdf:resource=\"urn:B\"/><rdf:rest rdf:nodeID=\"h\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(cyclic.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+
+        let forked = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf rdf:nodeID=\"e\"/></rdf:Description><rdf:Description rdf:nodeID=\"e\"><owl:unionOf rdf:nodeID=\"h\"/></rdf:Description><rdf:Description rdf:nodeID=\"h\"><rdf:first rdf:resource=\"urn:B\"/><rdf:first rdf:resource=\"urn:C\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(forked.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+
+        let shared_tail = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf rdf:nodeID=\"e1\"/></rdf:Description><rdf:Description rdf:about=\"urn:D\"><rdfs:subClassOf rdf:nodeID=\"e2\"/></rdf:Description><rdf:Description rdf:nodeID=\"e1\"><owl:intersectionOf rdf:nodeID=\"h1\"/></rdf:Description><rdf:Description rdf:nodeID=\"e2\"><owl:unionOf rdf:nodeID=\"h2\"/></rdf:Description><rdf:Description rdf:nodeID=\"h1\"><rdf:first rdf:resource=\"urn:B\"/><rdf:rest rdf:nodeID=\"tail\"/></rdf:Description><rdf:Description rdf:nodeID=\"h2\"><rdf:first rdf:resource=\"urn:C\"/><rdf:rest rdf:nodeID=\"tail\"/></rdf:Description><rdf:Description rdf:nodeID=\"tail\"><rdf:first rdf:resource=\"urn:E\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(shared_tail.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
     }
 
     #[test]
