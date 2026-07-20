@@ -13,6 +13,7 @@ from pyowl_core import (
     BackendUnavailableError,
     CancellationSource,
     DocumentFormat,
+    EncodedStructuralView,
     ImportPolicy,
     ImportResolver,
     ImportStatus,
@@ -22,6 +23,7 @@ from pyowl_core import (
     ParseLimits,
     ResourceLimitError,
     UnresolvedImportWarning,
+    canonical_bytes,
     encode_snapshot,
     load_snapshot,
 )
@@ -31,6 +33,7 @@ from pyowl_core.cancellation import CancellationToken
 from pyowl_core.exceptions import UnsupportedSyntaxError
 from pyowl_core.io.formats.detection import detect_format
 from pyowl_core.io.source import acquire_source
+from tests.native.encoded_views._independent import decode_root_canonical_bytes
 from tests.native.foundation._support import NativeTestExtension, load_extension
 
 SOURCE = b"""\
@@ -180,7 +183,37 @@ def test_private_production_seam_publishes_exact_lazy_rdf_report(
     assert after_report.page_requests == 1
     assert after_report.rdf_header_rows_emitted == 1
     assert after_report.auxiliary_payload_bytes_copied == 17
+
+    before_python = selected._native_python_counters()
+    scalar_error = AssertionError("retained RDF/XML view crossed scalar traversal")
+    with (
+        patch.object(type(selected), "iter_axioms", side_effect=scalar_error),
+        patch.object(type(selected), "iter_extensions", side_effect=scalar_error),
+        patch.object(type(selected), "ontology_annotations", side_effect=scalar_error),
+    ):
+        direct = selected.view(EncodedStructuralView)
+    expected_roots = tuple(
+        (kind, canonical_bytes(value))
+        for kind, values in (
+            (1, reference.root.ontology_annotations),
+            (2, reference.root.axioms),
+            (3, reference.root.extension_components),
+        )
+        for value in values
+    )
+    after_direct = raw_owner._publication_counters_v2()
+    after_python = selected._native_python_counters()
+    assert direct.owner is selected
+    assert decode_root_canonical_bytes(direct.buffers) == expected_roots
+    assert len({id(value.obj) for value in direct.buffers.values()}) == 1
+    assert after_direct.encoded_view_requests == after_report.encoded_view_requests + 1
+    assert after_direct.page_requests == after_report.page_requests
+    assert after_direct.rows_emitted == after_report.rows_emitted
+    assert after_python.model_rows_materialized == before_python.model_rows_materialized
     assert selected.root.axioms == reference.root.axioms
+    selected.close()
+    assert selected.closed
+    assert decode_root_canonical_bytes(direct.buffers) == expected_roots
 
 
 def test_rdfxml_capability_remains_absent_and_public_dispatch_does_not_fallback(
