@@ -7,11 +7,13 @@ The committed `shared-host-smoke.json` exercises one pinned 1,450-byte generated
 Functional Syntax input through the core Python common-contract lane, once in a
 steady process and once in a fresh process. It records every other requested
 lane as `not-run`; no such row contributes a pass or timing ratio. Each of the
-five external lanes has a separate runner pin, and every one is `pending`
-without a runner artifact hash. Their current rows therefore report `artifact
-or external runner pin is pending`. The installed-native-wheel row separately
-reports that a source-tree/native build is ineligible and an isolated delivered
-wheel is required.
+five external lanes has a separate runner pin, and every one was `pending`
+without a runner artifact hash when this historical artifact was captured.
+Its rows therefore report `artifact or external runner pin is pending`. The
+current manifest now has a complete SHA-bound py-horned runner; that later
+implementation does not retroactively alter this report. The
+installed-native-wheel row separately reports that a source-tree/native build
+is ineligible and an isolated delivered wheel is required.
 
 The smoke proves the following repository-owned mechanics:
 
@@ -33,8 +35,8 @@ boundary or bulk encoded-view traversal.
 
 This is not comparative performance evidence. The reference-machine entry is
 still `pending`; only the tiny generated corpus was run; all external runner
-pins are pending and non-runnable; and the installed retained-native wheel/bulk
-path was not run. File lanes, persistent external steady-process execution,
+pins were pending and non-runnable at capture time; and the installed retained-
+native wheel/bulk path was not run. File lanes, persistent external steady-process execution,
 paired implementation-order randomization, and executable ratio gates were not
 implemented when this historical artifact was captured and remain absent from
 it. Therefore no Horned/OWLAPI ratio, threshold pass, bulk-consumer result, or

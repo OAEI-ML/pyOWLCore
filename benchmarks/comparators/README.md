@@ -45,13 +45,38 @@ py-horned, OWLAPI, a JVM, or a comparator runner. Missing launchers and pending
 artifact pins produce `not-run`; they can never become a pass.
 
 Every external lane has its own runner pin: direct retained Rust, raw Horned,
-common-contract Horned, py-horned, and OWLAPI. All five runner pins are
-currently `pending` without runner artifact hashes, so every external lane is
-non-runnable even if a launcher environment variable is configured.
-Horned-OWL 1.4.0 still has one exact engine artifact pin shared by its raw and
-common lanes; that engine pin does not complete either runner pin. The
-installed retained-native-wheel lane is separate and rejects source-tree/native
-builds; it requires an isolated delivered-wheel environment.
+common-contract Horned, py-horned, and OWLAPI. The development-only py-horned
+runner is complete and SHA-256 bound. The other four runner pins remain
+`pending`, so those lanes are non-runnable even if their launcher environment
+variables are configured. Horned-OWL 1.4.0 still has one exact engine artifact
+pin shared by its raw and common lanes; that engine pin does not complete
+either runner pin. The installed retained-native-wheel lane is separate and
+rejects source-tree/native builds; it requires an isolated delivered-wheel
+environment.
+
+The py-horned runner is deliberately absent from package artifacts and ordinary
+test dependencies. Reproduce its isolated development environment from the
+exact pinned sdist as follows, substituting paths outside the repository:
+
+```console
+python -m pip download --no-deps --no-binary=:all: \
+  --dest /tmp/py-horned-artifact py-horned-owl==1.4.0
+printf '%s  %s\n' \
+  7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d \
+  /tmp/py-horned-artifact/py_horned_owl-1.4.0.tar.gz | shasum -a 256 -c -
+python -m venv /tmp/py-horned-venv
+/tmp/py-horned-venv/bin/python -m pip install \
+  /tmp/py-horned-artifact/py_horned_owl-1.4.0.tar.gz
+export PATH="/tmp/py-horned-venv/bin:$PATH"
+export PYOWL_CORE_PY_HORNED_RUNNER="$PWD/benchmarks/comparators/runners/py_horned_common.py"
+```
+
+The runner parses with py-horned-owl, maps its independent object graph to the
+public pyowl-core structural contract, and includes the complete mapping,
+freeze, fingerprint, inventory, and validation cost inside the timer. Version
+1.4.0 exposes Functional Syntax, OWL/XML, and RDF/XML readers but no Turtle
+reader selection. Turtle requests therefore return explicit `ineligible`
+evidence; they are never sent to the RDF/XML reader or counted as passes.
 
 Each external command reads one
 `pyowl-core/comparator-adapter-request/v2` JSON object on standard input and
@@ -121,12 +146,12 @@ an approved versioned machine. Resident-byte and file lanes and the audited
 persistent lifecycle are implemented and contract-tested. File inputs are
 hash-checked and prepared before timing, use the same stable source-bound
 document IRI as resident bytes, and include the implementation's file open/read
-in the timer. Every external runner pin is still pending, so no real persistent
-runner has executed and every external lane remains `not-run`. Representative
+in the timer. The complete py-horned runner can exercise that lifecycle, while
+the other four external runner pins remain pending. Representative
 medium/large approved-machine samples, native retention/copy counters, and
 phase profiles remain open. The configured ratio gates therefore fail closed;
-no performance threshold has passed merely because its evaluator and lifecycle
-now exist.
+no performance threshold has passed merely because its evaluator, lifecycle,
+and one external adapter now exist.
 
 `dependency-audit-shared-host.json` binds passing alias-aware source,
 payload-manifest, and packaged-Python scans plus reproducible SHA-bound sdist and

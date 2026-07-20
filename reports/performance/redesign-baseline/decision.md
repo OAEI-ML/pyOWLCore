@@ -186,8 +186,8 @@ Python snapshot and its common-contract ledger still complete inside the
 timer, but that completion is not a native publication capability. The
 executable scaffold now implements resident-byte and prepared-file
 fresh/steady execution. The committed smoke predates the file boundary and
-exercises resident bytes only; paired randomized ordering remains
-unimplemented and must not be inferred from this timing table.
+exercises resident bytes only; it also predates the now-implemented paired
+randomized ordering, which must not be inferred from that historical artifact.
 
 ## 7. Current implementation limitations and evidence status
 
@@ -204,10 +204,12 @@ exercise the prepared-file modes with a path-independent source-bound document
 IRI and equal common-contract digest. The committed smoke exercises the four
 fingerprint preimage checks, structural/identity/
 provenance/diagnostic inventories, raw-sample recording, and post-timer
-equality fence. Every non-Python lane is `not-run`, the reference-machine
-record remains `pending`, and `comparative_complete` is false. An intentional
-partial invocation succeeds only with the explicit `--allow-partial` opt-in;
-the default CLI exit remains fail-closed.
+equality fence. Every non-Python lane in that historical report is `not-run`,
+the reference-machine record remains `pending`, and `comparative_complete` is
+false. The manifest has since gained one complete external runner pin for
+py-horned; that does not retroactively change the smoke. An intentional partial
+invocation succeeds only with the explicit `--allow-partial` opt-in; the
+default CLI exit remains fail-closed.
 
 Existing generated-large and biomedical profiles remain historical evidence;
 they were not produced by this successor comparative matrix. No numeric
@@ -221,20 +223,21 @@ representative samples remain unmeasured under the new contract.
 The following are recorded as **not-run**, not passes:
 
 - external runners: direct retained Rust, raw Horned, common-contract Horned,
-  py-horned, and OWLAPI each have a separate runner pin; every runner pin is
-  `pending` without a runner artifact hash, so all five lanes are non-runnable;
+  py-horned, and OWLAPI each have a separate runner pin. The py-horned pin is
+  complete and SHA-256 bound; the other four remain `pending` and non-runnable;
 - external steady-process evidence: the authenticated, framed, bounded
   one-process-per-lane lifecycle, equal warm-ups, and cleanup barriers are
-  implemented and contract-tested, but no completed external runner pin exists
-  with which to execute it;
+  implemented and contract-tested. Py-horned development runs exercise it, but
+  approved-machine representative lifecycle evidence remains unrecorded;
 - installed retained-native-wheel/bulk lane: the scaffold refuses a
   source-tree/native build and no isolated delivered-wheel run is recorded;
 - Horned engine inputs: raw and common-contract lanes share the exact
   Horned-OWL 1.4.0 engine artifact pin, but that completed engine pin does not
   complete either separately pending runner pin;
-- py-horned and OWLAPI inputs: the py-horned package artifact and OWLAPI
-  JDK/GC/heap policy are recorded, but their external runner artifacts remain
-  pending;
+- py-horned and OWLAPI inputs: the exact py-horned 1.4.0 sdist and runner are
+  complete. Its public API has no Turtle reader selection, so Turtle is
+  explicitly ineligible. The OWLAPI runner and its isolated image/archive
+  evidence remain pending;
 - file-lane approved evidence and paired randomized blocks: the core file
   boundary and paired scheduler are implemented and contract-tested, but
   external/reference-machine file samples and approved paired results are not

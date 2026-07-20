@@ -292,17 +292,19 @@ def test_cli_records_maximum_u64_seed(tmp_path: Path) -> None:
     assert report["lanes"][0]["samples"][0]["schedule_seed"] == MAX_U64
 
 
-def test_committed_shared_host_smoke_matches_current_manifests() -> None:
+def test_committed_shared_host_smoke_is_self_bound_historical_evidence() -> None:
     evidence_path = (
         ROOT / "reports" / "performance" / "redesign-baseline" / "shared-host-smoke.json"
     )
     evidence = cast(dict[str, Any], json.loads(evidence_path.read_text(encoding="utf-8")))
 
     assert evidence["schema"] == "pyowl-core/comparator-baseline/v1"
-    assert (
-        evidence["comparator_manifest_sha256"]
-        == hashlib.sha256(DEFAULT_COMPARATOR_MANIFEST.read_bytes()).hexdigest()
+    assert evidence["comparator_manifest_sha256"] == (
+        "54fa26e8f35b4d252e2b0b62bfea90635b66e37892244117c40d7d1967df23ae"
     )
+    assert evidence["comparator_manifest_sha256"] != hashlib.sha256(
+        DEFAULT_COMPARATOR_MANIFEST.read_bytes()
+    ).hexdigest()
     assert (
         evidence["corpus_manifest_sha256"]
         == hashlib.sha256(DEFAULT_MANIFEST.read_bytes()).hexdigest()
@@ -312,9 +314,12 @@ def test_committed_shared_host_smoke_matches_current_manifests() -> None:
     assert source_identity["schema"] == "pyowl-core/comparator-runtime-source/v1"
     assert len(cast(str, source_identity["sha256"])) == 64
     assert source_identity["input_count"] == len(source_inputs)
-    assert "tools/benchmark/comparators/runner.py" in {
-        cast(str, value["path"]) for value in source_inputs
-    }
+    inputs_by_path = {cast(str, value["path"]): value for value in source_inputs}
+    assert "tools/benchmark/comparators/runner.py" in inputs_by_path
+    assert (
+        inputs_by_path["benchmarks/comparators/comparators.toml"]["sha256"]
+        == evidence["comparator_manifest_sha256"]
+    )
     environment = cast(dict[str, Any], evidence["environment"])
     assert environment["git_dirty"] is False
 

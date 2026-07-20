@@ -123,8 +123,9 @@ features = ["abi3-wrapper", "independent-common-contract-v1"]
 allocator = "Rust system allocator and CPython platform allocator"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_PY_HORNED_RUNNER"
-runner_pin_state = "pending"
-runner_revision = "independent py-horned common-contract runner not yet built"
+runner_pin_state = "complete"
+runner_revision = "pyowl-core-py-horned-common-runner-v1"
+runner_sha256 = "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b"
 gating = true
 required = true
 

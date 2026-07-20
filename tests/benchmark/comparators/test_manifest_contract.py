@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, cast
 
@@ -68,7 +69,7 @@ def test_pin_ledger_covers_normative_lanes_and_exact_phases() -> None:
     assert set(manifest.fence("equality_assertion").lanes.values()) == {"outside"}
 
 
-def test_every_external_runner_is_pending_and_not_runnable() -> None:
+def test_external_runners_are_fail_closed_except_pinned_py_horned() -> None:
     manifest = load_comparator_manifest()
     external = tuple(pin for pin in manifest.comparators if pin.adapter == "external-command")
 
@@ -79,7 +80,16 @@ def test_every_external_runner_is_pending_and_not_runnable() -> None:
         "py-horned-common",
         "owlapi-common",
     }
+    py_horned = manifest.by_id("py-horned-common")
+    runner = Path("benchmarks/comparators/runners/py_horned_common.py")
+    assert py_horned.runner_pin_state == "complete"
+    assert py_horned.runner_revision == "pyowl-core-py-horned-common-runner-v1"
+    assert py_horned.runner_sha256 == hashlib.sha256(runner.read_bytes()).hexdigest()
+    assert py_horned.artifact_is_runnable is True
+
     for pin in external:
+        if pin is py_horned:
+            continue
         assert pin.runner_pin_state == "pending"
         assert pin.runner_revision
         assert pin.runner_sha256 is None
