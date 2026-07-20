@@ -50,7 +50,7 @@ def main() -> None:
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.IGNORE,
             backend=backend,
-            collect_provenance=False,
+            collect_provenance=True,
         )
 
     reference = load_snapshot(source, options=options(BackendPreference.PYTHON))

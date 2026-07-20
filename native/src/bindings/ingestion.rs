@@ -39,23 +39,26 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
 ///
 /// This private, unadvertised bridge lets the narrowly eligible public
 /// forced-native load path retain its structural roots in the typed owner.  It
-/// accepts canonical rows only, publishes no capability, and deliberately
-/// remains single-document until native import orchestration owns the complete
-/// closure.
+/// accepts canonical roots plus their attested origin rows, publishes no
+/// format capability, and deliberately remains single-document until native
+/// import orchestration owns the complete closure.
 #[pyfunction]
-#[pyo3(signature = (documents, attestation, config, cancel=None))]
+#[pyo3(signature = (documents, origins, attestation, config, cancel=None))]
 fn _retain_structural_snapshot_v2<'py>(
     py: Python<'py>,
     documents: &Bound<'py, PyAny>,
+    origins: &Bound<'py, PyAny>,
     attestation: &Bound<'py, PyAny>,
     config: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<NativeSnapshotHandle> {
     let limits = crate::limits_from_python(config)?;
     let cancellation = crate::cancellation_or_default(cancel);
-    let (owned_documents, external_bytes) =
+    let (owned_documents, mut external_bytes) =
         owned_structural_documents(py, documents, &limits, &cancellation)?;
-    let storage = crate::run_detached(py, move |interrupt| {
+    let owned_origins =
+        owned_origin_rows(py, origins, &limits, &cancellation, &mut external_bytes)?;
+    let (storage, retained_origins) = crate::run_detached(py, move |interrupt| {
         let mut builder = TypedFacadeBuilderV2::new(
             limits,
             cancellation.clone(),
@@ -65,9 +68,9 @@ fn _retain_structural_snapshot_v2<'py>(
         for document in &owned_documents {
             builder.add_document(&document[0], &document[1], &document[2])?;
         }
-        builder.freeze(&[vec![0]], &[0])
+        Ok((builder.freeze(&[vec![0]], &[0])?, owned_origins))
     })?;
-    crate::publication::typed_structural_handle_v2(attestation, storage)
+    crate::publication::typed_structural_handle_v2(attestation, storage, retained_origins)
 }
 
 type OwnedStructuralDocument = [Vec<Vec<u8>>; 3];
@@ -208,6 +211,76 @@ fn owned_structural_rows(
             crate::python_error(NativeError::limit(
                 "native structural row allocation failed",
             ))
+        })?;
+        copied.extend_from_slice(bytes);
+        owned.push(copied);
+    }
+    Ok(owned)
+}
+
+fn owned_origin_rows(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    limits: &Limits,
+    cancellation: &crate::cancel::Cancellation,
+    total_bytes: &mut usize,
+) -> PyResult<Vec<Vec<u8>>> {
+    if !value.get_type().is(py.get_type::<PyTuple>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "native origin rows must be an exact tuple",
+        ));
+    }
+    let rows = value.cast::<PyTuple>()?;
+    if u64::try_from(rows.len()).map_or(true, |length| length > limits.max_origin_entries) {
+        return Err(crate::python_error(NativeError::limit(
+            "native origin row count exceeds configured limits",
+        )));
+    }
+    let mut owned = Vec::new();
+    owned.try_reserve_exact(rows.len()).map_err(|_| {
+        crate::python_error(NativeError::limit("native origin row allocation failed"))
+    })?;
+    for (ordinal, row) in rows.iter().enumerate() {
+        if ordinal
+            % usize::try_from(limits.cancellation_stride)
+                .unwrap_or(1)
+                .max(1)
+            == 0
+        {
+            cancellation.checkpoint().map_err(crate::python_error)?;
+            py.check_signals()?;
+        }
+        if !row.get_type().is(py.get_type::<PyBytes>()) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native origin rows must contain exact bytes",
+            ));
+        }
+        let bytes = row.cast::<PyBytes>()?.as_bytes();
+        if bytes.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "native origin rows must be nonempty",
+            ));
+        }
+        *total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
+            crate::python_error(NativeError::limit("native retained boundary size overflow"))
+        })?;
+        let total = u64::try_from(*total_bytes).map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native retained boundary size exceeds u64",
+            ))
+        })?;
+        if total > limits.value(LimitKey::MaxTemporaryBytes)
+            || limits
+                .max_memory_bytes
+                .is_some_and(|maximum| total > maximum)
+        {
+            return Err(crate::python_error(NativeError::limit(
+                "native retained boundary exceeds configured memory limits",
+            )));
+        }
+        let mut copied = Vec::new();
+        copied.try_reserve_exact(bytes.len()).map_err(|_| {
+            crate::python_error(NativeError::limit("native origin row allocation failed"))
         })?;
         copied.extend_from_slice(bytes);
         owned.push(copied);

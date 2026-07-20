@@ -17,6 +17,7 @@ from pyowl_core import (
     ImportPolicy,
     LoadOptions,
     MappingResolver,
+    encode_snapshot,
     load_snapshot,
 )
 from pyowl_core.backends import native
@@ -52,7 +53,7 @@ def _options(backend: BackendPreference) -> LoadOptions:
         format=DocumentFormat.FUNCTIONAL,
         imports=ImportPolicy.IGNORE,
         backend=backend,
-        collect_provenance=False,
+        collect_provenance=True,
     )
 
 
@@ -67,11 +68,16 @@ def test_public_forced_native_load_publishes_real_typed_owner_without_scalar_fal
     assert selected.structural_fingerprint == reference.structural_fingerprint
     assert selected.logical_fingerprint == reference.logical_fingerprint
     assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
 
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
     raw_owner = object.__getattribute__(handle, "_owner_v2")
     assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
     before = cast(Any, raw_owner)._publication_counters_v2()
+    assert before.retained_origin_rows == 2 * sum(
+        len(rows) for rows in reference.origin_index.entries.values()
+    )
+    assert before.retained_origin_bytes > 0
     assert before.publication_structural_rows_copied == 0
     assert before.publication_structural_bytes_copied == 0
 
@@ -96,6 +102,24 @@ def test_public_forced_native_load_publishes_real_typed_owner_without_scalar_fal
     assert after.rows_emitted == before.rows_emitted
 
 
+def test_empty_provenance_enabled_load_retains_zero_origin_rows(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"Ontology(<urn:retained-empty>)"
+    reference = load_snapshot(source, options=_options(BackendPreference.PYTHON))
+    selected = load_snapshot(source, options=_options(BackendPreference.NATIVE))
+
+    assert selected.capabilities.backend == "native"
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
+    counters = cast(Any, raw_owner)._publication_counters_v2()
+    assert counters.retained_origin_rows == 0
+    assert counters.retained_origin_bytes == 0
+
+
 def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_construction(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
@@ -114,20 +138,20 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.IGNORE,
             backend=BackendPreference.NATIVE,
-            collect_provenance=True,
+            collect_provenance=False,
         ),
         LoadOptions(
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.IGNORE,
             backend=BackendPreference.NATIVE,
             preserve_source_map=True,
-            collect_provenance=False,
+            collect_provenance=True,
         ),
         LoadOptions(
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.IGNORE,
             backend=BackendPreference.NATIVE,
-            collect_provenance=False,
+            collect_provenance=True,
             validate_owl2_dl=True,
         ),
     ):
@@ -146,7 +170,7 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.RESOLVE_LOCAL,
             backend=BackendPreference.NATIVE,
-            collect_provenance=False,
+            collect_provenance=True,
         ),
         resolver=MappingResolver(
             {
@@ -174,13 +198,14 @@ def test_eligible_owner_construction_failure_propagates_without_fallback(
 
     def fail(
         _documents: object,
+        _origins: object,
         attestation: object,
         config: object,
         cancel: object,
     ) -> object:
         nonlocal calls
         calls += 1
-        return retain((((b"",), (), ()),), attestation, config, cancel)
+        return retain((((b"",), (), ()),), (), attestation, config, cancel)
 
     monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", fail)
     with pytest.raises(BackendProtocolError) as raised:

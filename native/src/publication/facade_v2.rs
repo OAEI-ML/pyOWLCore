@@ -1024,12 +1024,28 @@ impl PublicationStorageV2 {
     }
 
     /// Attach the production typed structural owner without retaining a
-    /// second canonical row store. Auxiliary V2 collections are added by the
-    /// publication assembler in a later, disjoint step.
+    /// second canonical row store. The origin-aware variant adds one shared
+    /// auxiliary row table without changing the typed arena.
     #[allow(dead_code)]
     pub(super) fn from_typed_structural(
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
+    ) -> NativeResult<Arc<Self>> {
+        Self::from_typed_structural_parts(attestation, typed_structural, None)
+    }
+
+    pub(super) fn from_typed_structural_with_origins(
+        attestation: NativeSnapshotAttestationV2,
+        typed_structural: TypedFacadeStorageV2,
+        origin_rows: Vec<Vec<u8>>,
+    ) -> NativeResult<Arc<Self>> {
+        Self::from_typed_structural_parts(attestation, typed_structural, Some(origin_rows))
+    }
+
+    fn from_typed_structural_parts(
+        attestation: NativeSnapshotAttestationV2,
+        typed_structural: TypedFacadeStorageV2,
+        origin_rows: Option<Vec<Vec<u8>>>,
     ) -> NativeResult<Arc<Self>> {
         if attestation.version != PUBLICATION_VERSION_V2
             || attestation.ledger_sha256 != PUBLICATION_LEDGER_SHA256_V2
@@ -1041,9 +1057,25 @@ impl PublicationStorageV2 {
                 "typed V2 publication attestation schema differs",
             ));
         }
+        let retains_origins = origin_rows.is_some();
+        let origins = origin_rows.unwrap_or_default();
+        let origin_count = u64::try_from(origins.len())
+            .map_err(|_| NativeError::limit("typed V2 origin count exceeds u64"))?;
+        let origin_maximum = origins.iter().try_fold(1_u64, |maximum, row| {
+            if row.len() < 32 {
+                return Err(NativeError::protocol(
+                    "typed V2 retained origin row is truncated",
+                ));
+            }
+            Ok(maximum.max(
+                u64::try_from(row.len())
+                    .map_err(|_| NativeError::limit("typed V2 origin row exceeds u64"))?,
+            ))
+        })?;
         let structural_counts = typed_structural.structural_counts()?;
         if attestation.document_count != typed_structural.document_count()
-            || attestation.max_facade_row_bytes != typed_structural.maximum_row_bytes()
+            || attestation.max_facade_row_bytes
+                != typed_structural.maximum_row_bytes().max(origin_maximum)
             || attestation.ontology_annotation_count != structural_counts.ontology_annotations
             || attestation.stored_axiom_count != structural_counts.stored_axioms
             || attestation.effective_axiom_count != structural_counts.effective_axioms
@@ -1053,9 +1085,10 @@ impl PublicationStorageV2 {
                 "typed V2 structural owner diverges from its attestation",
             ));
         }
-        if attestation.capability_bits != 7
+        let expected_capability_bits = if retains_origins { 7 | 16 } else { 7 };
+        if attestation.capability_bits != expected_capability_bits
             || attestation.source_map_entry_count != 0
-            || attestation.origin_entry_count != 0
+            || attestation.origin_entry_count != origin_count
             || attestation.rdf_mapping_report_count != 0
             || attestation.owl2_dl_report_summary.is_some()
             || attestation.owl2_dl_validated
@@ -1063,14 +1096,49 @@ impl PublicationStorageV2 {
             || attestation.owl2_dl_report_sha256.is_some()
         {
             return Err(NativeError::protocol(
-                "typed V2 structural-only owner attests auxiliary collections",
+                "typed V2 owner attests unsupported auxiliary collections",
+            ));
+        }
+        if retains_origins && attestation.document_count != 1 {
+            return Err(NativeError::protocol(
+                "typed V2 origin attachment currently requires one document",
             ));
         }
         let typed_structural = Arc::new(typed_structural);
-        let initial = typed_initial_counters(&typed_structural, &attestation)?;
+        let mut initial = typed_initial_counters(&typed_structural, &attestation)?;
+        let retained_origins = retain_origin_tables_v2(origins)?;
+        if retains_origins {
+            initial[RETAINED_ROW_FIRST + 5] = origin_count
+                .checked_mul(2)
+                .ok_or_else(|| NativeError::limit("typed V2 origin row count overflow"))?;
+            initial[RETAINED_ORIGIN_BYTES] = retained_origins.payload_bytes;
+            initial[RETAINED_METADATA_BYTES] = checked_add(
+                initial[RETAINED_METADATA_BYTES],
+                retained_origins.metadata_bytes,
+            )?;
+            let retained_delta = checked_add(
+                retained_origins.payload_bytes,
+                retained_origins.metadata_bytes,
+            )?;
+            initial[RETAINED_OWNER_BYTES] =
+                checked_add(initial[RETAINED_OWNER_BYTES], retained_delta)?;
+            initial[PEAK_BUILDER_BYTES] =
+                initial[PEAK_BUILDER_BYTES].max(initial[RETAINED_OWNER_BYTES]);
+            initial[PEAK_FREEZE_BYTES] =
+                initial[PEAK_FREEZE_BYTES].max(initial[RETAINED_OWNER_BYTES]);
+            if typed_structural
+                .max_memory_bytes()
+                .is_some_and(|maximum| initial[RETAINED_OWNER_BYTES] > maximum)
+            {
+                return Err(NativeError::limit(
+                    "typed V2 origin attachment exceeds max_memory_bytes",
+                ));
+            }
+            validate_retained_total(&initial)?;
+        }
         Ok(Arc::new(Self {
             attestation,
-            effective_tables: Vec::new(),
+            effective_tables: retained_origins.effective_tables,
             raw_document_tables: None,
             typed_structural: Some(typed_structural),
             counters: CounterStateV2::new(initial),
@@ -1305,6 +1373,115 @@ impl PublicationStorageV2 {
             .finish(attestation_value)
             .map_err(native_error_to_python)
     }
+}
+
+#[derive(Debug, Default)]
+struct RetainedOriginTablesV2 {
+    effective_tables: Vec<FacadeTableV2>,
+    payload_bytes: u64,
+    metadata_bytes: u64,
+}
+
+fn retain_origin_tables_v2(rows: Vec<Vec<u8>>) -> NativeResult<RetainedOriginTablesV2> {
+    if rows.is_empty() {
+        return Ok(RetainedOriginTablesV2::default());
+    }
+    if rows
+        .windows(2)
+        .any(|pair| pair[0].get(..32) > pair[1].get(..32))
+    {
+        return Err(NativeError::protocol(
+            "typed V2 retained origin digest groups are not ordered",
+        ));
+    }
+
+    let mut document_rows = Vec::new();
+    document_rows
+        .try_reserve_exact(rows.len())
+        .map_err(|_| NativeError::limit("typed V2 origin row-reference allocation failed"))?;
+    let mut payload_bytes = 0_u64;
+    let mut metadata_bytes = u64::try_from(
+        document_rows
+            .capacity()
+            .checked_mul(size_of::<Arc<Vec<u8>>>())
+            .ok_or_else(|| NativeError::limit("typed V2 origin row-reference size overflow"))?,
+    )
+    .map_err(|_| NativeError::limit("typed V2 origin row-reference size exceeds u64"))?;
+    for row in rows {
+        let payload = u64::try_from(row.len())
+            .map_err(|_| NativeError::limit("typed V2 origin payload exceeds u64"))?;
+        let allocation = arc_vec_allocation_bytes(row.capacity())?;
+        let allocation = u64::try_from(allocation)
+            .map_err(|_| NativeError::limit("typed V2 origin allocation exceeds u64"))?;
+        payload_bytes = checked_add(payload_bytes, payload)?;
+        metadata_bytes = checked_add(
+            metadata_bytes,
+            allocation.checked_sub(payload).ok_or_else(|| {
+                NativeError::protocol("typed V2 origin allocation accounting underflow")
+            })?,
+        )?;
+        document_rows.push(Arc::new(row));
+    }
+
+    let mut closure_rows = Vec::new();
+    closure_rows
+        .try_reserve_exact(document_rows.len())
+        .map_err(|_| NativeError::limit("typed V2 origin closure allocation failed"))?;
+    metadata_bytes = checked_add(
+        metadata_bytes,
+        u64::try_from(
+            closure_rows
+                .capacity()
+                .checked_mul(size_of::<Arc<Vec<u8>>>())
+                .ok_or_else(|| NativeError::limit("typed V2 origin closure size overflow"))?,
+        )
+        .map_err(|_| NativeError::limit("typed V2 origin closure size exceeds u64"))?,
+    )?;
+    closure_rows.extend(document_rows.iter().cloned());
+
+    let mut effective_tables = Vec::new();
+    effective_tables
+        .try_reserve_exact(2)
+        .map_err(|_| NativeError::limit("typed V2 origin table allocation failed"))?;
+    metadata_bytes = checked_add(
+        metadata_bytes,
+        u64::try_from(
+            effective_tables
+                .capacity()
+                .checked_mul(size_of::<FacadeTableV2>())
+                .ok_or_else(|| NativeError::limit("typed V2 origin table size overflow"))?,
+        )
+        .map_err(|_| NativeError::limit("typed V2 origin table size exceeds u64"))?,
+    )?;
+    effective_tables.push(FacadeTableV2 {
+        coordinate: CoordinateV2 {
+            collection: CollectionV2::OriginEntries,
+            scope: ScopeV2::Document,
+            document_ordinal: Some(0),
+            signature_kind: SignatureKindV2::All,
+            include_builtins: true,
+        },
+        rows: document_rows,
+        source_identity: 0,
+    });
+    effective_tables.push(FacadeTableV2 {
+        coordinate: CoordinateV2 {
+            collection: CollectionV2::OriginEntries,
+            scope: ScopeV2::Closure,
+            document_ordinal: None,
+            signature_kind: SignatureKindV2::All,
+            include_builtins: true,
+        },
+        rows: closure_rows,
+        source_identity: 0,
+    });
+    effective_tables.sort_unstable_by_key(|table| table.coordinate);
+    reject_duplicate_coordinates(&effective_tables)?;
+    Ok(RetainedOriginTablesV2 {
+        effective_tables,
+        payload_bytes,
+        metadata_bytes,
+    })
 }
 
 fn typed_initial_counters(
@@ -2940,6 +3117,39 @@ mod tests {
         assert_eq!(counters[PUBLICATION_METADATA_RECORDS], 3);
         assert!(counters[RETAINED_OWNER_BYTES] > typed_counters.retained_owner_bytes);
         validate_retained_total(&counters).expect("disjoint retained owner counters");
+    }
+
+    #[test]
+    fn typed_structural_owner_retains_one_shared_origin_table() {
+        let (typed, canonical) = typed_structural_owner();
+        let origin = vec![0x42; 96];
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.capability_bits |= 16;
+        attestation.origin_entry_count = 1;
+        attestation.max_facade_row_bytes = canonical.len().max(origin.len()) as u64;
+        let storage = PublicationStorageV2::from_typed_structural_with_origins(
+            attestation,
+            typed,
+            vec![origin.clone()],
+        )
+        .expect("typed publication with origins");
+
+        let document = storage.rows(
+            coordinate(CollectionV2::OriginEntries, ScopeV2::Document, Some(0)),
+            false,
+        );
+        let closure = storage.rows(
+            coordinate(CollectionV2::OriginEntries, ScopeV2::Closure, None),
+            false,
+        );
+        assert_eq!(document.len(), 1);
+        assert_eq!(document[0].as_slice(), origin);
+        assert!(Arc::ptr_eq(&document[0], &closure[0]));
+        let counters = storage.counters.snapshot();
+        assert_eq!(counters[RETAINED_ROW_FIRST + 5], 2);
+        assert_eq!(counters[RETAINED_ORIGIN_BYTES], origin.len() as u64);
+        assert!(counters[RETAINED_METADATA_BYTES] > 0);
+        validate_retained_total(&counters).expect("origin owner counters");
     }
 
     #[test]

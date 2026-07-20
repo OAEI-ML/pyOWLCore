@@ -58,7 +58,7 @@ def retain_forced_native_snapshot_v2(
         or snapshot.root.provenance.backend != "native"
         or snapshot.root.provenance.format is not DocumentFormat.FUNCTIONAL
         or snapshot.load_options.preserve_source_map
-        or snapshot.load_options.collect_provenance
+        or not snapshot.load_options.collect_provenance
         or snapshot.load_options.validate_owl2_dl
         or snapshot.root.rdf_mapping_report is not None
     ):
@@ -98,8 +98,10 @@ def _publish_structural_snapshot_v2(
         NativeFacadeCollectionV2,
         NativeFacadeScopeV2,
         NativeFingerprintEvidenceV2,
+        NativeOriginRowV2,
         NativeSignatureKindV2,
         _seal_native_snapshot_owner_v2,
+        encode_native_auxiliary_row_v2,
         freeze_native_snapshot_publication_v2,
         native_snapshot_content_digests_v2,
         native_snapshot_publication_attestation_v2,
@@ -149,6 +151,39 @@ def _publish_structural_snapshot_v2(
     if raw_rows != effective_rows:
         return snapshot
 
+    origin_items: list[tuple[tuple[object, ...], bytes]] = []
+    for digest, occurrences in snapshot.origin_index.entries.items():
+        for occurrence in occurrences:
+            if occurrence.document_key != record.document_key:
+                return snapshot
+            origin = NativeOriginRowV2(
+                digest=digest,
+                document_key=occurrence.document_key,
+                occurrence=occurrence.occurrence,
+                span=occurrence.span,
+            )
+            collection, encoded = encode_native_auxiliary_row_v2(
+                origin,
+                max_row_bytes=snapshot.load_options.limits.max_wire_bytes,
+            )
+            if collection is not NativeFacadeCollectionV2.ORIGIN_ENTRIES:
+                raise AssertionError(collection)
+            origin_items.append(
+                (
+                    (
+                        digest,
+                        occurrence.document_key.encode("utf-8"),
+                        occurrence.occurrence,
+                        encoded,
+                    ),
+                    encoded,
+                )
+            )
+    origin_items.sort(key=lambda item: item[0])
+    origin_rows = tuple(item[1] for item in origin_items)
+    if len(set(origin_rows)) != len(origin_rows):
+        return snapshot
+
     document_diagnostics = tuple(
         freeze_native_diagnostic_publication_v1(value) for value in document.diagnostics
     )
@@ -165,7 +200,7 @@ def _publish_structural_snapshot_v2(
             axiom_count=len(raw_rows[1]),
             extension_count=len(raw_rows[2]),
             source_map_entry_count=0,
-            origin_entry_count=0,
+            origin_entry_count=len(origin_rows),
             rdf_mapping_conformant=None,
             rdf_mapping_report_sha256=None,
         ),
@@ -193,17 +228,13 @@ def _publish_structural_snapshot_v2(
         owl2_dl_conforms=None,
         owl2_dl_report_sha256=None,
     )
-    capability_bits = 7
+    capability_bits = 23
     import_manifest = freeze_native_import_manifest_publication_v1(snapshot.import_manifest)
     sidecars = NativeDiagnosticReferenceSidecarsV2(
         snapshot=tuple(_diagnostic_reference_kinds(value) for value in diagnostics),
-        documents=(
-            tuple(_diagnostic_reference_kinds(value) for value in document_diagnostics),
-        ),
+        documents=(tuple(_diagnostic_reference_kinds(value) for value in document_diagnostics),),
         import_edges=tuple(
-            None
-            if edge.diagnostic is None
-            else _diagnostic_reference_kinds(edge.diagnostic)
+            None if edge.diagnostic is None else _diagnostic_reference_kinds(edge.diagnostic)
             for edge in import_manifest.edges
         ),
     )
@@ -214,7 +245,7 @@ def _publish_structural_snapshot_v2(
                 effective_annotation_count=len(effective_rows[0]),
                 effective_axiom_count=len(effective_rows[1]),
                 effective_extension_count=len(effective_rows[2]),
-                effective_origin_count=0,
+                effective_origin_count=len(origin_rows),
                 raw_source_prefix_count=0,
                 rdf_unconsumed_triple_count=0,
                 rdf_rule_count=0,
@@ -225,7 +256,7 @@ def _publish_structural_snapshot_v2(
             effective_annotation_count=len(effective_rows[0]),
             effective_axiom_count=len(effective_rows[1]),
             effective_extension_count=len(effective_rows[2]),
-            effective_origin_count=0,
+            effective_origin_count=len(origin_rows),
         ),
     )
     collections = {
@@ -244,6 +275,19 @@ def _publish_structural_snapshot_v2(
             (NativeFacadeScopeV2.CLOSURE, None),
         )
     }
+    for scope, ordinal in (
+        (NativeFacadeScopeV2.DOCUMENT, 0),
+        (NativeFacadeScopeV2.CLOSURE, None),
+    ):
+        collections[
+            (
+                NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+                scope,
+                ordinal,
+                NativeSignatureKindV2.ALL,
+                True,
+            )
+        ] = origin_rows
     preimages = (
         document_fingerprint_bytes(document),
         snapshot_structural_fingerprint_bytes(
@@ -290,11 +334,15 @@ def _publish_structural_snapshot_v2(
             fingerprint_schema=fingerprint.schema,
             digest=hashlib.sha256(preimage).digest(),
         )
-        for tag, preimage, fingerprint in zip(
-            (1, 2, 3, 4), preimages, fingerprints, strict=True
+        for tag, preimage, fingerprint in zip((1, 2, 3, 4), preimages, fingerprints, strict=True)
+    )
+    max_facade_row_bytes = max(
+        (
+            1,
+            *(len(row) for roots in effective_rows for row in roots),
+            *(len(row) for row in origin_rows),
         )
     )
-    max_facade_row_bytes = max(1, *(len(row) for roots in effective_rows for row in roots))
     content = native_snapshot_content_digests_v2(
         documents=documents,
         report=report,
@@ -332,6 +380,7 @@ def _publish_structural_snapshot_v2(
             extension,
             lambda: retain(
                 (raw_rows,),
+                origin_rows,
                 attestation,
                 config,
                 cancel,

@@ -45,9 +45,7 @@ def main() -> None:
     probe = native.probe(refresh=True)
     if not probe.available or "parse-functional-v1" not in probe.features:
         raise RuntimeError(probe.reason or "native Functional parser is unavailable")
-    pyelk_native = _load_pyelk_extension(
-        Path(os.environ["PYOWL_CORE_TEST_PYELK_NATIVE_LIBRARY"])
-    )
+    pyelk_native = _load_pyelk_extension(Path(os.environ["PYOWL_CORE_TEST_PYELK_NATIVE_LIBRARY"]))
     from pyelk.indexing.compiler import compile_ontology  # type: ignore[import-not-found]
     from pyelk.indexing.summary import compiler_digest  # type: ignore[import-not-found]
 
@@ -65,7 +63,7 @@ def main() -> None:
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.IGNORE,
             backend=backend,
-            collect_provenance=False,
+            collect_provenance=True,
         )
 
     reference = load_snapshot(source, options=options(BackendPreference.PYTHON))
