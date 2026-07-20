@@ -10,7 +10,7 @@ from pyowl_core.backends.python import PythonParser
 
 @pytest.fixture
 def operation_counters(monkeypatch: pytest.MonkeyPatch) -> Iterator[OperationCounters]:
-    """Count every root/import parser dispatch, including forced native dispatch."""
+    """Count Python parser dispatches; retained native parsing bypasses this hook."""
 
     counters = OperationCounters()
     original = PythonParser.parse

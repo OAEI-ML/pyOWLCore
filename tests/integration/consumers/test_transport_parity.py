@@ -52,7 +52,8 @@ def test_standalone_python_native_and_in_process_forms_match(
             options=options,
         )
         delta = operation_counters.snapshot() - before
-        assert delta.parser == 1
+        expected_python_parses = int(backend is pyowl_core.BackendPreference.PYTHON)
+        assert delta.parser == expected_python_parses
         consumer = FixtureConsumer()
         consumer_before = operation_counters.snapshot()
         observation = consumer(view)

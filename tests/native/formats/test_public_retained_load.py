@@ -829,6 +829,18 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["auto_closed"] is True
     assert observed["unresolved_retained_parity"] is True
     assert observed["unresolved_snapshot_type"] == "_NativeOntologySnapshot"
+    assert observed["empty_closure_parity"] == {
+        "resolve_local": True,
+        "resolve_strict": True,
+    }
+    assert observed["empty_closure_snapshot_types"] == {
+        "resolve_local": "_NativeOntologySnapshot",
+        "resolve_strict": "_NativeOntologySnapshot",
+    }
+    assert observed["empty_closure_parser_result_bytes"] == {
+        "resolve_local": 0,
+        "resolve_strict": 0,
+    }
     assert observed["ingestion_features"] == []
     assert observed["view_features"] == []
     assert observed["encoded_view_schemas"] == {}

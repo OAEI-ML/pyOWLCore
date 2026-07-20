@@ -166,6 +166,53 @@ def main() -> None:
     if not without_provenance_parity:
         raise AssertionError("provenance-disabled retained load differs from Python reference")
 
+    empty_closure_parity: dict[str, bool] = {}
+    empty_closure_snapshot_types: dict[str, str] = {}
+    empty_closure_parser_result_bytes: dict[str, int] = {}
+    for policy in (ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT):
+        empty_reference = load_snapshot(
+            source,
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=policy,
+                backend=BackendPreference.PYTHON,
+                collect_provenance=True,
+            ),
+        )
+        empty_selected = load_snapshot(
+            source,
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=policy,
+                backend=BackendPreference.NATIVE,
+                collect_provenance=True,
+            ),
+        )
+        empty_ingestion = cast(Any, empty_selected)._native_ingestion_counters_v2()
+        parity = (
+            type(empty_selected).__name__ == "_NativeOntologySnapshot"
+            and empty_selected.import_manifest == empty_reference.import_manifest
+            and empty_selected.import_manifest.policy is policy
+            and empty_selected.import_manifest.edges == ()
+            and empty_selected.report.resolution_attempts == 0
+            and empty_selected.structural_fingerprint
+            == empty_reference.structural_fingerprint
+            and empty_selected.logical_fingerprint == empty_reference.logical_fingerprint
+            and empty_selected.signature_fingerprint == empty_reference.signature_fingerprint
+            and empty_selected.origin_index == empty_reference.origin_index
+            and encode_snapshot(empty_selected) == encode_snapshot(empty_reference)
+            and empty_ingestion.parser_result_bytes_scanned == 0
+            and empty_ingestion.canonical_bytes_copied_to_python == 0
+        )
+        if not parity:
+            raise AssertionError(f"{policy.value} empty retained closure differs from Python")
+        empty_closure_parity[policy.value] = parity
+        empty_closure_snapshot_types[policy.value] = type(empty_selected).__name__
+        empty_closure_parser_result_bytes[policy.value] = (
+            empty_ingestion.parser_result_bytes_scanned
+        )
+        empty_selected.close()
+
     auto_source = (
         b"Ontology(<urn:retained-auto-installed> "
         b"Import(<urn:retained-auto-installed:ignored>) "
@@ -320,6 +367,9 @@ def main() -> None:
                 "direct_root_parity": direct_roots == expected_roots,
                 "direct_survives_owner_close": direct_survives_owner_close,
                 "encoded_view_schemas": dict(selected.capabilities.encoded_view_schemas),
+                "empty_closure_parity": empty_closure_parity,
+                "empty_closure_parser_result_bytes": empty_closure_parser_result_bytes,
+                "empty_closure_snapshot_types": empty_closure_snapshot_types,
                 "fingerprint_parity": (
                     selected.structural_fingerprint == reference.structural_fingerprint
                     and selected.logical_fingerprint == reference.logical_fingerprint
