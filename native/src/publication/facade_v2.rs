@@ -1041,12 +1041,21 @@ impl PublicationStorageV2 {
         origin_rows: Vec<Vec<u8>>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
-        Self::from_typed_structural_parts(
+        Self::from_typed_structural_with_optional_origins(
             attestation,
             typed_structural,
             Some(origin_rows),
             parser_bytes,
         )
+    }
+
+    pub(super) fn from_typed_structural_with_optional_origins(
+        attestation: NativeSnapshotAttestationV2,
+        typed_structural: TypedFacadeStorageV2,
+        origin_rows: Option<Vec<Vec<u8>>>,
+        parser_bytes: u64,
+    ) -> NativeResult<Arc<Self>> {
+        Self::from_typed_structural_parts(attestation, typed_structural, origin_rows, parser_bytes)
     }
 
     fn from_typed_structural_parts(

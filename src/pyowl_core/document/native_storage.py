@@ -2225,6 +2225,13 @@ class _NativeOntologySnapshot(OntologySnapshot):
 
         self._check_open()
         entries = self._native_snapshot_state.origin_index.entries
+        if not self.load_options.collect_provenance:
+            if entries:
+                raise BackendProtocolError(
+                    "native wire source retained origins without provenance capability",
+                    code="NATIVE_WIRE_SOURCE",
+                )
+            return
         if not isinstance(entries, _NativeOriginMapping):
             raise BackendProtocolError(
                 "native wire source does not retain an origin-row facade",

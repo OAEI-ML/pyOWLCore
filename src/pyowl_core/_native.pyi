@@ -111,7 +111,7 @@ def _parse_functional_retained_v2(
 ) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int]]: ...
 def _finalize_parsed_structural_snapshot_v2(
     parsed: _NativeParsedStructuralStorageV2,
-    origins: object,
+    origins: object | None,
     attestation: NativeSnapshotAttestationV2,
     cancel: _Cancellation | None = None,
 ) -> _NativeSnapshotHandle: ...

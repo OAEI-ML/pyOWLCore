@@ -9,10 +9,12 @@ from pyowl_core import (
     BackendPreference,
     BackendUnavailableError,
     DocumentFormat,
+    ImportPolicy,
     LoadOptions,
     OptionConflictError,
     PythonParser,
     UnsupportedSyntaxError,
+    load_snapshot,
     parse_document,
     render_document,
 )
@@ -64,6 +66,20 @@ def test_w3c_derived_minimal_documents_have_one_structure(
     )
     assert document.ontology_id.ontology_iri == m.IRI(ONTOLOGY)
     assert document.axioms == m.CanonicalSet((m.Declaration(m.Class(m.IRI(CLASS))),))
+
+
+def test_disabled_provenance_omits_document_and_snapshot_origins() -> None:
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.PYTHON,
+        collect_provenance=False,
+    )
+    document = parse_document(FUNCTIONAL, options=options)
+    snapshot = load_snapshot(FUNCTIONAL, options=options)
+
+    assert document.origin_index is None
+    assert not snapshot.origin_index.entries
 
 
 @pytest.mark.parametrize("format", tuple(DocumentFormat))

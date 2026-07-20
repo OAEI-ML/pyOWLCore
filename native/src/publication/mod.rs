@@ -53,11 +53,11 @@ pub(crate) fn encoded_fixture_handle_v2() -> NativeResult<NativeSnapshotHandle> 
 pub(crate) fn typed_structural_handle_v2(
     attestation: &pyo3::Bound<'_, pyo3::types::PyAny>,
     storage: TypedFacadeStorageV2,
-    origin_rows: Vec<Vec<u8>>,
+    origin_rows: Option<Vec<Vec<u8>>>,
     parser_bytes: u64,
 ) -> pyo3::PyResult<NativeSnapshotHandle> {
     let attestation = facade_v2::NativeSnapshotAttestationV2::from_python(attestation)?;
-    let publication = facade_v2::PublicationStorageV2::from_typed_structural_with_origins(
+    let publication = facade_v2::PublicationStorageV2::from_typed_structural_with_optional_origins(
         attestation,
         storage,
         origin_rows,

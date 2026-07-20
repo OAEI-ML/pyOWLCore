@@ -234,6 +234,41 @@ def test_empty_provenance_enabled_load_retains_zero_origin_rows(
     assert python_counters.model_rows_materialized == before_python.model_rows_materialized
 
 
+def test_provenance_disabled_load_retains_parser_arena_without_origin_capability(
+    extension: NativeTestExtension,
+) -> None:
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=False,
+    )
+    reference = load_snapshot(
+        SOURCE,
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=BackendPreference.PYTHON,
+            collect_provenance=False,
+        ),
+    )
+    selected = load_snapshot(SOURCE, options=options)
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    counters = cast(Any, raw_owner)._publication_counters_v2()
+
+    assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
+    assert selected.capabilities.backend == "native"
+    assert selected.origin_index == reference.origin_index
+    assert reference.root.origin_index is None
+    assert selected.root.origin_index is None
+    assert handle.attestation.capability_bits == 7
+    assert counters.parser_bytes == len(SOURCE)
+    assert counters.retained_origin_rows == 0
+    assert counters.retained_origin_bytes == 0
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
 def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_construction(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
@@ -248,12 +283,6 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
     monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", unexpected)
 
     for options in (
-        LoadOptions(
-            format=DocumentFormat.FUNCTIONAL,
-            imports=ImportPolicy.IGNORE,
-            backend=BackendPreference.NATIVE,
-            collect_provenance=False,
-        ),
         LoadOptions(
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.IGNORE,
@@ -369,6 +398,8 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
         "native_freeze_seconds",
         "root_parse_seconds",
     } <= observed["phase_timings"].keys()
+    assert observed["provenance_disabled_parity"] is True
+    assert observed["provenance_disabled_retained_origin_rows"] == 0
     assert observed["retained_origin_rows"] == observed["reference_origin_rows"]
     assert observed["mapped_root_parity"] is True
     assert observed["mapped_fingerprint_parity"] is True

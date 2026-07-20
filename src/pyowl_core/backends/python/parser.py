@@ -183,10 +183,15 @@ class PythonParser:
             ),
             backend=selected_backend,
         )
-        candidates: tuple[StructuralNode, ...] = (*annotations, *axioms, *extensions)
-        matcher = _FrozenMatcher(candidates)
+        matcher = (
+            _FrozenMatcher((*annotations, *axioms, *extensions))
+            if selected_options.preserve_source_map or selected_options.collect_provenance
+            else None
+        )
         source_map = None
         if selected_options.preserve_source_map:
+            if matcher is None:
+                raise AssertionError("source-map construction requires a frozen matcher")
             builder = SourceMapBuilder(dict(parsed.prefixes))
             language_details = _language_details(
                 parsed,
@@ -221,23 +226,28 @@ class PythonParser:
                         "max_source_map_entries", source_map_entries
                     )
             source_map = builder.freeze()
-        provisional = OntologyDocument(
-            parsed.ontology_id,
-            effective_iri,
-            imports,
-            annotations,
-            axioms,
-            extensions,
-            provenance,
-            source_map,
-            None,
-            parsed.rdf_mapping_report,
-        )
-        origin_builder = OriginIndexBuilder(provisional.document_fingerprint.hex)
-        for occurrence, (original, span) in enumerate(parsed.occurrences):
-            frozen, digest = matcher.match(original)
-            if frozen is not None:
-                origin_builder.add_digest(digest, occurrence, span)
+        origin_index = None
+        if selected_options.collect_provenance:
+            if matcher is None:
+                raise AssertionError("origin construction requires a frozen matcher")
+            provisional = OntologyDocument(
+                parsed.ontology_id,
+                effective_iri,
+                imports,
+                annotations,
+                axioms,
+                extensions,
+                provenance,
+                source_map,
+                None,
+                parsed.rdf_mapping_report,
+            )
+            origin_builder = OriginIndexBuilder(provisional.document_fingerprint.hex)
+            for occurrence, (original, span) in enumerate(parsed.occurrences):
+                frozen, digest = matcher.match(original)
+                if frozen is not None:
+                    origin_builder.add_digest(digest, occurrence, span)
+            origin_index = origin_builder.freeze()
         document = OntologyDocument(
             parsed.ontology_id,
             effective_iri,
@@ -247,7 +257,7 @@ class PythonParser:
             extensions,
             provenance,
             source_map,
-            origin_builder.freeze(),
+            origin_index,
             parsed.rdf_mapping_report,
         )
         native_storage = parsed_result.native_storage

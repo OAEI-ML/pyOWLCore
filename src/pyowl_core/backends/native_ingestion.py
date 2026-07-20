@@ -61,13 +61,14 @@ def retain_forced_native_snapshot_v2(
         or snapshot.root.provenance.backend != "native"
         or snapshot.root.provenance.format is not DocumentFormat.FUNCTIONAL
         or snapshot.load_options.preserve_source_map
-        or not snapshot.load_options.collect_provenance
         or snapshot.load_options.validate_owl2_dl
         or snapshot.root.rdf_mapping_report is not None
     ):
         return snapshot
     extension = native.require("parse-functional-v1")
     if parsed_native_storage is None:
+        if not snapshot.load_options.collect_provenance:
+            return snapshot
         hook = getattr(extension, "_retain_structural_snapshot_v2", None)
         if not callable(hook):
             return snapshot
@@ -247,7 +248,7 @@ def _publish_structural_snapshot_v2(
         owl2_dl_conforms=None,
         owl2_dl_report_sha256=None,
     )
-    capability_bits = 23
+    capability_bits = 7 | (16 if snapshot.load_options.collect_provenance else 0)
     import_manifest = freeze_native_import_manifest_publication_v1(snapshot.import_manifest)
     sidecars = NativeDiagnosticReferenceSidecarsV2(
         snapshot=tuple(_diagnostic_reference_kinds(value) for value in diagnostics),
@@ -411,7 +412,7 @@ def _publish_structural_snapshot_v2(
                 extension,
                 lambda: selected_extension._finalize_parsed_structural_snapshot_v2(
                     parsed_native_storage,
-                    origin_rows,
+                    origin_rows if snapshot.load_options.collect_provenance else None,
                     attestation,
                     cancel,
                 ),

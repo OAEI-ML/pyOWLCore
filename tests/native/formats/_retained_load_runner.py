@@ -121,6 +121,39 @@ def main() -> None:
     if not decoded_parity:
         raise AssertionError("decoded retained wire differs from Python reference")
 
+    without_provenance_reference = load_snapshot(
+        source,
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=BackendPreference.PYTHON,
+            collect_provenance=False,
+        ),
+    )
+    without_provenance = load_snapshot(
+        source,
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=BackendPreference.NATIVE,
+            collect_provenance=False,
+        ),
+    )
+    without_provenance_handle = cast(Any, without_provenance)._native_snapshot_state.owner.handle
+    without_provenance_owner = object.__getattribute__(without_provenance_handle, "_owner_v2")
+    without_provenance_counters = without_provenance_owner._publication_counters_v2()
+    without_provenance_parity = (
+        without_provenance.capabilities.backend == "native"
+        and without_provenance.origin_index == without_provenance_reference.origin_index
+        and without_provenance.root.origin_index is None
+        and without_provenance_handle.attestation.capability_bits == 7
+        and without_provenance_counters.parser_bytes == len(source)
+        and without_provenance_counters.retained_origin_rows == 0
+        and encode_snapshot(without_provenance) == encode_snapshot(without_provenance_reference)
+    )
+    if not without_provenance_parity:
+        raise AssertionError("provenance-disabled retained load differs from Python reference")
+
     with tempfile.TemporaryDirectory(prefix="pyowl-core-retained-wire-") as temporary:
         path = Path(temporary) / "retained.pyocore"
         path.write_bytes(retained_wire)
@@ -187,6 +220,10 @@ def main() -> None:
                 "package_file": pyowl_core.__file__,
                 "parser_bytes": before_native.parser_bytes,
                 "phase_timings": dict(selected.report.timings),
+                "provenance_disabled_parity": without_provenance_parity,
+                "provenance_disabled_retained_origin_rows": (
+                    without_provenance_counters.retained_origin_rows
+                ),
                 "reference_origin_rows": reference_origin_rows,
                 "retained_origin_rows": retained_origin_rows,
                 "selected_closed": selected.closed,

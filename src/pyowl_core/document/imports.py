@@ -332,7 +332,6 @@ def _prepare_retained_native_root(options: LoadOptions) -> bool:
         options.backend is BackendPreference.NATIVE
         and options.imports is ImportPolicy.IGNORE
         and not options.preserve_source_map
-        and options.collect_provenance
         and not options.validate_owl2_dl
         and options.format in {None, DocumentFormat.FUNCTIONAL}
     )

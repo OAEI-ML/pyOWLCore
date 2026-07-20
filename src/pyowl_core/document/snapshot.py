@@ -360,12 +360,15 @@ class OntologySnapshot:
             closure_annotations = CanonicalSet(
                 annotation for values in annotations_by_key.values() for annotation in values
             )
-        origin_index = self._origin_index_override or _merge_origins(
-            records,
-            documents,
-            scoped,
-            maximum=self.load_options.limits.max_origin_entries,
-        )
+        if not self.load_options.collect_provenance:
+            origin_index = OriginIndex()
+        else:
+            origin_index = self._origin_index_override or _merge_origins(
+                records,
+                documents,
+                scoped,
+                maximum=self.load_options.limits.max_origin_entries,
+            )
         owl2_dl_report: OWL2DLReport | None = None
         if self.load_options.validate_owl2_dl:
             if not self.import_manifest.is_complete:

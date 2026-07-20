@@ -127,7 +127,7 @@ fn _parse_functional_retained_v2<'py>(
 fn _finalize_parsed_structural_snapshot_v2<'py>(
     py: Python<'py>,
     mut parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
-    origins: &Bound<'py, PyAny>,
+    origins: Option<&Bound<'py, PyAny>>,
     attestation: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<NativeSnapshotHandle> {
@@ -139,9 +139,19 @@ fn _finalize_parsed_structural_snapshot_v2<'py>(
             "native parsed structural storage was already consumed",
         )
     })?;
-    let mut external_bytes = 0_usize;
-    let retained_origins =
-        owned_origin_rows(py, origins, &limits, &cancellation, &mut external_bytes)?;
+    let retained_origins = match origins {
+        Some(rows) => {
+            let mut external_bytes = 0_usize;
+            Some(owned_origin_rows(
+                py,
+                rows,
+                &limits,
+                &cancellation,
+                &mut external_bytes,
+            )?)
+        }
+        None => None,
+    };
     crate::publication::typed_structural_handle_v2(
         attestation,
         storage,
@@ -185,7 +195,7 @@ fn _retain_structural_snapshot_v2<'py>(
         }
         Ok((builder.freeze(&[vec![0]], &[0])?, owned_origins))
     })?;
-    crate::publication::typed_structural_handle_v2(attestation, storage, retained_origins, 0)
+    crate::publication::typed_structural_handle_v2(attestation, storage, Some(retained_origins), 0)
 }
 
 type OwnedStructuralDocument = [Vec<Vec<u8>>; 3];
