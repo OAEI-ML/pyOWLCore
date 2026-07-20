@@ -1129,6 +1129,30 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         })
     }
 
+    pub(crate) fn decode_object_property_collection(
+        &mut self,
+        head: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<DecodedPropertyCollection> {
+        let decoded = self.lists.decode(head, session)?;
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        let mut consumed = decoded.consumed;
+        let mut properties = reserved_vec(decoded.items.len(), session)?;
+        for item in decoded.items {
+            properties.push(self.decode_object_property(item, &mut consumed, session)?);
+        }
+        consumed.sort_unstable();
+        consumed.dedup();
+        session.finish()?;
+        Ok(DecodedPropertyCollection {
+            properties,
+            consumed,
+            data_properties: false,
+        })
+    }
+
     pub(crate) fn decode_literal(
         &mut self,
         triple_index: usize,

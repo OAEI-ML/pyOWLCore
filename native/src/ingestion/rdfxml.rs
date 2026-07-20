@@ -42,6 +42,7 @@ const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClas
 const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
 const OWL_EQUIVALENT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#equivalentProperty";
 const OWL_PROPERTY_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#propertyDisjointWith";
+const OWL_PROPERTY_CHAIN_AXIOM: &str = "http://www.w3.org/2002/07/owl#propertyChainAxiom";
 const OWL_INVERSE_OF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
 const OWL_SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
 const OWL_DIFFERENT_FROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
@@ -1266,6 +1267,13 @@ fn map_graph(
         &mut axioms,
         session,
     )?;
+    map_property_chains(
+        &list_graph,
+        &mut consumed,
+        &mut expressions,
+        &mut axioms,
+        session,
+    )?;
     map_equivalent_class_components(
         &list_graph,
         &mut consumed,
@@ -1585,6 +1593,48 @@ fn map_all_disjoint_collections<'view, 'graph>(
         consume_collection_indexes(collection_consumed, consumed, session)?;
         consumed[type_index] = true;
         consumed[members_index] = true;
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
+fn map_property_chains<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index] || triple.predicate != OWL_PROPERTY_CHAIN_AXIOM {
+            continue;
+        }
+        let ListResource::Iri(super_property) = triple.subject else {
+            continue;
+        };
+        let DecodedPropertyCollection {
+            properties,
+            consumed: collection_consumed,
+            data_properties: _,
+        } = expressions.decode_object_property_collection(triple.object, session)?;
+        if properties.len() < 2 {
+            return Err(rdf_mapping_cardinality(
+                "native object property chain has fewer than two members",
+            ));
+        }
+        let chain = build_node(11, [Field::Sequence(properties)], session)?;
+        let axiom = build_node(
+            70,
+            [
+                Field::Node(chain),
+                Field::Node(named_entity("object_property", super_property, session)?),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?;
+        consume_collection_indexes(collection_consumed, consumed, session)?;
+        consumed[index] = true;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -4363,6 +4413,67 @@ mod tests {
             );
             assert!(mapped(single.as_bytes(), None).is_err());
         }
+    }
+
+    #[test]
+    fn object_property_chains_preserve_order_and_inverse_members() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:ObjectProperty rdf:about=\"urn:super\"><owl:propertyChainAxiom rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:p\"/><rdf:Description><owl:inverseOf rdf:resource=\"urn:q\"/></rdf:Description><rdf:Description rdf:about=\"urn:p\"/></owl:propertyChainAxiom></owl:ObjectProperty></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("property chain");
+        let property = |value: &str| {
+            entity(
+                "object_property",
+                iri(value.to_owned()).expect("property IRI"),
+            )
+            .expect("object property")
+        };
+        let inverse = Node::build(10, vec![Field::Node(property("urn:q"))])
+            .expect("inverse property expression");
+        let chain = Node::build(
+            11,
+            vec![Field::Sequence(vec![
+                property("urn:p"),
+                inverse,
+                property("urn:p"),
+            ])],
+        )
+        .expect("object property chain");
+        let expected = Node::build(
+            70,
+            vec![
+                Field::Node(chain),
+                Field::Node(property("urn:super")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("sub-property axiom");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        for members in ["", "<rdf:Description rdf:about=\"urn:only\"/>"] {
+            let short = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:ObjectProperty rdf:about=\"urn:super\"><owl:propertyChainAxiom rdf:parseType=\"Collection\">{members}</owl:propertyChainAxiom></owl:ObjectProperty></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(short.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_CARDINALITY",
+            );
+        }
+
+        let blank_super = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><owl:propertyChainAxiom rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:q\"/></owl:propertyChainAxiom></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(blank_super.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
     }
 
     #[test]
