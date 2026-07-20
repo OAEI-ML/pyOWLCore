@@ -8,6 +8,7 @@
 mod rdfxml;
 #[cfg(any(test, feature = "test-hooks"))]
 mod v1_adapter;
+mod v2_adapter;
 
 use crate::error::{NativeError, NativeResult};
 use crate::hash::sha256;

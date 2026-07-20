@@ -4,7 +4,7 @@
 //! add functions/classes and feature names in this module without editing the
 //! shared module registry.
 
-#[cfg(any(test, feature = "test-hooks"))]
+#[allow(dead_code)]
 #[path = "../ingestion/mod.rs"]
 mod engine;
 
