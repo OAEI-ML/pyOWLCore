@@ -1578,47 +1578,59 @@ def _publish_structural_snapshot_v2(
             tuple(canonical_bytes(value) for value in document.axioms),
             tuple(canonical_bytes(value) for value in document.extension_components),
         )
-        # Typed V2 currently has no anonymous re-scope sidecar. Never publish a
-        # raw-document owner whose roots would silently differ from Python.
-        if raw_rows != effective_rows:
-            return snapshot
     else:
         # The parser orchestration discards parser-built storage before this
         # point whenever anonymous canonical re-scoping changes the roots.
         raw_rows = effective_rows
 
-    origin_items: list[tuple[tuple[object, ...], bytes]] = []
-    for digest, occurrences in snapshot.origin_index.entries.items():
-        for occurrence in occurrences:
-            if occurrence.document_key != record.document_key:
-                return snapshot
-            origin = NativeOriginRowV2(
-                digest=digest,
-                document_key=occurrence.document_key,
-                occurrence=occurrence.occurrence,
-                span=occurrence.span,
-            )
-            collection, encoded = encode_native_auxiliary_row_v2(
-                origin,
-                max_row_bytes=snapshot.load_options.limits.max_wire_bytes,
-            )
-            if collection is not NativeFacadeCollectionV2.ORIGIN_ENTRIES:
-                raise AssertionError(collection)
-            origin_items.append(
-                (
+    raw_origin_index = document.origin_index
+    if raw_origin_index is None:
+        return snapshot
+    encoded_origin_tables: list[tuple[bytes, ...]] = []
+    for raw_owner_role, origin_index in (
+        (True, raw_origin_index),
+        (False, snapshot.origin_index),
+    ):
+        origin_items: list[tuple[bytes, bytes, int, bytes]] = []
+        for digest, occurrences in origin_index.entries.items():
+            for occurrence in occurrences:
+                if not raw_owner_role and occurrence.document_key != record.document_key:
+                    return snapshot
+                origin = NativeOriginRowV2(
+                    digest=digest,
+                    # Raw document occurrences use the provisional document
+                    # fingerprint while parsing.  The published owner is keyed
+                    # by the authoritative import-manifest identity, just like
+                    # the effective origin table.
+                    document_key=record.document_key,
+                    occurrence=occurrence.occurrence,
+                    span=occurrence.span,
+                )
+                collection, encoded_row = encode_native_auxiliary_row_v2(
+                    origin,
+                    max_row_bytes=snapshot.load_options.limits.max_wire_bytes,
+                )
+                if collection is not NativeFacadeCollectionV2.ORIGIN_ENTRIES:
+                    raise AssertionError(collection)
+                origin_items.append(
                     (
                         digest,
                         occurrence.document_key.encode("utf-8"),
                         occurrence.occurrence,
-                        encoded,
-                    ),
-                    encoded,
+                        encoded_row,
+                    )
                 )
-            )
-    origin_items.sort(key=lambda item: item[0])
-    origin_rows = tuple(item[1] for item in origin_items)
-    if len(set(origin_rows)) != len(origin_rows):
-        return snapshot
+        if raw_owner_role:
+            # Stable digest sorting retains producer order and multiplicity
+            # within a raw document's digest groups.
+            origin_items.sort(key=lambda item: item[0])
+        else:
+            origin_items.sort()
+        encoded_rows = tuple(item[3] for item in origin_items)
+        if not raw_owner_role and len(set(encoded_rows)) != len(encoded_rows):
+            return snapshot
+        encoded_origin_tables.append(encoded_rows)
+    raw_origin_rows, effective_origin_rows = encoded_origin_tables
 
     document_diagnostics = tuple(
         freeze_native_diagnostic_publication_v1(value) for value in document.diagnostics
@@ -1636,7 +1648,7 @@ def _publish_structural_snapshot_v2(
             axiom_count=len(raw_rows[1]),
             extension_count=len(raw_rows[2]),
             source_map_entry_count=0,
-            origin_entry_count=len(origin_rows),
+            origin_entry_count=len(raw_origin_rows),
             rdf_mapping_conformant=None,
             rdf_mapping_report_sha256=None,
         ),
@@ -1681,7 +1693,7 @@ def _publish_structural_snapshot_v2(
                 effective_annotation_count=len(effective_rows[0]),
                 effective_axiom_count=len(effective_rows[1]),
                 effective_extension_count=len(effective_rows[2]),
-                effective_origin_count=len(origin_rows),
+                effective_origin_count=len(effective_origin_rows),
                 raw_source_prefix_count=0,
                 rdf_unconsumed_triple_count=0,
                 rdf_rule_count=0,
@@ -1692,12 +1704,12 @@ def _publish_structural_snapshot_v2(
             effective_annotation_count=len(effective_rows[0]),
             effective_axiom_count=len(effective_rows[1]),
             effective_extension_count=len(effective_rows[2]),
-            effective_origin_count=len(origin_rows),
+            effective_origin_count=len(effective_origin_rows),
         ),
     )
     collections = {
-        (collection, scope, ordinal, NativeSignatureKindV2.ALL, True): values
-        for collection, values in zip(
+        (collection, scope, ordinal, NativeSignatureKindV2.ALL, True): effective_values
+        for collection, effective_values in zip(
             (
                 NativeFacadeCollectionV2.ONTOLOGY_ANNOTATIONS,
                 NativeFacadeCollectionV2.AXIOMS,
@@ -1723,7 +1735,37 @@ def _publish_structural_snapshot_v2(
                 NativeSignatureKindV2.ALL,
                 True,
             )
-        ] = origin_rows
+        ] = effective_origin_rows
+    raw_collections = None
+    if raw_rows != effective_rows or raw_origin_rows != effective_origin_rows:
+        raw_collections = dict(collections)
+        for collection, raw_values in zip(
+            (
+                NativeFacadeCollectionV2.ONTOLOGY_ANNOTATIONS,
+                NativeFacadeCollectionV2.AXIOMS,
+                NativeFacadeCollectionV2.EXTENSIONS,
+            ),
+            raw_rows,
+            strict=True,
+        ):
+            raw_collections[
+                (
+                    collection,
+                    NativeFacadeScopeV2.DOCUMENT,
+                    0,
+                    NativeSignatureKindV2.ALL,
+                    True,
+                )
+            ] = raw_values
+        raw_collections[
+            (
+                NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+                NativeFacadeScopeV2.DOCUMENT,
+                0,
+                NativeSignatureKindV2.ALL,
+                True,
+            )
+        ] = raw_origin_rows
     preimages = (
         document_fingerprint_bytes(document),
         snapshot_structural_fingerprint_bytes(
@@ -1776,7 +1818,9 @@ def _publish_structural_snapshot_v2(
         (
             1,
             *(len(row) for roots in effective_rows for row in roots),
-            *(len(row) for row in origin_rows),
+            *(len(row) for roots in raw_rows for row in roots),
+            *(len(row) for row in effective_origin_rows),
+            *(len(row) for row in raw_origin_rows),
         )
     )
     content = native_snapshot_content_digests_v2(
@@ -1790,6 +1834,7 @@ def _publish_structural_snapshot_v2(
         fingerprint_preimages=preimages,
         owl2_dl_report_summary=None,
         facade_cardinality_summary=facade_summary,
+        raw_document_collections=raw_collections,
     )
     attestation = native_snapshot_publication_attestation_v2(
         documents=documents,
@@ -1817,10 +1862,14 @@ def _publish_structural_snapshot_v2(
                 extension,
                 lambda: selected_extension._retain_structural_snapshot_v2(
                     (raw_rows,),
-                    origin_rows,
+                    raw_origin_rows,
                     attestation,
                     config,
                     cancel,
+                    effective_documents=(effective_rows,) if raw_collections is not None else None,
+                    effective_origins=(
+                        effective_origin_rows if raw_collections is not None else None
+                    ),
                 ),
             )
         else:
@@ -1828,7 +1877,7 @@ def _publish_structural_snapshot_v2(
                 extension,
                 lambda: selected_extension._finalize_parsed_structural_snapshot_v2(
                     parsed_native_storage,
-                    origin_rows if snapshot.load_options.collect_provenance else None,
+                    effective_origin_rows if snapshot.load_options.collect_provenance else None,
                     attestation,
                     cancel,
                 ),
@@ -1854,7 +1903,9 @@ def _publish_structural_snapshot_v2(
     publication = freeze_native_snapshot_publication_v2(values)
     return ontology_snapshot_from_native_publication_v2(
         publication,
-        _wire_structural_aliases=_WIRE_STRUCTURAL_ALIAS_SEAL_V1,
+        _wire_structural_aliases=(
+            _WIRE_STRUCTURAL_ALIAS_SEAL_V1 if raw_collections is None else None
+        ),
     )
 
 

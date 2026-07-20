@@ -350,6 +350,7 @@ fn _finalize_parsed_structural_snapshot_v2<'py>(
         attestation,
         storage,
         prepared.origin_rows,
+        None,
         source_map,
         rdf_report,
         parser_bytes,
@@ -454,7 +455,17 @@ fn validate_prepared_attestation(
 /// format capability, and deliberately remains single-document until native
 /// import orchestration owns the complete closure.
 #[pyfunction]
-#[pyo3(signature = (documents, origins, attestation, config, cancel=None))]
+#[pyo3(signature = (
+    documents,
+    origins,
+    attestation,
+    config,
+    cancel=None,
+    *,
+    effective_documents=None,
+    effective_origins=None
+))]
+#[allow(clippy::too_many_arguments)]
 fn _retain_structural_snapshot_v2<'py>(
     py: Python<'py>,
     documents: &Bound<'py, PyAny>,
@@ -462,33 +473,93 @@ fn _retain_structural_snapshot_v2<'py>(
     attestation: &Bound<'py, PyAny>,
     config: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    effective_documents: Option<&Bound<'py, PyAny>>,
+    effective_origins: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<NativeSnapshotHandle> {
     let limits = crate::limits_from_python(config)?;
     let cancellation = crate::cancellation_or_default(cancel);
     let (owned_documents, mut external_bytes) =
         owned_structural_documents(py, documents, &limits, &cancellation)?;
+    let owned_effective_documents = effective_documents
+        .map(|value| owned_structural_documents(py, value, &limits, &cancellation))
+        .transpose()?;
+    if let Some((_, effective_bytes)) = &owned_effective_documents {
+        external_bytes = external_bytes
+            .checked_add(*effective_bytes)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native scoped structural boundary size overflow",
+                ))
+            })?;
+        enforce_retained_boundary(external_bytes, &limits)?;
+    }
     let owned_origins =
         owned_origin_rows(py, origins, &limits, &cancellation, &mut external_bytes)?;
-    let (storage, retained_origins) = crate::run_detached(py, move |interrupt| {
+    let owned_effective_origins = effective_origins
+        .map(|value| owned_origin_rows(py, value, &limits, &cancellation, &mut external_bytes))
+        .transpose()?;
+    let owned_effective_documents = owned_effective_documents.map(|(rows, _bytes)| rows);
+    let (storage, retained_origins, raw_origins) = crate::run_detached(py, move |interrupt| {
         let mut builder = TypedFacadeBuilderV2::new(
             limits,
             cancellation.clone(),
             Some(interrupt),
             external_bytes,
         )?;
-        for document in &owned_documents {
-            builder.add_document(&document[0], &document[1], &document[2])?;
+        if let Some(effective_documents) = owned_effective_documents {
+            if effective_documents.len() != owned_documents.len() {
+                return Err(NativeError::protocol(
+                    "native raw and effective document counts diverge",
+                ));
+            }
+            for (document, effective) in owned_documents.iter().zip(&effective_documents) {
+                builder.add_scoped_document(
+                    &document[0],
+                    &document[1],
+                    &document[2],
+                    &effective[0],
+                    &effective[1],
+                    &effective[2],
+                )?;
+            }
+        } else {
+            for document in &owned_documents {
+                builder.add_document(&document[0], &document[1], &document[2])?;
+            }
         }
-        Ok((builder.freeze(&[vec![0]], &[0])?, owned_origins))
+        let (effective, raw) = match owned_effective_origins {
+            Some(effective) => (effective, Some(owned_origins)),
+            None => (owned_origins, None),
+        };
+        Ok((builder.freeze(&[vec![0]], &[0])?, effective, raw))
     })?;
     crate::publication::typed_structural_handle_v2(
         attestation,
         storage,
         Some(retained_origins),
+        raw_origins,
         None,
         None,
         0,
     )
+}
+
+fn enforce_retained_boundary(total_bytes: usize, limits: &Limits) -> PyResult<()> {
+    let total = u64::try_from(total_bytes).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native retained boundary size exceeds u64",
+        ))
+    })?;
+    if total > limits.value(LimitKey::MaxTemporaryBytes)
+        || limits
+            .max_memory_bytes
+            .is_some_and(|maximum| total > maximum)
+    {
+        return Err(crate::python_error(NativeError::limit(
+            "native retained boundary exceeds configured memory limits",
+        )));
+    }
+    Ok(())
 }
 
 type OwnedStructuralDocument = [Vec<Vec<u8>>; 3];

@@ -394,11 +394,12 @@ def test_compact_publication_seed_does_not_copy_structural_rows_to_python(
     assert counters.publication_structural_bytes_copied == 0
 
 
-def test_anonymous_re_scope_uses_the_authoritative_model_fallback(
+def test_anonymous_re_scope_retains_distinct_raw_and_effective_native_owners(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
 ) -> None:
     source = b"Ontology(<urn:retained-anonymous> ClassAssertion(<urn:C> _:person))"
+    reference = load_snapshot(source, options=_options(BackendPreference.PYTHON))
     decode = native._decode_parsed_functional
     calls = 0
 
@@ -409,10 +410,37 @@ def test_anonymous_re_scope_uses_the_authoritative_model_fallback(
 
     monkeypatch.setattr(native, "_decode_parsed_functional", counted)
     selected = load_snapshot(source, options=_options(BackendPreference.NATIVE))
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    owner = object.__getattribute__(handle, "_owner_v2")
+    before_native = cast(Any, owner)._publication_counters_v2()
+    before_python = cast(Any, selected)._native_python_counters()
 
-    assert selected.capabilities.backend == "python"
-    assert type(selected).__name__ == "OntologySnapshot"
+    assert selected.capabilities.backend == "native"
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
     assert calls == 1
+    assert before_native.retained_axiom_rows == 3
+    assert before_native.retained_origin_rows == 3
+    assert before_native.page_requests == 0
+    assert before_python.model_rows_materialized == 0
+    assert before_python.auxiliary_rows_decoded == 0
+
+    raw_axioms = tuple(canonical_bytes(value) for value in selected.root.axioms)
+    reference_raw_axioms = tuple(canonical_bytes(value) for value in reference.root.axioms)
+    effective_axioms = tuple(canonical_bytes(value) for value in selected.iter_axioms())
+    reference_effective_axioms = tuple(canonical_bytes(value) for value in reference.iter_axioms())
+    assert raw_axioms == reference_raw_axioms
+    assert effective_axioms == reference_effective_axioms
+    assert raw_axioms != effective_axioms
+    assert tuple(selected.root.origin_index.entries) == tuple(reference.root.origin_index.entries)
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+    after_native = cast(Any, owner)._publication_counters_v2()
+    after_python = cast(Any, selected)._native_python_counters()
+    assert after_native.axiom_rows_emitted > before_native.axiom_rows_emitted
+    assert after_native.origin_rows_emitted > before_native.origin_rows_emitted
+    assert after_python.model_rows_materialized > before_python.model_rows_materialized
+    assert after_python.auxiliary_rows_decoded > before_python.auxiliary_rows_decoded
 
 
 def test_functional_source_map_stays_in_parser_owned_storage_until_access(
@@ -840,12 +868,6 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
         ),
     )
     assert ineligible.capabilities.backend == "python"
-
-    anonymous = load_snapshot(
-        b"Ontology(<urn:retained-anonymous> ClassAssertion(<urn:C> _:person))",
-        options=_options(BackendPreference.NATIVE),
-    )
-    assert anonymous.capabilities.backend == "python"
 
     imported = load_snapshot(
         b"Ontology(<urn:retained-root> Import(<urn:retained-child>))",

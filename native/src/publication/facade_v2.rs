@@ -1101,7 +1101,7 @@ impl PublicationStorageV2 {
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
     ) -> NativeResult<Arc<Self>> {
-        Self::from_typed_structural_parts(attestation, typed_structural, None, None, None, 0)
+        Self::from_typed_structural_parts(attestation, typed_structural, None, None, None, None, 0)
     }
 
     pub(super) fn from_typed_structural_with_origins(
@@ -1130,6 +1130,7 @@ impl PublicationStorageV2 {
             origin_rows,
             None,
             None,
+            None,
             parser_bytes,
         )
     }
@@ -1138,6 +1139,7 @@ impl PublicationStorageV2 {
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
         origin_rows: Option<Vec<Vec<u8>>>,
+        raw_origin_rows: Option<Vec<Vec<u8>>>,
         source_map: Option<TypedSourceMapRowsV2>,
         rdf_report: Option<TypedRdfReportRowsV2>,
         parser_bytes: u64,
@@ -1146,6 +1148,7 @@ impl PublicationStorageV2 {
             attestation,
             typed_structural,
             origin_rows,
+            raw_origin_rows,
             source_map,
             rdf_report,
             parser_bytes,
@@ -1156,6 +1159,7 @@ impl PublicationStorageV2 {
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
         origin_rows: Option<Vec<Vec<u8>>>,
+        raw_origin_rows: Option<Vec<Vec<u8>>>,
         source_map: Option<TypedSourceMapRowsV2>,
         rdf_report: Option<TypedRdfReportRowsV2>,
         parser_bytes: u64,
@@ -1171,20 +1175,32 @@ impl PublicationStorageV2 {
             ));
         }
         let retains_origins = origin_rows.is_some();
+        if raw_origin_rows.is_some() && !retains_origins {
+            return Err(NativeError::protocol(
+                "typed V2 raw origins require effective origins",
+            ));
+        }
         let origins = origin_rows.unwrap_or_default();
         let origin_count = u64::try_from(origins.len())
             .map_err(|_| NativeError::limit("typed V2 origin count exceeds u64"))?;
-        let origin_maximum = origins.iter().try_fold(1_u64, |maximum, row| {
-            if row.len() < 32 {
-                return Err(NativeError::protocol(
-                    "typed V2 retained origin row is truncated",
-                ));
-            }
-            Ok(maximum.max(
-                u64::try_from(row.len())
-                    .map_err(|_| NativeError::limit("typed V2 origin row exceeds u64"))?,
-            ))
+        let raw_origin_count = raw_origin_rows.as_ref().map_or(Ok(origin_count), |rows| {
+            u64::try_from(rows.len())
+                .map_err(|_| NativeError::limit("typed V2 raw origin count exceeds u64"))
         })?;
+        let origin_maximum = origins
+            .iter()
+            .chain(raw_origin_rows.as_deref().unwrap_or_default())
+            .try_fold(1_u64, |maximum, row| {
+                if row.len() < 32 {
+                    return Err(NativeError::protocol(
+                        "typed V2 retained origin row is truncated",
+                    ));
+                }
+                Ok(maximum.max(
+                    u64::try_from(row.len())
+                        .map_err(|_| NativeError::limit("typed V2 origin row exceeds u64"))?,
+                ))
+            })?;
         let retained_source = retain_source_tables_v2(source_map)?;
         let retained_rdf = retain_rdf_tables_v2(rdf_report)?;
         let structural_counts = typed_structural.structural_counts()?;
@@ -1210,7 +1226,7 @@ impl PublicationStorageV2 {
             | if retained_rdf.present { 32 } else { 0 };
         if attestation.capability_bits != expected_capability_bits
             || attestation.source_map_entry_count != retained_source.row_counts[0]
-            || attestation.origin_entry_count != origin_count
+            || attestation.origin_entry_count != raw_origin_count
             || attestation.rdf_mapping_report_count != u64::from(retained_rdf.present)
             || attestation.owl2_dl_report_summary.is_some()
             || attestation.owl2_dl_validated
@@ -1234,7 +1250,7 @@ impl PublicationStorageV2 {
         let typed_structural = Arc::new(typed_structural);
         let mut initial = typed_initial_counters(&typed_structural, &attestation)?;
         initial[PARSER_BYTES] = parser_bytes;
-        let mut retained_origins = retain_origin_tables_v2(origins)?;
+        let mut retained_origins = retain_origin_tables_v2(origins, raw_origin_rows)?;
         retained_origins
             .effective_tables
             .extend(retained_source.effective_tables);
@@ -1246,9 +1262,7 @@ impl PublicationStorageV2 {
             .sort_unstable_by_key(|table| table.coordinate);
         reject_duplicate_coordinates(&retained_origins.effective_tables)?;
         if retains_origins {
-            initial[RETAINED_ROW_FIRST + 5] = origin_count
-                .checked_mul(2)
-                .ok_or_else(|| NativeError::limit("typed V2 origin row count overflow"))?;
+            initial[RETAINED_ROW_FIRST + 5] = retained_origins.row_count;
             initial[RETAINED_ORIGIN_BYTES] = retained_origins.payload_bytes;
             initial[RETAINED_METADATA_BYTES] = checked_add(
                 initial[RETAINED_METADATA_BYTES],
@@ -1332,7 +1346,8 @@ impl PublicationStorageV2 {
         Ok(Arc::new(Self {
             attestation,
             effective_tables: retained_origins.effective_tables,
-            raw_document_tables: None,
+            raw_document_tables: (!retained_origins.raw_document_tables.is_empty())
+                .then_some(retained_origins.raw_document_tables),
             typed_structural: Some(typed_structural),
             counters: CounterStateV2::new(initial),
         }))
@@ -1696,14 +1711,150 @@ fn retain_source_tables_v2(
 #[derive(Debug, Default)]
 struct RetainedOriginTablesV2 {
     effective_tables: Vec<FacadeTableV2>,
+    raw_document_tables: Vec<FacadeTableV2>,
+    row_count: u64,
     payload_bytes: u64,
     metadata_bytes: u64,
 }
 
-fn retain_origin_tables_v2(rows: Vec<Vec<u8>>) -> NativeResult<RetainedOriginTablesV2> {
-    if rows.is_empty() {
-        return Ok(RetainedOriginTablesV2::default());
+#[derive(Debug, Default)]
+struct RetainedOriginPayloadV2 {
+    rows: Vec<Arc<Vec<u8>>>,
+    payload_bytes: u64,
+    metadata_bytes: u64,
+}
+
+fn retain_origin_tables_v2(
+    rows: Vec<Vec<u8>>,
+    raw_document_rows: Option<Vec<Vec<u8>>>,
+) -> NativeResult<RetainedOriginTablesV2> {
+    validate_origin_digest_groups(&rows)?;
+    if let Some(raw) = raw_document_rows.as_deref() {
+        validate_origin_digest_groups(raw)?;
     }
+    let effective_count = u64::try_from(rows.len())
+        .map_err(|_| NativeError::limit("typed V2 effective origin count exceeds u64"))?;
+    let raw_count = raw_document_rows
+        .as_ref()
+        .map_or(Ok(effective_count), |raw| {
+            u64::try_from(raw.len())
+                .map_err(|_| NativeError::limit("typed V2 raw origin count exceeds u64"))
+        })?;
+    let row_count = effective_count
+        .checked_mul(2)
+        .and_then(|count| {
+            raw_document_rows
+                .as_ref()
+                .map_or(Some(count), |_| count.checked_add(raw_count))
+        })
+        .ok_or_else(|| NativeError::limit("typed V2 origin row count overflow"))?;
+
+    let effective = retain_origin_payload_v2(rows)?;
+    let raw = raw_document_rows
+        .map(retain_origin_payload_v2)
+        .transpose()?;
+    let mut payload_bytes = effective.payload_bytes;
+    let mut metadata_bytes = effective.metadata_bytes;
+    if let Some(raw) = &raw {
+        payload_bytes = checked_add(payload_bytes, raw.payload_bytes)?;
+        metadata_bytes = checked_add(metadata_bytes, raw.metadata_bytes)?;
+    }
+
+    let document_rows = effective.rows;
+    let mut closure_rows = Vec::new();
+    closure_rows
+        .try_reserve_exact(document_rows.len())
+        .map_err(|_| NativeError::limit("typed V2 origin closure allocation failed"))?;
+    metadata_bytes = checked_add(
+        metadata_bytes,
+        u64::try_from(
+            closure_rows
+                .capacity()
+                .checked_mul(size_of::<Arc<Vec<u8>>>())
+                .ok_or_else(|| NativeError::limit("typed V2 origin closure size overflow"))?,
+        )
+        .map_err(|_| NativeError::limit("typed V2 origin closure size exceeds u64"))?,
+    )?;
+    closure_rows.extend(document_rows.iter().cloned());
+
+    let mut effective_tables = Vec::new();
+    if !document_rows.is_empty() {
+        effective_tables
+            .try_reserve_exact(2)
+            .map_err(|_| NativeError::limit("typed V2 origin table allocation failed"))?;
+        metadata_bytes = checked_add(
+            metadata_bytes,
+            u64::try_from(
+                effective_tables
+                    .capacity()
+                    .checked_mul(size_of::<FacadeTableV2>())
+                    .ok_or_else(|| NativeError::limit("typed V2 origin table size overflow"))?,
+            )
+            .map_err(|_| NativeError::limit("typed V2 origin table size exceeds u64"))?,
+        )?;
+        effective_tables.push(FacadeTableV2 {
+            coordinate: CoordinateV2 {
+                collection: CollectionV2::OriginEntries,
+                scope: ScopeV2::Document,
+                document_ordinal: Some(0),
+                signature_kind: SignatureKindV2::All,
+                include_builtins: true,
+            },
+            rows: document_rows,
+            source_identity: 0,
+        });
+        effective_tables.push(FacadeTableV2 {
+            coordinate: CoordinateV2 {
+                collection: CollectionV2::OriginEntries,
+                scope: ScopeV2::Closure,
+                document_ordinal: None,
+                signature_kind: SignatureKindV2::All,
+                include_builtins: true,
+            },
+            rows: closure_rows,
+            source_identity: 0,
+        });
+        effective_tables.sort_unstable_by_key(|table| table.coordinate);
+        reject_duplicate_coordinates(&effective_tables)?;
+    }
+
+    let mut raw_document_tables = Vec::new();
+    if let Some(raw) = raw {
+        raw_document_tables
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("typed V2 raw origin table allocation failed"))?;
+        metadata_bytes = checked_add(
+            metadata_bytes,
+            u64::try_from(
+                raw_document_tables
+                    .capacity()
+                    .checked_mul(size_of::<FacadeTableV2>())
+                    .ok_or_else(|| NativeError::limit("typed V2 raw origin table size overflow"))?,
+            )
+            .map_err(|_| NativeError::limit("typed V2 raw origin table size exceeds u64"))?,
+        )?;
+        raw_document_tables.push(FacadeTableV2 {
+            coordinate: CoordinateV2 {
+                collection: CollectionV2::OriginEntries,
+                scope: ScopeV2::Document,
+                document_ordinal: Some(0),
+                signature_kind: SignatureKindV2::All,
+                include_builtins: true,
+            },
+            rows: raw.rows,
+            source_identity: 0,
+        });
+    }
+    Ok(RetainedOriginTablesV2 {
+        effective_tables,
+        raw_document_tables,
+        row_count,
+        payload_bytes,
+        metadata_bytes,
+    })
+}
+
+fn validate_origin_digest_groups(rows: &[Vec<u8>]) -> NativeResult<()> {
     if rows
         .windows(2)
         .any(|pair| pair[0].get(..32) > pair[1].get(..32))
@@ -1712,7 +1863,10 @@ fn retain_origin_tables_v2(rows: Vec<Vec<u8>>) -> NativeResult<RetainedOriginTab
             "typed V2 retained origin digest groups are not ordered",
         ));
     }
+    Ok(())
+}
 
+fn retain_origin_payload_v2(rows: Vec<Vec<u8>>) -> NativeResult<RetainedOriginPayloadV2> {
     let mut document_rows = Vec::new();
     document_rows
         .try_reserve_exact(rows.len())
@@ -1741,62 +1895,8 @@ fn retain_origin_tables_v2(rows: Vec<Vec<u8>>) -> NativeResult<RetainedOriginTab
         document_rows.push(Arc::new(row));
     }
 
-    let mut closure_rows = Vec::new();
-    closure_rows
-        .try_reserve_exact(document_rows.len())
-        .map_err(|_| NativeError::limit("typed V2 origin closure allocation failed"))?;
-    metadata_bytes = checked_add(
-        metadata_bytes,
-        u64::try_from(
-            closure_rows
-                .capacity()
-                .checked_mul(size_of::<Arc<Vec<u8>>>())
-                .ok_or_else(|| NativeError::limit("typed V2 origin closure size overflow"))?,
-        )
-        .map_err(|_| NativeError::limit("typed V2 origin closure size exceeds u64"))?,
-    )?;
-    closure_rows.extend(document_rows.iter().cloned());
-
-    let mut effective_tables = Vec::new();
-    effective_tables
-        .try_reserve_exact(2)
-        .map_err(|_| NativeError::limit("typed V2 origin table allocation failed"))?;
-    metadata_bytes = checked_add(
-        metadata_bytes,
-        u64::try_from(
-            effective_tables
-                .capacity()
-                .checked_mul(size_of::<FacadeTableV2>())
-                .ok_or_else(|| NativeError::limit("typed V2 origin table size overflow"))?,
-        )
-        .map_err(|_| NativeError::limit("typed V2 origin table size exceeds u64"))?,
-    )?;
-    effective_tables.push(FacadeTableV2 {
-        coordinate: CoordinateV2 {
-            collection: CollectionV2::OriginEntries,
-            scope: ScopeV2::Document,
-            document_ordinal: Some(0),
-            signature_kind: SignatureKindV2::All,
-            include_builtins: true,
-        },
+    Ok(RetainedOriginPayloadV2 {
         rows: document_rows,
-        source_identity: 0,
-    });
-    effective_tables.push(FacadeTableV2 {
-        coordinate: CoordinateV2 {
-            collection: CollectionV2::OriginEntries,
-            scope: ScopeV2::Closure,
-            document_ordinal: None,
-            signature_kind: SignatureKindV2::All,
-            include_builtins: true,
-        },
-        rows: closure_rows,
-        source_identity: 0,
-    });
-    effective_tables.sort_unstable_by_key(|table| table.coordinate);
-    reject_duplicate_coordinates(&effective_tables)?;
-    Ok(RetainedOriginTablesV2 {
-        effective_tables,
         payload_bytes,
         metadata_bytes,
     })
@@ -3710,6 +3810,96 @@ mod tests {
     }
 
     #[test]
+    fn typed_structural_owner_retains_distinct_raw_and_effective_origin_tables() {
+        let (typed, canonical) = typed_structural_owner();
+        let effective_origin = vec![0x42; 96];
+        let raw_origin = vec![0x24; 96];
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.capability_bits |= 16;
+        attestation.origin_entry_count = 1;
+        attestation.max_facade_row_bytes = canonical
+            .len()
+            .max(effective_origin.len())
+            .max(raw_origin.len()) as u64;
+        let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
+            attestation,
+            typed,
+            Some(vec![effective_origin.clone()]),
+            Some(vec![raw_origin.clone()]),
+            None,
+            None,
+            0,
+        )
+        .expect("typed publication with scoped origins");
+
+        let raw_document = storage.rows(
+            coordinate(CollectionV2::OriginEntries, ScopeV2::Document, Some(0)),
+            true,
+        );
+        let effective_document = storage.rows(
+            coordinate(CollectionV2::OriginEntries, ScopeV2::Document, Some(0)),
+            false,
+        );
+        let closure = storage.rows(
+            coordinate(CollectionV2::OriginEntries, ScopeV2::Closure, None),
+            false,
+        );
+        assert_eq!(raw_document[0].as_slice(), raw_origin);
+        assert_eq!(effective_document[0].as_slice(), effective_origin);
+        assert!(Arc::ptr_eq(&effective_document[0], &closure[0]));
+        assert!(!Arc::ptr_eq(&raw_document[0], &effective_document[0]));
+        let counters = storage.counters.snapshot();
+        assert_eq!(counters[RETAINED_ROW_FIRST + 5], 3);
+        assert_eq!(
+            counters[RETAINED_ORIGIN_BYTES],
+            (raw_origin.len() + effective_origin.len()) as u64
+        );
+        validate_retained_total(&counters).expect("scoped origin owner counters");
+    }
+
+    #[test]
+    fn typed_structural_owner_retains_an_explicit_empty_raw_origin_override() {
+        let (typed, canonical) = typed_structural_owner();
+        let effective_origin = vec![0x42; 96];
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.capability_bits |= 16;
+        attestation.origin_entry_count = 0;
+        attestation.max_facade_row_bytes = canonical.len().max(effective_origin.len()) as u64;
+        let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
+            attestation,
+            typed,
+            Some(vec![effective_origin.clone()]),
+            Some(Vec::new()),
+            None,
+            None,
+            0,
+        )
+        .expect("typed publication with synthesized effective origins");
+
+        assert!(storage
+            .rows(
+                coordinate(CollectionV2::OriginEntries, ScopeV2::Document, Some(0)),
+                true,
+            )
+            .is_empty());
+        assert_eq!(
+            storage.rows(
+                coordinate(CollectionV2::OriginEntries, ScopeV2::Document, Some(0)),
+                false,
+            )[0]
+            .as_slice(),
+            effective_origin
+        );
+        let counters = storage.counters.snapshot();
+        assert_eq!(counters[RETAINED_ROW_FIRST + 5], 2);
+        assert_eq!(
+            counters[RETAINED_ORIGIN_BYTES],
+            effective_origin.len() as u64
+        );
+        validate_retained_total(&counters).expect("empty raw origin override counters");
+    }
+
+    #[test]
     fn typed_structural_owner_retains_lazy_source_map_rows() {
         let (typed, canonical) = typed_structural_owner();
         let mut entry = vec![0x42; 32];
@@ -3727,6 +3917,7 @@ mod tests {
         let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
             attestation,
             typed,
+            None,
             None,
             Some(TypedSourceMapRowsV2 {
                 entries: vec![entry.clone()],
@@ -3771,6 +3962,7 @@ mod tests {
         let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
             attestation,
             typed,
+            None,
             None,
             None,
             Some(TypedRdfReportRowsV2 {

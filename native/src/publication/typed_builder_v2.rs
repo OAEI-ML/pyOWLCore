@@ -37,14 +37,18 @@ const SIGNATURE_KINDS: [TypedFacadeSignatureKindV2; 7] = [
     TypedFacadeSignatureKindV2::NamedIndividual,
 ];
 
+type BorrowedDocumentRoots<'a> = (&'a [Vec<u8>], &'a [Vec<u8>], &'a [Vec<u8>]);
+
 #[derive(Debug, Default)]
 struct PendingDocumentV2 {
     roots: [Vec<PendingComponentId>; 3],
+    effective_roots: Option<[Vec<PendingComponentId>; 3]>,
 }
 
 #[derive(Debug, Default)]
 struct ResolvedDocumentV2 {
     roots: [Vec<ComponentId>; 3],
+    effective_roots: Option<[Vec<ComponentId>; 3]>,
 }
 
 #[derive(Debug)]
@@ -100,7 +104,42 @@ impl TypedFacadeBuilderV2 {
                 "typed V2 builder is poisoned after a failed mutation",
             ));
         }
-        let result = self.add_document_inner(ontology_annotations, axioms, extensions);
+        let result = self.add_document_inner(ontology_annotations, axioms, extensions, None);
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
+    }
+
+    /// Retain one document whose raw roots and already-scoped effective roots
+    /// intentionally differ. Both identities are interned into the same arena;
+    /// document owners select the raw table while snapshot owners select the
+    /// effective table.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn add_scoped_document(
+        &mut self,
+        ontology_annotations: &[Vec<u8>],
+        axioms: &[Vec<u8>],
+        extensions: &[Vec<u8>],
+        effective_ontology_annotations: &[Vec<u8>],
+        effective_axioms: &[Vec<u8>],
+        effective_extensions: &[Vec<u8>],
+    ) -> NativeResult<u64> {
+        if self.poisoned {
+            return Err(NativeError::protocol(
+                "typed V2 builder is poisoned after a failed mutation",
+            ));
+        }
+        let result = self.add_document_inner(
+            ontology_annotations,
+            axioms,
+            extensions,
+            Some((
+                effective_ontology_annotations,
+                effective_axioms,
+                effective_extensions,
+            )),
+        );
         if result.is_err() {
             self.poisoned = true;
         }
@@ -112,6 +151,7 @@ impl TypedFacadeBuilderV2 {
         ontology_annotations: &[Vec<u8>],
         axioms: &[Vec<u8>],
         extensions: &[Vec<u8>],
+        effective: Option<BorrowedDocumentRoots<'_>>,
     ) -> NativeResult<u64> {
         self.cancellation.checkpoint()?;
         let following = self
@@ -135,6 +175,21 @@ impl TypedFacadeBuilderV2 {
         validate_input_rows(ontology_annotations, Category::Annotation, &self.limits)?;
         validate_input_rows(axioms, Category::Axiom, &self.limits)?;
         validate_input_rows(extensions, Category::Swrl, &self.limits)?;
+        if let Some((effective_annotations, effective_axioms, effective_extensions)) = effective {
+            check_input_count(
+                effective_annotations.len(),
+                self.limits.max_annotations,
+                "typed V2 effective document exceeds max_annotations",
+            )?;
+            check_input_count(
+                effective_axioms.len(),
+                self.limits.max_axioms,
+                "typed V2 effective document exceeds max_axioms",
+            )?;
+            validate_input_rows(effective_annotations, Category::Annotation, &self.limits)?;
+            validate_input_rows(effective_axioms, Category::Axiom, &self.limits)?;
+            validate_input_rows(effective_extensions, Category::Swrl, &self.limits)?;
+        }
 
         let mut staged_bytes = 0_usize;
         let annotations =
@@ -148,6 +203,23 @@ impl TypedFacadeBuilderV2 {
         staged_bytes = staged_bytes
             .checked_add(pending_bytes(&extensions)?)
             .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
+        let effective_roots = if let Some((annotations, axioms, extensions)) = effective {
+            let annotations = self.intern_rows(annotations, Category::Annotation, staged_bytes)?;
+            staged_bytes = staged_bytes
+                .checked_add(pending_bytes(&annotations)?)
+                .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
+            let axioms = self.intern_rows(axioms, Category::Axiom, staged_bytes)?;
+            staged_bytes = staged_bytes
+                .checked_add(pending_bytes(&axioms)?)
+                .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
+            let extensions = self.intern_rows(extensions, Category::Swrl, staged_bytes)?;
+            staged_bytes = staged_bytes
+                .checked_add(pending_bytes(&extensions)?)
+                .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
+            Some([annotations, axioms, extensions])
+        } else {
+            None
+        };
 
         self.preflight_document_capacity(staged_bytes)?;
         self.documents
@@ -155,6 +227,7 @@ impl TypedFacadeBuilderV2 {
             .map_err(|_| NativeError::limit("typed V2 document table allocation failed"))?;
         self.documents.push(PendingDocumentV2 {
             roots: [annotations, axioms, extensions],
+            effective_roots,
         });
         self.refresh_component_external(0)?;
         u64::try_from(following - 1)
@@ -195,6 +268,34 @@ impl TypedFacadeBuilderV2 {
             .map_err(|_| NativeError::limit("typed V2 resolved document allocation failed"))?;
         for document in self.documents.drain(..) {
             self.cancellation.checkpoint()?;
+            let effective_roots = document
+                .effective_roots
+                .map(|roots| {
+                    Ok::<[Vec<ComponentId>; 3], NativeError>([
+                        resolve_roots(
+                            &frozen,
+                            roots[0].as_slice(),
+                            &mut resolve_guard,
+                            &mut resolve_work,
+                            &self.limits,
+                        )?,
+                        resolve_roots(
+                            &frozen,
+                            roots[1].as_slice(),
+                            &mut resolve_guard,
+                            &mut resolve_work,
+                            &self.limits,
+                        )?,
+                        resolve_roots(
+                            &frozen,
+                            roots[2].as_slice(),
+                            &mut resolve_guard,
+                            &mut resolve_work,
+                            &self.limits,
+                        )?,
+                    ])
+                })
+                .transpose()?;
             resolved.push(ResolvedDocumentV2 {
                 roots: [
                     resolve_roots(
@@ -219,6 +320,7 @@ impl TypedFacadeBuilderV2 {
                         &self.limits,
                     )?,
                 ],
+                effective_roots,
             });
         }
         resolve_guard.check(resolve_work, true)?;
@@ -441,8 +543,9 @@ fn union_document_roots(
                     NativeError::protocol("typed V2 reachability ordinal exceeds usize")
                 })?)
                 .ok_or_else(|| NativeError::protocol("typed V2 reachability ordinal is invalid"))?;
+            let roots = selected.effective_roots.as_ref().unwrap_or(&selected.roots);
             total
-                .checked_add(selected.roots[index].len())
+                .checked_add(roots[index].len())
                 .ok_or_else(|| NativeError::limit("typed V2 effective root count overflow"))
         })?;
         if u64::try_from(count).map_or(true, |value| value > limits.value(LimitKey::MaxIndexRows)) {
@@ -457,7 +560,8 @@ fn union_document_roots(
             let selected = &documents[usize::try_from(*ordinal).map_err(|_| {
                 NativeError::protocol("typed V2 reachability ordinal exceeds usize")
             })?];
-            result[index].extend_from_slice(&selected.roots[index]);
+            let roots = selected.effective_roots.as_ref().unwrap_or(&selected.roots);
+            result[index].extend_from_slice(&roots[index]);
         }
         arena.sort_deduplicate_ids(
             &mut result[index],
@@ -868,11 +972,21 @@ fn pending_bytes(values: &Vec<PendingComponentId>) -> NativeResult<usize> {
 
 fn pending_document_root_bytes(documents: &[PendingDocumentV2]) -> NativeResult<usize> {
     documents.iter().try_fold(0_usize, |total, document| {
-        document.roots.iter().try_fold(total, |total, roots| {
+        let raw = document.roots.iter().try_fold(total, |total, roots| {
             total
                 .checked_add(pending_bytes(roots)?)
                 .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))
-        })
+        })?;
+        document
+            .effective_roots
+            .as_ref()
+            .map_or(Ok(raw), |effective| {
+                effective.iter().try_fold(raw, |total, roots| {
+                    total
+                        .checked_add(pending_bytes(roots)?)
+                        .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))
+                })
+            })
     })
 }
 
@@ -1049,6 +1163,56 @@ mod tests {
                 .unwrap_err()
                 .code,
             "NATIVE_WIRE_LIMIT"
+        );
+    }
+
+    #[test]
+    fn scoped_document_retains_distinct_raw_and_effective_roots_in_one_arena() {
+        let raw = sorted(vec![declaration("class", "urn:builder:raw")]);
+        let effective = sorted(vec![declaration("class", "urn:builder:effective")]);
+        let limits = Limits::default();
+        let mut builder =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("typed builder");
+        builder
+            .add_scoped_document(&[], &raw, &[], &[], &effective, &[])
+            .expect("scoped document");
+        let storage = builder.freeze(&[vec![0]], &[0]).expect("scoped freeze");
+
+        assert_eq!(
+            page(
+                &storage,
+                TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0),
+                true,
+            ),
+            raw
+        );
+        assert_eq!(
+            page(
+                &storage,
+                TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0),
+                false,
+            ),
+            effective
+        );
+        assert_eq!(
+            page(
+                &storage,
+                TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms),
+                false,
+            ),
+            effective
+        );
+        assert_eq!(
+            storage.structural_counts().expect("counts").stored_axioms,
+            1
+        );
+        assert_eq!(
+            storage
+                .structural_counts()
+                .expect("counts")
+                .effective_axioms,
+            1
         );
     }
 
