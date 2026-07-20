@@ -1,0 +1,23 @@
+[package]
+name = "pyowl-core-horned-comparator"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+publish = false
+license = "Apache-2.0"
+description = "Development-only pinned Horned-OWL comparator for pyowl-core"
+
+[dependencies]
+base64 = "=0.22.1"
+horned-owl = "=1.4.0"
+libc = "=0.2.177"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+sha2 = "=0.10.9"
+
+[profile.release]
+panic = "unwind"
+overflow-checks = true
+codegen-units = 1
+lto = "thin"
+strip = "symbols"

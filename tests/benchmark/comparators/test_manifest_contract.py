@@ -69,7 +69,7 @@ def test_pin_ledger_covers_normative_lanes_and_exact_phases() -> None:
     assert set(manifest.fence("equality_assertion").lanes.values()) == {"outside"}
 
 
-def test_external_runners_are_fail_closed_except_pinned_py_horned() -> None:
+def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     manifest = load_comparator_manifest()
     external = tuple(pin for pin in manifest.comparators if pin.adapter == "external-command")
 
@@ -87,8 +87,16 @@ def test_external_runners_are_fail_closed_except_pinned_py_horned() -> None:
     assert py_horned.runner_sha256 == hashlib.sha256(runner.read_bytes()).hexdigest()
     assert py_horned.artifact_is_runnable is True
 
+    raw_horned = manifest.by_id("horned-owl-raw")
+    assert raw_horned.runner_pin_state == "complete"
+    assert raw_horned.runner_revision == "pyowl-core-horned-raw-runner-v1"
+    assert raw_horned.runner_sha256 == (
+        "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a"
+    )
+    assert raw_horned.artifact_is_runnable is True
+
     for pin in external:
-        if pin is py_horned:
+        if pin is py_horned or pin is raw_horned:
             continue
         assert pin.runner_pin_state == "pending"
         assert pin.runner_revision
@@ -100,28 +108,24 @@ def test_external_runner_requires_its_own_complete_hash_before_runnable(
     tmp_path: Path,
 ) -> None:
     source = _manifest_source()
-    changed = _replace_in_lane(
+    missing_hash_source = _replace_in_lane(
         source,
         "horned-owl-raw",
-        'runner_pin_state = "pending"',
-        'runner_pin_state = "complete"',
+        'runner_sha256 = "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a"',
+        "",
     )
-    missing_hash = _write_manifest(tmp_path, "missing-runner-hash.toml", changed)
+    missing_hash = _write_manifest(tmp_path, "missing-runner-hash.toml", missing_hash_source)
 
     with pytest.raises(ComparatorManifestError, match="runner requires SHA-256"):
         load_comparator_manifest(missing_hash)
 
-    complete = _replace_in_lane(
-        changed,
-        "horned-owl-raw",
-        'runner_revision = "raw Horned runner not yet built"',
-        'runner_revision = "raw-horned-runner-v1"\n' + f'runner_sha256 = "{"a" * 64}"',
-    )
-    complete_path = _write_manifest(tmp_path, "complete-runner.toml", complete)
+    complete_path = _write_manifest(tmp_path, "complete-runner.toml", source)
     raw = load_comparator_manifest(complete_path).by_id("horned-owl-raw")
 
-    assert raw.runner_revision == "raw-horned-runner-v1"
-    assert raw.runner_sha256 == "a" * 64
+    assert raw.runner_revision == "pyowl-core-horned-raw-runner-v1"
+    assert raw.runner_sha256 == (
+        "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a"
+    )
     assert raw.artifact_is_runnable is True
 
 

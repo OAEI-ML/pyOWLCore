@@ -83,8 +83,9 @@ features = ["default"]
 allocator = "Rust system allocator"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_HORNED_RUNNER"
-runner_pin_state = "pending"
-runner_revision = "raw Horned runner not yet built"
+runner_pin_state = "complete"
+runner_revision = "pyowl-core-horned-raw-runner-v1"
+runner_sha256 = "f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a"
 gating = false
 required = true
 
