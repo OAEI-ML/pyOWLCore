@@ -965,8 +965,13 @@ impl PublicationStorageV2 {
                 "typed V2 publication attestation schema differs",
             ));
         }
+        let structural_counts = typed_structural.structural_counts()?;
         if attestation.document_count != typed_structural.document_count()
             || attestation.max_facade_row_bytes != typed_structural.maximum_row_bytes()
+            || attestation.ontology_annotation_count != structural_counts.ontology_annotations
+            || attestation.stored_axiom_count != structural_counts.stored_axioms
+            || attestation.effective_axiom_count != structural_counts.effective_axioms
+            || attestation.extension_count != structural_counts.extensions
         {
             return Err(NativeError::protocol(
                 "typed V2 structural owner diverges from its attestation",
@@ -2649,9 +2654,10 @@ mod tests {
     use std::thread;
 
     use super::*;
+    use crate::canonical::{entity, iri, Field, Node};
     use crate::limits::Limits;
     use crate::model::NativeComponentBuilder;
-    use crate::publication::TypedFacadeTableV2;
+    use crate::publication::{TypedFacadeBuilderV2, TypedFacadeTableV2};
 
     fn typed_frame(value: &[u8]) -> Vec<u8> {
         let mut result = typed_varint(value.len());
@@ -2682,6 +2688,36 @@ mod tests {
         declaration.extend(typed_frame(&entity));
         declaration.extend([6, 0]);
         declaration
+    }
+
+    fn typed_annotation(value: &str) -> Vec<u8> {
+        Node::build(
+            5,
+            vec![
+                Field::Node(
+                    entity(
+                        "annotation_property",
+                        iri("urn:typed:annotation-property".into()).expect("annotation IRI"),
+                    )
+                    .expect("annotation property"),
+                ),
+                Field::Node(iri(value.into()).expect("annotation value")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("annotation")
+        .as_bytes()
+        .to_vec()
+    }
+
+    fn typed_extension(value: &str) -> Vec<u8> {
+        Node::build(
+            140,
+            vec![Field::Node(iri(value.into()).expect("SWRL variable IRI"))],
+        )
+        .expect("SWRL variable")
+        .as_bytes()
+        .to_vec()
     }
 
     fn typed_structural_owner() -> (TypedFacadeStorageV2, Vec<u8>) {
@@ -2822,6 +2858,83 @@ mod tests {
         attestation.capability_bits |= 8;
         attestation.source_map_entry_count = 1;
         assert!(PublicationStorageV2::from_typed_structural(attestation, typed).is_err());
+
+        for selected in 0..4 {
+            let (typed, canonical) = typed_structural_owner();
+            let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+            attestation.max_facade_row_bytes = canonical.len() as u64;
+            match selected {
+                0 => attestation.ontology_annotation_count = 1,
+                1 => attestation.stored_axiom_count = 2,
+                2 => attestation.effective_axiom_count = 2,
+                3 => attestation.extension_count = 1,
+                _ => unreachable!(),
+            }
+            assert!(PublicationStorageV2::from_typed_structural(attestation, typed).is_err());
+        }
+    }
+
+    #[test]
+    fn typed_structural_counts_follow_raw_owners_and_effective_import_closure() {
+        let annotation_a = typed_annotation("urn:typed:annotation-a");
+        let annotation_b = typed_annotation("urn:typed:annotation-b");
+        let axiom_a = typed_declaration("urn:typed:axiom-a");
+        let axiom_b = typed_declaration("urn:typed:axiom-b");
+        let extension = typed_extension("urn:typed:variable");
+        let limits = Limits::default();
+        let mut builder =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("typed builder");
+        assert_eq!(
+            builder
+                .add_document(
+                    std::slice::from_ref(&annotation_a),
+                    std::slice::from_ref(&axiom_a),
+                    &[],
+                )
+                .expect("root document"),
+            0,
+        );
+        assert_eq!(
+            builder
+                .add_document(
+                    std::slice::from_ref(&annotation_b),
+                    std::slice::from_ref(&axiom_b),
+                    std::slice::from_ref(&extension),
+                )
+                .expect("imported document"),
+            1,
+        );
+        let typed = builder
+            .freeze(&[vec![0, 1], vec![1]], &[0, 1])
+            .expect("import closure");
+        let before = typed.counters().expect("pre-count counters");
+        let counts = typed.structural_counts().expect("structural counts");
+        let after = typed.counters().expect("post-count counters");
+        assert_eq!(counts.ontology_annotations, 2);
+        assert_eq!(counts.stored_axioms, 2);
+        assert_eq!(counts.effective_axioms, 2);
+        assert_eq!(counts.extensions, 1);
+        assert_eq!(
+            after.canonical_encode_requests,
+            before.canonical_encode_requests
+        );
+        assert_eq!(after.publication_structural_rows_copied, 0);
+        assert_eq!(after.publication_structural_bytes_copied, 0);
+
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.document_count = 2;
+        attestation.import_edge_count = 1;
+        attestation.max_facade_row_bytes = typed.maximum_row_bytes();
+        attestation.ontology_annotation_count = 2;
+        attestation.stored_axiom_count = 2;
+        attestation.effective_axiom_count = 2;
+        attestation.extension_count = 1;
+        let storage = PublicationStorageV2::from_typed_structural(attestation, typed)
+            .expect("count-aligned typed publication");
+        let counters = storage.counters.snapshot();
+        assert_eq!(counters[47], 0);
+        assert_eq!(counters[48], 0);
     }
 
     #[test]

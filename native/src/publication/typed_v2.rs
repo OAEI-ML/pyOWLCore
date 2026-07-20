@@ -203,6 +203,14 @@ pub(crate) struct TypedFacadeCounterSnapshotV2 {
     pub(crate) canonical_encode_requests: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TypedFacadeStructuralCountsV2 {
+    pub(crate) ontology_annotations: u64,
+    pub(crate) stored_axioms: u64,
+    pub(crate) effective_axioms: u64,
+    pub(crate) extensions: u64,
+}
+
 #[derive(Debug)]
 pub(crate) struct TypedFacadeStorageV2 {
     // This is the only arena handle retained by this owner. Tables and indexes
@@ -583,6 +591,22 @@ impl TypedFacadeStorageV2 {
             })
     }
 
+    /// Derive the structural counts attested by the publication envelope from
+    /// retained root identifiers only. Stored counts use raw document-owner
+    /// overrides when present and otherwise fall back to the effective
+    /// document table; the effective axiom count is the closure table.
+    pub(crate) fn structural_counts(&self) -> NativeResult<TypedFacadeStructuralCountsV2> {
+        Ok(TypedFacadeStructuralCountsV2 {
+            ontology_annotations: self
+                .raw_document_count(TypedFacadeCollectionV2::OntologyAnnotations)?,
+            stored_axioms: self.raw_document_count(TypedFacadeCollectionV2::Axioms)?,
+            effective_axioms: self.table_count(TypedFacadeCoordinateV2::closure(
+                TypedFacadeCollectionV2::Axioms,
+            ))?,
+            extensions: self.raw_document_count(TypedFacadeCollectionV2::Extensions)?,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn observation_for_tests(&self) -> NativeResult<TypedFacadeStorageObservationV2> {
         let root_identifier_rows = root_count(&self.effective_tables, &self.raw_document_tables)?;
@@ -633,6 +657,36 @@ impl TypedFacadeStorageV2 {
             .binary_search_by_key(&coordinate, |table| table.coordinate)
             .ok()
             .and_then(|index| self.effective_tables.get(index))
+    }
+
+    fn raw_document_count(&self, collection: TypedFacadeCollectionV2) -> NativeResult<u64> {
+        let mut total = 0_u64;
+        for table in &self.effective_tables {
+            if table.coordinate.collection != collection
+                || table.coordinate.scope != TypedFacadeScopeV2::Document
+                || self
+                    .raw_document_tables
+                    .binary_search_by_key(&table.coordinate, |candidate| candidate.coordinate)
+                    .is_ok()
+            {
+                continue;
+            }
+            total = checked_add(total, table_count(table)?)?;
+        }
+        for table in &self.raw_document_tables {
+            if table.coordinate.collection == collection {
+                total = checked_add(total, table_count(table)?)?;
+            }
+        }
+        Ok(total)
+    }
+
+    fn table_count(&self, coordinate: TypedFacadeCoordinateV2) -> NativeResult<u64> {
+        self.effective_tables
+            .binary_search_by_key(&coordinate, |table| table.coordinate)
+            .ok()
+            .and_then(|index| self.effective_tables.get(index))
+            .map_or(Ok(0), table_count)
     }
 
     fn encoding_external_bytes(
@@ -1006,6 +1060,11 @@ fn reject_duplicate_coordinates(tables: &[TypedFacadeTableV2]) -> NativeResult<(
 fn checked_add(left: u64, right: u64) -> NativeResult<u64> {
     left.checked_add(right)
         .ok_or_else(|| NativeError::limit("typed V2 counter overflow"))
+}
+
+fn table_count(table: &TypedFacadeTableV2) -> NativeResult<u64> {
+    u64::try_from(table.roots.len())
+        .map_err(|_| NativeError::limit("typed V2 structural count exceeds u64"))
 }
 
 #[cfg(test)]
