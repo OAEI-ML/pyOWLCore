@@ -60,6 +60,11 @@ const OWL_SOURCE_INDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#sourceIndivid
 const OWL_ASSERTION_PROPERTY: &str = "http://www.w3.org/2002/07/owl#assertionProperty";
 const OWL_TARGET_INDIVIDUAL: &str = "http://www.w3.org/2002/07/owl#targetIndividual";
 const OWL_TARGET_VALUE: &str = "http://www.w3.org/2002/07/owl#targetValue";
+const OWL_AXIOM: &str = "http://www.w3.org/2002/07/owl#Axiom";
+const OWL_ANNOTATION: &str = "http://www.w3.org/2002/07/owl#Annotation";
+const OWL_ANNOTATED_SOURCE: &str = "http://www.w3.org/2002/07/owl#annotatedSource";
+const OWL_ANNOTATED_PROPERTY: &str = "http://www.w3.org/2002/07/owl#annotatedProperty";
+const OWL_ANNOTATED_TARGET: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1208,9 +1213,33 @@ fn map_graph(
     imports.dedup();
 
     let mut axioms = Vec::new();
+    let list_graph = list_graph_view(&triples, session)?;
+    let mut expressions = RdfClassExpressionDecoder::new(&list_graph);
+    for kind in &kinds {
+        match kind.kind {
+            "data_property" => expressions.register_data_property(kind.iri, session)?,
+            "datatype" => expressions.register_datatype(kind.iri, session)?,
+            _ => {}
+        }
+    }
+    for (index, triple) in triples.iter().enumerate() {
+        if let Term::Literal {
+            datatype, language, ..
+        } = &triple.object
+        {
+            expressions.register_literal(
+                index,
+                datatype.as_deref(),
+                language.as_deref(),
+                session,
+            )?;
+        }
+    }
+    let mut axiom_annotations =
+        collect_axiom_annotations(&triples, &mut consumed, &mut expressions, session)?;
     for (index, triple) in triples.iter().enumerate() {
         session.step(1)?;
-        if triple.predicate != RDF_TYPE {
+        if consumed[index] || triple.predicate != RDF_TYPE {
             continue;
         }
         let Term::Iri(object) = &triple.object else {
@@ -1240,28 +1269,6 @@ fn map_graph(
         )?;
         push_axiom(declaration, &mut axioms, session)?;
         consumed[index] = true;
-    }
-    let list_graph = list_graph_view(&triples, session)?;
-    let mut expressions = RdfClassExpressionDecoder::new(&list_graph);
-    for kind in &kinds {
-        match kind.kind {
-            "data_property" => expressions.register_data_property(kind.iri, session)?,
-            "datatype" => expressions.register_datatype(kind.iri, session)?,
-            _ => {}
-        }
-    }
-    for (index, triple) in triples.iter().enumerate() {
-        if let Term::Literal {
-            datatype, language, ..
-        } = &triple.object
-        {
-            expressions.register_literal(
-                index,
-                datatype.as_deref(),
-                language.as_deref(),
-                session,
-            )?;
-        }
     }
     map_ontology_annotations(
         header_index,
@@ -1350,27 +1357,49 @@ fn map_graph(
             continue;
         }
         session.step(1)?;
+        let annotations = axiom_annotations.annotations_for(triple, &triples, session)?;
         let class_axiom = class_expression_axiom(
             &list_graph[index],
             &kinds,
             &mut expressions,
             &mut consumed,
+            &annotations,
             session,
         )?;
         let axiom = match class_axiom {
             Some(value) => Some(value),
-            None => match annotation_axiom(index, triple, &kinds, &mut expressions, session)? {
+            None => match annotation_axiom(
+                index,
+                triple,
+                &kinds,
+                &mut expressions,
+                &annotations,
+                session,
+            )? {
                 Some(value) => Some(value),
-                None => match assertion_axiom(index, triple, &kinds, &mut expressions, session)? {
+                None => match assertion_axiom(
+                    index,
+                    triple,
+                    &kinds,
+                    &mut expressions,
+                    &annotations,
+                    session,
+                )? {
                     Some(value) => Some(value),
-                    None => named_axiom(triple, &kinds, session)?,
+                    None => named_axiom(triple, &kinds, &annotations, session)?,
                 },
             },
         };
         if let Some(axiom) = axiom {
             push_axiom(axiom, &mut axioms, session)?;
             consumed[index] = true;
+            axiom_annotations.claim(triple, &triples)?;
         }
+    }
+    if axiom_annotations.has_unclaimed() {
+        return Err(rdf_axiom_reification(
+            "native owl:Axiom reification targets an unsupported axiom mapping",
+        ));
     }
     axioms.sort_unstable();
     axioms.dedup();
@@ -1444,6 +1473,65 @@ fn list_graph_view<'graph>(
 struct KindRecord<'a> {
     iri: &'a str,
     kind: &'static str,
+}
+
+#[derive(Debug)]
+struct AxiomAnnotationRecord {
+    main_index: usize,
+    annotations: Vec<Node>,
+    claimed: bool,
+}
+
+#[derive(Debug, Default)]
+struct AxiomAnnotationLedger {
+    records: Vec<AxiomAnnotationRecord>,
+}
+
+impl AxiomAnnotationLedger {
+    fn annotations_for(
+        &self,
+        triple: &Triple,
+        triples: &[Triple],
+        session: &mut Session<'_>,
+    ) -> NativeResult<Vec<Node>> {
+        let mut annotations = Vec::new();
+        for record in &self.records {
+            session.step(1)?;
+            let main = triples.get(record.main_index).ok_or_else(|| {
+                NativeError::protocol("native RDF reification main index exceeds graph")
+            })?;
+            if main != triple {
+                continue;
+            }
+            for annotation in &record.annotations {
+                reserve_vec_item(&mut annotations, session)?;
+                session.reserve_bytes(annotation.as_bytes().len())?;
+                annotations.push(annotation.clone());
+            }
+        }
+        enforce_usize(
+            annotations.len(),
+            session.limits().value(LimitKey::MaxAnnotations),
+            "native RDF axiom annotations exceed max_annotations",
+        )?;
+        canonical_set(annotations, 0, None)
+    }
+
+    fn claim(&mut self, triple: &Triple, triples: &[Triple]) -> NativeResult<()> {
+        for record in &mut self.records {
+            let main = triples.get(record.main_index).ok_or_else(|| {
+                NativeError::protocol("native RDF reification main index exceeds graph")
+            })?;
+            if main == triple {
+                record.claimed = true;
+            }
+        }
+        Ok(())
+    }
+
+    fn has_unclaimed(&self) -> bool {
+        self.records.iter().any(|record| !record.claimed)
+    }
 }
 
 fn collect_entity_kinds<'a>(
@@ -2192,6 +2280,7 @@ fn class_expression_axiom<'view, 'graph>(
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
     consumed: &mut [bool],
+    annotations: &[Node],
     session: &mut Session<'_>,
 ) -> NativeResult<Option<Node>> {
     let subject = ClassTerm::from_resource(triple.subject);
@@ -2216,7 +2305,7 @@ fn class_expression_axiom<'view, 'graph>(
                         consumed,
                         session,
                     )?),
-                    Field::Set(Vec::new()),
+                    Field::Set(cloned_annotations(annotations, session)?),
                 ],
                 session,
             )?
@@ -2247,14 +2336,17 @@ fn class_expression_axiom<'view, 'graph>(
                             NativeError::protocol("native RDF disjoint ledger is empty")
                         })?),
                         Field::Node(named_entity("class", OWL_NOTHING, session)?),
-                        Field::Set(Vec::new()),
+                        Field::Set(cloned_annotations(annotations, session)?),
                     ],
                     session,
                 )?
             } else {
                 build_node(
                     63,
-                    [Field::Set(expressions_set), Field::Set(Vec::new())],
+                    [
+                        Field::Set(expressions_set),
+                        Field::Set(cloned_annotations(annotations, session)?),
+                    ],
                     session,
                 )?
             }
@@ -2277,7 +2369,7 @@ fn class_expression_axiom<'view, 'graph>(
                 [
                     Field::Node(first),
                     Field::Node(second),
-                    Field::Set(Vec::new()),
+                    Field::Set(cloned_annotations(annotations, session)?),
                 ],
                 session,
             )?
@@ -2300,7 +2392,7 @@ fn class_expression_axiom<'view, 'graph>(
                     [
                         Field::Node(named_entity("data_property", property, session)?),
                         Field::Node(data_range),
-                        Field::Set(Vec::new()),
+                        Field::Set(cloned_annotations(annotations, session)?),
                     ],
                     session,
                 )?));
@@ -2322,7 +2414,7 @@ fn class_expression_axiom<'view, 'graph>(
                         consumed,
                         session,
                     )?),
-                    Field::Set(Vec::new()),
+                    Field::Set(cloned_annotations(annotations, session)?),
                 ],
                 session,
             )?
@@ -2347,7 +2439,7 @@ fn class_expression_axiom<'view, 'graph>(
                         ClassTerm::from_resource(triple.subject).as_term(),
                         session,
                     )?),
-                    Field::Set(Vec::new()),
+                    Field::Set(cloned_annotations(annotations, session)?),
                 ],
                 session,
             )?
@@ -2534,11 +2626,162 @@ fn add_member<'a>(
     Ok(())
 }
 
+fn collect_axiom_annotations<'view, 'graph>(
+    triples: &'graph [Triple],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<AxiomAnnotationLedger> {
+    for triple in triples {
+        session.step(1)?;
+        if triple.predicate == RDF_TYPE
+            && matches!(&triple.object, Term::Iri(value) if value == OWL_ANNOTATION)
+        {
+            return Err(NativeError::new(
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+                "native nested RDF annotation reification is not yet supported",
+            ));
+        }
+    }
+
+    let mut ledger = AxiomAnnotationLedger::default();
+    for (type_index, type_triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed.get(type_index).copied().ok_or_else(|| {
+            NativeError::protocol("native RDF consumed ledger is shorter than graph")
+        })? || type_triple.predicate != RDF_TYPE
+            || !matches!(&type_triple.object, Term::Iri(value) if value == OWL_AXIOM)
+        {
+            continue;
+        }
+        let reification = &type_triple.subject;
+        let (_, source) =
+            unique_reification_term(reification, OWL_ANNOTATED_SOURCE, triples, session)?;
+        let (_, property) =
+            unique_reification_term(reification, OWL_ANNOTATED_PROPERTY, triples, session)?;
+        let (_, target) =
+            unique_reification_term(reification, OWL_ANNOTATED_TARGET, triples, session)?;
+        if !matches!(source, Term::Iri(_) | Term::Blank(_)) {
+            return Err(rdf_axiom_reification(
+                "native owl:Axiom annotatedSource must be an IRI or blank node",
+            ));
+        }
+        let Term::Iri(property) = property else {
+            return Err(rdf_axiom_reification(
+                "native owl:Axiom annotatedProperty must be an IRI",
+            ));
+        };
+        let mut main_index = None;
+        for (index, candidate) in triples.iter().enumerate() {
+            session.step(1)?;
+            if resource_matches_term(&candidate.subject, source)
+                && candidate.predicate == *property
+                && candidate.object == *target
+            {
+                main_index.get_or_insert(index);
+            }
+        }
+        let main_index = main_index.ok_or_else(|| {
+            rdf_axiom_reification("native owl:Axiom reification main triple is absent")
+        })?;
+
+        let mut annotations = Vec::new();
+        for (index, triple) in triples.iter().enumerate() {
+            session.step(1)?;
+            if &triple.subject != reification || is_reification_metadata(&triple.predicate) {
+                continue;
+            }
+            let annotation = build_node(
+                5,
+                [
+                    Field::Node(named_entity(
+                        "annotation_property",
+                        &triple.predicate,
+                        session,
+                    )?),
+                    Field::Node(annotation_value(index, triple, expressions, session)?),
+                    Field::Set(Vec::new()),
+                ],
+                session,
+            )?;
+            enforce_usize(
+                annotations.len().saturating_add(1),
+                session.limits().value(LimitKey::MaxAnnotations),
+                "native RDF axiom annotations exceed max_annotations",
+            )?;
+            session.reserve_bytes(annotation.as_bytes().len())?;
+            reserve_vec_item(&mut annotations, session)?;
+            annotations.push(annotation);
+        }
+        let annotations = canonical_set(annotations, 0, None)?;
+        reserve_vec_item(&mut ledger.records, session)?;
+        ledger.records.push(AxiomAnnotationRecord {
+            main_index,
+            annotations,
+            claimed: false,
+        });
+        for (index, triple) in triples.iter().enumerate() {
+            session.step(1)?;
+            if &triple.subject == reification {
+                let value = consumed.get_mut(index).ok_or_else(|| {
+                    NativeError::protocol("native RDF consumed ledger is shorter than graph")
+                })?;
+                *value = true;
+            }
+        }
+    }
+    Ok(ledger)
+}
+
+fn unique_reification_term<'a>(
+    reification: &Resource,
+    predicate: &str,
+    triples: &'a [Triple],
+    session: &mut Session<'_>,
+) -> NativeResult<(usize, &'a Term)> {
+    let mut value = None;
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if &triple.subject != reification || triple.predicate != predicate {
+            continue;
+        }
+        if value.replace((index, &triple.object)).is_some() {
+            return Err(rdf_axiom_reification(
+                "native owl:Axiom reification metadata must have cardinality one",
+            ));
+        }
+    }
+    value.ok_or_else(|| {
+        rdf_axiom_reification(
+            "native owl:Axiom reification requires source, property, and target metadata",
+        )
+    })
+}
+
+fn resource_matches_term(resource: &Resource, term: &Term) -> bool {
+    match (resource, term) {
+        (Resource::Iri(left), Term::Iri(right)) | (Resource::Blank(left), Term::Blank(right)) => {
+            left == right
+        }
+        (Resource::Iri(_) | Resource::Blank(_), Term::Literal { .. })
+        | (Resource::Iri(_), Term::Blank(_))
+        | (Resource::Blank(_), Term::Iri(_)) => false,
+    }
+}
+
+fn is_reification_metadata(predicate: &str) -> bool {
+    matches!(
+        predicate,
+        RDF_TYPE | OWL_ANNOTATED_SOURCE | OWL_ANNOTATED_PROPERTY | OWL_ANNOTATED_TARGET
+    )
+}
+
 fn annotation_axiom<'view, 'graph>(
     index: usize,
     triple: &'graph Triple,
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    annotations: &[Node],
     session: &mut Session<'_>,
 ) -> NativeResult<Option<Node>> {
     if triple.predicate == RDFS_SUB_PROPERTY_OF {
@@ -2559,7 +2802,7 @@ fn annotation_axiom<'view, 'graph>(
                         super_property,
                         session,
                     )?),
-                    Field::Set(Vec::new()),
+                    Field::Set(cloned_annotations(annotations, session)?),
                 ],
                 session,
             )?));
@@ -2588,7 +2831,7 @@ fn annotation_axiom<'view, 'graph>(
             [
                 Field::Node(named_entity("annotation_property", property, session)?),
                 Field::Node(target),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?));
@@ -2611,7 +2854,7 @@ fn annotation_axiom<'view, 'graph>(
             )?),
             Field::Node(subject),
             Field::Node(value),
-            Field::Set(Vec::new()),
+            Field::Set(cloned_annotations(annotations, session)?),
         ],
         session,
     )?))
@@ -2695,6 +2938,7 @@ fn assertion_axiom<'view, 'graph>(
     triple: &'graph Triple,
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    annotations: &[Node],
     session: &mut Session<'_>,
 ) -> NativeResult<Option<Node>> {
     if triple.predicate == OWL_DIFFERENT_FROM {
@@ -2713,7 +2957,10 @@ fn assertion_axiom<'view, 'graph>(
         let individuals = canonical_set(individuals, 2, None)?;
         return Ok(Some(build_node(
             111,
-            [Field::Set(individuals), Field::Set(Vec::new())],
+            [
+                Field::Set(individuals),
+                Field::Set(cloned_annotations(annotations, session)?),
+            ],
             session,
         )?));
     }
@@ -2733,7 +2980,7 @@ fn assertion_axiom<'view, 'graph>(
                 Field::Node(named_entity("data_property", &triple.predicate, session)?),
                 Field::Node(expressions.decode_individual(subject, session)?),
                 Field::Node(expressions.decode_literal(index, session)?),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?,
@@ -2743,7 +2990,7 @@ fn assertion_axiom<'view, 'graph>(
                 Field::Node(named_entity("object_property", &triple.predicate, session)?),
                 Field::Node(expressions.decode_individual(subject, session)?),
                 Field::Node(expressions.decode_individual(ListTerm::Iri(value), session)?),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?,
@@ -2753,7 +3000,7 @@ fn assertion_axiom<'view, 'graph>(
                 Field::Node(named_entity("object_property", &triple.predicate, session)?),
                 Field::Node(expressions.decode_individual(subject, session)?),
                 Field::Node(expressions.decode_individual(ListTerm::Blank(value), session)?),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?,
@@ -2843,6 +3090,7 @@ fn is_assertion_structural_predicate(value: &str) -> bool {
 fn named_axiom(
     triple: &Triple,
     kinds: &[KindRecord<'_>],
+    annotations: &[Node],
     session: &mut Session<'_>,
 ) -> NativeResult<Option<Node>> {
     let (Resource::Iri(subject), Term::Iri(object)) = (&triple.subject, &triple.object) else {
@@ -2854,7 +3102,7 @@ fn named_axiom(
             [
                 Field::Node(named_entity("class", subject, session)?),
                 Field::Node(named_entity("class", object, session)?),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?,
@@ -2863,7 +3111,7 @@ fn named_axiom(
             [
                 Field::Node(named_entity("class", subject, session)?),
                 Field::Node(named_entity("class", OWL_NOTHING, session)?),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?,
@@ -2871,7 +3119,7 @@ fn named_axiom(
             63,
             [
                 Field::Set(named_set("class", &[subject, object], session)?),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?,
@@ -2885,16 +3133,16 @@ fn named_axiom(
             if has_kind(kinds, subject, "data_property")
                 || has_kind(kinds, object, "data_property") =>
         {
-            build_binary_named_axiom(90, "data_property", subject, object, session)?
+            build_binary_named_axiom(90, "data_property", subject, object, annotations, session)?
         }
         RDFS_SUB_PROPERTY_OF => {
-            build_binary_named_axiom(70, "object_property", subject, object, session)?
+            build_binary_named_axiom(70, "object_property", subject, object, annotations, session)?
         }
         OWL_PROPERTY_DISJOINT_WITH if has_kind(kinds, subject, "data_property") => build_node(
             92,
             [
                 Field::Set(named_set("data_property", &[subject, object], session)?),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?,
@@ -2902,7 +3150,7 @@ fn named_axiom(
             72,
             [
                 Field::Set(named_set("object_property", &[subject, object], session)?),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?,
@@ -2917,7 +3165,7 @@ fn named_axiom(
                 [
                     Field::Node(first),
                     Field::Node(second),
-                    Field::Set(Vec::new()),
+                    Field::Set(cloned_annotations(annotations, session)?),
                 ],
                 session,
             )?
@@ -2930,7 +3178,7 @@ fn named_axiom(
             [
                 Field::Node(named_entity("data_property", subject, session)?),
                 Field::Node(named_entity("class", object, session)?),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?,
@@ -2939,12 +3187,16 @@ fn named_axiom(
             [
                 Field::Node(named_entity("data_property", subject, session)?),
                 Field::Node(named_entity("datatype", object, session)?),
-                Field::Set(Vec::new()),
+                Field::Set(cloned_annotations(annotations, session)?),
             ],
             session,
         )?,
-        RDFS_DOMAIN => build_binary_named_axiom(74, "object_property", subject, object, session)?,
-        RDFS_RANGE => build_binary_named_axiom(75, "object_property", subject, object, session)?,
+        RDFS_DOMAIN => {
+            build_binary_named_axiom(74, "object_property", subject, object, annotations, session)?
+        }
+        RDFS_RANGE => {
+            build_binary_named_axiom(75, "object_property", subject, object, annotations, session)?
+        }
         RDF_TYPE if has_kind(kinds, subject, "annotation_property") => return Ok(None),
         RDF_TYPE => {
             if let Some(tag) = characteristic_tag(object, has_kind(kinds, subject, "data_property"))
@@ -2958,7 +3210,7 @@ fn named_axiom(
                     tag,
                     [
                         Field::Node(named_entity(kind, subject, session)?),
-                        Field::Set(Vec::new()),
+                        Field::Set(cloned_annotations(annotations, session)?),
                     ],
                     session,
                 )?
@@ -2968,7 +3220,7 @@ fn named_axiom(
                     [
                         Field::Node(named_entity("class", object, session)?),
                         Field::Node(named_entity("named_individual", subject, session)?),
-                        Field::Set(Vec::new()),
+                        Field::Set(cloned_annotations(annotations, session)?),
                     ],
                     session,
                 )?
@@ -3009,6 +3261,7 @@ fn build_binary_named_axiom(
     first_kind: &'static str,
     first: &str,
     second: &str,
+    annotations: &[Node],
     session: &mut Session<'_>,
 ) -> NativeResult<Node> {
     let second_kind = match tag {
@@ -3020,10 +3273,19 @@ fn build_binary_named_axiom(
         [
             Field::Node(named_entity(first_kind, first, session)?),
             Field::Node(named_entity(second_kind, second, session)?),
-            Field::Set(Vec::new()),
+            Field::Set(cloned_annotations(annotations, session)?),
         ],
         session,
     )
+}
+
+fn cloned_annotations(annotations: &[Node], session: &mut Session<'_>) -> NativeResult<Vec<Node>> {
+    let mut output = reserved_vec(annotations.len(), session)?;
+    for annotation in annotations {
+        session.reserve_bytes(annotation.as_bytes().len())?;
+        output.push(annotation.clone());
+    }
+    Ok(output)
 }
 
 fn named_set(
@@ -3714,6 +3976,10 @@ fn rdf_mapping_type() -> NativeError {
 
 fn rdf_mapping_cardinality(message: &'static str) -> NativeError {
     NativeError::new("NATIVE_RDF_MAPPING_CARDINALITY", message)
+}
+
+fn rdf_axiom_reification(message: &'static str) -> NativeError {
+    NativeError::new("NATIVE_RDF_AXIOM_REIFICATION", message)
 }
 
 #[cfg(test)]
@@ -5809,6 +6075,149 @@ mod tests {
         assert_eq!(
             mapped(blank_domain.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_TYPE",
+        );
+    }
+
+    #[test]
+    fn axiom_reification_attaches_exact_canonical_annotations() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let xsd_integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let plain_literal = "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral";
+        let subclass = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf rdf:resource=\"urn:B\"/></rdf:Description><owl:Axiom rdf:nodeID=\"axiom\"><owl:annotatedSource rdf:resource=\"urn:A\"/><owl:annotatedProperty rdf:resource=\"{RDFS_SUB_CLASS_OF}\"/><owl:annotatedTarget rdf:resource=\"urn:B\"/><rdfs:comment xml:lang=\"EN\">note</rdfs:comment></owl:Axiom></rdf:RDF>"
+        );
+        let document = mapped(subclass.as_bytes(), None).expect("annotated subclass axiom");
+        let comment = Node::build(
+            5,
+            vec![
+                Field::Node(
+                    entity(
+                        "annotation_property",
+                        iri(format!("{rdfs}comment")).expect("comment IRI"),
+                    )
+                    .expect("comment property"),
+                ),
+                Field::Node(
+                    literal(
+                        "note".to_owned(),
+                        entity(
+                            "datatype",
+                            iri(plain_literal.to_owned()).expect("plain literal IRI"),
+                        )
+                        .expect("plain literal datatype"),
+                        Some("en".to_owned()),
+                    )
+                    .expect("comment literal"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("comment annotation");
+        let expected_subclass = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(class_node("urn:B")),
+                Field::Set(vec![comment]),
+            ],
+        )
+        .expect("annotated subclass");
+        assert_eq!(document.axioms, [expected_subclass.as_bytes().to_vec()]);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let data_assertion = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><owl:DatatypeProperty rdf:about=\"urn:d\"/><rdf:Description rdf:about=\"urn:s\"><e:d rdf:datatype=\"{xsd_integer}\">007</e:d></rdf:Description><owl:Axiom rdf:nodeID=\"axiom\"><owl:annotatedSource rdf:resource=\"urn:s\"/><owl:annotatedProperty rdf:resource=\"urn:d\"/><owl:annotatedTarget rdf:datatype=\"{xsd_integer}\">007</owl:annotatedTarget><e:note rdf:resource=\"urn:value\"/></owl:Axiom></rdf:RDF>"
+        );
+        let document = mapped(data_assertion.as_bytes(), None).expect("annotated data assertion");
+        let annotation = Node::build(
+            5,
+            vec![
+                Field::Node(
+                    entity(
+                        "annotation_property",
+                        iri("urn:note".to_owned()).expect("annotation property IRI"),
+                    )
+                    .expect("annotation property"),
+                ),
+                Field::Node(iri("urn:value".to_owned()).expect("annotation value")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("axiom annotation");
+        let expected_assertion = Node::build(
+            115,
+            vec![
+                Field::Node(
+                    entity(
+                        "data_property",
+                        iri("urn:d".to_owned()).expect("data property IRI"),
+                    )
+                    .expect("data property"),
+                ),
+                Field::Node(named_individual_node("urn:s")),
+                Field::Node(
+                    literal(
+                        "007".to_owned(),
+                        entity(
+                            "datatype",
+                            iri(xsd_integer.to_owned()).expect("integer datatype IRI"),
+                        )
+                        .expect("integer datatype"),
+                        None,
+                    )
+                    .expect("assertion literal"),
+                ),
+                Field::Set(vec![annotation]),
+            ],
+        )
+        .expect("annotated data assertion");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == expected_assertion.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+    }
+
+    #[test]
+    fn malformed_or_unclaimed_axiom_reification_fails_closed() {
+        let missing_main = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Axiom rdf:nodeID=\"axiom\"><owl:annotatedSource rdf:resource=\"urn:A\"/><owl:annotatedProperty rdf:resource=\"{RDFS_SUB_CLASS_OF}\"/><owl:annotatedTarget rdf:resource=\"urn:B\"/></owl:Axiom></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(missing_main.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_AXIOM_REIFICATION",
+        );
+
+        let duplicate_source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf rdf:resource=\"urn:B\"/></rdf:Description><owl:Axiom rdf:nodeID=\"axiom\"><owl:annotatedSource rdf:resource=\"urn:A\"/><owl:annotatedSource rdf:resource=\"urn:C\"/><owl:annotatedProperty rdf:resource=\"{RDFS_SUB_CLASS_OF}\"/><owl:annotatedTarget rdf:resource=\"urn:B\"/></owl:Axiom></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(duplicate_source.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_AXIOM_REIFICATION",
+        );
+
+        let annotated_declaration = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><owl:Axiom rdf:nodeID=\"axiom\"><owl:annotatedSource rdf:resource=\"urn:C\"/><owl:annotatedProperty rdf:resource=\"{RDF_TYPE}\"/><owl:annotatedTarget rdf:resource=\"{OWL}Class\"/></owl:Axiom></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(annotated_declaration.as_bytes(), None)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_AXIOM_REIFICATION",
+        );
+
+        let nested = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Annotation rdf:nodeID=\"annotation\"><owl:annotatedSource rdf:resource=\"urn:s\"/><owl:annotatedProperty rdf:resource=\"urn:p\"/><owl:annotatedTarget rdf:resource=\"urn:o\"/></owl:Annotation></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(nested.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
         );
     }
 
