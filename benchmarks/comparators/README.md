@@ -54,37 +54,49 @@ py-horned, OWLAPI, a JVM, or a comparator runner. Missing launchers and pending
 artifact pins produce `not-run`; they can never become a pass.
 
 Every external lane has its own runner pin: direct retained Rust, raw Horned,
-common-contract Horned, py-horned, and OWLAPI. The development-only raw Horned
-and py-horned runners are complete and SHA-256 bound. The other three runner
-pins remain `pending`, so those lanes are non-runnable even if their launcher
-environment variables are configured. Horned-OWL 1.4.0 has one exact engine
-artifact pin shared by its raw and common lanes; completing the raw runner does
-not complete the independent common-contract adapter. The installed retained-
+common-contract Horned, py-horned, and OWLAPI. The development-only Horned and
+py-horned runners are complete and SHA-256 bound. The direct retained-Rust and
+OWLAPI runner pins remain `pending`, so those lanes are non-runnable even if
+their launcher environment variables are configured. Horned-OWL 1.4.0 has one
+exact engine and executable artifact shared by its raw and common lanes, while
+the boundary and runner revision remain lane-bound. The installed retained-
 native-wheel lane is separate and rejects source-tree/native builds; it
 requires an isolated delivered-wheel environment.
 
-The raw Horned runner is an excluded development binary, built from its own
-exact Cargo lock and Rust 1.97.1 toolchain. Reproduce the recorded Darwin
-x86_64 runner and authenticate it before selection:
+The Horned runner is an excluded development binary, built from its own exact
+Cargo lock and Rust 1.97.1 toolchain. Reproduce the recorded Darwin x86_64
+runner and authenticate it before selecting either lane:
 
 ```console
 cd benchmarks/comparators/runners/horned
 cargo +1.97.1 build --locked --release
 printf '%s  %s\n' \
-  f4f18428bf9f115635a168cd690b201ebdd11ff3c0589bb6196993d948223f8a \
+  ffd20194b7c3715d6d07ec8ba9167d590ed484c278305754148711c44ae8887b \
   target/release/pyowl-core-horned-comparator | shasum -a 256 -c -
 export PYOWL_CORE_HORNED_RUNNER="$PWD/target/release/pyowl-core-horned-comparator"
 ```
 
-Runner v1 verifies the embedded Horned 1.4.0 crates.io checksum, its own
-executable SHA-256, exact semantic options, source/document identity, allocator,
-thread ceiling, lane, and boundary before parsing. It builds Horned's set, IRI,
-component-kind, and declaration indexes within the timer, then traverses the
-owned model to publish bounded axiom, annotation, import, typed-signature,
-diagnostic, and logical-object counts. The raw inventory digest uses the same
-canonical scalar preimage that the parent independently recomputes. Functional
-Syntax, OWL/XML, and RDF/XML are supported; Turtle is explicitly `ineligible`
-because the pinned Horned API exposes no Turtle reader selection for this lane.
+Raw runner v2 and common runner v1 verify the embedded Horned 1.4.0 crates.io
+checksum, their shared executable SHA-256, exact semantic options,
+source/document identity, allocator, thread ceiling, lane, and boundary before
+parsing. The raw boundary builds Horned's set, IRI, component-kind, and
+declaration indexes within the timer, then traverses the owned model to publish
+bounded axiom, annotation, import, typed-signature, diagnostic, and
+logical-object counts. Its inventory digest uses the same canonical scalar
+preimage that the parent independently recomputes.
+
+The independent common boundary maps the Horned model to every supported
+canonical structural node, freezes bounded anonymous-node labels, constructs
+the identity/import/diagnostic/provenance inventories and all four fingerprint
+preimages, and validates the complete common-contract ledger inside its timed
+adapter phase. Inputs whose semantics Horned 1.4.0 cannot preserve, including
+nested Functional or OWL/XML annotations, fail closed as `ineligible` instead
+of publishing a reduced contract. Functional Syntax SWRL surface tokens are
+adapted to Horned's equivalent parser spelling without rewriting comments,
+IRIs, or strings.
+
+Functional Syntax, OWL/XML, and RDF/XML are supported; Turtle is explicitly
+`ineligible` because the pinned Horned API exposes no Turtle reader selection.
 Resident and prepared-file input, fresh and authenticated persistent process,
 strict framing, monotonic sequences, fresh ontology identities, and clean
 shutdown all use the same audited parent contract as the py-horned runner.
@@ -186,12 +198,13 @@ an approved versioned machine. Resident-byte and file lanes and the audited
 persistent lifecycle are implemented and contract-tested. File inputs are
 hash-checked and prepared before timing, use the same stable source-bound
 document IRI as resident bytes, and include the implementation's file open/read
-in the timer. The complete raw Horned and py-horned runners can exercise that
-lifecycle, while the other three external runner pins remain pending.
+in the timer. The complete raw/common Horned and py-horned runners can exercise
+that lifecycle, while the direct retained-Rust and OWLAPI runner pins remain
+pending.
 Representative medium/large approved-machine samples, native retention/copy
 counters, and phase profiles remain open. The configured ratio gates therefore
 fail closed; no performance threshold has passed merely because its evaluator,
-lifecycle, and two external adapters now exist.
+lifecycle, and three external adapter lanes now exist.
 
 `dependency-audit-shared-host.json` binds passing alias-aware source,
 payload-manifest, and packaged-Python scans plus reproducible SHA-bound sdist and

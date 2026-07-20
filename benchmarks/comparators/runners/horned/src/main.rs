@@ -38,6 +38,7 @@ const ALLOCATOR: &str = "Rust system allocator";
 const THREAD_CEILING: u64 = 1;
 const RAW_RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v2";
 const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v1";
+const RUNNER_FEATURES: &[&str] = &["default", "independent-common-contract-v1"];
 
 const ADAPTER_REQUEST_SCHEMA: &str = "pyowl-core/comparator-adapter-request/v2";
 const ADAPTER_RESULT_SCHEMA: &str = "pyowl-core/comparator-adapter-result/v1";
@@ -211,10 +212,7 @@ impl Lane {
     }
 
     fn features(self) -> &'static [&'static str] {
-        match self {
-            Self::Raw => &["default"],
-            Self::Common => &["default", "independent-common-contract-v1"],
-        }
+        RUNNER_FEATURES
     }
 
     fn runner_revision(self) -> &'static str {

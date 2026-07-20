@@ -88,7 +88,7 @@ def test_python_file_lane_is_timed_and_semantically_matches_resident_bytes() -> 
     assert completion["file_lane_implemented"] is True
 
 
-def test_pending_horned_common_adapter_is_not_run_and_never_a_pass(
+def test_complete_horned_common_adapter_requires_an_explicit_launcher(
     monkeypatch: object,
 ) -> None:
     # pytest's monkeypatch fixture is intentionally used through its public method
@@ -103,7 +103,9 @@ def test_pending_horned_common_adapter_is_not_run_and_never_a_pass(
     rows = {value["lane"]: value for value in cast(list[dict[str, Any]], report["lanes"])}
     assert rows["pyowl-python-common"]["status"] == "ok"
     assert rows["horned-owl-common"]["status"] == "not-run"
-    assert "pending" in rows["horned-owl-common"]["reason"]
+    assert "launcher environment PYOWL_CORE_HORNED_RUNNER is unset" in rows[
+        "horned-owl-common"
+    ]["reason"]
     assert report["comparative_complete"] is False
     assert report["not_run_required"] == ["horned-owl-common"]
     completion = cast(dict[str, Any], report["completion_requirements"])
@@ -425,8 +427,11 @@ def test_committed_raw_horned_smoke_attests_real_persistent_lifecycle() -> None:
     evidence = cast(dict[str, Any], json.loads(evidence_path.read_text(encoding="utf-8")))
 
     assert evidence["schema"] == "pyowl-core/comparator-baseline/v1"
-    manifest_sha256 = hashlib.sha256(DEFAULT_COMPARATOR_MANIFEST.read_bytes()).hexdigest()
+    manifest_sha256 = "2ea395c5b1bbbdb6ce31013b59604b455fa837cc5a3a0d2485fc93e4c4614527"
     assert evidence["comparator_manifest_sha256"] == manifest_sha256
+    assert evidence["comparator_manifest_sha256"] != hashlib.sha256(
+        DEFAULT_COMPARATOR_MANIFEST.read_bytes()
+    ).hexdigest()
     source_identity = cast(dict[str, Any], evidence["source_identity"])
     source_inputs = cast(list[dict[str, Any]], source_identity["inputs"])
     inputs_by_path = {cast(str, value["path"]): value for value in source_inputs}
