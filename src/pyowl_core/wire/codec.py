@@ -646,18 +646,12 @@ def _native_wire_source_v1(
     aliases = getattr(snapshot, "_native_wire_structural_aliases_v1", None)
     if not callable(aliases) or aliases() is not True:
         return None
-    origin_rows = getattr(snapshot, "_native_origin_rows_v2", None)
-    if not callable(origin_rows):
+    origin_records = getattr(snapshot, "_native_origin_records_v2", None)
+    if not callable(origin_records):
         raise BackendProtocolError(
-            "attested native wire source omits retained origin rows",
+            "attested native wire source omits validated origin records",
             code="NATIVE_WIRE_SOURCE",
         )
-
-    from pyowl_core.backends.native_handoff_v2 import (
-        NativeFacadeCollectionV2,
-        NativeOriginRowV2,
-        decode_native_auxiliary_row_v2,
-    )
     from pyowl_core.backends.native_views import (
         _encoded_structural_wire_rows_v1,
         _produce_native_direct_view_v1,
@@ -675,27 +669,35 @@ def _native_wire_source_v1(
         raise BackendProtocolError(
             "attested native wire source lacks direct retained columns",
             code="NATIVE_WIRE_SOURCE",
-        )
+    )
     structural = _encoded_structural_wire_rows_v1(publication, limits)
     origins: list[_NativeWireOrigin] = []
-    for encoded in origin_rows():
-        decoded = decode_native_auxiliary_row_v2(
-            NativeFacadeCollectionV2.ORIGIN_ENTRIES,
-            encoded,
-            max_row_bytes=max(1, len(encoded)),
-            limits=limits,
-        )
-        if type(decoded) is not NativeOriginRowV2:
+    for record in origin_records():
+        if type(record) is not tuple or len(record) != 4:
             raise BackendProtocolError(
-                "native wire source returned a non-origin auxiliary row",
+                "native wire source returned an invalid origin record",
+                code="NATIVE_WIRE_SOURCE",
+            )
+        digest, document_key, occurrence, span = record
+        if (
+            type(digest) is not bytes
+            or len(digest) != 32
+            or type(document_key) is not str
+            or not document_key
+            or type(occurrence) is not int
+            or not 0 <= occurrence < 2**64
+            or (span is not None and type(span) is not SourceSpan)
+        ):
+            raise BackendProtocolError(
+                "native wire source returned invalid origin record scalars",
                 code="NATIVE_WIRE_SOURCE",
             )
         origins.append(
             _NativeWireOrigin(
-                decoded.digest,
-                decoded.document_key,
-                decoded.occurrence,
-                decoded.span,
+                digest,
+                document_key,
+                occurrence,
+                span,
             )
         )
     return _NativeWireSource(

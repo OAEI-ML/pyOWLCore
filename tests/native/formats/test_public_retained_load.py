@@ -24,7 +24,7 @@ from pyowl_core import (
     encode_snapshot,
     load_snapshot,
 )
-from pyowl_core.backends import native
+from pyowl_core.backends import native, native_handoff_v2
 from pyowl_core.exceptions import BackendProtocolError
 from pyowl_core.model import canonical_bytes
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
@@ -421,12 +421,50 @@ def test_retained_wire_reuses_columns_and_pages_origins_once(
     after_native = cast(Any, raw_owner)._publication_counters_v2()
     after_python = cast(Any, selected)._native_python_counters()
     assert retained_wire == encode_snapshot(reference)
-    assert after_python.model_rows_materialized == before_python.model_rows_materialized
+    assert after_python == before_python
     assert after_native.encoded_view_requests == before_native.encoded_view_requests + 1
     assert after_native.page_requests == before_native.page_requests + 1
     assert after_native.rows_emitted == before_native.rows_emitted + sum(
         len(rows) for rows in reference.origin_index.entries.values()
     )
+
+
+def test_native_origin_records_reuse_each_page_validation_without_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(SOURCE, options=_options(BackendPreference.PYTHON))
+    selected = load_snapshot(SOURCE, options=_options(BackendPreference.NATIVE))
+    records = getattr(selected, "_native_origin_records_v2", None)
+    assert callable(records)
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
+    before_native = cast(Any, raw_owner)._publication_counters_v2()
+    before_python = cast(Any, selected)._native_python_counters()
+    original = native_handoff_v2.decode_native_auxiliary_row_v2
+    decode_calls = 0
+
+    def observed(*arguments: object, **keywords: object) -> object:
+        nonlocal decode_calls
+        decode_calls += 1
+        return original(*arguments, **keywords)
+
+    monkeypatch.setattr(native_handoff_v2, "decode_native_auxiliary_row_v2", observed)
+    observed_records = tuple(records())
+    after_native = cast(Any, raw_owner)._publication_counters_v2()
+    after_python = cast(Any, selected)._native_python_counters()
+    expected = tuple(
+        (digest, item.document_key, item.occurrence, item.span)
+        for digest, occurrences in reference.origin_index.entries.items()
+        for item in occurrences
+    )
+
+    assert observed_records == expected
+    assert decode_calls == len(expected)
+    assert after_native.page_requests == before_native.page_requests + 1
+    assert after_native.rows_emitted == before_native.rows_emitted + len(expected)
+    assert after_python == before_python
 
 
 def test_attested_wire_source_fails_closed_without_direct_columns(

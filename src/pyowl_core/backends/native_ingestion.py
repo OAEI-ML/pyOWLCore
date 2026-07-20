@@ -992,7 +992,7 @@ def publish_retained_functional_snapshot_v2(
     sidecars = NativeDiagnosticReferenceSidecarsV2(
         snapshot=tuple(
             native_diagnostic_reference_kinds_v2(
-                document_reference=value.document_iri,
+                document_reference=cast(IRI | str | None, value.document_iri),
                 import_chain=cast(tuple[IRI | str, ...], value.import_chain),
             )
             for value in public_diagnostics
@@ -1003,7 +1003,10 @@ def publish_retained_functional_snapshot_v2(
                 None
                 if edge.diagnostic is None
                 else native_diagnostic_reference_kinds_v2(
-                    document_reference=edge.diagnostic.document_iri,
+                    document_reference=cast(
+                        IRI | str | None,
+                        edge.diagnostic.document_iri,
+                    ),
                     import_chain=cast(
                         tuple[IRI | str, ...],
                         edge.diagnostic.import_chain,

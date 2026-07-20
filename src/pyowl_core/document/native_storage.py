@@ -376,7 +376,13 @@ class _NativeCollectionRef(Generic[T]):
     def __post_init__(self) -> None:
         self.owner.shared.publication_object()
 
-    def iter_pairs(self, *, digest_filter: bytes | None = None) -> Iterator[tuple[bytes, object]]:
+    def _iter_validated_pairs(
+        self,
+        *,
+        digest_filter: bytes | None = None,
+    ) -> Iterator[tuple[bytes, object]]:
+        """Traverse each page's already validation-decoded rows exactly once."""
+
         self.owner.ensure_open()
         if self.count == 0:
             return
@@ -419,7 +425,7 @@ class _NativeCollectionRef(Generic[T]):
                 # not let values buffered by an earlier page call escape after
                 # the independently owned document/snapshot handle closes.
                 self.owner.ensure_open()
-                yield encoded, self.owner.shared.consume(self.collection, encoded, decoded)
+                yield encoded, decoded
             if page.terminal:
                 return
             if page.next_cursor is None:
@@ -428,62 +434,22 @@ class _NativeCollectionRef(Generic[T]):
                     code="NATIVE_PAGE_CURSOR",
                 )
             cursor = page.next_cursor
+
+    def iter_pairs(self, *, digest_filter: bytes | None = None) -> Iterator[tuple[bytes, object]]:
+        for encoded, decoded in self._iter_validated_pairs(digest_filter=digest_filter):
+            yield encoded, self.owner.shared.consume(self.collection, encoded, decoded)
 
     def iter_encoded(self) -> Iterator[bytes]:
         """Traverse validated canonical rows without retaining their Python values."""
 
-        self.owner.ensure_open()
-        if self.count == 0:
-            return
-        cursor = 0
-        observed_total: int | None = None
-        while True:
-            page = self.owner.handle._facade_page_v2(
-                NativeFacadePageRequestV2(
-                    collection=self.collection,
-                    scope=self.scope,
-                    document_ordinal=self.document_ordinal,
-                    start=cursor,
-                    max_rows=NATIVE_SNAPSHOT_PUBLICATION_BOUNDS_V2["max_facade_page_rows"],
-                    max_bytes=self.owner.shared.page_bytes,
-                    max_row_bytes=self.owner.shared.max_row_bytes,
-                    signature_kind=self.signature_kind,
-                    include_builtins=self.include_builtins,
-                )
-            )
-            if observed_total is None:
-                observed_total = page.total_count
-            elif observed_total != page.total_count:
-                raise BackendProtocolError(
-                    "native page total changed during traversal",
-                    code="NATIVE_PAGE_TOTAL",
-                )
-            if self.count is not None and page.total_count != self.count:
-                raise BackendProtocolError(
-                    "native page total diverges from facade cardinality",
-                    code="NATIVE_PAGE_TOTAL",
-                )
-            # The owner has already validation-decoded this page.  Retrieve the
-            # fixed tuple exactly once even when the caller only needs bytes;
-            # this preserves the V2 page-consumption invariant without adding
-            # those values to the facade materialization/cache counters.
-            decoded_rows = page._validated_rows_v2()
-            if len(decoded_rows) != len(page.rows):
-                raise BackendProtocolError(
-                    "native page validation rows are not aligned",
-                    code="NATIVE_PAGE_ROWS",
-                )
-            for encoded in page.rows:
-                self.owner.ensure_open()
-                yield encoded
-            if page.terminal:
-                return
-            if page.next_cursor is None:
-                raise BackendProtocolError(
-                    "native nonterminal page omitted its cursor",
-                    code="NATIVE_PAGE_CURSOR",
-                )
-            cursor = page.next_cursor
+        for encoded, _decoded in self._iter_validated_pairs():
+            yield encoded
+
+    def iter_validated(self) -> Iterator[object]:
+        """Traverse validated values without facade cache/materialization accounting."""
+
+        for _encoded, decoded in self._iter_validated_pairs():
+            yield decoded
 
     def row_at(self, index: int) -> tuple[bytes, object]:
         self.owner.ensure_open()
@@ -2282,6 +2248,29 @@ class _NativeOntologySnapshot(OntologySnapshot):
     def _native_origin_rows_v2(self) -> Iterator[bytes]:
         """Yield each retained origin row once without facade-cache materialization."""
 
+        entries = self._native_origin_mapping_v2()
+        if entries is None:
+            return
+        yield from entries._ref.iter_encoded()
+
+    def _native_origin_records_v2(
+        self,
+    ) -> Iterator[tuple[bytes, str, int, SourceSpan | None]]:
+        """Yield already-validated origin scalars once per native facade page."""
+
+        entries = self._native_origin_mapping_v2()
+        if entries is None:
+            return
+        for value in entries._ref.iter_validated():
+            if type(value) is not NativeOriginRowV2:
+                raise BackendProtocolError(
+                    "native retained source returned a non-origin validated row",
+                    code="NATIVE_WIRE_SOURCE",
+                )
+            origin = value
+            yield origin.digest, origin.document_key, origin.occurrence, origin.span
+
+    def _native_origin_mapping_v2(self) -> _NativeOriginMapping | None:
         self._check_open()
         entries = self._native_snapshot_state.origin_index.entries
         if not self.load_options.collect_provenance:
@@ -2290,13 +2279,13 @@ class _NativeOntologySnapshot(OntologySnapshot):
                     "native wire source retained origins without provenance capability",
                     code="NATIVE_WIRE_SOURCE",
                 )
-            return
+            return None
         if not isinstance(entries, _NativeOriginMapping):
             raise BackendProtocolError(
                 "native wire source does not retain an origin-row facade",
                 code="NATIVE_WIRE_SOURCE",
             )
-        yield from entries._ref.iter_encoded()
+        return entries
 
 
 def _reject_document_key(scope: AxiomScope, document_key: str | None) -> None:
