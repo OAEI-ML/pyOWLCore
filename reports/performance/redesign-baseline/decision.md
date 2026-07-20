@@ -235,9 +235,10 @@ The following are recorded as **not-run**, not passes:
   Horned-OWL 1.4.0 engine artifact pin, but that completed engine pin does not
   complete either separately pending runner pin;
 - py-horned and OWLAPI inputs: the exact py-horned 1.4.0 sdist and runner are
-  complete. Its public API has no Turtle reader selection, so Turtle is
-  explicitly ineligible. The OWLAPI runner and its isolated image/archive
-  evidence remain pending;
+  complete. Runner v2 verifies the installed version, exact sdist provenance,
+  and every hashed RECORD entry before its request/handshake. Its public API
+  has no Turtle reader selection, so Turtle is explicitly ineligible. The
+  OWLAPI runner and its isolated image/archive evidence remain pending;
 - file-lane approved evidence and paired randomized blocks: the core file
   boundary and paired scheduler are implemented and contract-tested, but
   external/reference-machine file samples and approved paired results are not

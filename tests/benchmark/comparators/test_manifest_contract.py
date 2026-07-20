@@ -83,7 +83,7 @@ def test_external_runners_are_fail_closed_except_pinned_py_horned() -> None:
     py_horned = manifest.by_id("py-horned-common")
     runner = Path("benchmarks/comparators/runners/py_horned_common.py")
     assert py_horned.runner_pin_state == "complete"
-    assert py_horned.runner_revision == "pyowl-core-py-horned-common-runner-v1"
+    assert py_horned.runner_revision == "pyowl-core-py-horned-common-runner-v2"
     assert py_horned.runner_sha256 == hashlib.sha256(runner.read_bytes()).hexdigest()
     assert py_horned.artifact_is_runnable is True
 

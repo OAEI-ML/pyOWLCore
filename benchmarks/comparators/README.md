@@ -81,6 +81,11 @@ freeze, fingerprint, inventory, and validation cost inside the timer. Version
 1.4.0 exposes Functional Syntax, OWL/XML, and RDF/XML readers but no Turtle
 reader selection. Turtle requests therefore return explicit `ineligible`
 evidence; they are never sent to the RDF/XML reader or counted as passes.
+Before either a fresh request or persistent handshake, runner v2 also requires
+distribution version 1.4.0, exact `direct_url.json` provenance for the pinned
+sdist SHA-256, and a byte-for-byte match for every SHA-256 entry in the
+installed distribution's RECORD. A renamed, editable, differently sourced, or
+post-install modified engine fails before producing samples.
 
 Each external command reads one
 `pyowl-core/comparator-adapter-request/v2` JSON object on standard input and

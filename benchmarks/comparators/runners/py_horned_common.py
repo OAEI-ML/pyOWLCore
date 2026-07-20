@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.metadata
 import json
 import os
 import resource
@@ -73,10 +74,14 @@ ENGINE_VERSION = "1.4.0"
 ENGINE_REVISION = "PyPI py-horned-owl 1.4.0 (2026-02-11)"
 ENGINE_ARTIFACT = "PyPI sdist py_horned_owl-1.4.0.tar.gz"
 ENGINE_SHA256 = "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d"
-FEATURES = ("abi3-wrapper", "independent-common-contract-v1")
+FEATURES = (
+    "abi3-wrapper",
+    "independent-common-contract-v1",
+    "verified-sdist-install-v1",
+)
 ALLOCATOR = "Rust system allocator and CPython platform allocator"
 THREAD_CEILING = 1
-RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v1"
+RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v2"
 
 MAX_REQUEST_BYTES = 512 * 1024**2
 MAX_FRAME_HEADER_BYTES = 32
@@ -130,6 +135,58 @@ def _runner_sha256() -> str:
         for chunk in iter(lambda: stream.read(1024**2), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _verify_engine_install() -> None:
+    """Bind the imported extension to the exact source artifact and RECORD."""
+
+    try:
+        distribution = importlib.metadata.distribution("py-horned-owl")
+    except importlib.metadata.PackageNotFoundError as error:
+        raise RunnerContractError("py-horned-owl distribution metadata is missing") from error
+    if distribution.version != ENGINE_VERSION:
+        raise RunnerContractError("py-horned-owl distribution version differs from pin")
+
+    raw_direct_url = distribution.read_text("direct_url.json")
+    if raw_direct_url is None:
+        raise RunnerContractError("py-horned-owl install lacks direct artifact provenance")
+    try:
+        direct_url = json.loads(raw_direct_url)
+    except json.JSONDecodeError as error:
+        raise RunnerContractError("py-horned-owl direct artifact provenance is invalid") from error
+    if not isinstance(direct_url, dict):
+        raise RunnerContractError("py-horned-owl direct artifact provenance must be an object")
+    archive_info = direct_url.get("archive_info")
+    if not isinstance(archive_info, dict):
+        raise RunnerContractError("py-horned-owl was not installed from the pinned archive")
+    hashes = archive_info.get("hashes")
+    if not isinstance(hashes, dict) or hashes.get("sha256") != ENGINE_SHA256:
+        raise RunnerContractError("py-horned-owl source archive SHA-256 differs from pin")
+
+    files = distribution.files
+    if files is None:
+        raise RunnerContractError("py-horned-owl install lacks a RECORD inventory")
+    verified_files = 0
+    imported_package = Path(cast(str, pyhornedowl.__file__)).resolve()
+    imported_package_verified = False
+    for entry in files:
+        recorded_hash = entry.hash
+        if recorded_hash is None:
+            continue
+        if recorded_hash.mode != "sha256":
+            raise RunnerContractError("py-horned-owl RECORD uses a non-SHA-256 digest")
+        installed_path = Path(entry.locate()).resolve(strict=True)
+        digest = hashlib.sha256()
+        with installed_path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024**2), b""):
+                digest.update(chunk)
+        encoded = base64.urlsafe_b64encode(digest.digest()).rstrip(b"=").decode("ascii")
+        if encoded != recorded_hash.value:
+            raise RunnerContractError("py-horned-owl installed file differs from RECORD")
+        verified_files += 1
+        imported_package_verified |= installed_path == imported_package
+    if verified_files == 0 or not imported_package_verified:
+        raise RunnerContractError("py-horned-owl imported package is outside its RECORD")
 
 
 def _iri(value: object) -> IRI:
@@ -970,6 +1027,7 @@ def main() -> None:
             raise RunnerContractError(f"runner environment {name} differs from pin")
     if os.environ.get("RAYON_NUM_THREADS") != str(THREAD_CEILING):
         raise RunnerContractError("runner thread ceiling differs from pin")
+    _verify_engine_install()
     protocol_mode = os.environ.get("PYOWL_CORE_COMPARATOR_PROTOCOL_MODE")
     if protocol_mode == "fresh":
         _fresh_main()

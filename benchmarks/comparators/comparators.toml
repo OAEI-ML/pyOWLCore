@@ -119,13 +119,13 @@ revision = "PyPI py-horned-owl 1.4.0 (2026-02-11)"
 source_url = "https://github.com/ontology-tools/py-horned-owl"
 artifact = "PyPI sdist py_horned_owl-1.4.0.tar.gz"
 artifact_sha256 = "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d"
-features = ["abi3-wrapper", "independent-common-contract-v1"]
+features = ["abi3-wrapper", "independent-common-contract-v1", "verified-sdist-install-v1"]
 allocator = "Rust system allocator and CPython platform allocator"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_PY_HORNED_RUNNER"
 runner_pin_state = "complete"
-runner_revision = "pyowl-core-py-horned-common-runner-v1"
-runner_sha256 = "bb220affe68fd9a9f2cef7309687ce76a0e87f0956eda2a81479f4e5148a5a9b"
+runner_revision = "pyowl-core-py-horned-common-runner-v2"
+runner_sha256 = "4e1c48058a84e336d31da33077eff2bd2a69aa64c9787e27b1029efe3c0f8012"
 gating = true
 required = true
 
