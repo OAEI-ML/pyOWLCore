@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Protocol, cast
@@ -779,6 +780,7 @@ def publish_retained_functional_snapshot_v2(
     from pyowl_core.backends.native_handoff import (
         NativeDocumentPublicationV1,
         NativeLoadReportPublicationV1,
+        freeze_native_diagnostic_publication_v1,
         freeze_native_import_manifest_publication_v1,
         freeze_native_provenance_publication_v1,
     )
@@ -792,9 +794,11 @@ def publish_retained_functional_snapshot_v2(
         NativeSnapshotContentDigestsV2,
         _seal_native_snapshot_owner_v2,
         freeze_native_snapshot_publication_v2,
+        native_diagnostic_reference_kinds_v2,
         native_snapshot_publication_attestation_v2,
     )
     from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy, LoadOptions
+    from pyowl_core.diagnostics import Diagnostic
     from pyowl_core.document import Fingerprint, OntologyID
     from pyowl_core.document.imports import (
         DocumentRecord,
@@ -802,6 +806,7 @@ def publish_retained_functional_snapshot_v2(
         ImportEdge,
         ImportManifest,
         ImportStatus,
+        _record_unresolved_without_resolver,
     )
     from pyowl_core.document.native_storage import (
         _NO_ANONYMOUS_SCOPES_SEAL_V2,
@@ -810,7 +815,7 @@ def publish_retained_functional_snapshot_v2(
         ontology_snapshot_from_native_publication_v2,
     )
     from pyowl_core.document.provenance import DocumentProvenance
-    from pyowl_core.exceptions import ModelError
+    from pyowl_core.exceptions import ModelError, UnresolvedImportWarning
     from pyowl_core.io.formats.detection import FormatDetection
     from pyowl_core.io.resolver import resolver_configuration_fingerprint
     from pyowl_core.io.source import SourcePayload
@@ -822,7 +827,8 @@ def publish_retained_functional_snapshot_v2(
         raise TypeError("retained parser publication received invalid source metadata")
     if (
         options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
-        or options.imports is not ImportPolicy.IGNORE
+        or options.imports not in {ImportPolicy.IGNORE, ImportPolicy.RECORD_UNRESOLVED}
+        or (options.imports is ImportPolicy.RECORD_UNRESOLVED and resolver is not None)
         or options.preserve_source_map
         or options.validate_owl2_dl
         or detection.format is not DocumentFormat.FUNCTIONAL
@@ -878,7 +884,23 @@ def publish_retained_functional_snapshot_v2(
         detection.format,
         DocumentStatus.ROOT,
     )
-    edges = tuple(ImportEdge(document_key, iri, ImportStatus.IGNORED) for iri in direct_imports)
+    edges: tuple[ImportEdge, ...]
+    public_diagnostics: tuple[Diagnostic, ...]
+    if options.imports is ImportPolicy.IGNORE:
+        edges = tuple(
+            ImportEdge(document_key, iri, ImportStatus.IGNORED) for iri in direct_imports
+        )
+        public_diagnostics = ()
+        resolution_attempts = 0
+    else:
+        edges, public_diagnostics, resolution_attempts = (
+            _record_unresolved_without_resolver(
+                document_key,
+                document_iri,
+                direct_imports,
+                options,
+            )
+        )
     manifest = ImportManifest(
         options.imports,
         options.offline,
@@ -944,6 +966,9 @@ def publish_retained_functional_snapshot_v2(
     }
     timings.update(phase_timings)
     timings["native_publication_prepare_seconds"] = prepared.prepare_seconds
+    diagnostics = tuple(
+        freeze_native_diagnostic_publication_v1(value) for value in public_diagnostics
+    )
     report = NativeLoadReportPublicationV1(
         backend="native",
         api_version=(0, 1),
@@ -951,7 +976,7 @@ def publish_retained_functional_snapshot_v2(
         document_count=1,
         total_source_bytes=payload.byte_length,
         effective_axiom_count=seed.rows[1],
-        resolution_attempts=0,
+        resolution_attempts=resolution_attempts,
         acquisition_cache_hits=0,
         document_cache_hits=0,
         timings=tuple(sorted(timings.items(), key=lambda item: item[0].encode("utf-8"))),
@@ -965,9 +990,28 @@ def publish_retained_functional_snapshot_v2(
     capability_bits = 7 | (16 if options.collect_provenance else 0)
     import_manifest = freeze_native_import_manifest_publication_v1(manifest)
     sidecars = NativeDiagnosticReferenceSidecarsV2(
-        snapshot=(),
+        snapshot=tuple(
+            native_diagnostic_reference_kinds_v2(
+                document_reference=value.document_iri,
+                import_chain=cast(tuple[IRI | str, ...], value.import_chain),
+            )
+            for value in public_diagnostics
+        ),
         documents=((),),
-        import_edges=tuple(None for _edge in import_manifest.edges),
+        import_edges=tuple(
+            (
+                None
+                if edge.diagnostic is None
+                else native_diagnostic_reference_kinds_v2(
+                    document_reference=edge.diagnostic.document_iri,
+                    import_chain=cast(
+                        tuple[IRI | str, ...],
+                        edge.diagnostic.import_chain,
+                    ),
+                )
+            )
+            for edge in manifest.edges
+        ),
     )
     facade_summary = NativeFacadeCardinalitySummaryV2(
         documents=(
@@ -1003,7 +1047,7 @@ def publish_retained_functional_snapshot_v2(
         import_manifest=import_manifest,
         root_document_key=document_key,
         load_options=options,
-        diagnostics=(),
+        diagnostics=diagnostics,
         diagnostic_reference_sidecars=sidecars,
         facade_cardinality_summary=facade_summary,
         report=report,
@@ -1035,7 +1079,7 @@ def publish_retained_functional_snapshot_v2(
         "import_manifest": import_manifest,
         "root_document_key": document_key,
         "load_options": options,
-        "diagnostics": (),
+        "diagnostics": diagnostics,
         "diagnostic_reference_sidecars": sidecars,
         "facade_cardinality_summary": facade_summary,
         "report": report,
@@ -1063,12 +1107,15 @@ def publish_retained_functional_snapshot_v2(
         native_origin_rows_retained=prepared.origin_rows_retained,
         native_origin_bytes_retained=prepared.origin_bytes_retained,
     )
-    return ontology_snapshot_from_native_publication_v2(
+    snapshot = ontology_snapshot_from_native_publication_v2(
         publication,
         _wire_structural_aliases=_WIRE_STRUCTURAL_ALIAS_SEAL_V1,
         _ingestion_counters=ingestion_counters,
         _anonymous_scope_evidence=_NO_ANONYMOUS_SCOPES_SEAL_V2,
     )
+    for diagnostic in public_diagnostics:
+        warnings.warn(diagnostic.message, UnresolvedImportWarning, stacklevel=3)
+    return snapshot
 
 
 def retain_native_snapshot_v2(

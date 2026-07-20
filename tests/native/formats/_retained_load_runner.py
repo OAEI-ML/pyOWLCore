@@ -4,6 +4,7 @@ import gc
 import hashlib
 import json
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Any, cast
 
@@ -21,6 +22,7 @@ def main() -> None:
         ImportPolicy,
         LoadOptions,
         SnapshotInUseError,
+        UnresolvedImportWarning,
         decode_snapshot,
         encode_snapshot,
         load_snapshot,
@@ -215,6 +217,50 @@ def main() -> None:
         decode_root_canonical_bytes(auto_direct.buffers) == auto_expected_roots
     )
 
+    unresolved_source = (
+        b"Ontology(<urn:retained-unresolved-installed> "
+        b"Import(<urn:retained-unresolved-installed:missing>) "
+        b"Declaration(Class(<urn:retained-unresolved-installed:C>)))"
+    )
+
+    def unresolved_options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RECORD_UNRESOLVED,
+            backend=backend,
+            collect_provenance=True,
+        )
+
+    with warnings.catch_warnings(record=True) as reference_warnings:
+        warnings.simplefilter("always", UnresolvedImportWarning)
+        unresolved_reference = load_snapshot(
+            unresolved_source,
+            options=unresolved_options(BackendPreference.PYTHON),
+        )
+    with warnings.catch_warnings(record=True) as selected_warnings:
+        warnings.simplefilter("always", UnresolvedImportWarning)
+        unresolved_selected = load_snapshot(
+            unresolved_source,
+            options=unresolved_options(BackendPreference.NATIVE),
+        )
+    unresolved_ingestion = cast(Any, unresolved_selected)._native_ingestion_counters_v2()
+    unresolved_parity = (
+        type(unresolved_selected).__name__ == "_NativeOntologySnapshot"
+        and unresolved_selected.import_manifest == unresolved_reference.import_manifest
+        and unresolved_selected.report.diagnostics == unresolved_reference.report.diagnostics
+        and unresolved_selected.report.resolution_attempts
+        == unresolved_reference.report.resolution_attempts
+        == 1
+        and len(reference_warnings) == len(selected_warnings) == 1
+        and encode_snapshot(unresolved_selected) == encode_snapshot(unresolved_reference)
+        and unresolved_ingestion.parser_result_bytes_scanned == 0
+        and unresolved_ingestion.canonical_bytes_copied_to_python == 0
+        and unresolved_ingestion.fingerprint_preimage_bytes_materialized_in_python == 0
+    )
+    if not unresolved_parity:
+        raise AssertionError("RECORD_UNRESOLVED retained load differs from Python reference")
+    unresolved_selected.close()
+
     with tempfile.TemporaryDirectory(prefix="pyowl-core-retained-wire-") as temporary:
         path = Path(temporary) / "retained.pyocore"
         path.write_bytes(retained_wire)
@@ -332,6 +378,8 @@ def main() -> None:
                 "retained_origin_rows": retained_origin_rows,
                 "selected_closed": selected.closed,
                 "snapshot_type": type(selected).__name__,
+                "unresolved_retained_parity": unresolved_parity,
+                "unresolved_snapshot_type": type(unresolved_selected).__name__,
                 "view_features": list(extension.VIEW_FEATURES),
                 "wire_model_rows_materialized": (
                     after_wire_python.model_rows_materialized

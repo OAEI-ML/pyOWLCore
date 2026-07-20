@@ -114,6 +114,7 @@ class _Extension(Protocol):
         data: object,
         config: object,
         collect_provenance: bool,
+        record_unresolved: bool,
         cancel: _NativeCancellation | None = None,
     ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
 
@@ -309,6 +310,7 @@ def _parse_functional_retained_v2(
     limits: ParseLimits | None = None,
     allow_swrl: bool = False,
     collect_provenance: bool = True,
+    record_unresolved: bool = False,
     cancellation_token: CancellationToken | None = None,
 ) -> _NativeRetainedFunctionalParseV2:
     """Parse once and retain the parser-built structural arena when available."""
@@ -333,6 +335,8 @@ def _parse_functional_retained_v2(
         raise TypeError("allow_swrl must be bool")
     if not isinstance(collect_provenance, bool):
         raise TypeError("collect_provenance must be bool")
+    if not isinstance(record_unresolved, bool):
+        raise TypeError("record_unresolved must be bool")
     selected.enforce("max_source_bytes", len(data))
     request = (
         _PARSE_REQUEST.pack(
@@ -347,7 +351,13 @@ def _parse_functional_retained_v2(
     with _relay(extension, selected, cancellation_token) as cancel:
         result = _call_parse_value(
             extension,
-            lambda: hook(request, config, collect_provenance, cancel),
+            lambda: hook(
+                request,
+                config,
+                collect_provenance,
+                record_unresolved,
+                cancel,
+            ),
         )
     if type(result) is not tuple or len(result) != 3:
         raise BackendProtocolError(

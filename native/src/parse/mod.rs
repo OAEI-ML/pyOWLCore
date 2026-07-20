@@ -205,14 +205,20 @@ pub(crate) fn parse_retained(
     interrupt: Option<InterruptSlot>,
     input_bytes: usize,
     collect_provenance: bool,
+    record_unresolved: bool,
 ) -> NativeResult<RetainedParseOutcome> {
     let parse_started = Instant::now();
     let parsed = functional::parse_functional(request.source, request.allow_swrl, session)?;
     let syntax_parse_ns = elapsed_ns(parse_started)?;
 
-    let has_anonymous = retained::contains_anonymous(&parsed, &limits)?;
+    let import_diagnostics_exceed_publication_limit = record_unresolved
+        && u64::try_from(parsed.imports.len()).map_or(true, |count| {
+            count > limits.value(LimitKey::MaxDiagnostics) / 2
+        });
+    let requires_full_result = retained::contains_anonymous(&parsed, &limits)?
+        || import_diagnostics_exceed_publication_limit;
     let encode_started = Instant::now();
-    let (encoded, metadata, rows) = if has_anonymous {
+    let (encoded, metadata, rows) = if requires_full_result {
         let encoded = parsed.encode(session)?;
         let rows = parsed.into_structural_rows();
         (encoded, None, rows)

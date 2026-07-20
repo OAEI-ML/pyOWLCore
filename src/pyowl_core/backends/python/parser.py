@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pyowl_core.cancellation import CancellationToken
-from pyowl_core.config import BackendPreference, DocumentFormat, LoadOptions
+from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy, LoadOptions
 from pyowl_core.document import OntologyDocument
 from pyowl_core.document.document import freeze_document_anonymous, provisional_label
 from pyowl_core.document.provenance import (
@@ -166,6 +166,9 @@ class PythonParser:
             backend=selected_backend,
             retain_native_storage=retain_native_storage,
             collect_provenance=selected_options.collect_provenance,
+            record_unresolved=(
+                selected_options.imports is ImportPolicy.RECORD_UNRESOLVED
+            ),
         )
         if parsed_result.native_summary is not None:
             if (
@@ -435,6 +438,7 @@ def _parse_payload(
     backend: str,
     retain_native_storage: bool,
     collect_provenance: bool,
+    record_unresolved: bool,
 ) -> _ParsedPayloadResult:
     from pyowl_core.limits import ParseLimits
 
@@ -454,6 +458,7 @@ def _parse_payload(
                         cancellation_token=cancellation_token,
                         allow_swrl=allow_swrl,
                         collect_provenance=collect_provenance,
+                        record_unresolved=record_unresolved,
                     )
                     return _ParsedPayloadResult(
                         ontology=retained.parsed,

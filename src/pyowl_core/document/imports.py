@@ -327,10 +327,16 @@ _DEFAULT_ACQUISITION_CACHE = AcquisitionCache()
 _DEFAULT_DOCUMENT_CACHE = ParsedDocumentCache()
 
 
-def _prepare_retained_native_root(options: LoadOptions) -> bool:
+def _prepare_retained_native_root(
+    options: LoadOptions,
+    resolver: ImportResolver | None,
+) -> bool:
     return (
         options.backend in {BackendPreference.AUTO, BackendPreference.NATIVE}
-        and options.imports is ImportPolicy.IGNORE
+        and (
+            options.imports is ImportPolicy.IGNORE
+            or (options.imports is ImportPolicy.RECORD_UNRESOLVED and resolver is None)
+        )
         and not options.preserve_source_map
         and not options.validate_owl2_dl
         and options.format in {None, DocumentFormat.FUNCTIONAL}
@@ -389,7 +395,7 @@ class SnapshotLoader:
         if isinstance(source, OntologyDocument):
             root = source
             root_cache_hit = False
-        elif _prepare_retained_native_root(selected):
+        elif _prepare_retained_native_root(selected, resolver):
             from pyowl_core.backends.python.parser import _parse_document_for_retained_load
 
             parsed = _parse_document_for_retained_load(
@@ -443,6 +449,19 @@ class SnapshotLoader:
                 ImportEdge(item.importing_document_key, item.import_iri, ImportStatus.IGNORED)
                 for item in pending
             )
+            pending = []
+        elif selected.imports is ImportPolicy.RECORD_UNRESOLVED and resolver is None:
+            recorded_edges, recorded_diagnostics, resolution_attempts = (
+                _record_unresolved_without_resolver(
+                    root_node.key,
+                    root.document_iri,
+                    root.direct_imports,
+                    selected,
+                )
+            )
+            edges.extend(recorded_edges)
+            diagnostics.extend(recorded_diagnostics)
+            counters["resolver_attempts"] += resolution_attempts
             pending = []
         while pending:
             _check_operation(cancellation_token, started, selected)
@@ -826,6 +845,37 @@ def _failed_edge(
         ),
         diagnostic,
     )
+
+
+def _record_unresolved_without_resolver(
+    document_key: str,
+    document_iri: IRI | None,
+    direct_imports: tuple[IRI, ...],
+    options: LoadOptions,
+) -> tuple[tuple[ImportEdge, ...], tuple[Diagnostic, ...], int]:
+    """Build the exact single-document RECORD_UNRESOLVED result for no resolver."""
+
+    if options.imports is not ImportPolicy.RECORD_UNRESOLVED:
+        raise AssertionError("missing-resolver recording requires RECORD_UNRESOLVED")
+    pending = [
+        _Pending(document_key, document_iri, import_iri, (import_iri,), 1)
+        for import_iri in direct_imports
+    ]
+    options.limits.enforce("max_resolver_attempts", len(pending))
+    for _item in pending:
+        options.limits.enforce("max_import_depth", 1)
+    pending.sort(key=_pending_key)
+    diagnostics: list[Diagnostic] = []
+    edges: list[ImportEdge] = []
+    for item in pending:
+        edge, diagnostic = _failed_edge(
+            item,
+            ResolverOutcome.missing("none"),
+            options.imports,
+        )
+        edges.append(edge)
+        _append_diagnostic(diagnostics, diagnostic, options)
+    return tuple(edges), tuple(diagnostics), len(pending)
 
 
 def _raise_resolution(pending: _Pending, outcome: ResolverOutcome) -> None:

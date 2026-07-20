@@ -16,8 +16,11 @@ from pyowl_core import (
     DocumentFormat,
     EncodedStructuralView,
     ImportPolicy,
+    ImportStatus,
     LoadOptions,
     MappingResolver,
+    ParseLimits,
+    UnresolvedImportWarning,
     encode_snapshot,
     load_snapshot,
 )
@@ -175,6 +178,112 @@ def test_owner_first_publication_skips_eager_structural_model_decoding(
     after = cast(Any, selected)._native_python_counters()
     assert after.model_rows_materialized == 3
     assert cast(Any, selected)._native_ingestion_counters_v2() == ingestion
+
+
+def test_record_unresolved_without_resolver_keeps_owner_first_diagnostics_exact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = (
+        b"Ontology(<urn:retained-unresolved> "
+        b"Import(<https://example.test/child?secret=yes>) "
+        b"Import(<urn:retained-unresolved:other>) "
+        b"Declaration(Class(<urn:retained-unresolved:C>)))"
+    )
+    limits = ParseLimits()
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RECORD_UNRESOLVED,
+            backend=backend,
+            limits=limits,
+            collect_provenance=True,
+        )
+
+    with pytest.warns(UnresolvedImportWarning):
+        reference = load_snapshot(
+            source,
+            document_iri="urn:retained-unresolved:document",
+            options=options(BackendPreference.PYTHON),
+        )
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("record-unresolved retained load crossed the complete model decoder")
+
+    monkeypatch.setattr(native, "_decode_parsed_functional", unexpected)
+    with pytest.warns(UnresolvedImportWarning):
+        selected = load_snapshot(
+            source,
+            document_iri="urn:retained-unresolved:document",
+            options=options(BackendPreference.NATIVE),
+        )
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.report.diagnostics == reference.report.diagnostics
+    assert selected.report.resolution_attempts == reference.report.resolution_attempts == 2
+    assert len(selected.report.diagnostics) == 2
+    assert all(
+        diagnostic.code == "UNRESOLVED_IMPORT"
+        for diagnostic in selected.report.diagnostics
+    )
+    assert all(
+        edge.status is ImportStatus.UNRESOLVED for edge in selected.import_manifest.edges
+    )
+    assert all(edge.resolver_name == "none" for edge in selected.import_manifest.edges)
+    assert all(edge.diagnostic is not None for edge in selected.import_manifest.edges)
+    http_edge = next(
+        edge
+        for edge in selected.import_manifest.edges
+        if edge.import_iri.value.startswith("https:")
+    )
+    assert cast(Any, http_edge.diagnostic).details["import_iri"] == (
+        "https://example.test/child"
+    )
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+    ingestion = cast(Any, selected)._native_ingestion_counters_v2()
+    assert ingestion.parser_result_bytes_scanned == 0
+    assert ingestion.canonical_bytes_copied_to_python == 0
+    assert ingestion.fingerprint_preimage_bytes_materialized_in_python == 0
+    assert ingestion.provenance_occurrence_records_materialized == 0
+
+
+def test_record_unresolved_tight_diagnostic_limit_falls_back_before_publication() -> None:
+    source = (
+        b"Ontology(<urn:retained-unresolved-limit> "
+        b"Import(<urn:retained-unresolved-limit:a>) "
+        b"Import(<urn:retained-unresolved-limit:b>) "
+        b"Declaration(Class(<urn:retained-unresolved-limit:C>)))"
+    )
+    limits = replace(ParseLimits(), max_diagnostics=1)
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RECORD_UNRESOLVED,
+            backend=backend,
+            limits=limits,
+            collect_provenance=True,
+        )
+
+    with pytest.warns(UnresolvedImportWarning):
+        reference = load_snapshot(source, options=options(BackendPreference.PYTHON))
+    with pytest.warns(UnresolvedImportWarning):
+        selected = load_snapshot(source, options=options(BackendPreference.NATIVE))
+
+    assert type(selected).__name__ == "OntologySnapshot"
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.report.diagnostics == reference.report.diagnostics
+    assert selected.report.diagnostics[0].code == "DIAGNOSTICS_SUPPRESSED"
+    assert selected.report.diagnostics[0].details["count"] == 2
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
 
 
 def test_owner_first_fingerprint_inputs_cover_annotations_and_nested_entities(
@@ -642,6 +751,8 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["auto_parser_bytes"] == observed["auto_source_bytes"] == 262281
     assert observed["auto_direct_survives_owner_close"] is True
     assert observed["auto_closed"] is True
+    assert observed["unresolved_retained_parity"] is True
+    assert observed["unresolved_snapshot_type"] == "_NativeOntologySnapshot"
     assert observed["ingestion_features"] == []
     assert observed["view_features"] == []
     assert observed["encoded_view_schemas"] == {}
