@@ -8,10 +8,14 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 #[cfg(feature = "test-hooks")]
-use pyo3::types::PyBytes;
+use pyo3::types::{PyAny, PyBytes, PyDict, PyString};
 
 #[cfg(any(test, feature = "test-hooks"))]
 use crate::error::{NativeError, NativeResult};
+#[cfg(any(test, feature = "test-hooks"))]
+use crate::publication::TypedFacadeScopeV2;
+#[cfg(feature = "test-hooks")]
+use crate::publication::{NativeDocumentHandle, NativeSnapshotHandle};
 
 #[cfg(any(test, feature = "test-hooks"))]
 mod generated {
@@ -48,8 +52,137 @@ pub(super) const FEATURES: &[&str] = &[];
 
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "test-hooks")]
-    _module.add_function(wrap_pyfunction!(_encoded_view_schema_v1, _module)?)?;
+    {
+        _module.add_function(wrap_pyfunction!(_encoded_view_schema_v1, _module)?)?;
+        _module.add_function(wrap_pyfunction!(_encoded_structural_columns_v1, _module)?)?;
+        _module.add_function(wrap_pyfunction!(
+            _encoded_structural_document_columns_v1,
+            _module
+        )?)?;
+    }
     Ok(())
+}
+
+/// Exercise raw document-owner selection without relaxing the snapshot hook's
+/// effective-scope semantics.
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, config, cancel=None))]
+fn _encoded_structural_document_columns_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeDocumentHandle>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
+    let limits = crate::limits_from_python(config)?;
+    let cancellation = crate::cancellation_or_default(cancel);
+    let document_ordinal = handle.document_ordinal();
+    let storage = handle.encoded_storage_v2(py)?;
+    drop(handle);
+    let columns = crate::run_detached(py, move |interrupt| {
+        storage.encoded_structural_columns(
+            TypedFacadeScopeV2::Document,
+            Some(document_ordinal),
+            true,
+            &limits,
+            cancellation,
+            Some(interrupt),
+        )
+    })?;
+    encoded_columns_to_python(py, &columns)
+}
+
+/// Exercise the direct retained-column path through an open V2 snapshot
+/// owner. This remains a test hook until the installed-wheel lifetime/copy
+/// matrix permits advertising the frozen view capability.
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, cancel=None))]
+fn _encoded_structural_columns_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
+    if !scope.get_type().is(py.get_type::<PyString>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "encoded structural scope must be an exact str",
+        ));
+    }
+    let scope: String = scope.extract()?;
+    let selected_scope = encoded_selection(&scope, document_ordinal)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let limits = crate::limits_from_python(config)?;
+    let cancellation = crate::cancellation_or_default(cancel);
+    let storage = handle.encoded_storage_v2(py)?;
+    drop(handle);
+    let columns = crate::run_detached(py, move |interrupt| {
+        storage.encoded_structural_columns(
+            selected_scope,
+            document_ordinal,
+            false,
+            &limits,
+            cancellation,
+            Some(interrupt),
+        )
+    })?;
+    encoded_columns_to_python(py, &columns)
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+fn encoded_selection(
+    scope: &str,
+    document_ordinal: Option<u64>,
+) -> Result<TypedFacadeScopeV2, &'static str> {
+    match scope {
+        "closure" if document_ordinal.is_none() => Ok(TypedFacadeScopeV2::Closure),
+        "document" if document_ordinal.is_some() => Ok(TypedFacadeScopeV2::Document),
+        "closure" | "document" => Err("encoded structural scope and document ordinal disagree"),
+        _ => Err("encoded structural scope must be closure or document"),
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+fn encoded_columns_to_python(
+    py: Python<'_>,
+    columns: &crate::model::EncodedStructuralColumnsV1,
+) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
+    let buffers = PyDict::new(py);
+    for (name, payload) in columns.buffers().named() {
+        buffers.set_item(name, PyBytes::new(py, payload))?;
+    }
+    let counters = columns.counters();
+    let observed = PyDict::new(py);
+    for (name, value) in [
+        ("root_rows", counters.root_rows),
+        ("node_rows", counters.node_rows),
+        ("field_rows", counters.field_rows),
+        ("item_rows", counters.item_rows),
+        ("scalar_bytes", counters.scalar_bytes),
+        ("retained_buffer_bytes", counters.retained_buffer_bytes),
+        ("retained_metadata_bytes", counters.retained_metadata_bytes),
+        ("peak_owned_bytes", counters.peak_owned_bytes),
+        ("peak_workspace_bytes", counters.peak_workspace_bytes),
+        ("scalar_copy_bytes", counters.scalar_copy_bytes),
+        ("canonical_work", counters.canonical_work),
+        (
+            "canonical_comparison_bytes",
+            counters.canonical_comparison_bytes,
+        ),
+        (
+            "complete_root_encode_calls",
+            counters.complete_root_encode_calls,
+        ),
+        // The pre-advertisement PyO3 observation bridge freezes each Rust
+        // buffer into Python bytes. Keep that copy visible and distinct from
+        // construction counters until the owning buffer surface replaces it.
+        ("python_bridge_copy_bytes", counters.retained_buffer_bytes),
+    ] {
+        observed.set_item(name, value)?;
+    }
+    Ok((buffers.unbind(), observed.unbind()))
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -157,5 +290,20 @@ mod tests {
         )
         .is_err());
         assert!(registered_schema(schema.name, schema.version, schema.model_schema, &[]).is_err());
+    }
+
+    #[test]
+    fn direct_column_selection_requires_exact_scope_coordinates() {
+        assert_eq!(
+            encoded_selection("closure", None),
+            Ok(TypedFacadeScopeV2::Closure)
+        );
+        assert_eq!(
+            encoded_selection("document", Some(0)),
+            Ok(TypedFacadeScopeV2::Document)
+        );
+        assert!(encoded_selection("closure", Some(0)).is_err());
+        assert!(encoded_selection("document", None).is_err());
+        assert!(encoded_selection("root", None).is_err());
     }
 }
