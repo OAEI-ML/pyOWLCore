@@ -6173,6 +6173,7 @@ def native_snapshot_publication_attestation_v2(
         diagnostics,
         report,
         capability_bits,
+        allow_auto_backend=True,
     )
     diagnostic_reference_kinds_sha256 = _diagnostic_reference_kinds_sha256_v2(
         diagnostic_reference_sidecars,

@@ -329,7 +329,7 @@ _DEFAULT_DOCUMENT_CACHE = ParsedDocumentCache()
 
 def _prepare_retained_native_root(options: LoadOptions) -> bool:
     return (
-        options.backend is BackendPreference.NATIVE
+        options.backend in {BackendPreference.AUTO, BackendPreference.NATIVE}
         and options.imports is ImportPolicy.IGNORE
         and not options.preserve_source_map
         and not options.validate_owl2_dl
@@ -552,10 +552,10 @@ class SnapshotLoader:
             acquisition_cache_hits=counters["acquisition_cache_hits"],
             document_cache_hits=counters["document_cache_hits"],
         )
-        if selected.backend is BackendPreference.NATIVE:
-            from pyowl_core.backends.native_ingestion import retain_forced_native_snapshot_v2
+        if selected.backend is BackendPreference.NATIVE or native_storage is not None:
+            from pyowl_core.backends.native_ingestion import retain_native_snapshot_v2
 
-            snapshot = retain_forced_native_snapshot_v2(
+            snapshot = retain_native_snapshot_v2(
                 snapshot,
                 cancellation_token=cancellation_token,
                 parsed_native_storage=native_storage,

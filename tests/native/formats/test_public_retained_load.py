@@ -32,6 +32,11 @@ SOURCE = (
     b"Declaration(Class(<urn:retained-load:D>)) "
     b"SubClassOf(<urn:retained-load:C> <urn:retained-load:D>))"
 )
+AUTO_SOURCE = (
+    b"Ontology(<urn:retained-auto> Import(<urn:retained-auto:ignored>) "
+    + (b" " * (256 * 1024))
+    + b"Declaration(Class(<urn:retained-auto:C>)))"
+)
 ROOT = Path(__file__).parents[3]
 RUNNER = Path(__file__).with_name("_retained_load_runner.py")
 
@@ -267,6 +272,71 @@ def test_provenance_disabled_load_retains_parser_arena_without_origin_capability
     assert counters.retained_origin_rows == 0
     assert counters.retained_origin_bytes == 0
     assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_small_auto_load_stays_python_selected_without_retained_native_parse(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    calls = 0
+
+    def unexpected(*_arguments: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("small AUTO load crossed the retained native parser")
+
+    monkeypatch.setattr(cast(Any, extension), "_parse_functional_retained_v2", unexpected)
+    selected = load_snapshot(SOURCE, options=_options(BackendPreference.AUTO))
+
+    assert selected.capabilities.backend == "python"
+    assert type(selected).__name__ == "OntologySnapshot"
+    assert calls == 0
+
+
+def test_large_auto_load_retains_parser_arena_with_ignored_import_metadata(
+    extension: NativeTestExtension,
+) -> None:
+    assert len(AUTO_SOURCE) > 256 * 1024
+    reference = load_snapshot(AUTO_SOURCE, options=_options(BackendPreference.PYTHON))
+    selected = load_snapshot(AUTO_SOURCE, options=_options(BackendPreference.AUTO))
+
+    assert selected.capabilities.backend == "native"
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.import_manifest == reference.import_manifest
+    assert len(selected.import_manifest.edges) == 1
+    assert selected.import_manifest.edges[0].status.value == "ignored"
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
+    before_native = cast(Any, raw_owner)._publication_counters_v2()
+    before_python = cast(Any, selected)._native_python_counters()
+    direct = selected.view(EncodedStructuralView)
+    after_direct_native = cast(Any, raw_owner)._publication_counters_v2()
+    after_direct_python = cast(Any, selected)._native_python_counters()
+    expected_roots = tuple((2, canonical_bytes(value)) for value in reference.iter_axioms())
+
+    assert before_native.parser_bytes == len(AUTO_SOURCE)
+    assert direct.owner is selected
+    assert decode_root_canonical_bytes(direct.buffers) == expected_roots
+    assert len({id(value.obj) for value in direct.buffers.values()}) == 1
+    assert after_direct_native.page_requests == before_native.page_requests
+    assert after_direct_native.rows_emitted == before_native.rows_emitted
+    assert after_direct_python.model_rows_materialized == before_python.model_rows_materialized
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    after_wire_python = cast(Any, selected)._native_python_counters()
+    assert after_wire_python.model_rows_materialized == before_python.model_rows_materialized
+    assert extension.INGESTION_FEATURES == ()
+    assert extension.VIEW_FEATURES == ()
+    assert not selected.capabilities.encoded_view_schemas
+
+    selected.close()
+    assert selected.closed
+    assert decode_root_canonical_bytes(direct.buffers) == expected_roots
 
 
 def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_construction(

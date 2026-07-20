@@ -38,24 +38,25 @@ def require_ingestion_binding(capability: str) -> NativeIngestionExtension:
     return cast(NativeIngestionExtension, extension)
 
 
-def retain_forced_native_snapshot_v2(
+def retain_native_snapshot_v2(
     snapshot: OntologySnapshot,
     *,
     cancellation_token: CancellationToken | None = None,
     parsed_native_storage: object | None = None,
 ) -> OntologySnapshot:
-    """Promote one narrowly eligible forced-native load into the typed V2 owner.
+    """Promote one narrowly eligible native parse into the typed V2 owner.
 
     The bridge remains deliberately unadvertised while WP16's complete
-    format/import/source-map matrix is unfinished.  An ineligible load stays on
+    format/import/source-map matrix is unfinished. An ineligible load stays on
     its existing Python storage before owner publication; an eligible load
-    either publishes the retained owner or fails without fallback.
+    selected explicitly or by the existing AUTO policy either publishes the
+    retained owner or fails without fallback.
     """
 
     from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy
 
     if (
-        snapshot.load_options.backend is not BackendPreference.NATIVE
+        snapshot.load_options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
         or len(snapshot.documents) != 1
         or snapshot.load_options.imports is not ImportPolicy.IGNORE
         or snapshot.root.provenance.backend != "native"
@@ -67,6 +68,8 @@ def retain_forced_native_snapshot_v2(
         return snapshot
     extension = native.require("parse-functional-v1")
     if parsed_native_storage is None:
+        if snapshot.load_options.backend is BackendPreference.AUTO:
+            return snapshot
         if not snapshot.load_options.collect_provenance:
             return snapshot
         hook = getattr(extension, "_retain_structural_snapshot_v2", None)

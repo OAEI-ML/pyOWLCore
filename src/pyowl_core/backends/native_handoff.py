@@ -1416,9 +1416,20 @@ def _validate_publication_alignment(
     diagnostics: tuple[NativeDiagnosticPublicationV1, ...],
     report: NativeLoadReportPublicationV1,
     capability_bits: int,
+    *,
+    allow_auto_backend: bool = False,
 ) -> None:
-    if options.backend is not BackendPreference.NATIVE:
+    if options.backend is not BackendPreference.NATIVE and not (
+        allow_auto_backend and options.backend is BackendPreference.AUTO
+    ):
         _fail("retained publication requires forced native backend", "NATIVE_PUBLICATION_OPTIONS")
+    if options.backend is BackendPreference.AUTO and any(
+        document.provenance.backend != "native" for document in documents
+    ):
+        _fail(
+            "AUTO retained publication requires native parser provenance",
+            "NATIVE_PUBLICATION_OPTIONS",
+        )
     if len(documents) > min(options.limits.max_documents, _bound("max_documents")):
         _fail("native publication exceeds document limit", "NATIVE_PUBLICATION_LIMIT")
     if len(manifest.edges) > min(options.limits.max_axioms, _bound("max_import_edges")):

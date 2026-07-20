@@ -154,6 +154,56 @@ def main() -> None:
     if not without_provenance_parity:
         raise AssertionError("provenance-disabled retained load differs from Python reference")
 
+    auto_source = (
+        b"Ontology(<urn:retained-auto-installed> "
+        b"Import(<urn:retained-auto-installed:ignored>) "
+        + (b" " * (256 * 1024))
+        + b"Declaration(Class(<urn:retained-auto-installed:C>)))"
+    )
+    auto_reference = load_snapshot(auto_source, options=options(BackendPreference.PYTHON))
+    auto_selected = load_snapshot(auto_source, options=options(BackendPreference.AUTO))
+    auto_handle = cast(Any, auto_selected)._native_snapshot_state.owner.handle
+    auto_owner = object.__getattribute__(auto_handle, "_owner_v2")
+    auto_before_native = auto_owner._publication_counters_v2()
+    auto_before_python = cast(Any, auto_selected)._native_python_counters()
+    auto_direct = auto_selected.view(EncodedStructuralView)
+    auto_after_direct_native = auto_owner._publication_counters_v2()
+    auto_after_direct_python = cast(Any, auto_selected)._native_python_counters()
+    auto_expected_roots = tuple(
+        (2, canonical_bytes(value)) for value in auto_reference.iter_axioms()
+    )
+    auto_wire = encode_snapshot(auto_selected)
+    auto_reference_wire = encode_snapshot(auto_reference)
+    auto_after_wire_python = cast(Any, auto_selected)._native_python_counters()
+    auto_parity = (
+        type(auto_owner) is cast(Any, extension)._NativeSnapshotHandle
+        and auto_selected.capabilities.backend == "native"
+        and auto_selected.structural_fingerprint == auto_reference.structural_fingerprint
+        and auto_selected.logical_fingerprint == auto_reference.logical_fingerprint
+        and auto_selected.signature_fingerprint == auto_reference.signature_fingerprint
+        and auto_selected.origin_index == auto_reference.origin_index
+        and auto_selected.import_manifest == auto_reference.import_manifest
+        and len(auto_selected.import_manifest.edges) == 1
+        and auto_selected.import_manifest.edges[0].status.value == "ignored"
+        and auto_before_native.parser_bytes == len(auto_source)
+        and auto_direct.owner is auto_selected
+        and decode_root_canonical_bytes(auto_direct.buffers) == auto_expected_roots
+        and len({id(value.obj) for value in auto_direct.buffers.values()}) == 1
+        and auto_after_direct_native.page_requests == auto_before_native.page_requests
+        and auto_after_direct_native.rows_emitted == auto_before_native.rows_emitted
+        and auto_after_direct_python.model_rows_materialized
+        == auto_before_python.model_rows_materialized
+        and auto_after_wire_python.model_rows_materialized
+        == auto_before_python.model_rows_materialized
+        and auto_wire == auto_reference_wire
+    )
+    if not auto_parity:
+        raise AssertionError("AUTO-selected retained load differs from Python reference")
+    auto_selected.close()
+    auto_direct_survives_owner_close = (
+        decode_root_canonical_bytes(auto_direct.buffers) == auto_expected_roots
+    )
+
     with tempfile.TemporaryDirectory(prefix="pyowl-core-retained-wire-") as temporary:
         path = Path(temporary) / "retained.pyocore"
         path.write_bytes(retained_wire)
@@ -192,6 +242,15 @@ def main() -> None:
     print(
         json.dumps(
             {
+                "auto_backend": auto_selected.capabilities.backend,
+                "auto_closed": auto_selected.closed,
+                "auto_direct_survives_owner_close": auto_direct_survives_owner_close,
+                "auto_ignored_manifest_parity": (
+                    auto_selected.import_manifest == auto_reference.import_manifest
+                ),
+                "auto_parser_bytes": auto_before_native.parser_bytes,
+                "auto_retained_parity": auto_parity,
+                "auto_source_bytes": len(auto_source),
                 "backend": selected.capabilities.backend,
                 "decoded_parity": decoded_parity,
                 "direct_encoded_view_requests": (

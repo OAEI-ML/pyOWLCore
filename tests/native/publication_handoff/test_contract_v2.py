@@ -52,6 +52,7 @@ from pyowl_core.backends.native_handoff_v2 import (
     freeze_native_snapshot_publication_v2,
     require_native_facade_publication_v2,
 )
+from pyowl_core.config import BackendPreference, LoadOptions
 from pyowl_core.diagnostics import SourceSpan
 from pyowl_core.document.document import Fingerprint, OntologyID
 from pyowl_core.exceptions import BackendProtocolError, ClosedSnapshotError
@@ -132,6 +133,27 @@ def test_v2_publication_is_exact_frozen_and_binds_all_amended_semantics() -> Non
     assert copy.deepcopy(value.handle) is value.handle
     with pytest.raises(TypeError, match="cannot be pickled"):
         pickle.dumps(value.handle)
+
+
+def test_v2_auto_publication_requires_native_parser_provenance() -> None:
+    values = publication_fields()
+    options = cast(LoadOptions, values["load_options"])
+    values["load_options"] = replace(options, backend=BackendPreference.AUTO)
+
+    selected = publication(values=values)
+    assert selected.load_options.backend is BackendPreference.AUTO
+    assert selected.documents[0].provenance.backend == "native"
+
+    documents = cast(tuple[NativeDocumentPublicationV1, ...], values["documents"])
+    values["documents"] = (
+        replace(
+            documents[0],
+            provenance=replace(documents[0].provenance, backend="python"),
+        ),
+    )
+    with pytest.raises(BackendProtocolError) as raised:
+        publication(values=values)
+    assert raised.value.code == "NATIVE_PUBLICATION_OPTIONS"
 
 
 def test_facade_dispatch_requires_v2_and_marks_v1_legacy() -> None:
