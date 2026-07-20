@@ -1223,8 +1223,10 @@ fn map_graph(
     let list_graph = list_graph_view(&triples, session)?;
     let mut expressions = RdfClassExpressionDecoder::new(&list_graph);
     for kind in &kinds {
-        if kind.kind == "data_property" {
-            expressions.register_data_property(kind.iri, session)?;
+        match kind.kind {
+            "data_property" => expressions.register_data_property(kind.iri, session)?,
+            "datatype" => expressions.register_datatype(kind.iri, session)?,
+            _ => {}
         }
     }
     map_equivalent_class_components(
@@ -3015,9 +3017,39 @@ mod tests {
         let declared_data = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:DatatypeProperty rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:allValuesFrom rdf:resource=\"urn:B\"/></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
         );
+        let declared_data =
+            mapped(declared_data.as_bytes(), None).expect("quantified data restriction");
+        let restriction = Node::build(
+            42,
+            vec![
+                Field::Sequence(vec![entity(
+                    "data_property",
+                    iri("urn:p".to_owned()).expect("property IRI"),
+                )
+                .expect("data property")]),
+                Field::Node(
+                    entity("datatype", iri("urn:B".to_owned()).expect("datatype IRI"))
+                        .expect("datatype"),
+                ),
+            ],
+        )
+        .expect("data restriction node");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(declared_data
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
         assert_eq!(
-            mapped(declared_data.as_bytes(), None).unwrap_err().code,
-            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            declared_data.mapping.total_triples,
+            declared_data.mapping.consumed_triples,
         );
     }
 
@@ -3192,9 +3224,46 @@ mod tests {
             "<rdf:Description rdf:about=\"urn:A\">",
             "<owl:DatatypeProperty rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:A\">",
         );
+        let data_property =
+            mapped(data_property.as_bytes(), None).expect("unqualified data cardinality");
+        let restriction = Node::build(
+            44,
+            vec![
+                Field::Integer("2".to_owned()),
+                Field::Node(
+                    entity(
+                        "data_property",
+                        iri("urn:p".to_owned()).expect("property IRI"),
+                    )
+                    .expect("data property"),
+                ),
+                Field::Node(
+                    entity(
+                        "datatype",
+                        iri("http://www.w3.org/2000/01/rdf-schema#Literal".to_owned())
+                            .expect("datatype IRI"),
+                    )
+                    .expect("datatype"),
+                ),
+            ],
+        )
+        .expect("data cardinality node");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(data_property
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
         assert_eq!(
-            mapped(data_property.as_bytes(), None).unwrap_err().code,
-            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            data_property.mapping.total_triples,
+            data_property.mapping.consumed_triples,
         );
     }
 

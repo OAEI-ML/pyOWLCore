@@ -27,6 +27,7 @@ const OWL_ON_CLASS: &str = "http://www.w3.org/2002/07/owl#onClass";
 const OWL_ON_DATA_RANGE: &str = "http://www.w3.org/2002/07/owl#onDataRange";
 const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
 const OWL_UNION_OF: &str = "http://www.w3.org/2002/07/owl#unionOf";
+const RDFS_LITERAL: &str = "http://www.w3.org/2000/01/rdf-schema#Literal";
 
 const ROLE_EXPRESSION: u8 = 1;
 const ROLE_LIST: u8 = 2;
@@ -46,6 +47,7 @@ pub(crate) struct RdfClassExpressionDecoder<'graph, 'data> {
     active: Vec<&'data str>,
     blank_roles: Vec<BlankRole<'data>>,
     data_properties: Vec<&'data str>,
+    datatypes: Vec<&'data str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,6 +102,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             active: Vec::new(),
             blank_roles: Vec::new(),
             data_properties: Vec::new(),
+            datatypes: Vec::new(),
         }
     }
 
@@ -108,15 +111,15 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         value: &'data str,
         session: &mut Session<'_>,
     ) -> NativeResult<()> {
-        session.step(usize_as_u64(
-            self.data_properties.len(),
-            "native RDF property-kind work exceeds u64",
-        )?)?;
-        if !self.data_properties.contains(&value) {
-            reserve_item(&mut self.data_properties, session)?;
-            self.data_properties.push(value);
-        }
-        Ok(())
+        register_kind_value(&mut self.data_properties, value, session)
+    }
+
+    pub(crate) fn register_datatype(
+        &mut self,
+        value: &'data str,
+        session: &mut Session<'_>,
+    ) -> NativeResult<()> {
+        register_kind_value(&mut self.datatypes, value, session)
     }
 
     pub(crate) fn decode_term(
@@ -129,6 +132,45 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         consumed.sort_unstable();
         consumed.dedup();
         Ok(DecodedClassExpression { node, consumed })
+    }
+
+    fn decode_data_range(
+        &mut self,
+        value: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        match value {
+            RdfTerm::Iri(value) => named_entity("datatype", value, session),
+            RdfTerm::Blank(_) => Err(unsupported(
+                "native bounded RDF data restriction requires a named datatype filler",
+            )),
+            RdfTerm::Literal(_) => Err(unsupported(
+                "native RDF data restriction filler cannot be a literal",
+            )),
+        }
+    }
+
+    fn restriction_uses_data_range(
+        &self,
+        property: &str,
+        filler: RdfTerm<'data>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<bool> {
+        session.step(usize_as_u64(
+            self.data_properties.len(),
+            "native RDF property-kind work exceeds u64",
+        )?)?;
+        if self.data_properties.contains(&property) {
+            return Ok(true);
+        }
+        session.step(usize_as_u64(
+            self.datatypes.len(),
+            "native RDF datatype-kind work exceeds u64",
+        )?)?;
+        Ok(matches!(
+            filler,
+            RdfTerm::Iri(value) if self.datatypes.contains(&value)
+        ))
     }
 
     fn decode_into(
@@ -415,21 +457,25 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         push_index(consumed, on_property, session)?;
         match operator {
             RestrictionOperator::Quantified { index, tag } => {
-                session.step(usize_as_u64(
-                    self.data_properties.len(),
-                    "native RDF property-kind work exceeds u64",
-                )?)?;
-                if self.data_properties.contains(&property_iri) {
-                    return Err(unsupported(
-                        "native bounded RDF restriction does not map data properties",
-                    ));
-                }
                 push_index(consumed, index, session)?;
-                let filler = self.decode_into(self.triples[index].object, consumed, session)?;
-                let property = named_entity("object_property", property_iri, session)?;
-                let fields =
-                    reserved_fields([Field::Node(property), Field::Node(filler)], session)?;
-                Node::build(tag, fields)
+                let filler_term = self.triples[index].object;
+                if self.restriction_uses_data_range(property_iri, filler_term, session)? {
+                    let property = named_entity("data_property", property_iri, session)?;
+                    let mut properties = reserved_vec(1, session)?;
+                    properties.push(property);
+                    let filler = self.decode_data_range(filler_term, session)?;
+                    let fields = reserved_fields(
+                        [Field::Sequence(properties), Field::Node(filler)],
+                        session,
+                    )?;
+                    Node::build(if tag == 34 { 41 } else { 42 }, fields)
+                } else {
+                    let filler = self.decode_into(filler_term, consumed, session)?;
+                    let property = named_entity("object_property", property_iri, session)?;
+                    let fields =
+                        reserved_fields([Field::Node(property), Field::Node(filler)], session)?;
+                    Node::build(tag, fields)
+                }
             }
             RestrictionOperator::HasValue { index } => {
                 push_index(consumed, index, session)?;
@@ -455,7 +501,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 index,
                 tag,
                 qualified,
-            } => self.decode_object_cardinality(
+            } => self.decode_cardinality(
                 subject,
                 property_iri,
                 index,
@@ -468,7 +514,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn decode_object_cardinality(
+    fn decode_cardinality(
         &mut self,
         subject: &'data str,
         property_iri: &'data str,
@@ -481,46 +527,67 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         let cardinality = nonnegative_integer(self.triples[cardinality_index].object, session)?;
         let on_class = self.unique_edge(subject, OWL_ON_CLASS, session)?;
         let on_data = self.unique_edge(subject, OWL_ON_DATA_RANGE, session)?;
-        let filler_index = if qualified {
+        session.step(usize_as_u64(
+            self.data_properties.len(),
+            "native RDF property-kind work exceeds u64",
+        )?)?;
+        let declared_data = self.data_properties.contains(&property_iri);
+        let (filler_index, data_cardinality) = if qualified {
             match (on_class, on_data) {
-                (Some(index), None) => Some(index),
-                (None, Some(_)) => {
-                    return Err(unsupported(
-                        "native bounded RDF restriction does not map data cardinalities",
-                    ));
-                }
+                (Some(index), None) => (Some(index), false),
+                (None, Some(index)) => (Some(index), true),
                 (Some(_), Some(_)) | (None, None) => {
                     return Err(unsupported(
-                        "native qualified RDF cardinality requires one class filler",
+                        "native qualified RDF cardinality requires one qualified filler",
                     ));
                 }
             }
         } else {
-            if on_data.is_some() {
+            if on_class.is_some() && (on_data.is_some() || declared_data) {
                 return Err(unsupported(
-                    "native bounded RDF restriction does not map data cardinalities",
+                    "native RDF cardinality has conflicting object and data selectors",
                 ));
             }
-            session.step(usize_as_u64(
-                self.data_properties.len(),
-                "native RDF property-kind work exceeds u64",
-            )?)?;
-            if self.data_properties.contains(&property_iri) {
-                return Err(unsupported(
-                    "native bounded RDF restriction does not map data cardinalities",
-                ));
+            match (on_class, on_data) {
+                (Some(index), None) => (Some(index), false),
+                (None, Some(index)) => (Some(index), true),
+                (None, None) => (None, declared_data),
+                (Some(_), Some(_)) => {
+                    return Err(unsupported(
+                        "native RDF cardinality has conflicting qualified fillers",
+                    ));
+                }
             }
-            on_class
         };
 
         push_index(consumed, cardinality_index, session)?;
-        let filler = if let Some(index) = filler_index {
+        let filler_term = filler_index.map(|index| self.triples[index].object);
+        if let Some(index) = filler_index {
             push_index(consumed, index, session)?;
-            self.decode_into(self.triples[index].object, consumed, session)?
+        }
+        let (property, filler, tag) = if data_cardinality {
+            let filler = if let Some(value) = filler_term {
+                self.decode_data_range(value, session)?
+            } else {
+                named_entity("datatype", RDFS_LITERAL, session)?
+            };
+            (
+                named_entity("data_property", property_iri, session)?,
+                filler,
+                tag + 6,
+            )
         } else {
-            named_class(OWL_THING, session)?
+            let filler = if let Some(value) = filler_term {
+                self.decode_into(value, consumed, session)?
+            } else {
+                named_class(OWL_THING, session)?
+            };
+            (
+                named_entity("object_property", property_iri, session)?,
+                filler,
+                tag,
+            )
         };
-        let property = named_entity("object_property", property_iri, session)?;
         let fields = reserved_fields(
             [
                 Field::Integer(cardinality),
@@ -738,6 +805,22 @@ fn reserve_item<T>(values: &mut Vec<T>, session: &mut Session<'_>) -> NativeResu
     Ok(())
 }
 
+fn register_kind_value<'data>(
+    values: &mut Vec<&'data str>,
+    value: &'data str,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session.step(usize_as_u64(
+        values.len(),
+        "native RDF entity-kind work exceeds u64",
+    )?)?;
+    if !values.contains(&value) {
+        reserve_item(values, session)?;
+        values.push(value);
+    }
+    Ok(())
+}
+
 fn usize_as_u64(value: usize, message: &'static str) -> NativeResult<u64> {
     u64::try_from(value).map_err(|_| NativeError::limit(message))
 }
@@ -777,6 +860,15 @@ mod tests {
         graph: &[RdfTriple<'static>],
         value: RdfTerm<'static>,
     ) -> NativeResult<DecodedClassExpression> {
+        decode_with_kinds(graph, value, &[], &[])
+    }
+
+    fn decode_with_kinds(
+        graph: &[RdfTriple<'static>],
+        value: RdfTerm<'static>,
+        data_properties: &[&'static str],
+        datatypes: &[&'static str],
+    ) -> NativeResult<DecodedClassExpression> {
         let limits = Limits::default();
         let mut guard = Guard::new(
             Cancellation::with_duration(None),
@@ -784,7 +876,14 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0)?;
-        RdfClassExpressionDecoder::new(graph).decode_term(value, &mut session)
+        let mut decoder = RdfClassExpressionDecoder::new(graph);
+        for property in data_properties {
+            decoder.register_data_property(property, &mut session)?;
+        }
+        for datatype in datatypes {
+            decoder.register_datatype(datatype, &mut session)?;
+        }
+        decoder.decode_term(value, &mut session)
     }
 
     #[test]
@@ -969,53 +1068,109 @@ mod tests {
     }
 
     #[test]
-    fn declared_data_property_is_not_misclassified_as_object_restriction() {
+    fn quantified_data_restrictions_follow_property_and_datatype_kinds() {
         let graph = [
             edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
             edge("e", OWL_ON_PROPERTY, iri_term("urn:data")),
             edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:Filler")),
         ];
-        let limits = Limits::default();
-        let mut guard = Guard::new(
-            Cancellation::with_duration(None),
-            limits.deadline,
-            limits.cancellation_stride,
-        );
-        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut decoder = RdfClassExpressionDecoder::new(&graph);
-        decoder
-            .register_data_property("urn:data", &mut session)
-            .expect("data property kind");
-        assert_eq!(
-            decoder
-                .decode_term(blank_term("e"), &mut session)
-                .unwrap_err()
-                .code,
-            "NATIVE_RDF_MAPPING_UNSUPPORTED",
-        );
+        let decoded = decode_with_kinds(&graph, blank_term("e"), &["urn:data"], &[])
+            .expect("data-property restriction");
+        let expected = Node::build(
+            41,
+            vec![
+                Field::Sequence(vec![entity(
+                    "data_property",
+                    iri("urn:data".to_owned()).unwrap(),
+                )
+                .unwrap()]),
+                Field::Node(entity("datatype", iri("urn:Filler".to_owned()).unwrap()).unwrap()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+        assert_eq!(decoded.consumed, [0, 1, 2]);
+
+        let datatype_graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:inferred-data")),
+            edge("e", OWL_ALL_VALUES_FROM, iri_term("urn:Datatype")),
+        ];
+        let decoded = decode_with_kinds(&datatype_graph, blank_term("e"), &[], &["urn:Datatype"])
+            .expect("datatype-filler restriction");
+        let expected = Node::build(
+            42,
+            vec![
+                Field::Sequence(vec![entity(
+                    "data_property",
+                    iri("urn:inferred-data".to_owned()).unwrap(),
+                )
+                .unwrap()]),
+                Field::Node(entity("datatype", iri("urn:Datatype".to_owned()).unwrap()).unwrap()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+        assert_eq!(decoded.consumed, [0, 1, 2]);
     }
 
     #[test]
-    fn declared_data_property_is_not_misclassified_as_object_cardinality() {
+    fn data_cardinalities_map_declared_properties_and_on_data_range() {
         let graph = [
             edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
             edge("e", OWL_ON_PROPERTY, iri_term("urn:data")),
             edge("e", OWL_MIN_CARDINALITY, RdfTerm::Literal("1")),
         ];
-        let limits = Limits::default();
-        let mut guard = Guard::new(
-            Cancellation::with_duration(None),
-            limits.deadline,
-            limits.cancellation_stride,
-        );
-        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut decoder = RdfClassExpressionDecoder::new(&graph);
-        decoder
-            .register_data_property("urn:data", &mut session)
-            .expect("data property kind");
+        let decoded = decode_with_kinds(&graph, blank_term("e"), &["urn:data"], &[])
+            .expect("unqualified data cardinality");
+        let expected = Node::build(
+            44,
+            vec![
+                Field::Integer("1".to_owned()),
+                Field::Node(entity("data_property", iri("urn:data".to_owned()).unwrap()).unwrap()),
+                Field::Node(entity("datatype", iri(RDFS_LITERAL.to_owned()).unwrap()).unwrap()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+        assert_eq!(decoded.consumed, [0, 1, 2]);
+
+        for (predicate, tag, cardinality) in [
+            (OWL_MAX_QUALIFIED_CARDINALITY, 45, "2"),
+            (OWL_QUALIFIED_CARDINALITY, 46, "3"),
+        ] {
+            let qualified = [
+                edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+                edge("e", OWL_ON_PROPERTY, iri_term("urn:data")),
+                edge("e", predicate, RdfTerm::Literal(cardinality)),
+                edge("e", OWL_ON_DATA_RANGE, iri_term("urn:Datatype")),
+            ];
+            let decoded = decode(&qualified, blank_term("e")).expect("qualified data cardinality");
+            let expected = Node::build(
+                tag,
+                vec![
+                    Field::Integer(cardinality.to_owned()),
+                    Field::Node(
+                        entity("data_property", iri("urn:data".to_owned()).unwrap()).unwrap(),
+                    ),
+                    Field::Node(
+                        entity("datatype", iri("urn:Datatype".to_owned()).unwrap()).unwrap(),
+                    ),
+                ],
+            )
+            .unwrap();
+            assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+            assert_eq!(decoded.consumed, [0, 1, 2, 3]);
+        }
+
+        let conflicting_kind = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:data")),
+            edge("e", OWL_CARDINALITY, RdfTerm::Literal("1")),
+            edge("e", OWL_ON_CLASS, iri_term("urn:Class")),
+        ];
         assert_eq!(
-            decoder
-                .decode_term(blank_term("e"), &mut session)
+            decode_with_kinds(&conflicting_kind, blank_term("e"), &["urn:data"], &[],)
                 .unwrap_err()
                 .code,
             "NATIVE_RDF_MAPPING_UNSUPPORTED",
@@ -1094,12 +1249,6 @@ mod tests {
             edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
             edge("e", OWL_MIN_QUALIFIED_CARDINALITY, RdfTerm::Literal("1")),
         ];
-        let qualified_data_filler = [
-            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
-            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
-            edge("e", OWL_MAX_QUALIFIED_CARDINALITY, RdfTerm::Literal("1")),
-            edge("e", OWL_ON_DATA_RANGE, iri_term("urn:datatype")),
-        ];
         let qualified_conflicting_fillers = [
             edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
             edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
@@ -1122,7 +1271,6 @@ mod tests {
             (nonliteral_cardinality.as_slice(), blank_term("e")),
             (negative_cardinality.as_slice(), blank_term("e")),
             (qualified_without_filler.as_slice(), blank_term("e")),
-            (qualified_data_filler.as_slice(), blank_term("e")),
             (qualified_conflicting_fillers.as_slice(), blank_term("e")),
             (&[][..], RdfTerm::Literal("not-a-class")),
         ] {
