@@ -12,6 +12,7 @@ const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
 const OWL_COMPLEMENT_OF: &str = "http://www.w3.org/2002/07/owl#complementOf";
 const OWL_DATATYPE_COMPLEMENT_OF: &str = "http://www.w3.org/2002/07/owl#datatypeComplementOf";
 const OWL_INTERSECTION_OF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
+const OWL_INVERSE_OF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
 const OWL_ONE_OF: &str = "http://www.w3.org/2002/07/owl#oneOf";
 const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
 const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
@@ -40,6 +41,7 @@ const ROLE_EXPRESSION: u8 = 1;
 const ROLE_LIST: u8 = 2;
 const ROLE_INDIVIDUAL: u8 = 4;
 const ROLE_FACET: u8 = 8;
+const ROLE_PROPERTY: u8 = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedClassExpression {
@@ -501,7 +503,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
 
     fn restriction_uses_data_range(
         &self,
-        property: &str,
+        property: Option<&str>,
         filler: RdfTerm<'data>,
         session: &mut Session<'_>,
     ) -> NativeResult<bool> {
@@ -509,7 +511,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             self.data_properties.len(),
             "native RDF property-kind work exceeds u64",
         )?)?;
-        if self.data_properties.contains(&property) {
+        if property.is_some_and(|value| self.data_properties.contains(&value)) {
             return Ok(true);
         }
         session.step(usize_as_u64(
@@ -808,11 +810,13 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 "native RDF restriction operator ledger is empty",
             ));
         };
-        let property_iri = match self.triples[on_property].object {
-            RdfTerm::Iri(value) => value,
-            RdfTerm::Blank(_) | RdfTerm::Literal(_) => {
+        let property_term = self.triples[on_property].object;
+        let property_iri = match property_term {
+            RdfTerm::Iri(value) => Some(value),
+            RdfTerm::Blank(_) => None,
+            RdfTerm::Literal(_) => {
                 return Err(unsupported(
-                    "native bounded RDF restriction requires a named object property",
+                    "native RDF property selector must be a resource",
                 ));
             }
         };
@@ -822,7 +826,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 push_index(consumed, index, session)?;
                 let filler_term = self.triples[index].object;
                 if self.restriction_uses_data_range(property_iri, filler_term, session)? {
-                    let property = named_entity("data_property", property_iri, session)?;
+                    let property = named_data_property(property_term, session)?;
                     let mut properties = reserved_vec(1, session)?;
                     properties.push(property);
                     let filler = self.decode_data_range(filler_term, consumed, session)?;
@@ -833,7 +837,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                     Node::build(if tag == 34 { 41 } else { 42 }, fields)
                 } else {
                     let filler = self.decode_into(filler_term, consumed, session)?;
-                    let property = named_entity("object_property", property_iri, session)?;
+                    let property = self.decode_object_property(property_term, consumed, session)?;
                     let fields =
                         reserved_fields([Field::Node(property), Field::Node(filler)], session)?;
                     Node::build(tag, fields)
@@ -843,13 +847,13 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 push_index(consumed, index, session)?;
                 if matches!(self.triples[index].object, RdfTerm::Literal(_)) {
                     let value = self.decode_literal(index, session)?;
-                    let property = named_entity("data_property", property_iri, session)?;
+                    let property = named_data_property(property_term, session)?;
                     let fields =
                         reserved_fields([Field::Node(property), Field::Node(value)], session)?;
                     Node::build(43, fields)
                 } else {
                     let individual = self.decode_individual(self.triples[index].object, session)?;
-                    let property = named_entity("object_property", property_iri, session)?;
+                    let property = self.decode_object_property(property_term, consumed, session)?;
                     let fields =
                         reserved_fields([Field::Node(property), Field::Node(individual)], session)?;
                     Node::build(36, fields)
@@ -863,7 +867,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                     return Err(unsupported("native RDF owl:hasSelf value must be true"));
                 }
                 push_index(consumed, index, session)?;
-                let property = named_entity("object_property", property_iri, session)?;
+                let property = self.decode_object_property(property_term, consumed, session)?;
                 let fields = reserved_fields([Field::Node(property)], session)?;
                 Node::build(37, fields)
             }
@@ -873,7 +877,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 qualified,
             } => self.decode_cardinality(
                 subject,
-                property_iri,
+                property_term,
                 index,
                 tag,
                 qualified,
@@ -887,7 +891,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
     fn decode_cardinality(
         &mut self,
         subject: &'data str,
-        property_iri: &'data str,
+        property_term: RdfTerm<'data>,
         cardinality_index: usize,
         tag: u64,
         qualified: bool,
@@ -901,7 +905,16 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             self.data_properties.len(),
             "native RDF property-kind work exceeds u64",
         )?)?;
-        let declared_data = self.data_properties.contains(&property_iri);
+        let property_iri = match property_term {
+            RdfTerm::Iri(value) => Some(value),
+            RdfTerm::Blank(_) => None,
+            RdfTerm::Literal(_) => {
+                return Err(NativeError::protocol(
+                    "native RDF cardinality property selector is a literal",
+                ));
+            }
+        };
+        let declared_data = property_iri.is_some_and(|value| self.data_properties.contains(&value));
         let (filler_index, data_cardinality) = if qualified {
             match (on_class, on_data) {
                 (Some(index), None) => (Some(index), false),
@@ -942,7 +955,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 named_entity("datatype", RDFS_LITERAL, session)?
             };
             (
-                named_entity("data_property", property_iri, session)?,
+                named_data_property(property_term, session)?,
                 filler,
                 tag + 6,
             )
@@ -953,7 +966,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 named_class(OWL_THING, session)?
             };
             (
-                named_entity("object_property", property_iri, session)?,
+                self.decode_object_property(property_term, consumed, session)?,
                 filler,
                 tag,
             )
@@ -967,6 +980,40 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             session,
         )?;
         Node::build(tag, fields)
+    }
+
+    fn decode_object_property(
+        &mut self,
+        value: RdfTerm<'data>,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        match value {
+            RdfTerm::Iri(value) => named_entity("object_property", value, session),
+            RdfTerm::Blank(value) => {
+                self.claim_blank(value, ROLE_PROPERTY, session)?;
+                let inverse = self
+                    .unique_edge(value, OWL_INVERSE_OF, session)?
+                    .ok_or_else(|| {
+                        unsupported("native RDF inverse property has no named target")
+                    })?;
+                let target = match self.triples[inverse].object {
+                    RdfTerm::Iri(value) => value,
+                    RdfTerm::Blank(_) | RdfTerm::Literal(_) => {
+                        return Err(unsupported(
+                            "native RDF inverse property target must be named",
+                        ));
+                    }
+                };
+                push_index(consumed, inverse, session)?;
+                let property = named_entity("object_property", target, session)?;
+                let fields = reserved_fields([Field::Node(property)], session)?;
+                Node::build(10, fields)
+            }
+            RdfTerm::Literal(_) => Err(unsupported(
+                "native RDF object property expression cannot be a literal",
+            )),
+        }
     }
 
     fn decode_individual(
@@ -1075,6 +1122,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             let roles = record.roles | role;
             if (roles & ROLE_INDIVIDUAL != 0 && roles != ROLE_INDIVIDUAL)
                 || (roles & ROLE_FACET != 0 && roles != ROLE_FACET)
+                || (roles & ROLE_PROPERTY != 0 && roles != ROLE_PROPERTY)
             {
                 return Err(unsupported("native RDF blank node has ambiguous roles"));
             }
@@ -1154,6 +1202,15 @@ fn named_class(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
 
 fn named_individual(value: &str, session: &mut Session<'_>) -> NativeResult<Node> {
     named_entity("named_individual", value, session)
+}
+
+fn named_data_property(value: RdfTerm<'_>, session: &mut Session<'_>) -> NativeResult<Node> {
+    match value {
+        RdfTerm::Iri(value) => named_entity("data_property", value, session),
+        RdfTerm::Blank(_) | RdfTerm::Literal(_) => Err(unsupported(
+            "native RDF data property selector must be named",
+        )),
+    }
 }
 
 fn owned_lowercase(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
@@ -1658,6 +1715,41 @@ mod tests {
     }
 
     #[test]
+    fn inverse_object_property_maps_inside_restrictions() {
+        let graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, blank_term("inverse")),
+            edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:Filler")),
+            edge("inverse", OWL_INVERSE_OF, iri_term("urn:p")),
+        ];
+        let decoded = decode(&graph, blank_term("e")).expect("inverse property restriction");
+        let inverse = Node::build(
+            10,
+            vec![Field::Node(
+                entity("object_property", iri("urn:p".to_owned()).unwrap()).unwrap(),
+            )],
+        )
+        .unwrap();
+        let expected = Node::build(
+            34,
+            vec![
+                Field::Node(inverse),
+                Field::Node(entity("class", iri("urn:Filler".to_owned()).unwrap()).unwrap()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+        assert_eq!(decoded.consumed, [0, 1, 2, 3]);
+
+        assert_eq!(
+            decode_with_kinds(&graph, blank_term("e"), &[], &["urn:Filler"],)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+    }
+
+    #[test]
     fn object_value_and_self_restrictions_match_canonical_tags() {
         let has_value_graph = [
             edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
@@ -2052,6 +2144,12 @@ mod tests {
             edge("e", OWL_ON_PROPERTY, blank_term("p")),
             edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:A")),
         ];
+        let malformed_inverse = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, blank_term("p")),
+            edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:A")),
+            edge("p", OWL_INVERSE_OF, blank_term("nested")),
+        ];
         let conflicting_operators = [
             edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
             edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
@@ -2108,6 +2206,7 @@ mod tests {
             (ambiguous_individual.as_slice(), blank_term("e")),
             (conflicting_quantifiers.as_slice(), blank_term("e")),
             (blank_property.as_slice(), blank_term("e")),
+            (malformed_inverse.as_slice(), blank_term("e")),
             (conflicting_operators.as_slice(), blank_term("e")),
             (literal_has_value.as_slice(), blank_term("e")),
             (false_has_self.as_slice(), blank_term("e")),

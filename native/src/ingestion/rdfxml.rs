@@ -3068,6 +3068,47 @@ mod tests {
     }
 
     #[test]
+    fn inverse_object_property_maps_inside_restriction() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty><rdf:Description><owl:inverseOf rdf:resource=\"urn:p\"/></rdf:Description></owl:onProperty><owl:someValuesFrom rdf:resource=\"urn:B\"/></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("inverse property restriction");
+        let inverse = Node::build(
+            10,
+            vec![Field::Node(
+                entity(
+                    "object_property",
+                    iri("urn:p".to_owned()).expect("property IRI"),
+                )
+                .expect("object property"),
+            )],
+        )
+        .expect("inverse property");
+        let restriction = Node::build(
+            34,
+            vec![Field::Node(inverse), Field::Node(class_node("urn:B"))],
+        )
+        .expect("object restriction");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(restriction),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("subclass node");
+        assert!(document
+            .axioms
+            .iter()
+            .any(|value| value == expected.as_bytes()));
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+    }
+
+    #[test]
     fn structural_data_ranges_map_inside_restrictions() {
         let union_source = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:DatatypeProperty rdf:about=\"urn:p\"/><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"urn:p\"/><owl:someValuesFrom><rdfs:Datatype><owl:unionOf rdf:parseType=\"Collection\"><rdfs:Datatype rdf:about=\"urn:B\"/><rdfs:Datatype rdf:about=\"urn:C\"/></owl:unionOf></rdfs:Datatype></owl:someValuesFrom></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
