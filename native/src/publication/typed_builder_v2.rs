@@ -1053,6 +1053,65 @@ mod tests {
     }
 
     #[test]
+    fn retained_axiom_type_index_borrows_effective_and_raw_root_tables() {
+        let (storage, _) = two_document_owner();
+        let limits = Limits::default();
+        let closure = storage
+            .axiom_type_index(
+                TypedFacadeScopeV2::Closure,
+                None,
+                false,
+                &limits,
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("closure axiom-type index");
+        assert_eq!(closure.tags(), [60]);
+        assert_eq!(closure.offsets(), [0, 4]);
+        assert_eq!(closure.postings(), [0, 1, 2, 3]);
+        assert_eq!(closure.counters().axiom_rows, 4);
+        assert_eq!(closure.counters().complete_root_encode_calls, 0);
+        assert!(closure.owner().shares_storage_with(storage.arena()));
+
+        let raw_document = storage
+            .axiom_type_index(
+                TypedFacadeScopeV2::Document,
+                Some(0),
+                true,
+                &limits,
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("raw document axiom-type index");
+        assert_eq!(raw_document.offsets(), [0, 2]);
+        assert_eq!(raw_document.postings(), [0, 1]);
+
+        let retained_owner_bytes = storage
+            .counters()
+            .expect("storage counters")
+            .retained_owner_bytes;
+        let required = retained_owner_bytes
+            .checked_add(closure.counters().retained_buffer_bytes)
+            .expect("index peak");
+        let mut tight = limits;
+        tight.max_memory_bytes = Some(required - 1);
+        assert_eq!(
+            storage
+                .axiom_type_index(
+                    TypedFacadeScopeV2::Closure,
+                    None,
+                    false,
+                    &tight,
+                    Cancellation::with_duration(None),
+                    None,
+                )
+                .unwrap_err()
+                .code,
+            "NATIVE_WIRE_LIMIT"
+        );
+    }
+
+    #[test]
     fn builder_derives_effective_raw_closure_and_signature_tables_from_one_arena() {
         let (storage, documents) = two_document_owner();
         let document_zero = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);

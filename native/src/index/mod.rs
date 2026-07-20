@@ -1,5 +1,10 @@
 //! Checked axiom-type partition construction over coarse canonical rows.
 
+mod retained;
+
+#[allow(unused_imports)]
+pub(crate) use retained::{build_retained_axiom_type_index_v1, RetainedAxiomTypeIndexV1};
+
 use std::collections::BTreeMap;
 
 use crate::error::{NativeError, NativeResult};

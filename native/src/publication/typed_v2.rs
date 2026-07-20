@@ -10,6 +10,7 @@ use std::sync::Mutex;
 
 use crate::cancel::{Cancellation, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
+use crate::index::{build_retained_axiom_type_index_v1, RetainedAxiomTypeIndexV1};
 use crate::limits::{LimitKey, Limits};
 use crate::model::{
     build_encoded_structural_columns_from_tables_v1, scan_canonical, structural_digest_v1,
@@ -663,6 +664,69 @@ impl TypedFacadeStorageV2 {
             interrupt,
             self.external_retained_bytes,
         )
+    }
+
+    /// Build exact-constructor postings directly over a retained axiom root
+    /// table. Postings are stable table ordinals and the returned index shares
+    /// this facade's component arena rather than materializing axiom rows.
+    pub(crate) fn axiom_type_index(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> NativeResult<RetainedAxiomTypeIndexV1> {
+        let roots = self.structural_roots(
+            TypedFacadeCollectionV2::Axioms,
+            scope,
+            document_ordinal,
+            raw_document_owner,
+        )?;
+        let index = build_retained_axiom_type_index_v1(
+            &self.arena,
+            roots,
+            limits,
+            cancellation,
+            interrupt,
+            self.external_retained_bytes,
+        )?;
+        let expected_offset_count = index
+            .tags()
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("typed V2 axiom-type offset count overflow"))?;
+        let counters = index.counters();
+        if !index.owner().shares_storage_with(&self.arena)
+            || index.tags().windows(2).any(|pair| pair[0] >= pair[1])
+            || index.offsets().len() != expected_offset_count
+            || index.offsets().first() != Some(&0)
+            || index.offsets().last().copied()
+                != Some(u64::try_from(index.postings().len()).map_err(|_| {
+                    NativeError::limit("typed V2 axiom-type posting count exceeds u64")
+                })?)
+            || index.offsets().windows(2).any(|pair| pair[0] > pair[1])
+            || index
+                .postings()
+                .iter()
+                .copied()
+                .enumerate()
+                .any(|(ordinal, posting)| u64::try_from(ordinal) != Ok(posting))
+            || counters.axiom_rows
+                != u64::try_from(roots.len())
+                    .map_err(|_| NativeError::limit("typed V2 axiom-type root count exceeds u64"))?
+            || counters.constructor_groups
+                != u64::try_from(index.tags().len()).map_err(|_| {
+                    NativeError::limit("typed V2 axiom-type group count exceeds u64")
+                })?
+            || counters.complete_root_encode_calls != 0
+        {
+            return Err(NativeError::protocol(
+                "typed V2 retained axiom-type layout drifted",
+            ));
+        }
+        Ok(index)
     }
 
     #[cfg(test)]
