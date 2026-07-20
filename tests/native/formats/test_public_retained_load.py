@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -11,9 +16,11 @@ from pyowl_core import (
     EncodedStructuralView,
     ImportPolicy,
     LoadOptions,
+    MappingResolver,
     load_snapshot,
 )
 from pyowl_core.backends import native
+from pyowl_core.exceptions import BackendProtocolError
 from pyowl_core.model import canonical_bytes
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
 from tests.native.foundation._support import NativeTestExtension, load_extension
@@ -21,8 +28,11 @@ from tests.native.foundation._support import NativeTestExtension, load_extension
 SOURCE = (
     b"Ontology(<urn:retained-load> "
     b"Declaration(Class(<urn:retained-load:C>)) "
+    b"Declaration(Class(<urn:retained-load:D>)) "
     b"SubClassOf(<urn:retained-load:C> <urn:retained-load:D>))"
 )
+ROOT = Path(__file__).parents[3]
+RUNNER = Path(__file__).with_name("_retained_load_runner.py")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -33,7 +43,7 @@ def extension() -> NativeTestExtension:
     if not result.available or "parse-functional-v1" not in result.features:
         pytest.skip(result.reason or "native Functional parser capability is unavailable")
     if not hasattr(selected, "_retain_structural_snapshot_v2"):
-        pytest.skip("selected native artifact lacks the retained-load test hook")
+        pytest.skip("selected native artifact lacks the retained-owner constructor")
     return selected
 
 
@@ -47,10 +57,8 @@ def _options(backend: BackendPreference) -> LoadOptions:
 
 
 def test_public_forced_native_load_publishes_real_typed_owner_without_scalar_fallback(
-    monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
 ) -> None:
-    monkeypatch.setenv("PYOWL_CORE_TEST_RETAINED_NATIVE_LOAD", "1")
     reference = load_snapshot(SOURCE, options=_options(BackendPreference.PYTHON))
     selected = load_snapshot(SOURCE, options=_options(BackendPreference.NATIVE))
 
@@ -88,21 +96,120 @@ def test_public_forced_native_load_publishes_real_typed_owner_without_scalar_fal
     assert after.rows_emitted == before.rows_emitted
 
 
-def test_retained_load_stays_unadvertised_and_ineligible_options_keep_existing_storage(
+def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_construction(
     monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
 ) -> None:
-    monkeypatch.delenv("PYOWL_CORE_TEST_RETAINED_NATIVE_LOAD", raising=False)
-    unadvertised = load_snapshot(SOURCE, options=_options(BackendPreference.NATIVE))
-    assert unadvertised.capabilities.backend == "python"
+    calls = 0
 
-    monkeypatch.setenv("PYOWL_CORE_TEST_RETAINED_NATIVE_LOAD", "1")
-    provenance = load_snapshot(
-        SOURCE,
-        options=LoadOptions(
+    def unexpected(*_arguments: object) -> object:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("ineligible load crossed retained-owner construction")
+
+    monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", unexpected)
+
+    for options in (
+        LoadOptions(
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.IGNORE,
             backend=BackendPreference.NATIVE,
             collect_provenance=True,
         ),
+        LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=BackendPreference.NATIVE,
+            preserve_source_map=True,
+            collect_provenance=False,
+        ),
+        LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=BackendPreference.NATIVE,
+            collect_provenance=False,
+            validate_owl2_dl=True,
+        ),
+    ):
+        ineligible = load_snapshot(SOURCE, options=options)
+        assert ineligible.capabilities.backend == "python"
+
+    anonymous = load_snapshot(
+        b"Ontology(<urn:retained-anonymous> ClassAssertion(<urn:C> _:person))",
+        options=_options(BackendPreference.NATIVE),
     )
-    assert provenance.capabilities.backend == "python"
+    assert anonymous.capabilities.backend == "python"
+
+    imported = load_snapshot(
+        b"Ontology(<urn:retained-root> Import(<urn:retained-child>))",
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RESOLVE_LOCAL,
+            backend=BackendPreference.NATIVE,
+            collect_provenance=False,
+        ),
+        resolver=MappingResolver(
+            {
+                "urn:retained-child": (
+                    b"Ontology(<urn:retained-child> Declaration(Class(<urn:Child>)))"
+                )
+            }
+        ),
+    )
+    assert len(imported.documents) == 2
+    assert imported.capabilities.backend == "python"
+
+    assert calls == 0
+    assert extension.INGESTION_FEATURES == ()
+    assert "retained-structural-snapshot-v2" not in extension.FEATURES
+    assert not imported.capabilities.encoded_view_schemas
+
+
+def test_eligible_owner_construction_failure_propagates_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    calls = 0
+    retain = cast(Any, extension)._retain_structural_snapshot_v2
+
+    def fail(
+        _documents: object,
+        attestation: object,
+        config: object,
+        cancel: object,
+    ) -> object:
+        nonlocal calls
+        calls += 1
+        return retain((((b"",), (), ()),), attestation, config, cancel)
+
+    monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", fail)
+    with pytest.raises(BackendProtocolError) as raised:
+        load_snapshot(SOURCE, options=_options(BackendPreference.NATIVE))
+    assert raised.value.code == "NATIVE_EXCEPTION"
+    assert calls == 1
+
+
+def test_isolated_installed_artifact_public_load_has_python_parity() -> None:
+    environment = dict(os.environ)
+    inherited = environment.get("PYTHONPATH", "")
+    paths = [str(ROOT)]
+    if environment.get("PYOWL_CORE_TEST_NATIVE_LIBRARY") != "1":
+        paths.insert(0, str(ROOT / "src"))
+    if inherited:
+        paths.append(inherited)
+    environment["PYTHONPATH"] = os.pathsep.join(paths)
+    completed = subprocess.run(
+        [sys.executable, str(RUNNER)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    observed = json.loads(completed.stdout)
+    assert observed["backend"] == "native"
+    assert observed["snapshot_type"] == "_NativeOntologySnapshot"
+    assert observed["fingerprint_parity"] is True
+    assert observed["ingestion_features"] == []
+    assert observed["encoded_view_schemas"] == {}
+    if environment.get("PYOWL_CORE_TEST_NATIVE_LIBRARY") == "1":
+        assert not Path(observed["package_file"]).is_relative_to(ROOT / "src")

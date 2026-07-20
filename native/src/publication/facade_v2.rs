@@ -2503,7 +2503,6 @@ impl NativeSnapshotAttestationV2 {
         }
     }
 
-    #[cfg(feature = "test-hooks")]
     pub(super) fn from_python(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let selected = Self {
             version: value.getattr("version")?.extract()?,
@@ -2701,7 +2700,6 @@ impl Owl2DlSummaryV2 {
     }
 }
 
-#[cfg(feature = "test-hooks")]
 fn optional_summary(value: Bound<'_, PyAny>) -> PyResult<Option<Owl2DlSummaryV2>> {
     if value.is_none() {
         return Ok(None);
@@ -2719,7 +2717,6 @@ fn optional_summary(value: Bound<'_, PyAny>) -> PyResult<Option<Owl2DlSummaryV2>
     }))
 }
 
-#[cfg(feature = "test-hooks")]
 fn optional_bool(value: Bound<'_, PyAny>) -> PyResult<Option<bool>> {
     if value.is_none() {
         Ok(None)
@@ -2728,7 +2725,6 @@ fn optional_bool(value: Bound<'_, PyAny>) -> PyResult<Option<bool>> {
     }
 }
 
-#[cfg(feature = "test-hooks")]
 fn digest_attr(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Digest> {
     digest_from_python(&value.getattr(name)?)
 }

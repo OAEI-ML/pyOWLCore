@@ -57,7 +57,6 @@ def test_real_retained_owner_crosses_pyelk_without_scalar_materialization() -> N
             "PYTHONPATH": os.pathsep.join(value for value in python_path if value),
             "PYOWL_CORE_TEST_NATIVE_LIBRARY": str(core),
             "PYOWL_CORE_TEST_PYELK_NATIVE_LIBRARY": str(pyelk),
-            "PYOWL_CORE_TEST_RETAINED_NATIVE_LOAD": "1",
         }
     )
     completed = subprocess.run(

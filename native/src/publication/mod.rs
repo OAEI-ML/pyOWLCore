@@ -50,7 +50,6 @@ pub(crate) fn encoded_fixture_handle_v2() -> NativeResult<NativeSnapshotHandle> 
     ))
 }
 
-#[cfg(feature = "test-hooks")]
 pub(crate) fn typed_structural_handle_v2(
     attestation: &pyo3::Bound<'_, pyo3::types::PyAny>,
     storage: TypedFacadeStorageV2,

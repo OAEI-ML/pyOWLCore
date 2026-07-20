@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -43,18 +42,16 @@ def retain_forced_native_snapshot_v2(
     *,
     cancellation_token: CancellationToken | None = None,
 ) -> OntologySnapshot:
-    """Promote one forced-native test load into the real typed V2 owner.
+    """Promote one narrowly eligible forced-native load into the typed V2 owner.
 
-    The bridge remains deliberately unadvertised and explicitly test-gated
-    while WP16's complete format/import/source-map matrix is unfinished.  An
-    ineligible load stays on its existing Python storage; an eligible, opted-in
-    load either publishes the retained owner or fails without fallback.
+    The bridge remains deliberately unadvertised while WP16's complete
+    format/import/source-map matrix is unfinished.  An ineligible load stays on
+    its existing Python storage before owner publication; an eligible load
+    either publishes the retained owner or fails without fallback.
     """
 
     from pyowl_core.config import BackendPreference, DocumentFormat
 
-    if os.environ.get("PYOWL_CORE_TEST_RETAINED_NATIVE_LOAD") != "1":
-        return snapshot
     if (
         snapshot.load_options.backend is not BackendPreference.NATIVE
         or len(snapshot.documents) != 1

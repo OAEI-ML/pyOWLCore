@@ -9,20 +9,19 @@
 mod engine;
 
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyAny, PyBytes, PyModule, PyTuple};
 
 #[cfg(feature = "test-hooks")]
 use pyo3::buffer::PyBuffer;
 #[cfg(feature = "test-hooks")]
-use pyo3::types::{PyAny, PyBytes, PyString, PyTuple};
+use pyo3::types::PyString;
 
 #[cfg(feature = "test-hooks")]
 use crate::cancel::Guard;
+use crate::error::NativeError;
 #[cfg(feature = "test-hooks")]
-use crate::error::{NativeError, NativeResult};
-#[cfg(feature = "test-hooks")]
+use crate::error::NativeResult;
 use crate::limits::{LimitKey, Limits};
-#[cfg(feature = "test-hooks")]
 use crate::publication::{NativeSnapshotHandle, TypedFacadeBuilderV2};
 #[cfg(feature = "test-hooks")]
 use crate::session::Session;
@@ -30,22 +29,19 @@ use crate::session::Session;
 pub(super) const FEATURES: &[&str] = &[];
 
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
+    _module.add_function(wrap_pyfunction!(_retain_structural_snapshot_v2, _module)?)?;
     #[cfg(feature = "test-hooks")]
-    {
-        _module.add_function(wrap_pyfunction!(_ingest_rdfxml_slice_v1, _module)?)?;
-        _module.add_function(wrap_pyfunction!(_retain_structural_snapshot_v2, _module)?)?;
-    }
+    _module.add_function(wrap_pyfunction!(_ingest_rdfxml_slice_v1, _module)?)?;
     Ok(())
 }
 
 /// Freeze one already-validated document into the real typed V2 owner.
 ///
-/// This private, test-gated bridge lets the public forced-native load path
-/// exercise the retained snapshot/closure boundary before a complete native
-/// format parser is advertised.  It accepts canonical rows only, publishes no
-/// capability, and deliberately remains single-document until native import
-/// orchestration owns the complete closure.
-#[cfg(feature = "test-hooks")]
+/// This private, unadvertised bridge lets the narrowly eligible public
+/// forced-native load path retain its structural roots in the typed owner.  It
+/// accepts canonical rows only, publishes no capability, and deliberately
+/// remains single-document until native import orchestration owns the complete
+/// closure.
 #[pyfunction]
 #[pyo3(signature = (documents, attestation, config, cancel=None))]
 fn _retain_structural_snapshot_v2<'py>(
@@ -74,10 +70,8 @@ fn _retain_structural_snapshot_v2<'py>(
     crate::publication::typed_structural_handle_v2(attestation, storage)
 }
 
-#[cfg(feature = "test-hooks")]
 type OwnedStructuralDocument = [Vec<Vec<u8>>; 3];
 
-#[cfg(feature = "test-hooks")]
 fn owned_structural_documents(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -144,7 +138,6 @@ fn owned_structural_documents(
     Ok((owned, total_bytes))
 }
 
-#[cfg(feature = "test-hooks")]
 fn owned_structural_rows(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
