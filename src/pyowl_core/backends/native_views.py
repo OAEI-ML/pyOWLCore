@@ -377,6 +377,16 @@ class _Columns:
     scalar_bytes: memoryview
 
 
+@dataclass(frozen=True, slots=True)
+class _EncodedStructuralWireRowsV1:
+    """Canonical rows needed by wire without traversing Python model objects."""
+
+    nodes: tuple[tuple[int, str, bytes], ...]
+    roots: tuple[tuple[int, bytes], ...]
+    scalar_strings: tuple[bytes, ...]
+    sequences: tuple[bytes, ...]
+
+
 def require_view_binding(capability: str) -> NativeViewExtension:
     """Require a capability registered specifically by the view seam."""
 
@@ -1647,9 +1657,13 @@ def _freeze_segments(
         limits.enforce("max_index_bytes", local_buffer_bytes + posting_bytes)
         limits.enforce("max_canonical_work", local_buffer_bytes + posting_bytes)
         if trusted:
-            allowed_exporters = (bytes,) if trusted_zero_copy is _TRUSTED_ZERO_COPY else (
-                bytes,
-                _mmap.mmap,
+            allowed_exporters = (
+                (bytes,)
+                if trusted_zero_copy is _TRUSTED_ZERO_COPY
+                else (
+                    bytes,
+                    _mmap.mmap,
+                )
             )
             if not isinstance(raw_root_ids.obj, allowed_exporters) or not isinstance(
                 raw_scope_map.obj, allowed_exporters
@@ -1695,8 +1709,10 @@ def _freeze_segments(
             source_trust: object | None = None
             if type(source) is EncodedStructuralViewV1 and source._seal is _VALIDATED_VIEW_SEAL:
                 exporters = tuple(value.obj for value in source.buffers.values())
-                if exporters and all(type(value) is _mmap.mmap for value in exporters) and all(
-                    value is exporters[0] for value in exporters[1:]
+                if (
+                    exporters
+                    and all(type(value) is _mmap.mmap for value in exporters)
+                    and all(value is exporters[0] for value in exporters[1:])
                 ):
                     source_trust = _TRUSTED_MAPPED_ZERO_COPY
                 else:
@@ -2012,6 +2028,148 @@ def _encoded_structural_root_digest_v1(
     """Validate one column set and return its canonical effective-root digest."""
 
     return _validate_columns(buffers, limits)
+
+
+def _encoded_structural_wire_rows_v1(
+    publication: EncodedStructuralViewV1,
+    limits: ParseLimits,
+) -> _EncodedStructuralWireRowsV1:
+    """Reconstruct canonical rows from one already validated direct publication.
+
+    This is deliberately private wire plumbing.  It accepts only the sealed
+    direct view shape, so segmented owners and caller-forged buffers cannot use
+    it to bypass the normal scalar materialization path.
+    """
+
+    if (
+        type(publication) is not EncodedStructuralViewV1
+        or publication._seal is not _VALIDATED_VIEW_SEAL
+        or publication.scope is not AxiomScope.CLOSURE
+        or publication.document_key is not None
+        or len(publication.segments) != 1
+        or publication.segments[0].role != _SEGMENT_DIRECT
+    ):
+        _fail(
+            "wire canonical rows require a sealed direct closure publication",
+            "ENCODED_VIEW_WIRE_SOURCE",
+        )
+    columns = _Columns(
+        _UIntColumn(publication.buffers["root_kinds"], 1),
+        _UIntColumn(publication.buffers["root_ids"], 4),
+        _UIntColumn(publication.buffers["node_tags"], 2),
+        _UIntColumn(publication.buffers["node_field_offsets"], 8),
+        _UIntColumn(publication.buffers["field_kinds"], 1),
+        _UIntColumn(publication.buffers["field_values"], 8),
+        _UIntColumn(publication.buffers["field_lengths"], 8),
+        _UIntColumn(publication.buffers["item_kinds"], 1),
+        _UIntColumn(publication.buffers["item_values"], 8),
+        _UIntColumn(publication.buffers["item_lengths"], 8),
+        publication.buffers["scalar_bytes"],
+    )
+    memo: dict[int, bytes] = {}
+    nodes: list[tuple[int, str, bytes]] = []
+    scalar_strings: set[bytes] = set()
+    sequences: set[bytes] = set()
+    temporary = 0
+    for node_id in range(1, len(columns.tags) + 1):
+        encoded = _canonical_node(columns, node_id, memo, set(), None, limits)
+        tag = columns.tags[node_id - 1]
+        constructor = _CONSTRUCTOR_BY_TAG.get(tag)
+        if constructor is None:  # pragma: no cover - sealed view invariant
+            _fail(
+                "wire canonical rows contain an unsupported constructor",
+                "ENCODED_VIEW_WIRE_SOURCE",
+            )
+        nodes.append((tag, constructor[1], encoded))
+        temporary += len(encoded)
+        start = columns.field_offsets[node_id - 1]
+        end = columns.field_offsets[node_id]
+        for field_index in range(start, end):
+            kind = columns.field_kinds[field_index]
+            value = columns.field_values[field_index]
+            length = columns.field_lengths[field_index]
+            if kind == _TEXT:
+                scalar_strings.add(bytes(columns.scalar_bytes[value : value + length]))
+            elif kind == _ENUM and tag == 2:
+                # EntityKind is a ``str`` enum, so scalar traversal interns its
+                # value in STRINGS even though canonical-model-v1 tags it ENUM.
+                scalar_strings.add(bytes(columns.scalar_bytes[value : value + length]))
+            elif kind in {_SET, _SEQUENCE}:
+                descriptor = _encoded_sequence_descriptor_v1(
+                    columns,
+                    kind,
+                    value,
+                    length,
+                    memo,
+                    limits,
+                )
+                sequences.add(descriptor)
+                temporary += len(descriptor)
+        limits.enforce("max_temporary_bytes", max(1, temporary))
+    roots = tuple(
+        (
+            columns.roots_kind[index],
+            _canonical_node(columns, columns.roots_id[index], memo, set(), None, limits),
+        )
+        for index in range(len(columns.roots_id))
+    )
+    return _EncodedStructuralWireRowsV1(
+        tuple(nodes),
+        roots,
+        tuple(sorted(scalar_strings)),
+        tuple(sorted(sequences)),
+    )
+
+
+def _encoded_sequence_descriptor_v1(
+    columns: _Columns,
+    kind: int,
+    start: int,
+    length: int,
+    memo: dict[int, bytes],
+    limits: ParseLimits,
+) -> bytes:
+    output = bytearray((2 if kind == _SET else 1,))
+    output.extend(length.to_bytes(8, "little"))
+    for item_index in range(start, start + length):
+        item_kind = columns.item_kinds[item_index]
+        item_value = columns.item_values[item_index]
+        item_length = columns.item_lengths[item_index]
+        if item_kind == _NODE:
+            payload = _canonical_node(columns, item_value, memo, set(), None, limits)
+        else:
+            payload = _encoded_sequence_scalar_repr_v1(
+                columns,
+                item_kind,
+                item_value,
+                item_length,
+            )
+        output.extend(hashlib.sha256(payload).digest())
+    return bytes(output)
+
+
+def _encoded_sequence_scalar_repr_v1(
+    columns: _Columns,
+    kind: int,
+    start: int,
+    length: int,
+) -> bytes:
+    if kind == _NONE:
+        return repr(None).encode("utf-8")
+    payload = bytes(columns.scalar_bytes[start : start + length])
+    if kind == _TEXT:
+        return repr(payload.decode("utf-8")).encode("utf-8")
+    if kind == _BYTES:
+        return repr(payload).encode("utf-8")
+    if kind == _INTEGER:
+        return repr(int.from_bytes(payload, "little")).encode("utf-8")
+    # Schema v1 currently has no constructor whose ordered sequence contains
+    # enum scalars.  Enum repr also includes its Python class name, so guessing
+    # from the payload would make the supposedly language-neutral route unsafe.
+    _fail(
+        "wire canonical rows do not support scalar enum sequence members",
+        "ENCODED_VIEW_WIRE_SOURCE",
+    )
 
 
 def _encoded_structural_rows_digest_v1(

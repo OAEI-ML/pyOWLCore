@@ -112,7 +112,10 @@ def _publish_structural_snapshot_v2(
         signature_fingerprint_bytes,
         snapshot_structural_fingerprint_bytes,
     )
-    from pyowl_core.document.native_storage import ontology_snapshot_from_native_publication_v2
+    from pyowl_core.document.native_storage import (
+        _WIRE_STRUCTURAL_ALIAS_SEAL_V1,
+        ontology_snapshot_from_native_publication_v2,
+    )
     from pyowl_core.document.snapshot import AxiomScope
     from pyowl_core.model import canonical_bytes
 
@@ -405,7 +408,10 @@ def _publish_structural_snapshot_v2(
     for field in fields(content):
         values[field.name] = getattr(content, field.name)
     publication = freeze_native_snapshot_publication_v2(values)
-    return ontology_snapshot_from_native_publication_v2(publication)
+    return ontology_snapshot_from_native_publication_v2(
+        publication,
+        _wire_structural_aliases=_WIRE_STRUCTURAL_ALIAS_SEAL_V1,
+    )
 
 
 def _diagnostic_reference_kinds(

@@ -122,6 +122,7 @@ _STRUCTURAL_COLLECTIONS = frozenset(
 _MISSING = object()
 _REPLACE_ERROR = "native ontology facades cannot be replaced; materialize them first"
 _EMPTY_CACHE_BYTES = sys.getsizeof(OrderedDict())
+_WIRE_STRUCTURAL_ALIAS_SEAL_V1 = object()
 
 
 def _deep_size(value: object, seen: set[int] | None = None) -> int:
@@ -1683,6 +1684,7 @@ class _NativeSnapshotState:
         "root_document_key",
         "signature_fingerprint",
         "structural_fingerprint",
+        "wire_structural_aliases",
     )
 
     def __init__(
@@ -1704,6 +1706,7 @@ class _NativeSnapshotState:
         origin_index: OriginIndex,
         capabilities: CoreCapabilities,
         report: LoadReport,
+        wire_structural_aliases: bool,
     ) -> None:
         from pyowl_core.index.cache import create_index_cache
 
@@ -1736,6 +1739,7 @@ class _NativeSnapshotState:
         self.logical_fingerprint = report.logical_fingerprint
         self.signature_fingerprint = report.signature_fingerprint
         self.report = report
+        self.wire_structural_aliases = wire_structural_aliases
         self.identity_metadata = _identity_metadata_from_manifest(
             import_manifest,
             diagnostics,
@@ -2210,6 +2214,24 @@ class _NativeOntologySnapshot(OntologySnapshot):
     def _native_python_counters(self) -> NativePythonFacadeCountersV2:
         return self._native_snapshot_state.owner.shared.counters()
 
+    def _native_wire_structural_aliases_v1(self) -> bool:
+        """Report an internally attested raw/effective/closure root alias."""
+
+        self._check_open()
+        return self._native_snapshot_state.wire_structural_aliases
+
+    def _native_origin_rows_v2(self) -> Iterator[bytes]:
+        """Yield each retained origin row once without facade-cache materialization."""
+
+        self._check_open()
+        entries = self._native_snapshot_state.origin_index.entries
+        if not isinstance(entries, _NativeOriginMapping):
+            raise BackendProtocolError(
+                "native wire source does not retain an origin-row facade",
+                code="NATIVE_WIRE_SOURCE",
+            )
+        yield from entries._ref.iter_encoded()
+
 
 def _reject_document_key(scope: AxiomScope, document_key: str | None) -> None:
     if document_key is not None:
@@ -2244,9 +2266,17 @@ def _capabilities(publication: NativeSnapshotPublicationV2) -> CoreCapabilities:
 def ontology_snapshot_from_native_publication_v2(
     publication: NativeSnapshotPublicationV2,
     /,
+    *,
+    _wire_structural_aliases: object | None = None,
 ) -> OntologySnapshot:
     """Publish a lazy public snapshot without materializing retained roots."""
 
+    if (
+        _wire_structural_aliases is not None
+        and _wire_structural_aliases is not _WIRE_STRUCTURAL_ALIAS_SEAL_V1
+    ):
+        raise TypeError("_wire_structural_aliases carries an invalid internal seal")
+    wire_structural_aliases = _wire_structural_aliases is _WIRE_STRUCTURAL_ALIAS_SEAL_V1
     selected = require_native_facade_publication_v2(publication)
     shared = _NativeSharedState(selected)
     sidecars = selected.diagnostic_reference_sidecars
@@ -2416,6 +2446,34 @@ def ontology_snapshot_from_native_publication_v2(
 
         snapshot_owner = _NativeOwnerState(selected.handle, shared)
         closure = selected.facade_cardinality_summary.closure
+        if wire_structural_aliases:
+            if len(selected.documents) != 1:
+                raise BackendProtocolError(
+                    "native wire structural aliases require exactly one document",
+                    code="NATIVE_WIRE_SOURCE",
+                )
+            document = selected.documents[0]
+            effective = selected.facade_cardinality_summary.documents[0]
+            raw_counts = (
+                document.ontology_annotation_count,
+                document.axiom_count,
+                document.extension_count,
+            )
+            effective_counts = (
+                effective.effective_annotation_count,
+                effective.effective_axiom_count,
+                effective.effective_extension_count,
+            )
+            closure_counts = (
+                closure.effective_annotation_count,
+                closure.effective_axiom_count,
+                closure.effective_extension_count,
+            )
+            if raw_counts != effective_counts or effective_counts != closure_counts:
+                raise BackendProtocolError(
+                    "native wire structural alias cardinalities diverge",
+                    code="NATIVE_WIRE_SOURCE",
+                )
 
         def closure_ref(
             collection: NativeFacadeCollectionV2,
@@ -2541,6 +2599,7 @@ def ontology_snapshot_from_native_publication_v2(
             origin_index=origin_index,
             capabilities=_capabilities(selected),
             report=report,
+            wire_structural_aliases=wire_structural_aliases,
         )
         result = _NativeOntologySnapshot(snapshot_state)
         shared.publication_object()

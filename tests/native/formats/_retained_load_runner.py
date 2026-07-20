@@ -98,6 +98,14 @@ def main() -> None:
         raise AssertionError("retained snapshot has an unexpected wire divergence")
     after_wire_native = raw_owner._publication_counters_v2()
     after_wire_python = cast(Any, selected)._native_python_counters()
+    if after_wire_python.model_rows_materialized != after_direct_python.model_rows_materialized:
+        raise AssertionError("wire handoff materialized Python model rows")
+    if after_wire_native.encoded_view_requests - after_direct_native.encoded_view_requests != 1:
+        raise AssertionError("wire handoff did not reuse one direct-column publication")
+    if after_wire_native.page_requests - after_direct_native.page_requests != 1:
+        raise AssertionError("wire handoff did not use exactly one retained origin page")
+    if after_wire_native.rows_emitted - after_direct_native.rows_emitted != retained_origin_rows:
+        raise AssertionError("wire handoff emitted rows outside the retained origin page")
     if after_wire_native.publication_structural_rows_copied != 0:
         raise AssertionError("wire handoff copied structural publication rows")
     if after_wire_native.publication_structural_bytes_copied != 0:
@@ -185,6 +193,10 @@ def main() -> None:
                 "wire_model_rows_materialized": (
                     after_wire_python.model_rows_materialized
                     - after_direct_python.model_rows_materialized
+                ),
+                "wire_encoded_view_requests": (
+                    after_wire_native.encoded_view_requests
+                    - after_direct_native.encoded_view_requests
                 ),
                 "wire_page_requests": (
                     after_wire_native.page_requests - after_direct_native.page_requests

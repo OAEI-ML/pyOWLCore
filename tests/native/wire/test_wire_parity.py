@@ -111,6 +111,77 @@ class NativeWireParityTests(unittest.TestCase):
                 self.assertEqual(decoded.structural_fingerprint, value.structural_fingerprint)
                 self.assertEqual(encode_snapshot(decoded), python_wire)
 
+        # The retained fast path deliberately excludes anonymous re-scoping.
+        # For every constructor eligible for the raw/effective/closure alias,
+        # prove that column-derived tables are byte-identical to scalar tables.
+        from pyowl_core.backends.native_views import (
+            _encoded_structural_wire_rows_v1,
+            produce_encoded_structural_view_v1,
+        )
+        from pyowl_core.document.snapshot import AxiomScope
+        from pyowl_core.wire._binary import Guard
+        from pyowl_core.wire.codec import (
+            _collect_native_sections,
+            _collect_sections,
+            _NativeWireOrigin,
+            _NativeWireSource,
+        )
+
+        def eligible(value: model.StructuralNode) -> bool:
+            return not any(
+                isinstance(node, model.AnonymousIndividual) for node in model.walk(value)
+            )
+
+        eligible_document = replace(
+            document,
+            ontology_annotations=model.CanonicalSet(
+                value for value in document.ontology_annotations if eligible(value)
+            ),
+            axioms=model.CanonicalSet(value for value in document.axioms if eligible(value)),
+            extension_components=model.CanonicalSet(
+                value for value in document.extension_components if eligible(value)
+            ),
+        )
+        eligible_snapshot = load_snapshot(
+            eligible_document,
+            options=LoadOptions(
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.PYTHON,
+            ),
+        )
+        limits = eligible_snapshot.load_options.limits
+        publication = produce_encoded_structural_view_v1(
+            eligible_snapshot,
+            scope=AxiomScope.CLOSURE,
+            limits=limits,
+            materialize_segments=True,
+        )
+        structural = _encoded_structural_wire_rows_v1(publication, limits)
+        origins = tuple(
+            _NativeWireOrigin(digest, item.document_key, item.occurrence, item.span)
+            for digest, occurrences in eligible_snapshot.origin_index.entries.items()
+            for item in occurrences
+        )
+        scalar_sections = _collect_sections(
+            eligible_snapshot,
+            limits,
+            Guard(limits, None),
+        )
+        retained_sections = _collect_native_sections(
+            eligible_snapshot,
+            _NativeWireSource(
+                publication,
+                structural.nodes,
+                structural.roots,
+                structural.scalar_strings,
+                structural.sequences,
+                origins,
+            ),
+            limits,
+            Guard(limits, None),
+        )
+        self.assertEqual(retained_sections, scalar_sections)
+
     def test_all_truncations_and_systematic_integrity_corruptions_are_typed(self) -> None:
         encoded = encode_snapshot(snapshot())
         for length in range(len(encoded)):

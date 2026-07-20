@@ -102,6 +102,65 @@ def test_public_forced_native_load_publishes_real_typed_owner_without_scalar_fal
     assert after.rows_emitted == before.rows_emitted
 
 
+def test_retained_wire_reuses_columns_and_pages_origins_once(
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(SOURCE, options=_options(BackendPreference.PYTHON))
+    selected = load_snapshot(SOURCE, options=_options(BackendPreference.NATIVE))
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
+    before_native = cast(Any, raw_owner)._publication_counters_v2()
+    before_python = cast(Any, selected)._native_python_counters()
+
+    scalar_error = AssertionError("wire consumer crossed scalar traversal")
+    with (
+        patch.object(type(selected), "iter_axioms", side_effect=scalar_error),
+        patch.object(type(selected), "iter_extensions", side_effect=scalar_error),
+        patch.object(type(selected), "ontology_annotations", side_effect=scalar_error),
+        patch.object(type(selected), "signature", side_effect=scalar_error),
+    ):
+        retained_wire = encode_snapshot(selected)
+
+    after_native = cast(Any, raw_owner)._publication_counters_v2()
+    after_python = cast(Any, selected)._native_python_counters()
+    assert retained_wire == encode_snapshot(reference)
+    assert after_python.model_rows_materialized == before_python.model_rows_materialized
+    assert after_native.encoded_view_requests == before_native.encoded_view_requests + 1
+    assert after_native.page_requests == before_native.page_requests + 1
+    assert after_native.rows_emitted == before_native.rows_emitted + sum(
+        len(rows) for rows in reference.origin_index.entries.values()
+    )
+
+
+def test_attested_wire_source_fails_closed_without_direct_columns(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    selected = load_snapshot(SOURCE, options=_options(BackendPreference.NATIVE))
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    before_native = cast(Any, raw_owner)._publication_counters_v2()
+    before_python = cast(Any, selected)._native_python_counters()
+    monkeypatch.setattr(cast(Any, extension), "_encoded_structural_columns_v1", None)
+
+    scalar_error = AssertionError("failed wire source crossed scalar traversal")
+    with (
+        patch.object(type(selected), "iter_axioms", side_effect=scalar_error),
+        patch.object(type(selected), "iter_extensions", side_effect=scalar_error),
+        patch.object(type(selected), "ontology_annotations", side_effect=scalar_error),
+        pytest.raises(BackendProtocolError) as raised,
+    ):
+        encode_snapshot(selected)
+
+    after_native = cast(Any, raw_owner)._publication_counters_v2()
+    after_python = cast(Any, selected)._native_python_counters()
+    assert raised.value.code == "NATIVE_WIRE_SOURCE"
+    assert after_native.page_requests == before_native.page_requests
+    assert after_native.rows_emitted == before_native.rows_emitted
+    assert after_python.model_rows_materialized == before_python.model_rows_materialized
+
+
 def test_empty_provenance_enabled_load_retains_zero_origin_rows(
     extension: NativeTestExtension,
 ) -> None:
@@ -111,13 +170,19 @@ def test_empty_provenance_enabled_load_retains_zero_origin_rows(
 
     assert selected.capabilities.backend == "native"
     assert selected.origin_index == reference.origin_index
-    assert encode_snapshot(selected) == encode_snapshot(reference)
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
     raw_owner = object.__getattribute__(handle, "_owner_v2")
     assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
+    before_native = cast(Any, raw_owner)._publication_counters_v2()
+    before_python = cast(Any, selected)._native_python_counters()
+    assert encode_snapshot(selected) == encode_snapshot(reference)
     counters = cast(Any, raw_owner)._publication_counters_v2()
+    python_counters = cast(Any, selected)._native_python_counters()
     assert counters.retained_origin_rows == 0
     assert counters.retained_origin_bytes == 0
+    assert counters.page_requests == before_native.page_requests
+    assert counters.rows_emitted == before_native.rows_emitted
+    assert python_counters.model_rows_materialized == before_python.model_rows_materialized
 
 
 def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_construction(
@@ -240,10 +305,10 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["decoded_parity"] is True
     assert len(observed["wire_sha256"]) == 64
     assert len(observed["wire_python_sha256"]) == 64
-    assert observed["wire_python_parity"] is (observed["wire_differing_sections"] == [])
-    assert observed["wire_differing_sections"] in ([], [13, 14])
-    assert observed["origin_parity"] is observed["wire_python_parity"]
-    assert 0 <= observed["retained_origin_rows"] <= observed["reference_origin_rows"]
+    assert observed["wire_python_parity"] is True
+    assert observed["wire_differing_sections"] == []
+    assert observed["origin_parity"] is True
+    assert observed["retained_origin_rows"] == observed["reference_origin_rows"]
     assert observed["mapped_root_parity"] is True
     assert observed["mapped_fingerprint_parity"] is True
     assert observed["mapped_owner_identity"] is True
@@ -258,8 +323,9 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["ingestion_features"] == []
     assert observed["view_features"] == []
     assert observed["encoded_view_schemas"] == {}
-    assert observed["wire_model_rows_materialized"] >= 0
-    assert observed["wire_page_requests"] >= 0
-    assert observed["wire_rows_emitted"] >= 0
+    assert observed["wire_model_rows_materialized"] == 0
+    assert observed["wire_encoded_view_requests"] == 1
+    assert observed["wire_page_requests"] == 1
+    assert observed["wire_rows_emitted"] == observed["retained_origin_rows"]
     if environment.get("PYOWL_CORE_TEST_NATIVE_LIBRARY") == "1":
         assert not Path(observed["package_file"]).is_relative_to(ROOT / "src")

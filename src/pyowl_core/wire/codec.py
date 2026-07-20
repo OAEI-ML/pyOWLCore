@@ -227,6 +227,24 @@ class _ViewRefs:
     extensions: tuple[int, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _NativeWireOrigin:
+    digest: bytes
+    document_key: str
+    occurrence: int
+    span: SourceSpan | None
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeWireSource:
+    publication: object
+    nodes: tuple[tuple[int, str, bytes], ...]
+    roots: tuple[tuple[int, bytes], ...]
+    scalar_strings: tuple[bytes, ...]
+    sequences: tuple[bytes, ...]
+    origins: tuple[_NativeWireOrigin, ...]
+
+
 def encode_snapshot(
     snapshot: OntologyView,
     *,
@@ -244,7 +262,20 @@ def encode_snapshot(
     guard.check(force=True)
     source_identity = _identity_metadata_for_view(snapshot, cancellation_token)
     concrete = _materialize_for_wire(snapshot, selected_limits)
-    rows, flags = _collect_sections(concrete, selected_limits, guard)
+    native_source = _native_wire_source_v1(
+        concrete,
+        selected_limits,
+        cancellation_token,
+    )
+    if native_source is None:
+        rows, flags = _collect_sections(concrete, selected_limits, guard)
+    else:
+        rows, flags = _collect_native_sections(
+            concrete,
+            native_source,
+            selected_limits,
+            guard,
+        )
     sections: dict[SectionKind, bytes] = {
         kind: encode_table(tuple(sorted(set(values)))) for kind, values in rows.items()
     }
@@ -256,6 +287,7 @@ def encode_snapshot(
         selected_limits,
         guard,
         cancellation_token,
+        publication=None if native_source is None else native_source.publication,
     )
     required_identity = _identity_metadata_from_manifest(
         concrete.import_manifest,
@@ -602,6 +634,186 @@ def _materialize_for_wire(view: OntologyView, limits: ParseLimits) -> OntologySn
     )
 
 
+def _native_wire_source_v1(
+    snapshot: OntologySnapshot,
+    limits: ParseLimits,
+    cancellation_token: CancellationToken | None,
+) -> _NativeWireSource | None:
+    from pyowl_core.document.native_storage import _NativeOntologySnapshot
+
+    if type(snapshot) is not _NativeOntologySnapshot:
+        return None
+    aliases = getattr(snapshot, "_native_wire_structural_aliases_v1", None)
+    if not callable(aliases) or aliases() is not True:
+        return None
+    origin_rows = getattr(snapshot, "_native_origin_rows_v2", None)
+    if not callable(origin_rows):
+        raise BackendProtocolError(
+            "attested native wire source omits retained origin rows",
+            code="NATIVE_WIRE_SOURCE",
+        )
+
+    from pyowl_core.backends.native_handoff_v2 import (
+        NativeFacadeCollectionV2,
+        NativeOriginRowV2,
+        decode_native_auxiliary_row_v2,
+    )
+    from pyowl_core.backends.native_views import (
+        _encoded_structural_wire_rows_v1,
+        _produce_native_direct_view_v1,
+    )
+
+    publication = _produce_native_direct_view_v1(
+        snapshot,
+        scope=AxiomScope.CLOSURE,
+        document_key=None,
+        limits=limits,
+        budget=None,
+        cancellation_token=cancellation_token,
+    )
+    if publication is None:
+        raise BackendProtocolError(
+            "attested native wire source lacks direct retained columns",
+            code="NATIVE_WIRE_SOURCE",
+        )
+    structural = _encoded_structural_wire_rows_v1(publication, limits)
+    origins: list[_NativeWireOrigin] = []
+    for encoded in origin_rows():
+        decoded = decode_native_auxiliary_row_v2(
+            NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+            encoded,
+            max_row_bytes=max(1, len(encoded)),
+            limits=limits,
+        )
+        if type(decoded) is not NativeOriginRowV2:
+            raise BackendProtocolError(
+                "native wire source returned a non-origin auxiliary row",
+                code="NATIVE_WIRE_SOURCE",
+            )
+        origins.append(
+            _NativeWireOrigin(
+                decoded.digest,
+                decoded.document_key,
+                decoded.occurrence,
+                decoded.span,
+            )
+        )
+    return _NativeWireSource(
+        publication,
+        structural.nodes,
+        structural.roots,
+        structural.scalar_strings,
+        structural.sequences,
+        tuple(origins),
+    )
+
+
+def _collect_native_sections(
+    snapshot: OntologySnapshot,
+    source: _NativeWireSource,
+    limits: ParseLimits,
+    guard: Guard,
+) -> tuple[dict[SectionKind, list[bytes]], int]:
+    """Collect wire rows from attested retained columns, never scalar roots."""
+
+    rows: dict[SectionKind, list[bytes]] = {kind: [] for kind in REQUIRED_SECTIONS[:-1]}
+    strings = set(source.scalar_strings)
+    model_rows: dict[SectionKind, set[bytes]] = {
+        SectionKind.IRIS: set(),
+        SectionKind.ENTITIES: set(),
+        SectionKind.LITERALS: set(),
+        SectionKind.ANONYMOUS: set(),
+        SectionKind.ANNOTATIONS: set(),
+        SectionKind.TERMS: set(),
+        SectionKind.AXIOMS: set(),
+        SectionKind.SWRL: set(),
+    }
+    temporary = sum(len(value) for value in source.sequences)
+    for index, (tag, category, encoded) in enumerate(source.nodes):
+        guard.check(index)
+        kind = _native_model_section(tag, category)
+        model_rows[kind].add(encoded)
+        temporary += len(encoded)
+        if temporary > limits.max_temporary_bytes:
+            raise ResourceLimitError(
+                "wire encoder exceeds max_temporary_bytes",
+                limit="max_temporary_bytes",
+                observed=temporary,
+                allowed=limits.max_temporary_bytes,
+            )
+
+    for record, document in snapshot.iter_documents():
+        strings.add(record.document_key.encode("utf-8"))
+        strings.add(_CANONICAL_WIRE_PARSER.encode("utf-8"))
+        strings.add(_CANONICAL_WIRE_BACKEND.encode("utf-8"))
+        for iri in (
+            document.ontology_id.ontology_iri,
+            document.ontology_id.version_iri,
+            record.ontology_id.ontology_iri,
+            record.ontology_id.version_iri,
+            *document.direct_imports,
+        ):
+            if iri is not None:
+                model_rows[SectionKind.IRIS].add(canonical_bytes(iri, limits=limits))
+                strings.add(iri.value.encode("utf-8"))
+    for edge in snapshot.import_manifest.edges:
+        strings.add(edge.importing_document_key.encode("utf-8"))
+        model_rows[SectionKind.IRIS].add(canonical_bytes(edge.import_iri, limits=limits))
+        strings.add(edge.import_iri.value.encode("utf-8"))
+        if edge.resolved_document_key is not None:
+            strings.add(edge.resolved_document_key.encode("utf-8"))
+        if edge.resolver_name is not None:
+            strings.add(edge.resolver_name.encode("utf-8"))
+        if edge.diagnostic is not None:
+            strings.add(edge.diagnostic.code.encode("ascii"))
+    for origin in source.origins:
+        strings.add(origin.document_key.encode("utf-8"))
+    strings.add(snapshot.root_document_key.encode("utf-8"))
+
+    rows[SectionKind.STRINGS] = sorted(strings)
+    rows[SectionKind.SEQUENCES] = list(source.sequences)
+    for kind, values in model_rows.items():
+        if kind is not SectionKind.SWRL:
+            rows[kind] = sorted(values)
+    _enforce_id_spaces(rows, model_rows[SectionKind.SWRL])
+    ids = _build_ids(rows, model_rows[SectionKind.SWRL])
+    roots = {
+        kind: tuple(encoded for selected, encoded in source.roots if selected == kind)
+        for kind in (1, 2, 3)
+    }
+    document_rows = [
+        _document_row(snapshot, record, document, ids, encoded_roots=roots)
+        for record, document in snapshot.iter_documents()
+    ]
+    rows[SectionKind.DOCUMENTS] = sorted(document_rows)
+    rows[SectionKind.IMPORTS] = [_imports_row(snapshot.import_manifest, ids)]
+    rows[SectionKind.VIEW] = [_view_row(snapshot, ids, encoded_roots=roots)]
+    rows[SectionKind.ORIGINS] = _native_origin_rows(source.origins, ids)
+    flags = 0
+    if model_rows[SectionKind.SWRL]:
+        rows[SectionKind.SWRL] = sorted(model_rows[SectionKind.SWRL])
+        flags |= FEATURE_SWRL
+    return rows, flags
+
+
+def _native_model_section(tag: int, category: str) -> SectionKind:
+    if tag == 1:
+        return SectionKind.IRIS
+    if tag == 2:
+        return SectionKind.ENTITIES
+    if tag == 3:
+        return SectionKind.ANONYMOUS
+    if tag == 4:
+        return SectionKind.LITERALS
+    if tag == 5:
+        return SectionKind.ANNOTATIONS
+    if category.endswith("_axiom"):
+        return SectionKind.AXIOMS
+    if category == "swrl_extension":
+        return SectionKind.SWRL
+    return SectionKind.TERMS
+
+
 def _collect_sections(
     snapshot: OntologySnapshot,
     limits: ParseLimits,
@@ -785,6 +997,8 @@ def _document_row(
     record: DocumentRecord,
     document: OntologyDocument,
     ids: Mapping[SectionKind, Mapping[bytes, int]],
+    *,
+    encoded_roots: Mapping[int, Sequence[bytes]] | None = None,
 ) -> bytes:
     # Required wire sections describe canonical ontology structure. Exact
     # acquisition provenance remains available on direct documents and may be
@@ -817,27 +1031,34 @@ def _document_row(
     writer.u16(1)
     writer.u32(MODEL_SCHEMA)
     _write_references(writer, document.direct_imports, SectionKind.IRIS, ids)
-    _write_references(writer, document.ontology_annotations, SectionKind.ANNOTATIONS, ids)
-    _write_references(writer, document.axioms, SectionKind.AXIOMS, ids)
-    _write_references(writer, document.extension_components, SectionKind.SWRL, ids)
-    _write_references(
-        writer,
-        snapshot.ontology_annotations(scope=AxiomScope.DOCUMENT, document_key=record.document_key),
-        SectionKind.ANNOTATIONS,
-        ids,
-    )
-    _write_references(
-        writer,
-        snapshot.iter_axioms(scope=AxiomScope.DOCUMENT, document_key=record.document_key),
-        SectionKind.AXIOMS,
-        ids,
-    )
-    _write_references(
-        writer,
-        snapshot.iter_extensions(scope=AxiomScope.DOCUMENT, document_key=record.document_key),
-        SectionKind.SWRL,
-        ids,
-    )
+    if encoded_roots is None:
+        _write_references(writer, document.ontology_annotations, SectionKind.ANNOTATIONS, ids)
+        _write_references(writer, document.axioms, SectionKind.AXIOMS, ids)
+        _write_references(writer, document.extension_components, SectionKind.SWRL, ids)
+        _write_references(
+            writer,
+            snapshot.ontology_annotations(
+                scope=AxiomScope.DOCUMENT,
+                document_key=record.document_key,
+            ),
+            SectionKind.ANNOTATIONS,
+            ids,
+        )
+        _write_references(
+            writer,
+            snapshot.iter_axioms(scope=AxiomScope.DOCUMENT, document_key=record.document_key),
+            SectionKind.AXIOMS,
+            ids,
+        )
+        _write_references(
+            writer,
+            snapshot.iter_extensions(scope=AxiomScope.DOCUMENT, document_key=record.document_key),
+            SectionKind.SWRL,
+            ids,
+        )
+    else:
+        _write_encoded_root_references(writer, encoded_roots, ids)
+        _write_encoded_root_references(writer, encoded_roots, ids)
     return writer.finish()
 
 
@@ -863,6 +1084,8 @@ def _imports_row(
 def _view_row(
     snapshot: OntologySnapshot,
     ids: Mapping[SectionKind, Mapping[bytes, int]],
+    *,
+    encoded_roots: Mapping[int, Sequence[bytes]] | None = None,
 ) -> bytes:
     writer = ByteWriter()
     writer.u32(_string_id(snapshot.root_document_key, ids))
@@ -880,13 +1103,17 @@ def _view_row(
     _write_fingerprint(writer, snapshot.logical_fingerprint)
     _write_fingerprint(writer, snapshot.signature_fingerprint)
     writer.u64(len(snapshot.documents))
-    closure_annotations = snapshot.ontology_annotations()
-    closure_axioms = tuple(snapshot.iter_axioms())
-    closure_extensions = tuple(snapshot.iter_extensions())
-    writer.u64(len(closure_axioms))
-    _write_references(writer, closure_annotations, SectionKind.ANNOTATIONS, ids)
-    _write_references(writer, closure_axioms, SectionKind.AXIOMS, ids)
-    _write_references(writer, closure_extensions, SectionKind.SWRL, ids)
+    if encoded_roots is None:
+        closure_annotations = snapshot.ontology_annotations()
+        closure_axioms = tuple(snapshot.iter_axioms())
+        closure_extensions = tuple(snapshot.iter_extensions())
+        writer.u64(len(closure_axioms))
+        _write_references(writer, closure_annotations, SectionKind.ANNOTATIONS, ids)
+        _write_references(writer, closure_axioms, SectionKind.AXIOMS, ids)
+        _write_references(writer, closure_extensions, SectionKind.SWRL, ids)
+    else:
+        writer.u64(len(encoded_roots[2]))
+        _write_encoded_root_references(writer, encoded_roots, ids)
     return writer.finish()
 
 
@@ -976,6 +1203,27 @@ def _origin_rows(
     return rows
 
 
+def _native_origin_rows(
+    origins: Sequence[_NativeWireOrigin],
+    ids: Mapping[SectionKind, Mapping[bytes, int]],
+) -> list[bytes]:
+    by_digest: dict[bytes, set[str]] = {}
+    for origin in origins:
+        by_digest.setdefault(origin.digest, set()).add(origin.document_key)
+    rows: list[bytes] = []
+    for digest, document_keys in sorted(by_digest.items()):
+        writer = ByteWriter()
+        writer.raw(digest)
+        writer.u64(len(document_keys))
+        for document_key in sorted(document_keys):
+            writer.u32(_string_id(document_key, ids))
+            writer.u64(0)
+            for _ in range(6):
+                writer.u64(_NONE_U64)
+        rows.append(writer.finish())
+    return rows
+
+
 def _footer_row(
     snapshot: OntologySnapshot,
     sections: Mapping[SectionKind, bytes],
@@ -998,6 +1246,8 @@ def _encoded_structural_section_v1(
     limits: ParseLimits,
     guard: Guard,
     cancellation_token: CancellationToken | None,
+    *,
+    publication: object | None = None,
 ) -> bytes:
     """Encode one aligned closure-column row for zero-copy mmap publication."""
 
@@ -1006,18 +1256,27 @@ def _encoded_structural_section_v1(
         ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
         ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
         ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        EncodedStructuralViewV1,
         _encoded_structural_root_digest_v1,
         produce_encoded_structural_view_v1,
     )
 
-    publication = produce_encoded_structural_view_v1(
-        snapshot,
-        scope=AxiomScope.CLOSURE,
-        limits=limits,
-        materialize_segments=True,
-        _cancellation_token=cancellation_token,
-    )
-    buffers = publication.buffers
+    if publication is None:
+        selected = produce_encoded_structural_view_v1(
+            snapshot,
+            scope=AxiomScope.CLOSURE,
+            limits=limits,
+            materialize_segments=True,
+            _cancellation_token=cancellation_token,
+        )
+    elif type(publication) is EncodedStructuralViewV1:
+        selected = publication
+    else:  # pragma: no cover - internal type invariant
+        raise BackendProtocolError(
+            "native wire source returned an invalid encoded publication",
+            code="NATIVE_WIRE_SOURCE",
+        )
+    buffers = selected.buffers
     root_digest = _encoded_structural_root_digest_v1(buffers, limits)
     row_header_bytes = _ENCODED_STRUCTURAL_HEADER_V1.size + len(_BUFFER_SPECS) * (
         _ENCODED_STRUCTURAL_DIRECTORY_V1.size
@@ -1259,6 +1518,34 @@ def _write_references(
 ) -> None:
     selected = sorted({_node_id(value, kind, ids) for value in values})
     writer.ids(selected)
+
+
+def _write_encoded_references(
+    writer: ByteWriter,
+    values: Iterable[bytes],
+    kind: SectionKind,
+    ids: Mapping[SectionKind, Mapping[bytes, int]],
+) -> None:
+    try:
+        selected = sorted({ids[kind][value] for value in values})
+    except KeyError as error:
+        raise ValueError(
+            f"wire encoder did not intern retained canonical row in {kind.name}"
+        ) from error
+    writer.ids(selected)
+
+
+def _write_encoded_root_references(
+    writer: ByteWriter,
+    roots: Mapping[int, Sequence[bytes]],
+    ids: Mapping[SectionKind, Mapping[bytes, int]],
+) -> None:
+    for root_kind, section in (
+        (1, SectionKind.ANNOTATIONS),
+        (2, SectionKind.AXIOMS),
+        (3, SectionKind.SWRL),
+    ):
+        _write_encoded_references(writer, roots[root_kind], section, ids)
 
 
 def _node_id(
