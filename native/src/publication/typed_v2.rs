@@ -697,6 +697,10 @@ impl TypedFacadeStorageV2 {
             .len()
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("typed V2 axiom-type offset count overflow"))?;
+        let expected_category_offset_count =
+            index.category_codes().len().checked_add(1).ok_or_else(|| {
+                NativeError::limit("typed V2 axiom category offset count overflow")
+            })?;
         let counters = index.counters();
         if !index.owner().shares_storage_with(&self.arena)
             || index.tags().windows(2).any(|pair| pair[0] >= pair[1])
@@ -707,6 +711,20 @@ impl TypedFacadeStorageV2 {
                     NativeError::limit("typed V2 axiom-type posting count exceeds u64")
                 })?)
             || index.offsets().windows(2).any(|pair| pair[0] > pair[1])
+            || index
+                .category_codes()
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || index.category_offsets().len() != expected_category_offset_count
+            || index.category_offsets().first() != Some(&0)
+            || index.category_offsets().last().copied()
+                != Some(u64::try_from(index.postings().len()).map_err(|_| {
+                    NativeError::limit("typed V2 axiom category posting count exceeds u64")
+                })?)
+            || index
+                .category_offsets()
+                .windows(2)
+                .any(|pair| pair[0] > pair[1])
             || index
                 .postings()
                 .iter()
@@ -719,6 +737,10 @@ impl TypedFacadeStorageV2 {
             || counters.constructor_groups
                 != u64::try_from(index.tags().len()).map_err(|_| {
                     NativeError::limit("typed V2 axiom-type group count exceeds u64")
+                })?
+            || counters.category_groups
+                != u64::try_from(index.category_codes().len()).map_err(|_| {
+                    NativeError::limit("typed V2 axiom category group count exceeds u64")
                 })?
             || counters.complete_root_encode_calls != 0
         {

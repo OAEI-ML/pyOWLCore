@@ -7,10 +7,15 @@ use crate::error::{NativeError, NativeResult};
 use crate::limits::{LimitKey, Limits};
 use crate::model::{Category, ComponentId, NativeComponentArena};
 
+const AXIOM_CATEGORY_DECLARATION_V1: u8 = 1;
+const AXIOM_CATEGORY_LOGICAL_V1: u8 = 2;
+const AXIOM_CATEGORY_ANNOTATION_V1: u8 = 3;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RetainedAxiomTypeIndexCountersV1 {
     pub(crate) axiom_rows: u64,
     pub(crate) constructor_groups: u64,
+    pub(crate) category_groups: u64,
     pub(crate) retained_buffer_bytes: u64,
     pub(crate) peak_owned_bytes: u64,
     pub(crate) canonical_work: u64,
@@ -22,6 +27,8 @@ pub(crate) struct RetainedAxiomTypeIndexV1 {
     owner: NativeComponentArena,
     tags: Vec<u16>,
     offsets: Vec<u64>,
+    category_codes: Vec<u8>,
+    category_offsets: Vec<u64>,
     postings: Vec<u64>,
     counters: RetainedAxiomTypeIndexCountersV1,
 }
@@ -41,6 +48,14 @@ impl RetainedAxiomTypeIndexV1 {
 
     pub(crate) fn postings(&self) -> &[u64] {
         &self.postings
+    }
+
+    pub(crate) fn category_codes(&self) -> &[u8] {
+        &self.category_codes
+    }
+
+    pub(crate) fn category_offsets(&self) -> &[u64] {
+        &self.category_offsets
     }
 
     pub(crate) const fn counters(&self) -> &RetainedAxiomTypeIndexCountersV1 {
@@ -75,7 +90,9 @@ pub(crate) fn build_retained_axiom_type_index_v1(
     guard.check(0, true)?;
     let mut work = 0_u64;
     let mut groups = 0_usize;
+    let mut category_groups = 0_usize;
     let mut previous = None;
+    let mut previous_category = None;
     for identifier in roots {
         step(&mut guard, &mut work, limits)?;
         if arena.category(*identifier)? != Category::Axiom {
@@ -84,11 +101,9 @@ pub(crate) fn build_retained_axiom_type_index_v1(
             ));
         }
         let tag = arena.tag(*identifier)?;
-        if !axiom_root_tag(tag) {
-            return Err(NativeError::protocol(
-                "retained axiom-type index received a non-root axiom constructor",
-            ));
-        }
+        let category = axiom_category_code(tag).ok_or_else(|| {
+            NativeError::protocol("retained axiom-type index received a non-root axiom constructor")
+        })?;
         if previous.is_some_and(|prior| tag < prior) {
             return Err(NativeError::protocol(
                 "retained axiom-type roots are not canonical by constructor",
@@ -100,11 +115,31 @@ pub(crate) fn build_retained_axiom_type_index_v1(
                 .ok_or_else(|| NativeError::limit("retained axiom-type group count overflow"))?;
             previous = Some(tag);
         }
+        if previous_category.is_some_and(|prior| category < prior) {
+            return Err(NativeError::protocol(
+                "retained axiom-type roots are not canonical by category",
+            ));
+        }
+        if previous_category != Some(category) {
+            category_groups = category_groups
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("retained axiom-type category count overflow"))?;
+            previous_category = Some(category);
+        }
     }
     let offset_count = groups
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("retained axiom-type offset count overflow"))?;
-    let minimum_buffer_bytes = retained_buffer_bytes(groups, offset_count, roots.len())?;
+    let category_offset_count = category_groups
+        .checked_add(1)
+        .ok_or_else(|| NativeError::limit("retained axiom-type category offset overflow"))?;
+    let minimum_buffer_bytes = retained_buffer_bytes(
+        groups,
+        offset_count,
+        category_groups,
+        category_offset_count,
+        roots.len(),
+    )?;
     check_memory(arena, caller_external_bytes, minimum_buffer_bytes, limits)?;
     work = work
         .checked_add(
@@ -125,12 +160,25 @@ pub(crate) fn build_retained_axiom_type_index_v1(
     offsets
         .try_reserve_exact(offset_count)
         .map_err(|_| NativeError::limit("retained axiom-type offset allocation failed"))?;
+    let mut category_codes = Vec::new();
+    category_codes
+        .try_reserve_exact(category_groups)
+        .map_err(|_| NativeError::limit("retained axiom-type category allocation failed"))?;
+    let mut category_offsets = Vec::new();
+    category_offsets
+        .try_reserve_exact(category_offset_count)
+        .map_err(|_| NativeError::limit("retained axiom-type category offset allocation failed"))?;
     let mut postings = Vec::new();
     postings
         .try_reserve_exact(roots.len())
         .map_err(|_| NativeError::limit("retained axiom-type posting allocation failed"))?;
-    let buffer_bytes =
-        retained_buffer_bytes(tags.capacity(), offsets.capacity(), postings.capacity())?;
+    let buffer_bytes = retained_buffer_bytes(
+        tags.capacity(),
+        offsets.capacity(),
+        category_codes.capacity(),
+        category_offsets.capacity(),
+        postings.capacity(),
+    )?;
     check_memory(arena, caller_external_bytes, buffer_bytes, limits)?;
     let allocation_slack = buffer_bytes
         .checked_sub(minimum_buffer_bytes)
@@ -147,10 +195,15 @@ pub(crate) fn build_retained_axiom_type_index_v1(
         ));
     }
     offsets.push(0);
+    category_offsets.push(0);
     previous = None;
+    previous_category = None;
     for (ordinal, identifier) in roots.iter().copied().enumerate() {
         step(&mut guard, &mut work, limits)?;
         let tag = arena.tag(identifier)?;
+        let category = axiom_category_code(tag).ok_or_else(|| {
+            NativeError::protocol("retained axiom-type category changed during construction")
+        })?;
         if previous != Some(tag) {
             if previous.is_some() {
                 offsets.push(u64::try_from(postings.len()).map_err(|_| {
@@ -159,6 +212,15 @@ pub(crate) fn build_retained_axiom_type_index_v1(
             }
             tags.push(tag);
             previous = Some(tag);
+        }
+        if previous_category != Some(category) {
+            if previous_category.is_some() {
+                category_offsets.push(u64::try_from(postings.len()).map_err(|_| {
+                    NativeError::limit("retained axiom-type category offset exceeds u64")
+                })?);
+            }
+            category_codes.push(category);
+            previous_category = Some(category);
         }
         postings.push(
             u64::try_from(ordinal)
@@ -172,7 +234,19 @@ pub(crate) fn build_retained_axiom_type_index_v1(
             })?,
         );
     }
-    if tags.len() != groups || offsets.len() != offset_count || postings.len() != roots.len() {
+    if !category_codes.is_empty() {
+        category_offsets.push(
+            u64::try_from(postings.len()).map_err(|_| {
+                NativeError::limit("retained axiom-type category offset exceeds u64")
+            })?,
+        );
+    }
+    if tags.len() != groups
+        || offsets.len() != offset_count
+        || category_codes.len() != category_groups
+        || category_offsets.len() != category_offset_count
+        || postings.len() != roots.len()
+    {
         return Err(NativeError::protocol(
             "retained axiom-type layout accounting drifted",
         ));
@@ -188,14 +262,19 @@ pub(crate) fn build_retained_axiom_type_index_v1(
         .ok_or_else(|| NativeError::limit("retained axiom-type memory overflow"))?;
     let constructor_groups = u64::try_from(groups)
         .map_err(|_| NativeError::limit("retained axiom-type group count exceeds u64"))?;
+    let category_groups = u64::try_from(category_groups)
+        .map_err(|_| NativeError::limit("retained axiom-type category count exceeds u64"))?;
     Ok(RetainedAxiomTypeIndexV1 {
         owner: arena.clone(),
         tags,
         offsets,
+        category_codes,
+        category_offsets,
         postings,
         counters: RetainedAxiomTypeIndexCountersV1 {
             axiom_rows: root_rows,
             constructor_groups,
+            category_groups,
             retained_buffer_bytes,
             peak_owned_bytes,
             canonical_work: work,
@@ -216,17 +295,31 @@ fn step(guard: &mut Guard, work: &mut u64, limits: &Limits) -> NativeResult<()> 
     guard.check(*work, false)
 }
 
-fn axiom_root_tag(tag: u16) -> bool {
-    matches!(
-        tag,
-        60..=64 | 70..=82 | 90..=95 | 100..=101 | 110..=116 | 120..=123
-    )
+fn axiom_category_code(tag: u16) -> Option<u8> {
+    match tag {
+        60 => Some(AXIOM_CATEGORY_DECLARATION_V1),
+        61..=64 | 70..=82 | 90..=95 | 100..=101 | 110..=116 => Some(AXIOM_CATEGORY_LOGICAL_V1),
+        120..=123 => Some(AXIOM_CATEGORY_ANNOTATION_V1),
+        _ => None,
+    }
 }
 
-fn retained_buffer_bytes(tags: usize, offsets: usize, postings: usize) -> NativeResult<usize> {
+fn retained_buffer_bytes(
+    tags: usize,
+    offsets: usize,
+    categories: usize,
+    category_offsets: usize,
+    postings: usize,
+) -> NativeResult<usize> {
     tags.checked_mul(size_of::<u16>())
         .and_then(|value| {
             offsets
+                .checked_mul(size_of::<u64>())
+                .and_then(|part| value.checked_add(part))
+        })
+        .and_then(|value| value.checked_add(categories))
+        .and_then(|value| {
+            category_offsets
                 .checked_mul(size_of::<u64>())
                 .and_then(|part| value.checked_add(part))
         })
@@ -362,20 +455,53 @@ mod tests {
 
         assert_eq!(index.tags(), [60, 61]);
         assert_eq!(index.offsets(), [0, 2, 3]);
+        assert_eq!(index.category_codes(), [1, 2]);
+        assert_eq!(index.category_offsets(), [0, 2, 3]);
         assert_eq!(index.postings(), [0, 1, 2]);
         assert!(index.owner().shares_storage_with(&arena));
         assert_eq!(index.counters().axiom_rows, 3);
         assert_eq!(index.counters().constructor_groups, 2);
+        assert_eq!(index.counters().category_groups, 2);
         assert_eq!(index.counters().complete_root_encode_calls, 0);
         assert_eq!(
             index.counters().retained_buffer_bytes,
             u64::try_from(
                 index.tags.capacity() * size_of::<u16>()
                     + index.offsets.capacity() * size_of::<u64>()
+                    + index.category_codes.capacity()
+                    + index.category_offsets.capacity() * size_of::<u64>()
                     + index.postings.capacity() * size_of::<u64>()
             )
             .expect("allocated byte count")
         );
+    }
+
+    #[test]
+    fn axiom_category_table_covers_only_the_complete_root_ledger() {
+        assert_eq!(axiom_category_code(60), Some(1));
+        for tag in 61..=64 {
+            assert_eq!(axiom_category_code(tag), Some(2));
+        }
+        for tag in 70..=82 {
+            assert_eq!(axiom_category_code(tag), Some(2));
+        }
+        for tag in 90..=95 {
+            assert_eq!(axiom_category_code(tag), Some(2));
+        }
+        for tag in 100..=101 {
+            assert_eq!(axiom_category_code(tag), Some(2));
+        }
+        for tag in 110..=116 {
+            assert_eq!(axiom_category_code(tag), Some(2));
+        }
+        for tag in 120..=123 {
+            assert_eq!(axiom_category_code(tag), Some(3));
+        }
+        for tag in [
+            0, 5, 59, 65, 69, 83, 89, 96, 99, 102, 109, 117, 119, 124, 148,
+        ] {
+            assert_eq!(axiom_category_code(tag), None);
+        }
     }
 
     #[test]

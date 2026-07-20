@@ -18,6 +18,7 @@ use pyo3::types::{PyAny, PyBool, PyBytes, PyDict, PyInt, PyModule, PyTuple, PyTy
 
 use crate::cancel::{Cancellation, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
+use crate::index::RetainedAxiomTypeIndexV1;
 use crate::limits::Limits;
 use crate::model::EncodedStructuralColumnsV1;
 
@@ -972,6 +973,28 @@ impl PublicationStorageV2 {
         )?;
         self.counters.add_pairs(&[(ENCODED_VIEW_REQUESTS, 1)])?;
         Ok(columns)
+    }
+
+    pub(crate) fn retained_axiom_type_index(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> NativeResult<RetainedAxiomTypeIndexV1> {
+        let typed = self.typed_structural.as_deref().ok_or_else(|| {
+            NativeError::protocol("native V2 publication has no typed structural owner")
+        })?;
+        typed.axiom_type_index(
+            scope,
+            document_ordinal,
+            raw_document_owner,
+            limits,
+            cancellation,
+            interrupt,
+        )
     }
 
     /// Attach the production typed structural owner without retaining a
@@ -2978,6 +3001,20 @@ mod tests {
             )
             .expect("direct closure columns");
         assert_eq!(columns.counters().root_rows, 5);
+        let index = storage
+            .retained_axiom_type_index(
+                TypedFacadeScopeV2::Closure,
+                None,
+                false,
+                &limits,
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("direct closure axiom-type index");
+        assert_eq!(index.tags(), [60]);
+        assert_eq!(index.category_codes(), [1]);
+        assert_eq!(index.postings(), [0, 1]);
+        assert_eq!(index.counters().complete_root_encode_calls, 0);
         let after = storage.counters.snapshot();
         assert_eq!(after[ENCODED_VIEW_REQUESTS], 1);
         assert_eq!(&after[84..89], &[0, 1, 0, 0, 0]);

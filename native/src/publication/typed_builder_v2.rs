@@ -1068,6 +1068,8 @@ mod tests {
             .expect("closure axiom-type index");
         assert_eq!(closure.tags(), [60]);
         assert_eq!(closure.offsets(), [0, 4]);
+        assert_eq!(closure.category_codes(), [1]);
+        assert_eq!(closure.category_offsets(), [0, 4]);
         assert_eq!(closure.postings(), [0, 1, 2, 3]);
         assert_eq!(closure.counters().axiom_rows, 4);
         assert_eq!(closure.counters().complete_root_encode_calls, 0);
