@@ -98,6 +98,7 @@ pub(super) fn parse_rdfxml_retained_v2(
     cancellation: Cancellation,
     interrupt: Option<crate::cancel::InterruptSlot>,
     caller_external_bytes: usize,
+    collect_provenance: bool,
     require_empty_imports: bool,
 ) -> NativeResult<RetainedRdfXmlOutcomeV2> {
     let parse_started = Instant::now();
@@ -129,6 +130,7 @@ pub(super) fn parse_rdfxml_retained_v2(
         rows,
         document.decoded_codepoints,
         document.mapping.total_triples,
+        collect_provenance,
     )?;
     let result_encode_ns = elapsed_ns(encode_started)?;
     session.finish()?;
@@ -275,6 +277,7 @@ mod tests {
             cancellation,
             None,
             source.len(),
+            true,
             false,
         )
         .expect("retained RDF/XML outcome");
@@ -294,12 +297,21 @@ mod tests {
             &outcome.metadata,
             b"manifest",
             "document-key",
-            false,
+            true,
             &limits,
             Cancellation::with_duration(None),
             None,
         )
         .expect("prepared RDF/XML publication");
+        assert_eq!(prepared.origin_rows.as_ref().map(Vec::len), Some(1));
+        assert_eq!(
+            prepared
+                .origin_rows
+                .as_ref()
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.last()),
+            Some(&0),
+        );
         let report = prepared.rdf_report.expect("retained RDF report");
         assert!(report.conformant);
         assert_eq!(report.consumed_triples, 2);
@@ -339,6 +351,7 @@ mod tests {
                 cancellation,
                 None,
                 source.len(),
+                false,
                 require_empty_imports,
             )
             .err()

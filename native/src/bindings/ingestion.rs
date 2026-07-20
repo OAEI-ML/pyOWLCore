@@ -91,10 +91,10 @@ fn _parse_rdfxml_retained_v2<'py>(
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<RetainedRdfXmlParseBindingResult> {
-    if collect_provenance || allow_partial_rdf_mapping {
+    if allow_partial_rdf_mapping {
         return Err(crate::python_error(NativeError::new(
             "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
-            "native retained RDF/XML publication does not yet support provenance or partial mapping",
+            "native retained RDF/XML publication does not support partial mapping",
         )));
     }
     let limits = crate::limits_from_python(config)?;
@@ -121,6 +121,7 @@ fn _parse_rdfxml_retained_v2<'py>(
             cancellation,
             Some(interrupt),
             accounted_input,
+            collect_provenance,
             require_empty_imports,
         )?;
         let parser_bytes = u64::try_from(input_size)

@@ -1051,7 +1051,6 @@ def _publish_retained_snapshot_v2(
         or options.preserve_source_map
         or options.validate_owl2_dl
         or detection.format.value != expected_format
-        or (rdf_total_triples is not None and options.collect_provenance)
     ):
         raise AssertionError("retained publication was invoked for an ineligible load")
     if seed.imports and (

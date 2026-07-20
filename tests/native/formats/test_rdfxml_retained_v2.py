@@ -116,7 +116,7 @@ def _retained_snapshot(
         source,
         document_iri=None if document_iri is None else document_iri.value,
         limits=selected_options.limits,
-        collect_provenance=False,
+        collect_provenance=selected_options.collect_provenance,
         allow_partial_rdf_mapping=False,
         require_empty_imports=require_empty_imports,
         cancellation_token=cancellation_token,
@@ -215,13 +215,7 @@ def test_rdfxml_capability_remains_absent_and_public_dispatch_does_not_fallback(
 
 
 def test_private_rdfxml_seam_rejects_unowned_semantics_before_publication() -> None:
-    with pytest.raises(UnsupportedSyntaxError, match="does not yet support provenance"):
-        native._parse_rdfxml_retained_v2(
-            SOURCE,
-            document_iri=DOCUMENT_IRI.value,
-            collect_provenance=True,
-        )
-    with pytest.raises(UnsupportedSyntaxError, match="does not yet support provenance"):
+    with pytest.raises(UnsupportedSyntaxError, match="does not support partial mapping"):
         native._parse_rdfxml_retained_v2(
             SOURCE,
             document_iri=DOCUMENT_IRI.value,
@@ -245,6 +239,44 @@ def test_private_rdfxml_seam_rejects_unowned_semantics_before_publication() -> N
             document_iri=DOCUMENT_IRI.value,
             require_empty_imports=True,
         )
+
+
+def test_private_provenance_rows_match_python_and_remain_native_until_access() -> None:
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            collect_provenance=True,
+        )
+
+    reference = load_snapshot(
+        SOURCE,
+        document_iri=DOCUMENT_IRI,
+        options=options(BackendPreference.PYTHON),
+    )
+    selected = cast(
+        Any,
+        _retained_snapshot(options=options(BackendPreference.NATIVE)),
+    )
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    before = raw_owner._publication_counters_v2()
+    ingestion = selected._native_ingestion_counters_v2()
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    expected_origin_rows = sum(
+        len(values) for values in reference.origin_index.entries.values()
+    )
+    assert before.retained_origin_rows == 2 * expected_origin_rows
+    assert before.retained_origin_bytes > 0
+    assert before.origin_rows_emitted == 0
+    assert ingestion.provenance_occurrence_records_materialized == 0
+    assert ingestion.canonical_bytes_copied_to_python == 0
+    assert selected.origin_index == reference.origin_index
+    after = raw_owner._publication_counters_v2()
+    assert after.origin_rows_emitted >= expected_origin_rows
+    assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+    assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
 def test_private_record_unresolved_policy_matches_python_without_resolver() -> None:

@@ -62,7 +62,7 @@ pub(crate) struct FingerprintEvidenceV2 {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RetainedOccurrenceV2 {
     digest: [u8; 32],
-    span: Span,
+    span: Option<Span>,
     source_order: u64,
 }
 
@@ -221,6 +221,7 @@ pub(crate) fn build_rdfxml_seed(
     rows: [&[Vec<u8>]; 3],
     decoded_codepoints: u64,
     total_triples: u64,
+    collect_provenance: bool,
 ) -> NativeResult<(Vec<u8>, RetainedParseMetadataV2)> {
     let ontology_node = ontology_iri
         .map(|value| iri(value.to_owned()))
@@ -256,6 +257,7 @@ pub(crate) fn build_rdfxml_seed(
     let canonical_rows_scanned = occurrence_count
         .checked_add(metadata_iri_objects)
         .ok_or_else(|| NativeError::limit("native RDF/XML canonical row count overflow"))?;
+    let occurrences = rdfxml_retained_occurrences(rows, occurrence_count, collect_provenance)?;
 
     let mut encoded = Vec::new();
     append(&mut encoded, RETAINED_RDFXML_SEED_MAGIC_V2)?;
@@ -291,7 +293,7 @@ pub(crate) fn build_rdfxml_seed(
             document_fingerprint,
             occurrence_count,
             root_counts,
-            occurrences: Vec::new(),
+            occurrences,
             rdf_total_triples: Some(total_triples),
         },
     ))
@@ -441,11 +443,6 @@ pub(crate) fn prepare_publication(
     {
         return Err(NativeError::protocol(
             "native retained publication metadata diverges from its arena",
-        ));
-    }
-    if collect_provenance && metadata.rdf_total_triples.is_some() {
-        return Err(NativeError::protocol(
-            "native retained RDF/XML provenance is not implemented",
         ));
     }
     if collect_provenance {
@@ -864,18 +861,43 @@ fn retained_occurrences(
     {
         result.push(RetainedOccurrenceV2 {
             digest: structural_digest_v1(value.node.as_bytes()),
-            span: value.span,
+            span: Some(value.span),
             source_order: u64::try_from(source_order)
                 .map_err(|_| NativeError::limit("native occurrence ordinal exceeds u64"))?,
         });
     }
     result.sort_unstable_by_key(|value| {
-        (
-            value.span.byte_start,
-            value.span.byte_end,
-            value.source_order,
-        )
+        value
+            .span
+            .map_or((u64::MAX, u64::MAX, value.source_order), |span| {
+                (span.byte_start, span.byte_end, value.source_order)
+            })
     });
+    Ok(result)
+}
+
+fn rdfxml_retained_occurrences(
+    rows: [&[Vec<u8>]; 3],
+    count: u64,
+    collect: bool,
+) -> NativeResult<Vec<RetainedOccurrenceV2>> {
+    if !collect {
+        return Ok(Vec::new());
+    }
+    let capacity = usize::try_from(count)
+        .map_err(|_| NativeError::limit("native RDF/XML occurrence count exceeds usize"))?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(capacity)
+        .map_err(|_| NativeError::limit("native RDF/XML occurrence allocation failed"))?;
+    for (source_order, row) in rows.into_iter().flatten().enumerate() {
+        result.push(RetainedOccurrenceV2 {
+            digest: structural_digest_v1(row),
+            span: None,
+            source_order: u64::try_from(source_order)
+                .map_err(|_| NativeError::limit("native RDF/XML occurrence ordinal exceeds u64"))?,
+        });
+    }
     Ok(result)
 }
 
@@ -937,7 +959,7 @@ fn encode_origin_row(
     digest: [u8; 32],
     document_key: &str,
     occurrence: u64,
-    span: Span,
+    span: Option<Span>,
 ) -> NativeResult<Vec<u8>> {
     let key = document_key.as_bytes();
     let key_len = u32::try_from(key.len())
@@ -945,7 +967,7 @@ fn encode_origin_row(
     let size = 32_usize
         .checked_add(4)
         .and_then(|value| value.checked_add(key.len()))
-        .and_then(|value| value.checked_add(8 + 1 + 4 * 8))
+        .and_then(|value| value.checked_add(8 + 1 + usize::from(span.is_some()) * 4 * 8))
         .ok_or_else(|| NativeError::limit("native origin row size overflow"))?;
     let mut row = Vec::new();
     row.try_reserve_exact(size)
@@ -954,9 +976,14 @@ fn encode_origin_row(
     row.extend_from_slice(&key_len.to_le_bytes());
     row.extend_from_slice(key);
     row.extend_from_slice(&occurrence.to_le_bytes());
-    row.push(0x8f);
-    for coordinate in [span.byte_start, span.byte_end, span.line, span.column] {
-        row.extend_from_slice(&coordinate.to_le_bytes());
+    match span {
+        Some(span) => {
+            row.push(0x8f);
+            for coordinate in [span.byte_start, span.byte_end, span.line, span.column] {
+                row.extend_from_slice(&coordinate.to_le_bytes());
+            }
+        }
+        None => row.push(0),
     }
     Ok(row)
 }
