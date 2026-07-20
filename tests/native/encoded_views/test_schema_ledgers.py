@@ -44,6 +44,12 @@ def test_generated_schema_and_version_decision_are_current() -> None:
 
     assert decision["status"] == "frozen-unadvertised"
     assert decision["capability_advertised"] is False
+    assert decision["public_contract"] == {
+        "descriptor_digest_export": "pyowl_core.ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1",
+        "request_type_digest_attribute": "pyowl_core.EncodedStructuralView.DESCRIPTOR_SHA256",
+        "descriptor_digest_type": "exact immutable bytes32",
+        "materialization_required": False,
+    }
     assert decision["amendment"] == {
         "id": "WP17-V1-anonymous-scope-map",
         "phase": "pre-advertisement",

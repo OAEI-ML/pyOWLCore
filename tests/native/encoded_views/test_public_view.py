@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 import pyowl_core
-from pyowl_core.backends.native_views import EncodedStructuralViewV1
+from pyowl_core.backends.native_views import (
+    ENCODED_STRUCTURAL_DESCRIPTOR_V1,
+    EncodedStructuralViewV1,
+)
 from pyowl_core.document.native_storage import ontology_snapshot_from_native_publication_v2
 from pyowl_core.exceptions import ResourceLimitError
 from pyowl_core.index import IndexCachePolicy, index_cache_report
@@ -13,6 +18,19 @@ from tests.native.encoded_views._support import (
     scalar_root_bytes,
 )
 from tests.native.publication_handoff._support_v2 import publication
+
+_TOP_LEVEL_DESCRIPTOR_DIGEST: bytes = pyowl_core.ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1
+_REQUEST_TYPE_DESCRIPTOR_DIGEST: bytes = pyowl_core.EncodedStructuralView.DESCRIPTOR_SHA256
+
+
+def test_frozen_descriptor_digest_is_available_without_building_a_view() -> None:
+    assert _TOP_LEVEL_DESCRIPTOR_DIGEST is _REQUEST_TYPE_DESCRIPTOR_DIGEST
+    assert type(_TOP_LEVEL_DESCRIPTOR_DIGEST) is bytes
+    assert len(_TOP_LEVEL_DESCRIPTOR_DIGEST) == 32
+    assert (
+        hashlib.sha256(ENCODED_STRUCTURAL_DESCRIPTOR_V1).digest()
+        == _TOP_LEVEL_DESCRIPTOR_DIGEST
+    )
 
 
 def test_public_request_type_routes_through_cached_snapshot_view_boundary() -> None:

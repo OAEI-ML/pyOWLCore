@@ -62,6 +62,19 @@ hierarchies, domains/ranges, inverse/property chains, and ontology identities.
 They expose asserted structure only; inferred taxonomy and realization remain
 reasoner-owned.
 
+## Bulk structural handoff
+
+`EncodedStructuralView` is the public request type for the frozen structural-
+columns schema. Consumers can key compatibility and provenance without building
+a view by reading either
+`pyowl_core.ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1` or the identical
+`EncodedStructuralView.DESCRIPTOR_SHA256` immutable 32-byte digest.
+
+The exported digest is schema metadata, not a capability advertisement.
+Consumers still negotiate `CoreCapabilities.encoded_view_schemas`; absence is
+the normal scalar-fallback case while the candidate schema remains
+`frozen-unadvertised`.
+
 ## Wire and caches
 
 - `encode_snapshot` and `decode_snapshot` provide validated in-memory transport.
@@ -87,4 +100,3 @@ unavailable or incompatible, the complete Python path is selected and
 `NativeBackendUnavailableWarning` is emitted once when accelerated work is
 requested. `PYTHON` is silent and explicit; `NATIVE` raises instead of falling
 back. No public value is a PyO3/Rust object.
-

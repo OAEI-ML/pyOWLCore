@@ -41,6 +41,7 @@ Expression
 ExpressionOccurrence
 ExpressionOccurrenceIndex
 ExpressionOccurrenceOptions
+ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1
 EncodedStructuralView
 FIELD_ROLE_TABLE
 FieldID

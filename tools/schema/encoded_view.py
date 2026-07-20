@@ -210,6 +210,18 @@ def render_version_decision() -> str:
             "capability_advertised = false",
             'promotion_owner = "WP17"',
             "",
+            "[public_contract]",
+            (
+                'descriptor_digest_export = '
+                '"pyowl_core.ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1"'
+            ),
+            (
+                'request_type_digest_attribute = '
+                '"pyowl_core.EncodedStructuralView.DESCRIPTOR_SHA256"'
+            ),
+            'descriptor_digest_type = "exact immutable bytes32"',
+            "materialization_required = false",
+            "",
             "[amendment]",
             'id = "WP17-V1-anonymous-scope-map"',
             'phase = "pre-advertisement"',

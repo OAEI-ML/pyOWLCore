@@ -297,6 +297,7 @@ class EncodedStructuralViewV1:
 
     SCHEMA_NAME: ClassVar[str] = ENCODED_STRUCTURAL_SCHEMA_NAME_V1
     SCHEMA_VERSION: ClassVar[int] = ENCODED_STRUCTURAL_SCHEMA_VERSION_V1
+    DESCRIPTOR_SHA256: ClassVar[bytes] = ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1
     OPTIONS_TYPE: ClassVar[type[object]] = EncodedStructuralOptionsV1
     DEPENDENCIES: ClassVar[tuple[type[object], ...]] = ()
 
