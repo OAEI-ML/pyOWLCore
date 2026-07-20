@@ -12,7 +12,7 @@ use crate::limits::LimitKey;
 use crate::session::Session;
 
 use super::rdf_class_expressions::{
-    DecodedClassCollection, DecodedClassExpression, DecodedIndividualCollection,
+    DecodedClassCollection, DecodedClassExpression, DecodedDataRange, DecodedIndividualCollection,
     DecodedKeyCollection, DecodedPropertyCollection, RdfClassExpressionDecoder,
 };
 use super::rdf_lists::{RdfResource as ListResource, RdfTerm as ListTerm, RdfTriple as ListTriple};
@@ -1290,6 +1290,14 @@ fn map_graph(
         &mut axioms,
         session,
     )?;
+    map_datatype_definitions(
+        &list_graph,
+        &mut consumed,
+        &kinds,
+        &mut expressions,
+        &mut axioms,
+        session,
+    )?;
     map_equivalent_class_components(
         &list_graph,
         &mut consumed,
@@ -1739,6 +1747,46 @@ fn map_disjoint_unions<'view, 'graph>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn map_datatype_definitions<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    axioms: &mut Vec<Vec<u8>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index] || triple.predicate != OWL_EQUIVALENT_CLASS {
+            continue;
+        }
+        let ListResource::Iri(datatype) = triple.subject else {
+            continue;
+        };
+        if !has_kind(kinds, datatype, "datatype") {
+            continue;
+        }
+        let DecodedDataRange {
+            node: data_range,
+            consumed: range_consumed,
+        } = expressions.decode_data_term(triple.object, session)?;
+        let axiom = build_node(
+            100,
+            [
+                Field::Node(named_entity("datatype", datatype, session)?),
+                Field::Node(data_range),
+                Field::Set(Vec::new()),
+            ],
+            session,
+        )?;
+        consume_collection_indexes(range_consumed, consumed, session)?;
+        consumed[index] = true;
+        push_axiom(axiom, axioms, session)?;
+    }
+    Ok(())
+}
+
 fn collection_head<'graph>(
     triples: &[ListTriple<'graph>],
     subject: ListResource<'graph>,
@@ -1794,7 +1842,7 @@ fn map_equivalent_class_components<'view, 'graph>(
         let Some((left, right)) = class_equivalent_edge(&triples[start]) else {
             continue;
         };
-        if !class_member_supported(left, kinds) || !class_member_supported(right, kinds) {
+        if !class_equivalence_subject_supported(left, kinds) {
             continue;
         }
         let mut members = Vec::new();
@@ -1811,9 +1859,7 @@ fn map_equivalent_class_components<'view, 'graph>(
                 let Some((edge_left, edge_right)) = class_equivalent_edge(triple) else {
                     continue;
                 };
-                if !class_member_supported(edge_left, kinds)
-                    || !class_member_supported(edge_right, kinds)
-                {
+                if !class_equivalence_subject_supported(edge_left, kinds) {
                     continue;
                 }
                 if members.contains(&edge_left) || members.contains(&edge_right) {
@@ -1857,7 +1903,7 @@ fn class_equivalent_edge<'graph>(
     ))
 }
 
-fn class_member_supported(value: ClassTerm<'_>, kinds: &[KindRecord<'_>]) -> bool {
+fn class_equivalence_subject_supported(value: ClassTerm<'_>, kinds: &[KindRecord<'_>]) -> bool {
     match value {
         ClassTerm::Iri(value) => !has_kind(kinds, value, "datatype"),
         ClassTerm::Blank(_) => true,
@@ -4685,6 +4731,82 @@ mod tests {
         assert_eq!(
             mapped(blank_class.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_TYPE",
+        );
+    }
+
+    #[test]
+    fn datatype_definitions_preserve_direction_and_structural_ranges() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:D\"><owl:equivalentClass><rdfs:Datatype><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:unionOf></rdfs:Datatype></owl:equivalentClass></rdfs:Datatype><rdfs:Datatype rdf:about=\"urn:E\"><owl:equivalentClass rdf:resource=\"urn:Base\"/></rdfs:Datatype></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("datatype definitions");
+        let datatype = |value: &str| {
+            entity("datatype", iri(value.to_owned()).expect("datatype IRI")).expect("datatype")
+        };
+        let union = Node::build(
+            22,
+            vec![Field::Set(
+                canonical_set(vec![datatype("urn:A"), datatype("urn:B")], 2, Some(22))
+                    .expect("data union operands"),
+            )],
+        )
+        .expect("data union");
+        let structural = Node::build(
+            100,
+            vec![
+                Field::Node(datatype("urn:D")),
+                Field::Node(union),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("structural datatype definition");
+        let named = Node::build(
+            100,
+            vec![
+                Field::Node(datatype("urn:E")),
+                Field::Node(datatype("urn:Base")),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("named datatype definition");
+        for expected in [structural, named] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let reverse = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><owl:Class rdf:about=\"urn:C\"><owl:equivalentClass rdf:resource=\"urn:D\"/></owl:Class><rdfs:Datatype rdf:about=\"urn:D\"/></rdf:RDF>"
+        );
+        let reverse_document = mapped(reverse.as_bytes(), None).expect("reverse orientation");
+        let reverse_axiom = Node::build(
+            62,
+            vec![
+                Field::Set(
+                    canonical_set(vec![class_node("urn:C"), class_node("urn:D")], 2, None)
+                        .expect("equivalent classes"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("equivalent classes axiom");
+        assert!(reverse_document
+            .axioms
+            .iter()
+            .any(|value| value == reverse_axiom.as_bytes()));
+
+        let literal = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:D\"><owl:equivalentClass>not-a-range</owl:equivalentClass></rdfs:Datatype></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(literal.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
         );
     }
 
