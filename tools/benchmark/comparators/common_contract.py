@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, cast
 
 from pyowl_core import (
@@ -27,12 +27,27 @@ from pyowl_core import (
 from pyowl_core.model import LOGICAL_AXIOM_TYPES, Entity, StructuralNode, encode_varint
 from pyowl_core.model.axioms import AxiomNode
 
+from ..native_redesign.encoded_contract import (
+    DigestResult,
+    EncodedStructuralTraversal,
+    EncodedTraversalEvidence,
+    combine_traversal_evidence,
+)
+
 COMMON_CONTRACT_SCHEMA = "pyowl-core/comparator-common-contract/v1"
 _SHA256 = frozenset("0123456789abcdef")
 
 
 class CommonContractError(ValueError):
     """A comparator did not publish a complete, self-consistent output fence."""
+
+
+@dataclass(frozen=True, slots=True)
+class EncodedCommonContractResult:
+    """One bulk-produced common contract and its traversal-fence evidence."""
+
+    contract: dict[str, Any]
+    evidence: EncodedTraversalEvidence
 
 
 def build_core_common_contract(
@@ -120,6 +135,132 @@ def build_core_common_contract(
     }
     payload["contract_sha256"] = hashlib.sha256(_canonical_json(payload)).hexdigest()
     return payload
+
+
+def build_encoded_core_common_contract(
+    snapshot: OntologySnapshot,
+    *,
+    corpus_id: str,
+    source_sha256: str,
+    options_sha256: str,
+    require_native_direct: bool = True,
+) -> EncodedCommonContractResult:
+    """Publish the common contract by streaming frozen encoded columns.
+
+    The ontology-sized portions of this adapter are consumed only through
+    ``EncodedStructuralView`` buffers. Snapshot metadata remains the authority
+    for identity, provenance, diagnostics, and the expected public digests.
+    """
+
+    if not isinstance(snapshot, OntologySnapshot):
+        raise TypeError("snapshot must be OntologySnapshot")
+    if not corpus_id:
+        raise ValueError("corpus_id must be nonempty")
+    _require_digest(source_sha256, "source_sha256")
+    _require_digest(options_sha256, "options_sha256")
+
+    manifest = snapshot.import_manifest
+    closure = EncodedStructuralTraversal.from_snapshot(
+        snapshot,
+        scope=AxiomScope.CLOSURE,
+        require_native_direct=require_native_direct,
+    )
+    document_rows = tuple(
+        (
+            record,
+            EncodedStructuralTraversal.from_snapshot(
+                snapshot,
+                scope=AxiomScope.DOCUMENT,
+                document_key=record.document_key,
+                require_native_direct=require_native_direct,
+            ),
+        )
+        for record in manifest.documents
+    )
+    root_record, root_traversal = next(
+        row for row in document_rows if row[0].document_key == snapshot.root_document_key
+    )
+    direct_imports = tuple(
+        sorted(
+            {
+                canonical_bytes(edge.import_iri)
+                for edge in manifest.edges
+                if edge.importing_document_key == root_record.document_key
+            }
+        )
+    )
+
+    fingerprints = {
+        "document": _encoded_fingerprint_evidence(
+            root_traversal.document_preimage(
+                ontology_iri=_optional_canonical_bytes(root_record.ontology_id.ontology_iri),
+                version_iri=_optional_canonical_bytes(root_record.ontology_id.version_iri),
+                direct_imports=direct_imports,
+            ),
+            root_record.document_fingerprint.hex,
+        ),
+        "structural": _encoded_fingerprint_evidence(
+            EncodedStructuralTraversal.structural_preimage(
+                manifest.canonical_bytes(),
+                tuple((record.document_key, traversal) for record, traversal in document_rows),
+            ),
+            snapshot.structural_fingerprint.hex,
+        ),
+        "logical": _encoded_fingerprint_evidence(
+            closure.logical_preimage(),
+            snapshot.logical_fingerprint.hex,
+        ),
+        "signature": _encoded_fingerprint_evidence(
+            closure.signature_preimage(),
+            snapshot.signature_fingerprint.hex,
+        ),
+    }
+
+    diagnostic_rows = [value.to_dict() for value in snapshot.diagnostics]
+    diagnostics_bytes = _canonical_json(diagnostic_rows)
+    provenance = _provenance_inventory(snapshot)
+    provenance_bytes = _canonical_json(provenance)
+    identity = _identity_inventory(snapshot)
+    identity_bytes = _canonical_json(identity)
+    inventories = {
+        "ontology_annotations": closure.record_inventory(1),
+        "axioms": closure.record_inventory(2),
+        "extensions": closure.record_inventory(3),
+        "signature": closure.signature_inventory(),
+        "documents": _document_inventory(snapshot),
+    }
+    ledger = {
+        "inventories": inventories,
+        "identity_sha256": hashlib.sha256(identity_bytes).hexdigest(),
+        "identity_bytes": len(identity_bytes),
+        "provenance_sha256": hashlib.sha256(provenance_bytes).hexdigest(),
+        "provenance_bytes": len(provenance_bytes),
+        "diagnostics_sha256": hashlib.sha256(diagnostics_bytes).hexdigest(),
+        "diagnostics_bytes": len(diagnostics_bytes),
+        "diagnostic_count": len(diagnostic_rows),
+    }
+    payload: dict[str, Any] = {
+        "schema": COMMON_CONTRACT_SCHEMA,
+        "model_schema": snapshot.capabilities.model_schema,
+        "corpus_id": corpus_id,
+        "source_sha256": source_sha256,
+        "options_sha256": options_sha256,
+        "complete_import_closure": snapshot.is_complete,
+        "root_document_key": snapshot.root_document_key,
+        "identity": identity,
+        "provenance": provenance,
+        "diagnostics": diagnostic_rows,
+        "fingerprints": fingerprints,
+        "ledger": ledger,
+    }
+    payload["contract_sha256"] = hashlib.sha256(_canonical_json(payload)).hexdigest()
+    return EncodedCommonContractResult(
+        payload,
+        combine_traversal_evidence(
+            closure,
+            tuple(traversal for _record, traversal in document_rows),
+        ),
+    )
 
 
 def validate_common_contract(value: Mapping[str, Any]) -> None:
@@ -307,6 +448,20 @@ def _fingerprint_evidence(preimage: Iterable[bytes], expected: str) -> dict[str,
     }
 
 
+def _encoded_fingerprint_evidence(preimage: DigestResult, expected: str) -> dict[str, object]:
+    if preimage.sha256 != expected:
+        raise CommonContractError(
+            "encoded comparator preimage disagrees with published core fingerprint"
+        )
+    return {
+        "algorithm": "sha256",
+        "schema": 1,
+        "preimage_bytes": preimage.byte_count,
+        "preimage_sha256": preimage.sha256,
+        "digest": expected,
+    }
+
+
 def _document_preimage_parts(document: OntologyDocument) -> Iterable[bytes]:
     yield b"pyowl-core:document-fingerprint:v1\x00"
     ontology_id = document.ontology_id
@@ -481,6 +636,10 @@ def _provenance_inventory(snapshot: OntologySnapshot) -> dict[str, object]:
 
 def _optional_canonical(value: StructuralNode | None) -> str | None:
     return None if value is None else canonical_bytes(value).hex()
+
+
+def _optional_canonical_bytes(value: StructuralNode | None) -> bytes | None:
+    return None if value is None else canonical_bytes(value)
 
 
 def _validate_inventories(value: object) -> None:

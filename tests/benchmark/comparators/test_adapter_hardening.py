@@ -9,7 +9,15 @@ from typing import Any
 
 import pytest
 
-from pyowl_core import DocumentFormat, load_snapshot
+import tools.benchmark.comparators.adapters as adapters_module
+from pyowl_core import (
+    BackendPreference,
+    DocumentFormat,
+    ImportPolicy,
+    LoadOptions,
+    load_snapshot,
+)
+from pyowl_core.backends import native
 from tools.benchmark.comparators.adapters import (
     ADAPTER_RESULT_SCHEMA,
     RAW_INVENTORY_SCHEMA,
@@ -21,6 +29,7 @@ from tools.benchmark.comparators.adapters import (
     options_digest,
     raw_inventory_digest,
     run_bounded_subprocess,
+    run_core_adapter,
     run_external_adapter,
     sanitize_failure,
 )
@@ -246,6 +255,46 @@ def test_raw_inventory_requires_integer_counts_and_its_canonical_digest() -> Non
     unauthenticated["raw_inventory"]["inventory_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="canonical scalar preimage"):
         _validate_external_result(pin, request, unauthenticated)
+
+
+def test_native_core_adapter_uses_bulk_contract_and_publishes_fence_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probe = native.probe(refresh=True)
+    if not probe.available or "parse-functional-v1" not in probe.features:
+        pytest.skip(probe.reason or "native Functional parser capability is unavailable")
+    corpus, source, _default = _tiny_input()
+    options = LoadOptions(
+        format=corpus.format,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.PYTHON,
+        offline=True,
+        collect_provenance=True,
+    )
+    request = AdapterRequest(
+        corpus_id=corpus.id,
+        source=source,
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        format=corpus.format,
+        options=options,
+        options_sha256=options_digest(options),
+        input_mode="resident-bytes",
+        process_mode="steady-process",
+    )
+    pin = load_comparator_manifest().by_id("pyowl-native-wheel-common")
+    monkeypatch.setattr(adapters_module, "_native_is_from_installed_wheel", lambda: True)
+
+    result = run_core_adapter(pin, request)
+
+    assert result["status"] == "ok"
+    validate_common_contract(result["contract"])
+    assert result["timed_validation"]["inside_timed_envelope"] is True
+    assert result["metrics"]["encoded_view_count"] == 2
+    assert result["metrics"]["encoded_document_view_count"] == 1
+    assert result["metrics"]["encoded_referenced_buffer_bytes"] > 0
+    assert result["metrics"]["encoded_referenced_buffer_copy_bytes"] == 0
+    assert result["metrics"]["encoded_scalar_traversal_calls"] == 0
+    assert result["metrics"]["encoded_structural_nodes_materialized"] == 0
 
 
 def _tiny_input() -> tuple[Any, bytes, Any]:

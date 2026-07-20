@@ -33,8 +33,10 @@ from pyowl_core import (
 )
 from pyowl_core.exceptions import BackendUnavailableError
 
+from ..native_redesign.encoded_contract import EncodedContractUnavailable
 from .common_contract import (
     build_core_common_contract,
+    build_encoded_core_common_contract,
     common_contract_equality_key,
     validate_common_contract,
 )
@@ -236,22 +238,16 @@ def run_core_adapter(
         return _not_run(pin, request, "fresh core lane requires the isolated worker")
     if not pin.artifact_is_runnable:
         return _not_run(pin, request, "artifact pin is pending")
-    if pin.adapter == "core-native":
-        if not _native_is_from_installed_wheel():
-            return _not_run(
-                pin,
-                request,
-                "delivered-wheel lane refuses a source-tree/native build; "
-                "use an isolated wheel venv",
-            )
+    if pin.adapter == "core-native" and not _native_is_from_installed_wheel():
         return _not_run(
             pin,
             request,
-            "retained-native bulk common-contract exporter is not implemented",
+            "delivered-wheel lane refuses a source-tree/native build; use an isolated wheel venv",
         )
 
     backend = BackendPreference.PYTHON if pin.adapter == "core-python" else BackendPreference.NATIVE
     options = _replace_backend(request.options, backend)
+    encoded_metrics: dict[str, int] = {}
     try:
         with _core_input_source(request) as input_source:
             gc.collect()
@@ -270,12 +266,22 @@ def run_core_adapter(
             if not isinstance(loaded, OntologySnapshot):
                 raise TypeError("core comparator did not publish OntologySnapshot")
             contract_start = time.perf_counter_ns()
-            contract = build_core_common_contract(
-                loaded,
-                corpus_id=request.corpus_id,
-                source_sha256=request.source_sha256,
-                options_sha256=request.options_sha256,
-            )
+            if pin.adapter == "core-native":
+                encoded = build_encoded_core_common_contract(
+                    loaded,
+                    corpus_id=request.corpus_id,
+                    source_sha256=request.source_sha256,
+                    options_sha256=request.options_sha256,
+                )
+                contract = encoded.contract
+                encoded_metrics = encoded.evidence.to_metrics()
+            else:
+                contract = build_core_common_contract(
+                    loaded,
+                    corpus_id=request.corpus_id,
+                    source_sha256=request.source_sha256,
+                    options_sha256=request.options_sha256,
+                )
             validation_start = time.perf_counter_ns()
             validate_common_contract(contract)
             validation_end = time.perf_counter_ns()
@@ -287,6 +293,8 @@ def run_core_adapter(
             rss_after = _rss_peak_bytes()
     except BackendUnavailableError as error:
         return _not_run(pin, request, f"native backend unavailable: {error}")
+    except EncodedContractUnavailable as error:
+        return _not_run(pin, request, str(error))
     except Exception as error:  # comparator failures are evidence, not harness crashes
         return _error(pin, request, error)
     return {
@@ -322,6 +330,7 @@ def run_core_adapter(
             "python_allocated_blocks_increment": max(0, blocks_after - blocks_before),
             "python_gc_objects_increment": max(0, objects_after - objects_before),
             "core_report_seconds": dict(loaded.report.timings),
+            **encoded_metrics,
         },
         "artifact": {
             "pin_state": pin.pin_state,

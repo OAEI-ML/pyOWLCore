@@ -16,6 +16,7 @@ from pyowl_core import (
     OntologySnapshot,
     load_snapshot,
 )
+from pyowl_core.backends import native
 from pyowl_core.backends.python.parser import PythonParser
 from pyowl_core.document.fingerprint import (
     document_fingerprint_bytes,
@@ -25,7 +26,11 @@ from pyowl_core.document.fingerprint import (
 )
 from pyowl_core.io.resolver import MappingResolver, MappingTarget
 from pyowl_core.model import IRI
-from tools.benchmark.comparators.adapters import default_options, options_inventory
+from tools.benchmark.comparators.adapters import (
+    default_options,
+    options_digest,
+    options_inventory,
+)
 from tools.benchmark.comparators.common_contract import (
     CommonContractError,
     _document_preimage_parts,
@@ -33,10 +38,12 @@ from tools.benchmark.comparators.common_contract import (
     _signature_preimage_parts,
     _structural_preimage_parts,
     build_core_common_contract,
+    build_encoded_core_common_contract,
     common_contract_equality_key,
     validate_common_contract,
 )
 from tools.benchmark.manifest import generated_bytes, load_manifest
+from tools.benchmark.native_redesign.encoded_contract import EncodedContractUnavailable
 from tools.benchmark.synthetic import equivalent_source, import_diamond
 
 
@@ -65,18 +72,34 @@ def test_import_diamond_matches_authoritative_document_boundaries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, imports = import_diamond()
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_LOCAL,
+        backend=BackendPreference.PYTHON,
+    )
     snapshot = load_snapshot(
         source,
-        options=LoadOptions(
-            format=DocumentFormat.FUNCTIONAL,
-            imports=ImportPolicy.RESOLVE_LOCAL,
-            backend=BackendPreference.PYTHON,
-        ),
+        options=options,
         resolver=MappingResolver(cast(Mapping[IRI | str, MappingTarget], imports)),
     )
 
     assert len(snapshot.documents) == 4
     _assert_all_preimages_match(snapshot, monkeypatch)
+    contract_kwargs = {
+        "corpus_id": "generated-import-diamond",
+        "source_sha256": hashlib.sha256(source).hexdigest(),
+        "options_sha256": options_digest(options),
+    }
+    reference = build_core_common_contract(snapshot, **contract_kwargs)
+    encoded = build_encoded_core_common_contract(
+        snapshot,
+        require_native_direct=False,
+        **contract_kwargs,
+    )
+
+    assert encoded.contract == reference
+    assert encoded.evidence.view_count == 5
+    assert encoded.evidence.document_view_count == 4
 
 
 def test_annotated_swrl_logical_preimage_matches_authoritative_bytes(
@@ -130,6 +153,128 @@ def test_core_common_contract_reconstructs_all_four_fingerprint_preimages() -> N
     assert all(value["preimage_bytes"] > 0 for value in fingerprints.values())
     assert contract["ledger"]["inventories"]["axioms"]["count"] == 15
     assert contract["ledger"]["diagnostic_count"] == 0
+
+
+def test_encoded_common_contract_matches_scalar_without_model_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    corpus = load_manifest().by_id("generated-tiny-functional")
+    source = generated_bytes(corpus)
+    options = default_options(corpus.format)
+    snapshot = load_snapshot(source, options=options)
+    digest = options_digest(options)
+    reference = build_core_common_contract(
+        snapshot,
+        corpus_id=corpus.id,
+        source_sha256=corpus.sha256,
+        options_sha256=digest,
+    )
+    initial = build_encoded_core_common_contract(
+        snapshot,
+        corpus_id=corpus.id,
+        source_sha256=corpus.sha256,
+        options_sha256=digest,
+        require_native_direct=False,
+    )
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("bulk encoded contract crossed a scalar model callback")
+
+    for name in ("iter_axioms", "iter_extensions", "ontology_annotations", "signature"):
+        monkeypatch.setattr(type(snapshot), name, unexpected)
+    encoded = build_encoded_core_common_contract(
+        snapshot,
+        corpus_id=corpus.id,
+        source_sha256=corpus.sha256,
+        options_sha256=digest,
+        require_native_direct=False,
+    )
+
+    assert initial.contract == reference
+    assert encoded.contract == reference
+    assert encoded.evidence.view_count == 2
+    assert encoded.evidence.document_view_count == 1
+    assert encoded.evidence.referenced_buffer_bytes > 0
+    assert encoded.evidence.referenced_buffer_copy_bytes == 0
+    assert encoded.evidence.scalar_traversal_calls == 0
+    assert encoded.evidence.structural_nodes_materialized == 0
+
+
+def test_encoded_common_contract_fails_closed_for_annotated_logical_roots() -> None:
+    source = (
+        b"Ontology(<urn:annotated-contract> "
+        b"SubClassOf(Annotation(<urn:note> <urn:evidence>) <urn:A> <urn:B>))"
+    )
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.PYTHON,
+    )
+    snapshot = load_snapshot(source, options=options)
+
+    with pytest.raises(EncodedContractUnavailable, match="annotated roots"):
+        build_encoded_core_common_contract(
+            snapshot,
+            corpus_id="annotated-logical",
+            source_sha256=hashlib.sha256(source).hexdigest(),
+            options_sha256=options_digest(options),
+            require_native_direct=False,
+        )
+
+
+def test_retained_native_encoded_contract_matches_scalar_without_model_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probe = native.probe(refresh=True)
+    if not probe.available or "parse-functional-v1" not in probe.features:
+        pytest.skip(probe.reason or "native Functional parser capability is unavailable")
+    source = (
+        b"Ontology(<urn:native-contract> "
+        b"Declaration(Class(<urn:native-contract:A>)) "
+        b"Declaration(Class(<urn:native-contract:B>)) "
+        b"SubClassOf(<urn:native-contract:A> <urn:native-contract:B>))"
+    )
+    python_options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.PYTHON,
+        collect_provenance=True,
+    )
+    native_options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=True,
+    )
+    reference_snapshot = load_snapshot(source, options=python_options)
+    selected = load_snapshot(source, options=native_options)
+    digest = options_digest(python_options)
+    source_sha256 = hashlib.sha256(source).hexdigest()
+    reference = build_core_common_contract(
+        reference_snapshot,
+        corpus_id="native-retained-contract",
+        source_sha256=source_sha256,
+        options_sha256=digest,
+    )
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("retained native contract crossed a scalar model callback")
+
+    for name in ("iter_axioms", "iter_extensions", "ontology_annotations", "signature"):
+        monkeypatch.setattr(type(selected), name, unexpected)
+    encoded = build_encoded_core_common_contract(
+        selected,
+        corpus_id="native-retained-contract",
+        source_sha256=source_sha256,
+        options_sha256=digest,
+    )
+
+    assert encoded.contract == reference
+    assert encoded.evidence.view_count == 2
+    assert encoded.evidence.referenced_buffer_bytes > 0
+    assert encoded.evidence.referenced_buffer_copy_bytes == 0
+    assert encoded.evidence.scalar_traversal_calls == 0
+    assert encoded.evidence.structural_nodes_materialized == 0
 
 
 def test_common_contract_is_deterministic_for_identical_bytes_and_options() -> None:
