@@ -657,6 +657,74 @@ def test_committed_direct_smoke_attests_retained_runner_lifecycle() -> None:
     assert lifecycle["shutdown"] == "clean-exit"
 
 
+def test_committed_owlapi_smoke_attests_exact_four_syntax_lifecycle() -> None:
+    evidence_path = (
+        ROOT / "reports" / "performance" / "redesign-baseline" / "shared-host-owlapi-smoke.json"
+    )
+    evidence = cast(dict[str, Any], json.loads(evidence_path.read_text(encoding="utf-8")))
+
+    assert evidence["schema"] == "pyowl-core/comparator-baseline/v1"
+    assert evidence["contract_valid"] is True
+    assert evidence["comparative_complete"] is False
+    assert evidence["execution_errors"] == []
+    assert evidence["not_run_required"] == []
+    assert evidence["environment"]["git_commit"] == (
+        "c7e8b7264bbe5513867bd37a4018bda3ce2ddb07"
+    )
+    assert evidence["environment"]["git_dirty"] is False
+    assert (
+        evidence["comparator_manifest_sha256"]
+        == hashlib.sha256(DEFAULT_COMPARATOR_MANIFEST.read_bytes()).hexdigest()
+    )
+
+    corpora = cast(list[dict[str, Any]], evidence["corpora"])
+    assert {row["format"] for row in corpora} == {
+        "functional",
+        "owlxml",
+        "rdfxml",
+        "turtle",
+    }
+    assert {row["id"] for row in corpora} >= {
+        "generated-annotation-list",
+        "generated-import-diamond",
+    }
+    lanes = cast(list[dict[str, Any]], evidence["lanes"])
+    assert len(lanes) == 48
+    assert {row["lane"] for row in lanes} == {
+        "pyowl-python-common",
+        "owlapi-common",
+    }
+    assert all(row["status"] == "ok" and len(row["samples"]) == 3 for row in lanes)
+    assertions = cast(list[dict[str, Any]], evidence["equality_assertions"])
+    assert len(assertions) == 72
+    assert all(row["passed"] is True for row in assertions)
+
+    owlapi_samples = [
+        sample
+        for row in lanes
+        if row["lane"] == "owlapi-common"
+        for sample in cast(list[dict[str, Any]], row["samples"])
+    ]
+    assert all(
+        sample["artifact"]["runner_revision"]
+        == "pyowl-core-owlapi-common-runner-v1"
+        and sample["artifact"]["artifact_sha256"]
+        == "747b1a5269fee2992487dcde946f16dfbc14aa458d50854994a0485cf263ce07"
+        and sample["artifact"]["runner_sha256"]
+        == "04aeb9b6f995b1abcb26ae022969992ccc428a177b6aeaa76cf8a762a3ea7b07"
+        for sample in owlapi_samples
+    )
+    lifecycles = cast(list[dict[str, Any]], evidence["persistent_runner_lifecycles"])
+    assert len(lifecycles) == 1
+    lifecycle = lifecycles[0]
+    assert lifecycle["lane"] == "owlapi-common"
+    assert lifecycle["status"] == "pass"
+    assert lifecycle["request_count"] == lifecycle["response_count"] == 48
+    assert lifecycle["unique_ontology_instance_count"] == 48
+    assert lifecycle["stderr_bytes"] == 0
+    assert lifecycle["shutdown"] == "clean-exit"
+
+
 def _measured_schedule(report: Mapping[str, Any]) -> tuple[tuple[str, ...], ...]:
     rows = cast(Sequence[Mapping[str, Any]], report["lanes"])
     by_block: dict[int, list[tuple[int, str]]] = {}
