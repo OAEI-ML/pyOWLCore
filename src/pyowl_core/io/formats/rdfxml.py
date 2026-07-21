@@ -262,10 +262,14 @@ class RDFXMLGraphParser:
                 self._syntax("RDF property element must contain exactly one node element")
             if _has_non_whitespace_content(element):
                 self._syntax("resource property element cannot contain character data")
+            if self._non_syntax_attributes(element) and datatype is None:
+                self._syntax("empty property attributes cannot accompany a child node")
             child_object = self._node(element[0], base, language)
             triple = self._add(subject, predicate, child_object)
         else:
             property_attributes = self._non_syntax_attributes(element)
+            if property_attributes and (element.text or "").strip() and datatype is None:
+                self._syntax("empty property attributes cannot accompany literal content")
             if property_attributes and not (element.text or "").strip() and datatype is None:
                 empty_object = self._fresh("empty")
                 triple = self._add(subject, predicate, empty_object)

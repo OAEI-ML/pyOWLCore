@@ -246,6 +246,12 @@ def test_rdfxml_invalid_or_unsupported_source_encoding_is_rejected(source: bytes
         "<rdfs:subClassOf rdf:resource='urn:D'>text</rdfs:subClassOf>",
         "<rdfs:subClassOf>text<owl:Class rdf:about='urn:D'/></rdfs:subClassOf>",
         "<rdfs:subClassOf><owl:Class rdf:about='urn:D'/>text</rdfs:subClassOf>",
+        "<rdfs:label e:note='ignored'>text</rdfs:label>",
+        (
+            "<rdfs:subClassOf e:note='ignored'>"
+            "<owl:Class rdf:about='urn:D'/>"
+            "</rdfs:subClassOf>"
+        ),
         (
             "<owl:equivalentClass><owl:Class>"
             "<owl:unionOf rdf:parseType='Collection'>text"
@@ -266,7 +272,8 @@ def test_rdfxml_resource_property_grammar_rejects_conflicts_and_text(
     source = f"""\
 <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
          xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
-         xmlns:owl="http://www.w3.org/2002/07/owl#">
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:e="urn:e:">
   <owl:Class rdf:about="urn:C">{property_element}</owl:Class>
 </rdf:RDF>
 """.encode()

@@ -538,7 +538,7 @@ def test_empty_property_attributes_match_python_object_descriptions(
     assert triple_limited.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
-def test_datatyped_empty_property_with_legacy_attribute_matches_python(
+def test_datatyped_properties_with_legacy_attributes_match_python(
     extension: NativeTestExtension,
 ) -> None:
     source = b"""<rdf:RDF
@@ -548,6 +548,7 @@ def test_datatyped_empty_property_with_legacy_attribute_matches_python(
  xmlns:e='urn:e:'>
  <owl:Ontology rdf:about='urn:o'>
   <rdfs:comment rdf:datatype='urn:datatype' e:ignored='discarded'/>
+  <rdfs:comment rdf:datatype='urn:datatype' e:ignored='discarded'>kept</rdfs:comment>
  </owl:Ontology>
 </rdf:RDF>"""
 
@@ -556,7 +557,7 @@ def test_datatyped_empty_property_with_legacy_attribute_matches_python(
     assert python.rdf_mapping_report is not None
 
     assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
-    assert observed.total_triples == observed.consumed_triples == 2
+    assert observed.total_triples == observed.consumed_triples == 3
     assert observed.total_triples == python.rdf_mapping_report.total_triples
 
 
@@ -767,6 +768,12 @@ def test_duplicate_rdf_id_fails_in_both_backends(
         "<rdfs:subClassOf rdf:resource='urn:D'>text</rdfs:subClassOf>",
         "<rdfs:subClassOf>text<owl:Class rdf:about='urn:D'/></rdfs:subClassOf>",
         "<rdfs:subClassOf><owl:Class rdf:about='urn:D'/>text</rdfs:subClassOf>",
+        "<rdfs:label e:note='ignored'>text</rdfs:label>",
+        (
+            "<rdfs:subClassOf e:note='ignored'>"
+            "<owl:Class rdf:about='urn:D'/>"
+            "</rdfs:subClassOf>"
+        ),
         (
             "<owl:equivalentClass><owl:Class>"
             "<owl:unionOf rdf:parseType='Collection'>text"
@@ -788,7 +795,7 @@ def test_resource_property_conflicts_and_text_fail_in_both_backends(
     source = (
         "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
         "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
-        "xmlns:owl='http://www.w3.org/2002/07/owl#'>"
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' xmlns:e='urn:e:'>"
         f"<owl:Class rdf:about='urn:C'>{property_element}</owl:Class>"
         "</rdf:RDF>"
     ).encode()
