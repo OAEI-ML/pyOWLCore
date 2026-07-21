@@ -252,6 +252,11 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert parser["injected_failures"] == parser["allocation_checkpoints"]
     assert parser["boundary_successes"] == 1
     assert parser["scope"]
+    parser_bridge = sweep["parser_bridge"]
+    assert parser_bridge["allocation_checkpoints"] == 7
+    assert parser_bridge["injected_failures"] == parser_bridge["allocation_checkpoints"]
+    assert parser_bridge["boundary_successes"] == 1
+    assert parser_bridge["scope"]
     assert sweep["covered_allocation_checkpoints"] == (
         sweep["total_allocation_checkpoints"]
         + wire["allocation_checkpoints"]
@@ -259,6 +264,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + bridge["allocation_checkpoints"]
         + workspace["allocation_checkpoints"]
         + parser["allocation_checkpoints"]
+        + parser_bridge["allocation_checkpoints"]
     )
     assert sweep["covered_injected_failures"] == sweep["covered_allocation_checkpoints"]
     assert sweep["covered_boundary_successes"] == (
@@ -268,6 +274,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + bridge["boundary_successes"]
         + workspace["boundary_successes"]
         + parser["boundary_successes"]
+        + parser_bridge["boundary_successes"]
     )
 
     assert {run["id"]: run["status"] for run in checkpoint["runs"]} == {
@@ -287,6 +294,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert release["encoded_view_python_bridge_allocation_failures"] == "local-pass"
     assert release["encoded_view_rust_workspace_allocation_failures"] == "local-pass"
     assert release["native_parser_session_allocation_failures"] == "local-pass"
+    assert release["native_parser_python_bridge_allocation_failures"] == "local-pass"
     assert release["end_to_end_allocation_failure_matrix"] == "not-run"
     assert release["security_resource_determinism"] == "not-run"
     assert release["core_release_eligible"] is False
