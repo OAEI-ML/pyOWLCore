@@ -94,6 +94,21 @@ PROPERTY_ATTRIBUTE_SOURCE = b"""\
     xml:lang="EN" rdfs:label="Class label"/>
 </rdf:RDF>
 """
+EMPTY_PROPERTY_ATTRIBUTE_SOURCE = b"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#"
+  xmlns:e="urn:e:">
+  <owl:ObjectProperty rdf:about="urn:e:p"/>
+  <owl:NamedIndividual rdf:about="urn:i"/>
+  <rdf:Description rdf:about="urn:i">
+    <e:p rdf:resource="urn:j"
+      rdf:type="http://www.w3.org/2002/07/owl#NamedIndividual"
+      rdfs:label="Target"/>
+  </rdf:Description>
+</rdf:RDF>
+"""
 DOCUMENT_IRI = IRI("urn:rdfxml:document")
 
 
@@ -298,6 +313,33 @@ def test_node_property_attributes_publish_from_the_retained_parser_owner(
     assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
     assert encode_snapshot(selected) == encode_snapshot(reference)
     assert counters.parser_bytes == len(PROPERTY_ATTRIBUTE_SOURCE)
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
+
+
+def test_empty_property_attributes_publish_from_the_retained_parser_owner(
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(
+        EMPTY_PROPERTY_ATTRIBUTE_SOURCE,
+        document_iri=DOCUMENT_IRI,
+        options=_options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("empty property attributes crossed the Python RDF/XML parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(Any, _retained_snapshot(EMPTY_PROPERTY_ATTRIBUTE_SOURCE))
+
+    owner = selected._native_snapshot_state.owner.handle._owner_v2
+    counters = owner._publication_counters_v2()
+    assert type(owner) is cast(Any, extension)._NativeSnapshotHandle
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.root.axioms == reference.root.axioms
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert counters.parser_bytes == len(EMPTY_PROPERTY_ATTRIBUTE_SOURCE)
     assert counters.publication_structural_rows_copied == 0
     assert counters.publication_structural_bytes_copied == 0
 

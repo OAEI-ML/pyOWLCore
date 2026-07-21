@@ -740,15 +740,29 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         base: Option<&str>,
         language: Option<&str>,
     ) -> NativeResult<()> {
+        self.add_property_attributes(
+            attributes,
+            subject,
+            base,
+            language,
+            &[RDF_ABOUT, RDF_ID, RDF_NODE_ID, XML_BASE, XML_LANG],
+        )
+    }
+
+    fn add_property_attributes(
+        &mut self,
+        attributes: &[Attribute],
+        subject: &Resource,
+        base: Option<&str>,
+        language: Option<&str>,
+        ignored: &[&str],
+    ) -> NativeResult<()> {
         for attribute in attributes {
             if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
                 continue;
             }
             let predicate = self.expand(&attribute.name, true)?;
-            if matches!(
-                predicate.as_str(),
-                RDF_ABOUT | RDF_ID | RDF_NODE_ID | XML_BASE | XML_LANG
-            ) {
+            if ignored.contains(&predicate.as_str()) {
                 continue;
             }
             if !is_property_attribute_iri(&predicate) {
@@ -789,6 +803,33 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         Ok(())
     }
 
+    fn has_empty_property_attributes(&mut self, attributes: &[Attribute]) -> NativeResult<bool> {
+        let mut found = false;
+        for attribute in attributes {
+            if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
+                continue;
+            }
+            let expanded = self.expand(&attribute.name, true)?;
+            if matches!(
+                expanded.as_str(),
+                RDF_ID
+                    | RDF_RESOURCE
+                    | RDF_NODE_ID
+                    | RDF_PARSE_TYPE
+                    | RDF_DATATYPE
+                    | XML_BASE
+                    | XML_LANG
+            ) {
+                continue;
+            }
+            if !is_property_attribute_iri(&expanded) {
+                return Err(mapping_incomplete());
+            }
+            found = true;
+        }
+        Ok(found)
+    }
+
     fn property_role(
         &mut self,
         attributes: &[Attribute],
@@ -801,6 +842,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         let node_id = self.attribute(attributes, RDF, "nodeID")?;
         let parse_type = self.attribute(attributes, RDF, "parseType")?;
         let datatype_attribute = self.attribute(attributes, RDF, "datatype")?;
+        let id = self.attribute(attributes, RDF, "ID")?;
         if usize::from(resource.is_some())
             + usize::from(node_id.is_some())
             + usize::from(parse_type.is_some())
@@ -809,10 +851,13 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         {
             return Err(xml_syntax());
         }
+        // Every property-element rdf:ID reifies its emitted statement. Keep
+        // the private slice fail-closed until that complete production is
+        // retained and mapped instead of silently discarding the reification.
+        if id.is_some() {
+            return Err(mapping_incomplete());
+        }
         if let Some(parse_type) = parse_type {
-            if self.attribute(attributes, RDF, "ID")?.is_some() {
-                return Err(mapping_incomplete());
-            }
             self.reject_unknown_attributes(
                 attributes,
                 &[(RDF, "parseType"), (XML, "base"), (XML, "lang")],
@@ -837,21 +882,15 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 _ => Err(mapping_incomplete()),
             };
         }
+        let has_property_attributes = self.has_empty_property_attributes(attributes)?;
+        if has_property_attributes && datatype_attribute.is_some() {
+            // The retained mapper does not yet own the legacy datatype plus
+            // property-attribute branch, so keep it outside this closed slice.
+            return Err(mapping_incomplete());
+        }
         let datatype = datatype_attribute
             .map(|value| resolve_iri(value, base, self.session))
             .transpose()?;
-        self.reject_unknown_attributes(
-            attributes,
-            &[
-                (RDF, "resource"),
-                (RDF, "nodeID"),
-                (RDF, "parseType"),
-                (RDF, "datatype"),
-                (RDF, "ID"),
-                (XML, "base"),
-                (XML, "lang"),
-            ],
-        )?;
         let object = if let Some(value) = resource {
             Some(Resource::Iri(resolve_iri(value, base, self.session)?))
         } else {
@@ -859,15 +898,24 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 .map(|value| owned_text(value, self.session).map(Resource::Blank))
                 .transpose()?
         };
+        let object = if object.is_none() && has_property_attributes {
+            Some(self.fresh_blank()?)
+        } else {
+            object
+        };
         let object_set = object.is_some();
         if let Some(object) = object {
+            if has_property_attributes {
+                self.add_property_attributes(
+                    attributes,
+                    &object,
+                    base,
+                    language,
+                    &[RDF_RESOURCE, RDF_NODE_ID, XML_BASE, XML_LANG],
+                )?;
+            }
             let triple_subject = clone_resource(&subject, self.session)?;
-            let triple_predicate = owned_text(predicate, self.session)?;
-            self.add(Triple {
-                subject: triple_subject,
-                predicate: triple_predicate,
-                object: object.into(),
-            })?;
+            self.add_resource_edge(triple_subject, predicate, object)?;
         }
         Ok(FrameRole::Property {
             subject,
@@ -5440,7 +5488,8 @@ fn expanded_name_matches(expanded: &str, namespace: &str, local: &str) -> bool {
 fn is_property_attribute_iri(value: &str) -> bool {
     !matches!(
         value,
-        RDF_ID
+        RDF_RDF
+            | RDF_ID
             | RDF_ABOUT
             | RDF_PARSE_TYPE
             | RDF_RESOURCE
@@ -5747,6 +5796,126 @@ mod tests {
             graph(&source).unwrap_err().code,
             "NATIVE_RDF_MAPPING_INCOMPLETE"
         );
+    }
+
+    #[test]
+    fn empty_property_attributes_describe_resolved_and_implicit_objects() {
+        let resolved = graph(&format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\" xml:base=\"http://example.test/base/\" xml:lang=\"EN\"><rdf:Description rdf:about=\"subject\"><e:p rdf:resource=\"target\" rdf:type=\"../Class\" e:label=\"value\"/></rdf:Description></rdf:RDF>"
+        ))
+        .expect("empty property attributes with an IRI object");
+        assert_eq!(resolved.len(), 3);
+        assert!(contains_edge(
+            &resolved,
+            iri_resource("http://example.test/base/subject"),
+            "urn:e:p",
+            iri_resource("http://example.test/base/target").into(),
+        ));
+        assert!(contains_edge(
+            &resolved,
+            iri_resource("http://example.test/base/target"),
+            RDF_TYPE,
+            iri_resource("http://example.test/Class").into(),
+        ));
+        assert!(contains_edge(
+            &resolved,
+            iri_resource("http://example.test/base/target"),
+            "urn:e:label",
+            Term::Literal {
+                lexical: "value".to_owned(),
+                datatype: None,
+                language: Some("en".to_owned()),
+            },
+        ));
+
+        let implicit = graph(&format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p e:q=\"value\"></e:p></rdf:Description></rdf:RDF>"
+        ))
+        .expect("empty property attributes with an implicit blank object");
+        assert_eq!(implicit.len(), 2);
+        assert!(contains_edge(
+            &implicit,
+            iri_resource("urn:s"),
+            "urn:e:p",
+            blank_resource("generated-1").into(),
+        ));
+        assert!(contains_edge(
+            &implicit,
+            blank_resource("generated-1"),
+            "urn:e:q",
+            Term::Literal {
+                lexical: "value".to_owned(),
+                datatype: Some(XSD_STRING.to_owned()),
+                language: None,
+            },
+        ));
+
+        let named = graph(&format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:nodeID=\"target\" e:q=\"value\"/></rdf:Description></rdf:RDF>"
+        ))
+        .expect("empty property attributes with a named blank object");
+        assert!(contains_edge(
+            &named,
+            iri_resource("urn:s"),
+            "urn:e:p",
+            blank_resource("target").into(),
+        ));
+        assert!(contains_edge(
+            &named,
+            blank_resource("target"),
+            "urn:e:q",
+            Term::Literal {
+                lexical: "value".to_owned(),
+                datatype: Some(XSD_STRING.to_owned()),
+                language: None,
+            },
+        ));
+    }
+
+    #[test]
+    fn empty_property_attributes_fail_closed_for_unretained_forms() {
+        for (source, expected) in [
+            (
+                format!(
+                    "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:resource=\"urn:o\" e:q=\"value\"><rdf:Description/></e:p></rdf:Description></rdf:RDF>"
+                ),
+                "NATIVE_RDFXML_SYNTAX",
+            ),
+            (
+                format!(
+                    "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:resource=\"urn:o\" rdf:about=\"urn:invalid\"/></rdf:Description></rdf:RDF>"
+                ),
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            ),
+            (
+                format!(
+                    "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:resource=\"urn:o\" rdf:RDF=\"invalid\"/></rdf:Description></rdf:RDF>"
+                ),
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            ),
+            (
+                format!(
+                    "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:datatype=\"urn:datatype\" e:q=\"value\"/></rdf:Description></rdf:RDF>"
+                ),
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            ),
+        ] {
+            assert_eq!(graph(&source).unwrap_err().code, expected);
+        }
+
+        for property in [
+            "<e:p rdf:ID=\"statement\"/>",
+            "<e:p rdf:ID=\"statement\">value</e:p>",
+            "<e:p rdf:ID=\"statement\" rdf:resource=\"urn:o\"/>",
+        ] {
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\">{property}</rdf:Description></rdf:RDF>"
+            );
+            assert_eq!(
+                graph(&source).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE"
+            );
+        }
     }
 
     #[test]
