@@ -174,6 +174,70 @@ def test_rdfxml_duplicate_id_within_one_xml_base_is_rejected() -> None:
     assert raised.value.code == "RDFXML_SYNTAX"
 
 
+@pytest.mark.parametrize("declared_encoding", ("UTF-8", "UTF8", "US-ASCII"))
+def test_rdfxml_utf8_declaration_aliases_use_decoded_text(declared_encoding: str) -> None:
+    source = f"""\
+<?xml version='1.0' encoding='{declared_encoding}'?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="{CLASS}"><rdfs:label>café</rdfs:label></owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assertion = next(document.iter_axioms(m.AnnotationAssertion))
+
+    assert isinstance(assertion.value, m.Literal)
+    assert assertion.value.lexical_form == "café"
+
+
+@pytest.mark.parametrize(
+    ("declaration", "code"),
+    (
+        ("<?xml encoding='UTF-8'?>", "RDFXML_SYNTAX"),
+        ("<?xml version=''?>", "RDFXML_SYNTAX"),
+        ("<?xml version='1.1'?>", "RDFXML_SYNTAX"),
+        ("<?xml version='2.0'?>", "RDFXML_SYNTAX"),
+        ("<?xml version='1.0' unknown='value'?>", "RDFXML_SYNTAX"),
+        ("<?xml version='1.0' standalone='true'?>", "RDFXML_SYNTAX"),
+        (
+            "<?xml version='1.0' standalone='yes' encoding='UTF-8'?>",
+            "RDFXML_SYNTAX",
+        ),
+        (
+            "<?xml version='1.0' encoding='ISO-8859-1'?>",
+            "XML_FORBIDDEN_CONSTRUCT",
+        ),
+    ),
+)
+def test_rdfxml_xml_declaration_contract_is_strict(declaration: str, code: str) -> None:
+    source = (
+        declaration
+        + '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>'
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == code
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>'.encode(
+            "utf-32"
+        ),
+        b"\xff\xfe\x00\xd8",
+        b"\xff\xfe<\x00x",
+    ),
+)
+def test_rdfxml_invalid_or_unsupported_source_encoding_is_rejected(source: bytes) -> None:
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "FORMAT_ENCODING"
+
+
 @pytest.mark.parametrize(
     "property_element",
     (

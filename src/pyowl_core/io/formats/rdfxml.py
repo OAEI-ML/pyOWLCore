@@ -33,9 +33,8 @@ from .rdf import (
 )
 
 XML_NS = "http://www.w3.org/XML/1998/namespace"
-_FORBIDDEN_XML = re.compile(rb"(?is)<!\s*(?:DOCTYPE|ENTITY)")
 _FORBIDDEN_XML_TEXT = re.compile(r"(?is)<!\s*(?:DOCTYPE|ENTITY)")
-_XML_ENCODING = re.compile(rb"(?i)^\s*<\?xml[^>]*\bencoding\s*=\s*['\"]([^'\"]+)")
+_XML_SPACE = frozenset(" \t\r\n")
 
 
 def parse_rdfxml(
@@ -46,7 +45,9 @@ def parse_rdfxml(
     cancellation_token: CancellationToken | None = None,
     allow_partial_rdf_mapping: bool = False,
 ) -> ParsedOntology:
-    if _has_forbidden_xml(data):
+    text, source_encoding = _decode_xml_source(data)
+    _validate_xml_envelope(text, source_encoding)
+    if _FORBIDDEN_XML_TEXT.search(text):
         raise OntologySyntaxError(
             "DTD and entity declarations are forbidden",
             code="XML_FORBIDDEN_CONSTRUCT",
@@ -56,9 +57,9 @@ def parse_rdfxml(
     depth = 0
     root: ET.Element | None = None
     try:
-        for offset in range(0, len(data), 64 * 1024):
+        for offset in range(0, len(text), 64 * 1024):
             context.check()
-            pull.feed(data[offset : offset + 64 * 1024])
+            pull.feed(text[offset : offset + 64 * 1024])
             for raw_event in pull.read_events():
                 event, element = cast(tuple[str, ET.Element], raw_event)
                 if event == "start":
@@ -91,7 +92,7 @@ def parse_rdfxml(
         mapped.extensions,
         occurrences=mapped.occurrences,
         rdf_mapping_report=mapped.rdf_mapping_report,
-        decoded_codepoint_length=_decoded_xml_length(data),
+        decoded_codepoint_length=len(text),
     )
 
 
@@ -519,53 +520,132 @@ def _expanded(tag: str) -> str:
     return namespace + local
 
 
-def _decoded_xml_length(data: bytes) -> int:
-    wide_encoding = _wide_xml_encoding(data)
-    if wide_encoding is not None:
-        encoding = wide_encoding
-        match = None
-    elif data.startswith(b"\xef\xbb\xbf"):
-        encoding = "utf-8-sig"
-        match = None
-    else:
-        match = _XML_ENCODING.match(data[:512])
-        encoding = "utf-8"
-    try:
-        if match is not None:
-            encoding = match.group(1).decode("ascii", "strict")
-        return len(data.decode(encoding))
-    except (LookupError, UnicodeDecodeError) as error:
+def _decode_xml_source(data: bytes) -> tuple[str, str]:
+    if data.startswith(
+        (
+            b"\xff\xfe\x00\x00",
+            b"\x00\x00\xfe\xff",
+            b"\x00\x00\x00<",
+            b"<\x00\x00\x00",
+        )
+    ):
         raise OntologySyntaxError(
-            "invalid or unsupported XML encoding", code="XML_ENCODING"
+            "RDF/XML source uses unsupported UTF-32 encoding",
+            code="FORMAT_ENCODING",
+        )
+    if data.startswith(b"\xff\xfe"):
+        content, codec, source_encoding = data[2:], "utf-16-le", "utf-16-le"
+    elif data.startswith(b"\xfe\xff"):
+        content, codec, source_encoding = data[2:], "utf-16-be", "utf-16-be"
+    elif data.startswith(b"<\x00"):
+        content, codec, source_encoding = data, "utf-16-le", "utf-16-le"
+    elif data.startswith(b"\x00<"):
+        content, codec, source_encoding = data, "utf-16-be", "utf-16-be"
+    elif data.startswith(b"\xef\xbb\xbf"):
+        content, codec, source_encoding = data[3:], "utf-8", "utf-8"
+    else:
+        content, codec, source_encoding = data, "utf-8", "utf-8"
+    try:
+        return content.decode(codec), source_encoding
+    except UnicodeDecodeError as error:
+        raise OntologySyntaxError(
+            "invalid or unsupported XML encoding",
+            code="FORMAT_ENCODING",
         ) from error
 
 
-def _has_forbidden_xml(data: bytes) -> bool:
-    if _FORBIDDEN_XML.search(data):
-        return True
-    encoding = _wide_xml_encoding(data)
-    if encoding is None:
-        return False
-    try:
-        return _FORBIDDEN_XML_TEXT.search(data.decode(encoding)) is not None
-    except UnicodeDecodeError:
-        return False
+def _validate_xml_envelope(text: str, source_encoding: str) -> None:
+    if not text.startswith("<?"):
+        return
+    declaration_end = text.find("?>", 2)
+    if declaration_end < 0:
+        return
+    declaration = text[2:declaration_end]
+    target_end = 0
+    while target_end < len(declaration) and declaration[target_end] not in _XML_SPACE:
+        target_end += 1
+    target = declaration[:target_end]
+    if not target.isascii() or target.lower() != "xml":
+        return
+    if target != "xml":
+        _xml_declaration_syntax()
+    _validate_xml_declaration(declaration, source_encoding)
 
 
-def _wide_xml_encoding(data: bytes) -> str | None:
-    if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
-        return "utf-32"
-    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return "utf-16"
-    if data.startswith(b"\x00\x00\x00<"):
-        return "utf-32-be"
-    if data.startswith(b"<\x00\x00\x00"):
-        return "utf-32-le"
-    if data.startswith(b"\x00<"):
-        return "utf-16-be"
-    if data.startswith(b"<\x00"):
-        return "utf-16-le"
-    return None
+def _validate_xml_declaration(declaration: str, source_encoding: str) -> None:
+    if not declaration.startswith("xml") or (
+        len(declaration) == 3 or declaration[3] not in _XML_SPACE
+    ):
+        _xml_declaration_syntax()
+    cursor = _skip_xml_space(declaration, 3)
+    name, version, cursor = _xml_declaration_attribute(declaration, cursor)
+    if name != "version" or version != "1.0":
+        _xml_declaration_syntax()
+    encoding_seen = False
+    standalone_seen = False
+    while cursor < len(declaration):
+        if declaration[cursor] not in _XML_SPACE:
+            _xml_declaration_syntax()
+        cursor = _skip_xml_space(declaration, cursor)
+        if cursor == len(declaration):
+            break
+        name, value, cursor = _xml_declaration_attribute(declaration, cursor)
+        if name == "encoding" and not encoding_seen and not standalone_seen:
+            encoding_seen = True
+            compatible = {
+                "utf-8": frozenset(("utf-8", "utf8", "us-ascii")),
+                "utf-16-le": frozenset(("utf-16", "utf-16le")),
+                "utf-16-be": frozenset(("utf-16", "utf-16be")),
+            }[source_encoding]
+            if not value.isascii() or value.lower() not in compatible:
+                raise OntologySyntaxError(
+                    "XML declaration encoding does not match the source",
+                    code="XML_FORBIDDEN_CONSTRUCT",
+                )
+        elif name == "standalone" and not standalone_seen:
+            standalone_seen = True
+            if value not in {"yes", "no"}:
+                _xml_declaration_syntax()
+        else:
+            _xml_declaration_syntax()
+
+
+def _xml_declaration_attribute(declaration: str, cursor: int) -> tuple[str, str, int]:
+    name_start = cursor
+    while cursor < len(declaration):
+        character = declaration[cursor]
+        if not character.isascii() or not character.isalpha():
+            break
+        cursor += 1
+    if cursor == name_start:
+        _xml_declaration_syntax()
+    name = declaration[name_start:cursor]
+    cursor = _skip_xml_space(declaration, cursor)
+    if cursor == len(declaration) or declaration[cursor] != "=":
+        _xml_declaration_syntax()
+    cursor = _skip_xml_space(declaration, cursor + 1)
+    if cursor == len(declaration) or declaration[cursor] not in {'"', "'"}:
+        _xml_declaration_syntax()
+    quote = declaration[cursor]
+    cursor += 1
+    value_start = cursor
+    while cursor < len(declaration) and declaration[cursor] != quote:
+        if declaration[cursor] in "<&":
+            _xml_declaration_syntax()
+        cursor += 1
+    if cursor == len(declaration):
+        _xml_declaration_syntax()
+    return name, declaration[value_start:cursor], cursor + 1
+
+
+def _skip_xml_space(value: str, cursor: int) -> int:
+    while cursor < len(value) and value[cursor] in _XML_SPACE:
+        cursor += 1
+    return cursor
+
+
+def _xml_declaration_syntax() -> NoReturn:
+    raise OntologySyntaxError("malformed XML declaration", code="RDFXML_SYNTAX")
 
 
 __all__ = ["RDFXMLGraphParser", "parse_rdfxml", "render_rdfxml"]

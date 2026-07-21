@@ -169,6 +169,75 @@ def test_valid_xml_declaration_and_explicit_xml_binding_match_python(
     assert observed.total_triples == python.rdf_mapping_report.total_triples
 
 
+@pytest.mark.parametrize("declaration_encoding", ("UTF-8", "UTF8", "US-ASCII"))
+def test_utf8_declaration_aliases_match_python(
+    extension: NativeTestExtension,
+    declaration_encoding: str,
+) -> None:
+    source = f"""<?xml version='1.0' encoding='{declaration_encoding}'?>
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'><rdfs:label>café</rdfs:label></owl:Class>
+</rdf:RDF>""".encode()
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 2
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.decoded_codepoints == python.decoded_codepoint_length
+
+
+@pytest.mark.parametrize(
+    ("source", "code"),
+    (
+        (
+            b"<?xml encoding='UTF-8'?><rdf:RDF "
+            b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+            "RDFXML_SYNTAX",
+        ),
+        (
+            b"<?xml version='1.1'?><rdf:RDF "
+            b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+            "RDFXML_SYNTAX",
+        ),
+        (
+            b"<?xml version='1.0' standalone='yes' encoding='UTF-8'?><rdf:RDF "
+            b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+            "RDFXML_SYNTAX",
+        ),
+        (
+            b"<?xml version='1.0' encoding='ISO-8859-1'?><rdf:RDF "
+            b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+            "XML_FORBIDDEN_CONSTRUCT",
+        ),
+        (
+            '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>'.encode(
+                "utf-32"
+            ),
+            "FORMAT_ENCODING",
+        ),
+        (b"\xff\xfe\x00\xd8", "FORMAT_ENCODING"),
+        (b"\xff\xfe<\x00x", "FORMAT_ENCODING"),
+    ),
+)
+def test_xml_envelope_failures_match_python(
+    extension: NativeTestExtension,
+    source: bytes,
+    code: str,
+) -> None:
+    with pytest.raises(OntologySyntaxError) as python_raised:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_raised.value.code == code
+
+    with pytest.raises(extension._NativeError) as native_raised:
+        _ingest(extension, source)
+    assert native_raised.value.args[0] == "NATIVE_" + code
+
+
 @pytest.mark.parametrize(
     ("little_endian", "bom", "declaration_encoding"),
     (
