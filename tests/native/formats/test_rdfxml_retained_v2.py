@@ -1036,6 +1036,16 @@ def test_private_production_seam_fails_closed_for_syntax_limits_and_cancellation
         native._parse_rdfxml_retained_v2(b"<rdf:RDF", document_iri=None)
     assert malformed.value.code == "RDFXML_SYNTAX"
 
+    for source in (
+        b"<?xml version='1.1'?><rdf:RDF "
+        b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+        b"<!--bad---><rdf:RDF "
+        b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+    ):
+        with pytest.raises(OntologySyntaxError) as invalid_envelope:
+            native._parse_rdfxml_retained_v2(source, document_iri=None)
+        assert invalid_envelope.value.code == "RDFXML_SYNTAX"
+
     with pytest.raises(ResourceLimitError):
         native._parse_rdfxml_retained_v2(
             SOURCE,

@@ -208,11 +208,14 @@ impl<'a> XmlStream<'a> {
                     session,
                 )?
                 .ok_or_else(xml_syntax)?;
-                if bounded_find(self.text.as_bytes(), body_start, marker, b"--", session)?.is_some()
+                let body = &self.text[body_start..marker];
+                if body.ends_with('-')
+                    || bounded_find(self.text.as_bytes(), body_start, marker, b"--", session)?
+                        .is_some()
                 {
                     return Err(xml_syntax());
                 }
-                validate_xml_characters(&self.text[body_start..marker])?;
+                validate_xml_characters(body)?;
                 let end = marker + 3;
                 self.advance(end, session)?;
                 continue;
@@ -6123,8 +6126,8 @@ fn validate_xml_declaration(declaration: &str) -> NativeResult<()> {
     }
     let mut cursor = 3;
     skip_space(bytes, &mut cursor);
-    let (name, _version) = xml_declaration_attribute(declaration, &mut cursor)?;
-    if name != "version" {
+    let (name, version) = xml_declaration_attribute(declaration, &mut cursor)?;
+    if name != "version" || version != "1.0" {
         return Err(xml_syntax());
     }
     let mut encoding_seen = false;
@@ -10373,6 +10376,9 @@ mod tests {
         for declaration in [
             "<?xml encoding='UTF-8'?>",
             "<?xml garbage?>",
+            "<?xml version=''?>",
+            "<?xml version='1.1'?>",
+            "<?xml version='2.0'?>",
             "<?xml version='1.0' unknown='value'?>",
             "<?xml version='1.0' standalone='true'?>",
             "<?xml version='1.0' standalone='yes' encoding='UTF-8'?>",
@@ -10395,6 +10401,17 @@ mod tests {
             "xmlns:xmlns=\"urn:invalid\"".to_owned(),
         ] {
             let source = format!("<rdf:RDF xmlns:rdf=\"{RDF}\" {declaration}/>");
+            assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
+    }
+
+    #[test]
+    fn xml_comments_reject_double_hyphens_and_trailing_hyphens() {
+        for source in [
+            format!("<!--bad--comment--><rdf:RDF xmlns:rdf=\"{RDF}\"/>"),
+            format!("<!--bad---><rdf:RDF xmlns:rdf=\"{RDF}\"/>"),
+            format!("<rdf:RDF xmlns:rdf=\"{RDF}\"><!--bad---></rdf:RDF>"),
+        ] {
             assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
         }
     }

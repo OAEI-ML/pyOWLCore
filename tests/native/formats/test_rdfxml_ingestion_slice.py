@@ -670,6 +670,16 @@ def test_rfc3986_document_and_nested_xml_bases_match_python(
             "NATIVE_RDFXML_SYNTAX",
         ),
         (
+            b"<?xml version='1.1'?><rdf:RDF "
+            b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+            "NATIVE_RDFXML_SYNTAX",
+        ),
+        (
+            b"<!--bad---><rdf:RDF "
+            b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+            "NATIVE_RDFXML_SYNTAX",
+        ),
+        (
             b"<?xml version='1.0' encoding='UTF-16'?><rdf:RDF "
             b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
             "NATIVE_XML_FORBIDDEN_CONSTRUCT",
