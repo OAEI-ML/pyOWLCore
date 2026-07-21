@@ -630,6 +630,20 @@ def test_private_rdfxml_seam_rejects_unowned_semantics_before_publication() -> N
     with pytest.raises(UnsupportedSyntaxError, match="anonymous re-scoping"):
         native._parse_rdfxml_retained_v2(anonymous, document_iri=None)
 
+    reified = b"""\
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+      xmlns:owl="http://www.w3.org/2002/07/owl#" xmlns:e="urn:"
+      xml:base="http://example.test/doc">
+      <owl:AnnotationProperty rdf:about="urn:p"/>
+      <owl:Class rdf:about="urn:C">
+        <e:p rdf:ID="statement">value</e:p>
+      </owl:Class>
+    </rdf:RDF>
+    """
+    with pytest.raises(UnsupportedSyntaxError) as incomplete:
+        native._parse_rdfxml_retained_v2(reified, document_iri=None)
+    assert incomplete.value.code == "RDF_MAPPING_INCOMPLETE"
+
     with pytest.raises(UnsupportedSyntaxError, match="resolver-backed imports"):
         native._parse_rdfxml_retained_v2(
             SOURCE,
