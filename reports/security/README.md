@@ -27,8 +27,9 @@ through retained-component build, freeze, and encode for all 76 model
 constructors, plus the five explicit native wire validation/receipt allocation
 boundaries and 57 positive retained/temporary claims in the validated V2
 publication builder, plus 51 explicit backing-owner/slice/dictionary/counter
-publication checkpoints in the direct encoded-view Python bridge. It covers
-20,786 checkpoints locally; the remaining parser/encoded-workspace/bridge/
+publication checkpoints in the direct encoded-view Python bridge and 13 actual
+capacity-growth/owner checkpoints in its retained Rust encoded-column
+workspace. It covers 20,799 checkpoints locally; the remaining parser/bridge/
 process-allocator and hosted-platform matrix stays open.
 
 Run the ordinary bounded security lanes with:

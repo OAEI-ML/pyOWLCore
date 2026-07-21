@@ -242,11 +242,17 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert bridge["injected_failures"] == bridge["allocation_checkpoints"]
     assert bridge["boundary_successes"] == 1
     assert bridge["scope"]
+    workspace = sweep["encoded_view_workspace"]
+    assert workspace["allocation_checkpoints"] == 13
+    assert workspace["injected_failures"] == workspace["allocation_checkpoints"]
+    assert workspace["boundary_successes"] == 1
+    assert workspace["scope"]
     assert sweep["covered_allocation_checkpoints"] == (
         sweep["total_allocation_checkpoints"]
         + wire["allocation_checkpoints"]
         + publication["allocation_checkpoints"]
         + bridge["allocation_checkpoints"]
+        + workspace["allocation_checkpoints"]
     )
     assert sweep["covered_injected_failures"] == sweep["covered_allocation_checkpoints"]
     assert sweep["covered_boundary_successes"] == (
@@ -254,6 +260,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + wire["boundary_successes"]
         + publication["boundary_successes"]
         + bridge["boundary_successes"]
+        + workspace["boundary_successes"]
     )
 
     assert {run["id"]: run["status"] for run in checkpoint["runs"]} == {
@@ -271,6 +278,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert release["native_wire_validation_allocation_failures"] == "local-pass"
     assert release["retained_publication_allocation_failures"] == "local-pass"
     assert release["encoded_view_python_bridge_allocation_failures"] == "local-pass"
+    assert release["encoded_view_rust_workspace_allocation_failures"] == "local-pass"
     assert release["end_to_end_allocation_failure_matrix"] == "not-run"
     assert release["security_resource_determinism"] == "not-run"
     assert release["core_release_eligible"] is False
