@@ -168,6 +168,7 @@ pub fn load_rdfxml_common(
         None,
         caller_external_bytes,
         true,
+        request.allow_swrl,
         true,
     )
     .map_err(failure)?;

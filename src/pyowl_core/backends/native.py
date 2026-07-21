@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from pyowl_core.io.formats.common import ParsedOntology
     from pyowl_core.model.axioms import AxiomNode
 
-_ABI_VERSION = 2
+_ABI_VERSION = 3
 _MODEL_SCHEMA_VERSION = 1
 _WIRE_FORMAT_VERSION = (1, 1)
 _CONFIG = struct.Struct("<8sHHI37Q")
@@ -175,6 +175,7 @@ class _Extension(Protocol):
         config: object,
         collect_provenance: bool,
         allow_partial_rdf_mapping: bool,
+        allow_swrl: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
     ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
@@ -536,6 +537,7 @@ def _parse_rdfxml_retained_v2(
     limits: ParseLimits | None = None,
     collect_provenance: bool = False,
     allow_partial_rdf_mapping: bool = False,
+    allow_swrl: bool = False,
     require_empty_imports: bool = False,
     cancellation_token: CancellationToken | None = None,
 ) -> _NativeRetainedFunctionalParseV2:
@@ -563,6 +565,7 @@ def _parse_rdfxml_retained_v2(
     for name, value in (
         ("collect_provenance", collect_provenance),
         ("allow_partial_rdf_mapping", allow_partial_rdf_mapping),
+        ("allow_swrl", allow_swrl),
         ("require_empty_imports", require_empty_imports),
     ):
         if not isinstance(value, bool):
@@ -578,6 +581,7 @@ def _parse_rdfxml_retained_v2(
                 config,
                 collect_provenance,
                 allow_partial_rdf_mapping,
+                allow_swrl,
                 require_empty_imports,
                 cancel,
             ),

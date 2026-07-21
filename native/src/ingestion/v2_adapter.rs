@@ -235,7 +235,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
-        let document = super::super::parse_rdfxml(source, Some("urn:document"), &mut session)
+        let document = super::super::parse_rdfxml(source, Some("urn:document"), true, &mut session)
             .expect("mapped document");
         session.finish().expect("parse finish");
         let expected = document.axioms.clone();

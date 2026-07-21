@@ -39,7 +39,7 @@ class NativeBoundaryTests(unittest.TestCase):
 
     def test_exact_versions_features_and_self_test(self) -> None:
         extension = self.extension
-        self.assertEqual(extension.ABI_VERSION, 2)
+        self.assertEqual(extension.ABI_VERSION, 3)
         self.assertEqual(extension.MODEL_SCHEMA_VERSION, 1)
         self.assertEqual(extension.WIRE_FORMAT_VERSION, (1, 1))
         self.assertEqual(extension.FEATURES, tuple(sorted(set(extension.FEATURES))))

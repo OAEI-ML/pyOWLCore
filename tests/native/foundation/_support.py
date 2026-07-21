@@ -85,6 +85,7 @@ class NativeTestExtension(Protocol):
         config: object,
         collect_provenance: bool,
         allow_partial_rdf_mapping: bool,
+        allow_swrl: bool,
         require_empty_imports: bool,
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...

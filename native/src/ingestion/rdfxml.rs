@@ -1962,12 +1962,13 @@ pub(super) fn parse_and_map(
     document_iri: Option<&str>,
     session: &mut Session<'_>,
 ) -> NativeResult<CanonicalDocument> {
-    Ok(parse_and_map_timed(source, document_iri, session)?.0)
+    Ok(parse_and_map_timed(source, document_iri, true, session)?.0)
 }
 
 pub(super) fn parse_and_map_timed(
     source: &[u8],
     document_iri: Option<&str>,
+    allow_swrl: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<(CanonicalDocument, u64)> {
     let (text, decoded_codepoints, source_encoding) = decode_xml(source, session)?;
@@ -1981,7 +1982,7 @@ pub(super) fn parse_and_map_timed(
     let decoded_codepoints = decoded_codepoints.saturating_sub(u64::from(utf8_bom));
     let triples = GraphParser::new(text, document_iri, source_encoding, session)?.parse()?;
     let mapping_started = Instant::now();
-    let document = map_graph(triples, decoded_codepoints, session)?;
+    let document = map_graph(triples, decoded_codepoints, allow_swrl, session)?;
     let mapping_ns = u64::try_from(mapping_started.elapsed().as_nanos())
         .map_err(|_| NativeError::limit("native RDF mapping phase time exceeds u64"))?;
     Ok((document, mapping_ns))
@@ -2132,6 +2133,7 @@ fn decode_utf8(source: &[u8], session: &mut Session<'_>) -> NativeResult<(String
 fn map_graph(
     triples: Vec<Triple>,
     decoded_codepoints: u64,
+    allow_swrl: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<CanonicalDocument> {
     let total_triples = u64::try_from(triples.len())
@@ -2287,6 +2289,7 @@ fn map_graph(
         &mut expressions,
         &mut axiom_annotations,
         &mut extensions,
+        allow_swrl,
         session,
     )?;
     map_negative_property_assertions(
@@ -2823,6 +2826,7 @@ fn map_swrl_rules<'view, 'graph>(
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
     reifications: &mut AxiomAnnotationLedger,
     extensions: &mut Vec<Vec<u8>>,
+    allow_swrl: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
     for (type_index, triple) in triples.iter().enumerate() {
@@ -2832,6 +2836,12 @@ fn map_swrl_rules<'view, 'graph>(
             || triple.object != ListTerm::Iri(SWRL_IMP)
         {
             continue;
+        }
+        if !allow_swrl {
+            return Err(NativeError::new(
+                "NATIVE_EXTENSION_DISABLED",
+                "native RDF/XML SWRL mapping requires explicit enablement",
+            ));
         }
         let (_body_index, body_head) = required_metadata_edge(
             triples,

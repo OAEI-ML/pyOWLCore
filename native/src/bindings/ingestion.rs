@@ -98,6 +98,7 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     config,
     collect_provenance,
     allow_partial_rdf_mapping,
+    allow_swrl,
     require_empty_imports,
     cancel=None
 ))]
@@ -108,6 +109,7 @@ fn _parse_rdfxml_retained_v2<'py>(
     config: &Bound<'py, PyAny>,
     collect_provenance: bool,
     allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<RetainedRdfXmlParseBindingResult> {
@@ -119,6 +121,7 @@ fn _parse_rdfxml_retained_v2<'py>(
         config,
         collect_provenance,
         allow_partial_rdf_mapping,
+        allow_swrl,
         require_empty_imports,
         cancel,
         &mut allocations,
@@ -134,6 +137,7 @@ fn _parse_rdfxml_retained_v2<'py>(
     config,
     collect_provenance,
     allow_partial_rdf_mapping,
+    allow_swrl,
     require_empty_imports,
     fail_after=None
 ))]
@@ -144,6 +148,7 @@ fn _rdfxml_retained_bridge_allocation_probe_v2<'py>(
     config: &Bound<'py, PyAny>,
     collect_provenance: bool,
     allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
     require_empty_imports: bool,
     fail_after: Option<u64>,
 ) -> PyResult<(Py<PyBytes>, u64)> {
@@ -158,6 +163,7 @@ fn _rdfxml_retained_bridge_allocation_probe_v2<'py>(
         config,
         collect_provenance,
         allow_partial_rdf_mapping,
+        allow_swrl,
         require_empty_imports,
         None,
         &mut allocations,
@@ -173,6 +179,7 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
     config: &Bound<'py, PyAny>,
     collect_provenance: bool,
     allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
     allocations: &mut crate::BridgeAllocationProbe,
@@ -215,6 +222,7 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
             Some(interrupt),
             accounted_input,
             collect_provenance,
+            allow_swrl,
             require_empty_imports,
         )?;
         let parser_bytes = u64::try_from(input_size)
@@ -1110,13 +1118,14 @@ fn owned_origin_rows(
 /// RDF/XML grammar and OWL RDF mapping pass the installed-path matrix.
 #[cfg(feature = "test-hooks")]
 #[pyfunction]
-#[pyo3(signature = (source, document_iri, config, cancel=None))]
+#[pyo3(signature = (source, document_iri, config, cancel=None, *, allow_swrl=false))]
 fn _ingest_rdfxml_slice_v1<'py>(
     py: Python<'py>,
     source: &Bound<'py, PyAny>,
     document_iri: Option<&Bound<'py, PyAny>>,
     config: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    allow_swrl: bool,
 ) -> PyResult<(NativeSnapshotHandle, Py<PyBytes>)> {
     let limits = crate::limits_from_python(config)?;
     let cancellation = crate::cancellation_or_default(cancel);
@@ -1134,8 +1143,12 @@ fn _ingest_rdfxml_slice_v1<'py>(
             interrupt,
         );
         let mut session = Session::new(&mut guard, &limits, accounted_input)?;
-        let outcome =
-            engine::ingest_rdfxml_v1_test_adapter(&owned, document_iri.as_deref(), &mut session)?;
+        let outcome = engine::ingest_rdfxml_v1_test_adapter(
+            &owned,
+            document_iri.as_deref(),
+            allow_swrl,
+            &mut session,
+        )?;
         session.finish()?;
         Ok(outcome)
     })?;

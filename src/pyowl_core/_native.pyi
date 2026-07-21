@@ -171,6 +171,7 @@ def _rdfxml_retained_bridge_allocation_probe_v2(
     config: object,
     collect_provenance: bool,
     allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
     require_empty_imports: bool,
     fail_after: int | None = None,
 ) -> tuple[bytes, int]: ...
@@ -242,6 +243,7 @@ def _parse_rdfxml_retained_v2(
     config: object,
     collect_provenance: bool,
     allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
 ) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...

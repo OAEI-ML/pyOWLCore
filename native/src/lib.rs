@@ -37,7 +37,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyModule, PyTuple};
 use wire::WireArena;
 
-pub(crate) const ABI_VERSION: u32 = 2;
+pub(crate) const ABI_VERSION: u32 = 3;
 const MODEL_SCHEMA_VERSION: u32 = 1;
 const WIRE_FORMAT_VERSION: (u16, u16) = (1, 1);
 const FOUNDATION_FEATURES: [&str; 10] = [

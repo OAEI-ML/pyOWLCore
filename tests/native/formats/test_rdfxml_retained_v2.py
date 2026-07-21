@@ -324,6 +324,7 @@ def _retained_snapshot(
     resolver: ImportResolver | None = None,
     cancellation_token: CancellationToken | None = None,
     require_empty_imports: bool | None = None,
+    allow_swrl: bool = False,
 ) -> object:
     selected_options = _options(BackendPreference.NATIVE) if options is None else options
     payload = acquire_source(
@@ -346,6 +347,7 @@ def _retained_snapshot(
         limits=selected_options.limits,
         collect_provenance=selected_options.collect_provenance,
         allow_partial_rdf_mapping=False,
+        allow_swrl=allow_swrl,
         require_empty_imports=require_empty_imports,
         cancellation_token=cancellation_token,
     )
@@ -448,7 +450,19 @@ def test_retained_swrl_extension_matches_python_canonical_bytes() -> None:
         document_iri=None,
         allow_swrl=True,
     )
-    selected = cast(Any, _retained_snapshot(SWRL_SOURCE, document_iri=None))
+    with pytest.raises(UnsupportedSyntaxError) as disabled:
+        native._parse_rdfxml_retained_v2(SWRL_SOURCE, document_iri=None)
+    assert disabled.value.code == "EXTENSION_DISABLED"
+    with pytest.raises(TypeError, match="allow_swrl must be bool"):
+        native._parse_rdfxml_retained_v2(
+            SWRL_SOURCE,
+            document_iri=None,
+            allow_swrl=cast(Any, 1),
+        )
+    selected = cast(
+        Any,
+        _retained_snapshot(SWRL_SOURCE, document_iri=None, allow_swrl=True),
+    )
 
     expected = tuple(canonical_bytes(value) for value in reference.extensions)
     assert not selected.root.axioms

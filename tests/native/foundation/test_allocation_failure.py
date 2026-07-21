@@ -770,6 +770,7 @@ def test_rdfxml_retained_bridge_allocations_fail_before_publication(
             True,
             False,
             False,
+            False,
             None,
         )
     )
@@ -790,6 +791,7 @@ def test_rdfxml_retained_bridge_allocations_fail_before_publication(
                 True,
                 False,
                 False,
+                False,
                 fail_after,
             )
         assert source == original_source
@@ -801,6 +803,7 @@ def test_rdfxml_retained_bridge_allocations_fail_before_publication(
             "urn:allocation:document",
             memoryview(config),
             True,
+            False,
             False,
             False,
             allocations,

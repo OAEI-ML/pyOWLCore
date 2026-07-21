@@ -16,7 +16,7 @@ from ._support import load_extension
 
 def _metadata_extension(
     *,
-    abi_version: int = 2,
+    abi_version: int = 3,
     ingestion: object = (),
     views: object = (),
     extra_features: tuple[str, ...] = (),

@@ -61,14 +61,16 @@ pub(super) struct V1TestAdapterOutcome {
 fn parse_rdfxml(
     source: &[u8],
     document_iri: Option<&str>,
+    allow_swrl: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<CanonicalDocument> {
-    Ok(parse_rdfxml_timed(source, document_iri, session)?.0)
+    Ok(parse_rdfxml_timed(source, document_iri, allow_swrl, session)?.0)
 }
 
 fn parse_rdfxml_timed(
     source: &[u8],
     document_iri: Option<&str>,
+    allow_swrl: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<(CanonicalDocument, u64)> {
     check_source(source, session)?;
@@ -79,7 +81,8 @@ fn parse_rdfxml_timed(
             "native RDF/XML document IRI exceeds max_iri_bytes",
         )?;
     }
-    let (mut document, mapping_ns) = rdfxml::parse_and_map_timed(source, document_iri, session)?;
+    let (mut document, mapping_ns) =
+        rdfxml::parse_and_map_timed(source, document_iri, allow_swrl, session)?;
     document.document_iri = document_iri
         .map(|value| owned_text(value, session))
         .transpose()?;
@@ -99,10 +102,11 @@ pub(crate) fn parse_rdfxml_retained_v2(
     interrupt: Option<crate::cancel::InterruptSlot>,
     caller_external_bytes: usize,
     collect_provenance: bool,
+    allow_swrl: bool,
     require_empty_imports: bool,
 ) -> NativeResult<RetainedRdfXmlOutcomeV2> {
     let parse_started = Instant::now();
-    let (mut document, mapping_ns) = parse_rdfxml_timed(source, document_iri, session)?;
+    let (mut document, mapping_ns) = parse_rdfxml_timed(source, document_iri, allow_swrl, session)?;
     let parse_mapping_ns = elapsed_ns(parse_started)?;
     let syntax_parse_ns = parse_mapping_ns.saturating_sub(mapping_ns);
     if require_empty_imports && !document.imports.is_empty() {
@@ -212,9 +216,10 @@ fn owned_text(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
 pub(super) fn ingest_rdfxml_v1_test_adapter(
     source: &[u8],
     document_iri: Option<&str>,
+    allow_swrl: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<V1TestAdapterOutcome> {
-    let document = parse_rdfxml(source, document_iri, session)?;
+    let document = parse_rdfxml(source, document_iri, allow_swrl, session)?;
     let observation = v1_adapter::encode_observation(&document, session)?;
     let publication = v1_adapter::publish(&document, session)?;
     Ok(V1TestAdapterOutcome {
@@ -272,7 +277,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, source.len())?;
-        let result = parse_rdfxml(source, document_iri, &mut session)?;
+        let result = parse_rdfxml(source, document_iri, true, &mut session)?;
         session.finish()?;
         Ok(result)
     }
@@ -313,6 +318,7 @@ mod tests {
             cancellation,
             None,
             source.len(),
+            true,
             true,
             false,
         )
@@ -360,6 +366,70 @@ mod tests {
     }
 
     #[test]
+    fn retained_rdfxml_requires_explicit_swrl_enablement() {
+        let source = br#"<rdf:RDF
+            xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:swrl="http://www.w3.org/2003/11/swrl#">
+          <swrl:Imp>
+            <swrl:body rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+            <swrl:head rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+          </swrl:Imp>
+        </rdf:RDF>"#;
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
+        let error = parse_rdfxml_retained_v2(
+            source,
+            None,
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            source.len(),
+            false,
+            false,
+            false,
+        )
+        .err()
+        .expect("disabled SWRL must fail");
+        assert_eq!(error.code, "NATIVE_EXTENSION_DISABLED");
+
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
+        let outcome = parse_rdfxml_retained_v2(
+            source,
+            None,
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            source.len(),
+            false,
+            true,
+            false,
+        )
+        .expect("explicitly enabled SWRL");
+        assert_eq!(
+            outcome
+                .storage
+                .structural_counts()
+                .expect("counts")
+                .extensions,
+            1
+        );
+    }
+
+    #[test]
     fn retained_rdfxml_owns_anonymous_scope_and_rejects_resolver_bypass() {
         let anonymous = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
             xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#">
@@ -385,6 +455,7 @@ mod tests {
             cancellation,
             None,
             anonymous.len(),
+            true,
             true,
             false,
         )
@@ -430,6 +501,7 @@ mod tests {
             imported.len(),
             false,
             true,
+            true,
         )
         .err()
         .expect("resolver bypass must fail");
@@ -450,7 +522,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
-        let document = parse_rdfxml(source, None, &mut session).expect("mapped document");
+        let document = parse_rdfxml(source, None, true, &mut session).expect("mapped document");
         let publication = v1_adapter::publish(&document, &mut session).expect("publication");
         let storage = publication
             .handle()

@@ -109,6 +109,7 @@ def _ingest(
     document_iri: object | None = None,
     limits: ParseLimits | None = None,
     cancel: object | None = None,
+    allow_swrl: bool = False,
 ) -> tuple[object, _Observation]:
     selected = ParseLimits() if limits is None else limits
     config = cast(Any, native)._encode_config(selected, None, verify=False)
@@ -117,6 +118,7 @@ def _ingest(
         document_iri,
         config,
         cancel,
+        allow_swrl=allow_swrl,
     )
     return owner, _decode_observation(encoded)
 
@@ -1425,7 +1427,14 @@ def test_malformed_or_unclaimed_reification_rejection_matches_python(
 def test_swrl_rule_mapping_matches_python_extension_partition(
     extension: NativeTestExtension,
 ) -> None:
-    owner, observed = _ingest(extension, SWRL_SOURCE)
+    with pytest.raises(UnsupportedSyntaxError) as python_disabled:
+        parse_rdfxml(SWRL_SOURCE, limits=ParseLimits(), document_iri=None)
+    assert python_disabled.value.code == "RDF_EXTENSION_DISABLED"
+    with pytest.raises(extension._NativeError) as native_disabled:
+        _ingest(extension, SWRL_SOURCE)
+    assert native_disabled.value.args[0] == "NATIVE_EXTENSION_DISABLED"
+
+    owner, observed = _ingest(extension, SWRL_SOURCE, allow_swrl=True)
     python = parse_rdfxml(
         SWRL_SOURCE,
         limits=ParseLimits(),
@@ -1514,7 +1523,7 @@ def test_malformed_swrl_rule_rejection_matches_python(
         )
     assert python_error.value.code == python_code
     with pytest.raises(extension._NativeError) as native_error:
-        _ingest(extension, source)
+        _ingest(extension, source, allow_swrl=True)
     assert native_error.value.args[0] == native_code
 
 
@@ -1522,7 +1531,12 @@ def test_canonical_swrl_atom_limit_matches_python(
     extension: NativeTestExtension,
 ) -> None:
     boundary = ParseLimits(max_rule_atoms=6)
-    owner, observed = _ingest(extension, SWRL_SOURCE, limits=boundary)
+    owner, observed = _ingest(
+        extension,
+        SWRL_SOURCE,
+        limits=boundary,
+        allow_swrl=True,
+    )
     python = parse_rdfxml(
         SWRL_SOURCE,
         limits=boundary,
@@ -1543,7 +1557,7 @@ def test_canonical_swrl_atom_limit_matches_python(
         )
     assert python_error.value.limit == "max_rule_atoms"
     with pytest.raises(extension._NativeError) as native_error:
-        _ingest(extension, SWRL_SOURCE, limits=limited)
+        _ingest(extension, SWRL_SOURCE, limits=limited, allow_swrl=True)
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
