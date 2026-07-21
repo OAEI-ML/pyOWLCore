@@ -1086,6 +1086,32 @@ impl PublicationStorageV2 {
         )
     }
 
+    #[cfg(feature = "test-hooks")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_encoded_structural_columns_with_allocation_probe(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+        fail_after: Option<u64>,
+    ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'_>> {
+        let typed = self.typed_structural.as_deref().ok_or_else(|| {
+            NativeError::protocol("native V2 publication has no typed structural owner")
+        })?;
+        typed.prepare_encoded_structural_columns_with_allocation_probe(
+            scope,
+            document_ordinal,
+            raw_document_owner,
+            limits,
+            cancellation,
+            interrupt,
+            fail_after,
+        )
+    }
+
     pub(crate) fn record_encoded_view_success(&self) -> NativeResult<()> {
         self.counters.add_pairs(&[(ENCODED_VIEW_REQUESTS, 1)])?;
         Ok(())

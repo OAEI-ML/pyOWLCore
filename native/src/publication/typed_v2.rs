@@ -15,6 +15,8 @@ use crate::index::{
     RetainedAxiomTypeIndexV1, RetainedSignatureIndexV1,
 };
 use crate::limits::{LimitKey, Limits};
+#[cfg(feature = "test-hooks")]
+use crate::model::prepare_encoded_structural_columns_from_tables_with_allocation_probe_v1;
 use crate::model::{
     prepare_encoded_structural_columns_from_tables_v1, scan_canonical, structural_digest_v1,
     Category, ComponentCounters, ComponentId, EncodedRootKindV1, EncodedRootTableV1,
@@ -660,6 +662,49 @@ impl TypedFacadeStorageV2 {
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
     ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'_>> {
+        let tables =
+            self.encoded_structural_root_tables(scope, document_ordinal, raw_document_owner)?;
+        prepare_encoded_structural_columns_from_tables_v1(
+            &self.arena,
+            &tables,
+            limits,
+            cancellation,
+            interrupt,
+            self.external_retained_bytes,
+        )
+    }
+
+    #[cfg(feature = "test-hooks")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_encoded_structural_columns_with_allocation_probe(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+        fail_after: Option<u64>,
+    ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'_>> {
+        let tables =
+            self.encoded_structural_root_tables(scope, document_ordinal, raw_document_owner)?;
+        prepare_encoded_structural_columns_from_tables_with_allocation_probe_v1(
+            &self.arena,
+            &tables,
+            limits,
+            cancellation,
+            interrupt,
+            self.external_retained_bytes,
+            fail_after,
+        )
+    }
+
+    fn encoded_structural_root_tables(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+    ) -> NativeResult<[EncodedRootTableV1<'_>; 3]> {
         let annotations = self.structural_roots(
             TypedFacadeCollectionV2::OntologyAnnotations,
             scope,
@@ -683,14 +728,7 @@ impl TypedFacadeStorageV2 {
             EncodedRootTableV1::new(EncodedRootKindV1::Axiom, axioms),
             EncodedRootTableV1::new(EncodedRootKindV1::Extension, extensions),
         ];
-        prepare_encoded_structural_columns_from_tables_v1(
-            &self.arena,
-            &tables,
-            limits,
-            cancellation,
-            interrupt,
-            self.external_retained_bytes,
-        )
+        Ok(tables)
     }
 
     /// Build exact-constructor postings directly over a retained axiom root

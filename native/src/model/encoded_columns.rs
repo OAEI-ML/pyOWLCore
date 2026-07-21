@@ -155,6 +155,15 @@ struct ColumnWork {
     guard: Guard,
     used: u64,
     maximum: u64,
+    #[cfg(feature = "test-hooks")]
+    allocation_probe: Option<ColumnAllocationProbe>,
+}
+
+#[cfg(feature = "test-hooks")]
+#[derive(Debug)]
+struct ColumnAllocationProbe {
+    fail_after: Option<u64>,
+    allocations: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -212,7 +221,72 @@ impl ColumnWork {
             guard,
             used: 0,
             maximum: limits.max_canonical_work,
+            #[cfg(feature = "test-hooks")]
+            allocation_probe: None,
         })
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn with_allocation_failure(
+        limits: &Limits,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+        fail_after: Option<u64>,
+    ) -> NativeResult<Self> {
+        let mut work = Self::new(limits, cancellation, interrupt)?;
+        work.allocation_probe = Some(ColumnAllocationProbe {
+            fail_after,
+            allocations: 0,
+        });
+        Ok(work)
+    }
+
+    fn allocation_checkpoint(&mut self) -> NativeResult<()> {
+        #[cfg(feature = "test-hooks")]
+        {
+            let Some(probe) = self.allocation_probe.as_mut() else {
+                return Ok(());
+            };
+            if probe
+                .fail_after
+                .is_some_and(|maximum| probe.allocations >= maximum)
+            {
+                return Err(NativeError::limit(
+                    "injected native encoded-column workspace allocation failure",
+                ));
+            }
+            probe.allocations = probe.allocations.checked_add(1).ok_or_else(|| {
+                NativeError::limit("native encoded-column allocation counter overflow")
+            })?;
+        }
+        Ok(())
+    }
+
+    fn allocation_checkpoint_for_growth(
+        &mut self,
+        len: usize,
+        capacity: usize,
+        additional: usize,
+    ) -> NativeResult<()> {
+        #[cfg(feature = "test-hooks")]
+        {
+            let required = len.checked_add(additional).ok_or_else(|| {
+                NativeError::limit("native encoded-column allocation length overflow")
+            })?;
+            if required > capacity {
+                self.allocation_checkpoint()?;
+            }
+        }
+        #[cfg(not(feature = "test-hooks"))]
+        let _ = (len, capacity, additional);
+        Ok(())
+    }
+
+    #[cfg(feature = "test-hooks")]
+    fn allocation_count(&self) -> u64 {
+        self.allocation_probe
+            .as_ref()
+            .map_or(0, |probe| probe.allocations)
     }
 
     fn consume(&mut self, amount: usize) -> NativeResult<()> {
@@ -264,6 +338,8 @@ pub(crate) struct PreparedEncodedStructuralColumnsV1<'arena> {
     node_ids: HashMap<ComponentId, u32>,
     layout: EncodedStructuralBufferLayoutV1,
     counters: EncodedColumnCountersV1,
+    #[cfg(feature = "test-hooks")]
+    workspace_allocations: u64,
 }
 
 impl PreparedEncodedStructuralColumnsV1<'_> {
@@ -273,6 +349,11 @@ impl PreparedEncodedStructuralColumnsV1<'_> {
 
     pub(crate) const fn counters(&self) -> &EncodedColumnCountersV1 {
         &self.counters
+    }
+
+    #[cfg(feature = "test-hooks")]
+    pub(crate) const fn workspace_allocation_count(&self) -> u64 {
+        self.workspace_allocations
     }
 
     pub(crate) fn write_into(&self, output: &mut [u8]) -> NativeResult<()> {
@@ -363,13 +444,51 @@ pub(crate) fn prepare_encoded_structural_columns_from_tables_v1<'arena>(
     interrupt: Option<InterruptSlot>,
     caller_external_bytes: usize,
 ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'arena>> {
-    prepare_encoded_structural_columns_from_source_v1(
+    let work = ColumnWork::new(limits, cancellation, interrupt)?;
+    prepare_encoded_structural_columns_from_tables_with_work_v1(
         arena,
-        Box::new(RootTablesV1::new(tables)?),
+        tables,
         limits,
-        cancellation,
-        interrupt,
         caller_external_bytes,
+        work,
+    )
+}
+
+#[cfg(feature = "test-hooks")]
+pub(crate) fn prepare_encoded_structural_columns_from_tables_with_allocation_probe_v1<'arena>(
+    arena: &'arena NativeComponentArena,
+    tables: &[EncodedRootTableV1<'arena>],
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    caller_external_bytes: usize,
+    fail_after: Option<u64>,
+) -> NativeResult<PreparedEncodedStructuralColumnsV1<'arena>> {
+    let work = ColumnWork::with_allocation_failure(limits, cancellation, interrupt, fail_after)?;
+    prepare_encoded_structural_columns_from_tables_with_work_v1(
+        arena,
+        tables,
+        limits,
+        caller_external_bytes,
+        work,
+    )
+}
+
+fn prepare_encoded_structural_columns_from_tables_with_work_v1<'arena>(
+    arena: &'arena NativeComponentArena,
+    tables: &[EncodedRootTableV1<'arena>],
+    limits: &Limits,
+    caller_external_bytes: usize,
+    mut work: ColumnWork,
+) -> NativeResult<PreparedEncodedStructuralColumnsV1<'arena>> {
+    let roots = RootTablesV1::new(tables, &mut work)?;
+    work.allocation_checkpoint()?;
+    prepare_encoded_structural_columns_from_source_with_work_v1(
+        arena,
+        Box::new(roots),
+        limits,
+        caller_external_bytes,
+        work,
     )
 }
 
@@ -401,8 +520,9 @@ impl EncodedRootSourceV1 for RootSliceV1<'_> {
 struct RootTablesV1<'arena>(Vec<EncodedRootTableV1<'arena>>);
 
 impl<'arena> RootTablesV1<'arena> {
-    fn new(tables: &[EncodedRootTableV1<'arena>]) -> NativeResult<Self> {
+    fn new(tables: &[EncodedRootTableV1<'arena>], work: &mut ColumnWork) -> NativeResult<Self> {
         let mut owned = Vec::new();
+        work.allocation_checkpoint_for_growth(owned.len(), owned.capacity(), tables.len())?;
         owned
             .try_reserve_exact(tables.len())
             .map_err(|_| NativeError::limit("native encoded-column table allocation failed"))?;
@@ -450,7 +570,23 @@ fn prepare_encoded_structural_columns_from_source_v1<'arena>(
     interrupt: Option<InterruptSlot>,
     caller_external_bytes: usize,
 ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'arena>> {
-    let mut work = ColumnWork::new(limits, cancellation, interrupt)?;
+    let work = ColumnWork::new(limits, cancellation, interrupt)?;
+    prepare_encoded_structural_columns_from_source_with_work_v1(
+        arena,
+        roots,
+        limits,
+        caller_external_bytes,
+        work,
+    )
+}
+
+fn prepare_encoded_structural_columns_from_source_with_work_v1<'arena>(
+    arena: &'arena NativeComponentArena,
+    roots: Box<dyn EncodedRootSourceV1 + 'arena>,
+    limits: &Limits,
+    caller_external_bytes: usize,
+    mut work: ColumnWork,
+) -> NativeResult<PreparedEncodedStructuralColumnsV1<'arena>> {
     let root_source_workspace = roots.workspace_bytes()?;
     let discovery_external_bytes = caller_external_bytes
         .checked_add(root_source_workspace)
@@ -522,6 +658,7 @@ fn prepare_encoded_structural_columns_from_source_v1<'arena>(
     drop(discovery);
 
     let mut lengths = HashMap::new();
+    work.allocation_checkpoint_for_growth(lengths.len(), lengths.capacity(), nodes.len())?;
     lengths
         .try_reserve(nodes.len())
         .map_err(|_| NativeError::limit("native encoded-column length map allocation failed"))?;
@@ -576,6 +713,7 @@ fn prepare_encoded_structural_columns_from_source_v1<'arena>(
     drop(lengths);
 
     let mut node_ids = HashMap::new();
+    work.allocation_checkpoint_for_growth(node_ids.len(), node_ids.capacity(), nodes.len())?;
     node_ids
         .try_reserve(nodes.len())
         .map_err(|_| NativeError::limit("native encoded-column ID map allocation failed"))?;
@@ -650,6 +788,8 @@ fn prepare_encoded_structural_columns_from_source_v1<'arena>(
         .map_err(|_| NativeError::limit("native encoded-column item count exceeds u64"))?;
     let scalar_bytes = u64::try_from(counts.scalar_bytes)
         .map_err(|_| NativeError::limit("native encoded-column scalars exceed u64"))?;
+    #[cfg(feature = "test-hooks")]
+    let workspace_allocations = work.allocation_count();
     Ok(PreparedEncodedStructuralColumnsV1 {
         arena,
         roots,
@@ -672,6 +812,8 @@ fn prepare_encoded_structural_columns_from_source_v1<'arena>(
             canonical_comparison_bytes: comparison_bytes,
             complete_root_encode_calls: 0,
         },
+        #[cfg(feature = "test-hooks")]
+        workspace_allocations,
     })
 }
 
@@ -753,14 +895,17 @@ fn discover_node(
         ));
     }
     check_discovery_memory(arena, next, state.caller_external_bytes, limits)?;
+    work.allocation_checkpoint_for_growth(state.seen.len(), state.seen.capacity(), 1)?;
     state
         .seen
         .try_reserve(1)
         .map_err(|_| NativeError::limit("native encoded-column visited allocation failed"))?;
+    work.allocation_checkpoint_for_growth(state.nodes.len(), state.nodes.capacity(), 1)?;
     state
         .nodes
         .try_reserve(1)
         .map_err(|_| NativeError::limit("native encoded-column node allocation failed"))?;
+    work.allocation_checkpoint_for_growth(state.stack.len(), state.stack.capacity(), 1)?;
     state
         .stack
         .try_reserve(1)
@@ -992,6 +1137,7 @@ fn canonical_node_len(
     if let Some(length) = memo.get(&component).copied() {
         return Ok(length);
     }
+    work.allocation_checkpoint_for_growth(visiting.len(), visiting.capacity(), 1)?;
     visiting
         .try_reserve(1)
         .map_err(|_| NativeError::limit("native canonical-length stack allocation failed"))?;
@@ -1143,6 +1289,7 @@ impl<'arena, 'lengths> CanonicalCursor<'arena, 'lengths> {
         arena: &'arena NativeComponentArena,
         lengths: &'lengths HashMap<ComponentId, usize>,
         max_depth: u32,
+        work: &mut ColumnWork,
     ) -> NativeResult<Self> {
         let capacity = usize::try_from(max_depth)
             .map_err(|_| NativeError::limit("native cursor depth exceeds usize"))?
@@ -1150,6 +1297,7 @@ impl<'arena, 'lengths> CanonicalCursor<'arena, 'lengths> {
             .and_then(|value| value.checked_mul(8))
             .ok_or_else(|| NativeError::limit("native cursor stack size overflow"))?;
         let mut stack = Vec::new();
+        work.allocation_checkpoint_for_growth(stack.len(), stack.capacity(), capacity)?;
         stack
             .try_reserve_exact(capacity)
             .map_err(|_| NativeError::limit("native canonical cursor allocation failed"))?;
@@ -1160,9 +1308,9 @@ impl<'arena, 'lengths> CanonicalCursor<'arena, 'lengths> {
         })
     }
 
-    fn reset(&mut self, component: ComponentId) -> NativeResult<()> {
+    fn reset(&mut self, component: ComponentId, work: &mut ColumnWork) -> NativeResult<()> {
         self.stack.clear();
-        self.push(EmitTask::Node(component))
+        self.push(EmitTask::Node(component), work)
     }
 
     fn allocated_bytes(&self) -> NativeResult<usize> {
@@ -1172,7 +1320,8 @@ impl<'arena, 'lengths> CanonicalCursor<'arena, 'lengths> {
             .ok_or_else(|| NativeError::limit("native cursor workspace size overflow"))
     }
 
-    fn push(&mut self, task: EmitTask<'arena>) -> NativeResult<()> {
+    fn push(&mut self, task: EmitTask<'arena>, work: &mut ColumnWork) -> NativeResult<()> {
+        work.allocation_checkpoint_for_growth(self.stack.len(), self.stack.capacity(), 1)?;
         self.stack
             .try_reserve(1)
             .map_err(|_| NativeError::limit("native canonical cursor growth failed"))?;
@@ -1180,7 +1329,7 @@ impl<'arena, 'lengths> CanonicalCursor<'arena, 'lengths> {
         Ok(())
     }
 
-    fn next_byte(&mut self) -> NativeResult<Option<u8>> {
+    fn next_byte(&mut self, work: &mut ColumnWork) -> NativeResult<Option<u8>> {
         loop {
             let Some(task) = self.stack.pop() else {
                 return Ok(None);
@@ -1190,7 +1339,7 @@ impl<'arena, 'lengths> CanonicalCursor<'arena, 'lengths> {
                 EmitTask::Varint(value) => {
                     let following = value >> 7;
                     if following != 0 {
-                        self.push(EmitTask::Varint(following))?;
+                        self.push(EmitTask::Varint(following), work)?;
                     }
                     return Ok(Some(
                         (value as u8 & 0x7f) | if following == 0 { 0 } else { 0x80 },
@@ -1201,18 +1350,18 @@ impl<'arena, 'lengths> CanonicalCursor<'arena, 'lengths> {
                         NativeError::protocol("native canonical cursor slice is out of bounds")
                     })?;
                     if index + 1 < value.len() {
-                        self.push(EmitTask::Slice(value, index + 1))?;
+                        self.push(EmitTask::Slice(value, index + 1), work)?;
                     }
                     return Ok(Some(byte));
                 }
                 EmitTask::Node(component) => {
                     let record = self.arena.record(component)?;
                     for index in (0..record.field_count()).rev() {
-                        self.push(EmitTask::Field(record.field(index)?))?;
+                        self.push(EmitTask::Field(record.field(index)?), work)?;
                     }
-                    self.push(EmitTask::Varint(usize::from(record.tag())))?;
+                    self.push(EmitTask::Varint(usize::from(record.tag())), work)?;
                 }
-                EmitTask::Field(field) => self.schedule_field(field)?,
+                EmitTask::Field(field) => self.schedule_field(field, work)?,
                 EmitTask::Sequence {
                     value,
                     index,
@@ -1221,11 +1370,14 @@ impl<'arena, 'lengths> CanonicalCursor<'arena, 'lengths> {
                     if index >= value.len() {
                         continue;
                     }
-                    self.push(EmitTask::Sequence {
-                        value,
-                        index: index + 1,
-                        canonical_set,
-                    })?;
+                    self.push(
+                        EmitTask::Sequence {
+                            value,
+                            index: index + 1,
+                            canonical_set,
+                        },
+                        work,
+                    )?;
                     let item = value.item(index)?;
                     if canonical_set {
                         let ComponentFieldRef::Node(component) = item else {
@@ -1233,52 +1385,66 @@ impl<'arena, 'lengths> CanonicalCursor<'arena, 'lengths> {
                                 "native canonical set contains a scalar",
                             ));
                         };
-                        self.schedule_node_frame(component, false)?;
+                        self.schedule_node_frame(component, false, work)?;
                     } else {
-                        self.schedule_leaf(item)?;
+                        self.schedule_leaf(item, work)?;
                     }
                 }
             }
         }
     }
 
-    fn schedule_field(&mut self, field: ComponentFieldRef<'arena>) -> NativeResult<()> {
+    fn schedule_field(
+        &mut self,
+        field: ComponentFieldRef<'arena>,
+        work: &mut ColumnWork,
+    ) -> NativeResult<()> {
         match field {
             ComponentFieldRef::CanonicalSet(sequence) => {
-                self.push(EmitTask::Sequence {
-                    value: sequence,
-                    index: 0,
-                    canonical_set: true,
-                })?;
-                self.push(EmitTask::Varint(sequence.len()))?;
-                self.push(EmitTask::Byte(6))
+                self.push(
+                    EmitTask::Sequence {
+                        value: sequence,
+                        index: 0,
+                        canonical_set: true,
+                    },
+                    work,
+                )?;
+                self.push(EmitTask::Varint(sequence.len()), work)?;
+                self.push(EmitTask::Byte(6), work)
             }
             ComponentFieldRef::OrderedSequence(sequence) => {
-                self.push(EmitTask::Sequence {
-                    value: sequence,
-                    index: 0,
-                    canonical_set: false,
-                })?;
-                self.push(EmitTask::Varint(sequence.len()))?;
-                self.push(EmitTask::Byte(7))
+                self.push(
+                    EmitTask::Sequence {
+                        value: sequence,
+                        index: 0,
+                        canonical_set: false,
+                    },
+                    work,
+                )?;
+                self.push(EmitTask::Varint(sequence.len()), work)?;
+                self.push(EmitTask::Byte(7), work)
             }
-            leaf => self.schedule_leaf(leaf),
+            leaf => self.schedule_leaf(leaf, work),
         }
     }
 
-    fn schedule_leaf(&mut self, field: ComponentFieldRef<'arena>) -> NativeResult<()> {
+    fn schedule_leaf(
+        &mut self,
+        field: ComponentFieldRef<'arena>,
+        work: &mut ColumnWork,
+    ) -> NativeResult<()> {
         match field {
-            ComponentFieldRef::None => self.push(EmitTask::Byte(0)),
-            ComponentFieldRef::Node(component) => self.schedule_node_frame(component, true),
-            ComponentFieldRef::Text(value) => self.schedule_framed_scalar(2, value),
-            ComponentFieldRef::Bytes(value) => self.schedule_framed_scalar(3, value),
+            ComponentFieldRef::None => self.push(EmitTask::Byte(0), work),
+            ComponentFieldRef::Node(component) => self.schedule_node_frame(component, true, work),
+            ComponentFieldRef::Text(value) => self.schedule_framed_scalar(2, value, work),
+            ComponentFieldRef::Bytes(value) => self.schedule_framed_scalar(3, value, work),
             ComponentFieldRef::NonnegativeIntegerVarint(value) => {
                 if !value.is_empty() {
-                    self.push(EmitTask::Slice(value, 0))?;
+                    self.push(EmitTask::Slice(value, 0), work)?;
                 }
-                self.push(EmitTask::Byte(4))
+                self.push(EmitTask::Byte(4), work)
             }
-            ComponentFieldRef::Enum(value) => self.schedule_framed_scalar(5, value),
+            ComponentFieldRef::Enum(value) => self.schedule_framed_scalar(5, value, work),
             ComponentFieldRef::CanonicalSet(_) | ComponentFieldRef::OrderedSequence(_) => Err(
                 NativeError::protocol("native canonical sequence contains a nested collection"),
             ),
@@ -1289,24 +1455,30 @@ impl<'arena, 'lengths> CanonicalCursor<'arena, 'lengths> {
         &mut self,
         component: ComponentId,
         include_marker: bool,
+        work: &mut ColumnWork,
     ) -> NativeResult<()> {
         let length = self.lengths.get(&component).copied().ok_or_else(|| {
             NativeError::protocol("native canonical cursor child length is unavailable")
         })?;
-        self.push(EmitTask::Node(component))?;
-        self.push(EmitTask::Varint(length))?;
+        self.push(EmitTask::Node(component), work)?;
+        self.push(EmitTask::Varint(length), work)?;
         if include_marker {
-            self.push(EmitTask::Byte(1))?;
+            self.push(EmitTask::Byte(1), work)?;
         }
         Ok(())
     }
 
-    fn schedule_framed_scalar(&mut self, marker: u8, value: &'arena [u8]) -> NativeResult<()> {
+    fn schedule_framed_scalar(
+        &mut self,
+        marker: u8,
+        value: &'arena [u8],
+        work: &mut ColumnWork,
+    ) -> NativeResult<()> {
         if !value.is_empty() {
-            self.push(EmitTask::Slice(value, 0))?;
+            self.push(EmitTask::Slice(value, 0), work)?;
         }
-        self.push(EmitTask::Varint(value.len()))?;
-        self.push(EmitTask::Byte(marker))
+        self.push(EmitTask::Varint(value.len()), work)?;
+        self.push(EmitTask::Byte(marker), work)
     }
 }
 
@@ -1318,11 +1490,11 @@ fn compare_canonical_nodes(
     work: &mut ColumnWork,
     comparison_bytes: &mut u64,
 ) -> NativeResult<Ordering> {
-    left_cursor.reset(left)?;
-    right_cursor.reset(right)?;
+    left_cursor.reset(left, work)?;
+    right_cursor.reset(right, work)?;
     loop {
-        let left = left_cursor.next_byte()?;
-        let right = right_cursor.next_byte()?;
+        let left = left_cursor.next_byte(work)?;
+        let right = right_cursor.next_byte(work)?;
         match (left, right) {
             (Some(left), Some(right)) => {
                 *comparison_bytes = comparison_bytes.checked_add(1).ok_or_else(|| {
@@ -1351,6 +1523,7 @@ fn canonical_node_order(
 ) -> NativeResult<(Vec<NodeRow>, usize)> {
     if nodes.len() < 2 {
         let mut ordered = Vec::new();
+        work.allocation_checkpoint_for_growth(ordered.len(), ordered.capacity(), nodes.len())?;
         ordered
             .try_reserve_exact(nodes.len())
             .map_err(|_| NativeError::limit("native canonical output allocation failed"))?;
@@ -1365,17 +1538,19 @@ fn canonical_node_order(
         return Ok((ordered, workspace));
     }
     let mut order = Vec::new();
+    work.allocation_checkpoint_for_growth(order.len(), order.capacity(), nodes.len())?;
     order
         .try_reserve_exact(nodes.len())
         .map_err(|_| NativeError::limit("native canonical order allocation failed"))?;
     order.extend(0..nodes.len());
     let mut scratch = Vec::new();
+    work.allocation_checkpoint_for_growth(scratch.len(), scratch.capacity(), nodes.len())?;
     scratch
         .try_reserve_exact(nodes.len())
         .map_err(|_| NativeError::limit("native canonical sort allocation failed"))?;
     scratch.resize(nodes.len(), 0);
-    let mut left_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth)?;
-    let mut right_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth)?;
+    let mut left_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth, work)?;
+    let mut right_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth, work)?;
     let mut width = 1_usize;
     while width < nodes.len() {
         let step = width
@@ -1438,6 +1613,7 @@ fn canonical_node_order(
         }
     }
     let mut ordered = Vec::new();
+    work.allocation_checkpoint_for_growth(ordered.len(), ordered.capacity(), nodes.len())?;
     ordered
         .try_reserve_exact(nodes.len())
         .map_err(|_| NativeError::limit("native canonical output allocation failed"))?;
@@ -1481,8 +1657,8 @@ fn validate_root_order(
     if root_rows < 2 {
         return Ok(());
     }
-    let mut left_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth)?;
-    let mut right_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth)?;
+    let mut left_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth, work)?;
+    let mut right_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth, work)?;
     let mut prior = roots.get(0)?;
     for index in 1..root_rows {
         let current = roots.get(index)?;

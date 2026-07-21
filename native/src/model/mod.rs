@@ -35,6 +35,8 @@ pub(crate) use components::{
     ComponentSequenceKind, ComponentSequenceRef, ComponentTables, FrozenComponentBuild,
     NativeComponentArena, NativeComponentBuilder, PendingComponentId,
 };
+#[cfg(feature = "test-hooks")]
+pub(crate) use encoded_columns::prepare_encoded_structural_columns_from_tables_with_allocation_probe_v1;
 #[allow(unused_imports)]
 pub(crate) use encoded_columns::{
     build_encoded_structural_columns_from_tables_v1, build_encoded_structural_columns_v1,

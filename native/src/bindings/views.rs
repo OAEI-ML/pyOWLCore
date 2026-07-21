@@ -124,6 +124,10 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
             _encoded_structural_bridge_allocation_probe_v1,
             _module
         )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _encoded_structural_workspace_allocation_probe_v1,
+            _module
+        )?)?;
     }
     Ok(())
 }
@@ -532,6 +536,51 @@ fn _encoded_structural_bridge_allocation_probe_v1<'py>(
     Ok((buffers, counters, allocations.count()))
 }
 
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, fail_after=None))]
+fn _encoded_structural_workspace_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyDict>, Py<PyDict>, u64)> {
+    if !scope.get_type().is(py.get_type::<PyString>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "encoded structural scope must be an exact str",
+        ));
+    }
+    let scope: String = scope.extract()?;
+    let selected_scope = encoded_selection(&scope, document_ordinal)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let limits = crate::limits_from_python(config)?;
+    let storage = handle.encoded_storage_v2(py)?;
+    drop(handle);
+    let worker_storage = storage.as_ref();
+    let prepared = crate::run_detached(py, move |interrupt| {
+        worker_storage.prepare_encoded_structural_columns_with_allocation_probe(
+            selected_scope,
+            document_ordinal,
+            false,
+            &limits,
+            crate::cancel::Cancellation::with_duration(None),
+            Some(interrupt),
+            fail_after,
+        )
+    })?;
+    let allocation_count = prepared.workspace_allocation_count();
+    let mut bridge_allocations = EncodedBridgeAllocationProbe::disabled();
+    let (buffers, counters) = encoded_prepared_columns_to_python(
+        py,
+        storage.as_ref(),
+        prepared,
+        &mut bridge_allocations,
+    )?;
+    Ok((buffers, counters, allocation_count))
+}
+
 fn encoded_selection(
     scope: &str,
     document_ordinal: Option<u64>,
@@ -587,6 +636,15 @@ fn encoded_columns_to_python_with_allocations(
             Some(interrupt),
         )
     })?;
+    encoded_prepared_columns_to_python(py, storage, prepared, allocations)
+}
+
+fn encoded_prepared_columns_to_python(
+    py: Python<'_>,
+    storage: &PublicationStorageV2,
+    prepared: crate::model::PreparedEncodedStructuralColumnsV1<'_>,
+    allocations: &mut EncodedBridgeAllocationProbe,
+) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
     let layout = prepared.layout();
     let total_bytes = layout.total_bytes();
     isize::try_from(total_bytes).map_err(|_| {

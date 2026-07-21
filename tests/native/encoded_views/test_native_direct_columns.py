@@ -153,3 +153,47 @@ def test_direct_bridge_allocation_checkpoints_fail_before_publication(
     assert decode_root_canonical_bytes(boundary_buffers) == ((2, expected),)
     assert handle._publication_counters_v2().encoded_view_requests == after_baseline + 1
     handle._publication_close_v2()
+
+
+def test_direct_workspace_allocation_checkpoints_fail_before_publication(
+    extension: NativeTestExtension,
+) -> None:
+    probe = getattr(extension, "_encoded_structural_workspace_allocation_probe_v1", None)
+    if not callable(probe):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail("selected native test-hooks artifact lacks the encoded workspace probe")
+        pytest.skip("selected native artifact lacks the encoded workspace allocation hook")
+    invoke = cast(Any, probe)
+    handle = cast(Any, extension)._encoded_structural_fixture_v1()
+    before = handle._publication_counters_v2().encoded_view_requests
+
+    buffers, counters, allocations = invoke(handle, "closure", None, _config(), None)
+    assert allocations == 13
+    _assert_direct_buffers(buffers, counters)
+    expected = canonical_bytes(Declaration(Class(IRI("urn:encoded-view:fixture"))))
+    assert decode_root_canonical_bytes(buffers) == ((2, expected),)
+    after_baseline = handle._publication_counters_v2().encoded_view_requests
+    assert after_baseline == before + 1
+
+    for fail_after in range(allocations):
+        with pytest.raises(extension._NativeError) as raised:
+            invoke(handle, "closure", None, _config(), fail_after)
+        assert raised.value.args == (
+            "NATIVE_WIRE_LIMIT",
+            "injected native encoded-column workspace allocation failure",
+        )
+        assert handle._publication_counters_v2().encoded_view_requests == after_baseline
+        assert handle._publication_closed_v2() is False
+
+    boundary_buffers, boundary_counters, boundary_allocations = invoke(
+        handle,
+        "closure",
+        None,
+        _config(),
+        allocations,
+    )
+    assert boundary_allocations == allocations
+    _assert_direct_buffers(boundary_buffers, boundary_counters)
+    assert decode_root_canonical_bytes(boundary_buffers) == ((2, expected),)
+    assert handle._publication_counters_v2().encoded_view_requests == after_baseline + 1
+    handle._publication_close_v2()
