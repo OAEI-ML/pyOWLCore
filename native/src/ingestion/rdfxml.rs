@@ -449,6 +449,7 @@ enum FrameRole {
     Root,
     Node {
         subject: Resource,
+        next_li: u64,
     },
     Property {
         subject: Resource,
@@ -569,6 +570,11 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         }
         self.validate_expanded_attribute_uniqueness(&event.attributes)?;
         let expanded_name = self.expand(&event.name, false)?;
+        super::check_iri(
+            &expanded_name,
+            self.session,
+            "native RDF/XML element IRI exceeds max_iri_bytes",
+        )?;
         if expanded_name.starts_with(XINCLUDE) {
             return Err(xml_forbidden());
         }
@@ -596,6 +602,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             .or(parent_language);
         let role = if self.frames.is_empty() {
             if expanded_name == RDF_RDF {
+                self.reject_unknown_attributes(&event.attributes, &[(XML, "base"), (XML, "lang")])?;
                 FrameRole::Root
             } else {
                 self.node_role(
@@ -615,12 +622,17 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     language.as_deref(),
                     None,
                 )?,
-                Some(FrameRole::Node { subject }) => {
+                Some(FrameRole::Node { subject, .. }) => {
                     let subject = clone_resource(subject, self.session)?;
+                    let membership_predicate = if expanded_name == RDF_LI {
+                        Some(self.next_li_property()?)
+                    } else {
+                        None
+                    };
                     self.property_role(
                         &event.attributes,
                         subject,
-                        &expanded_name,
+                        membership_predicate.as_deref().unwrap_or(&expanded_name),
                         base.as_deref(),
                         language.as_deref(),
                     )?
@@ -634,7 +646,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                         None,
                     )?;
                     let object = match &role {
-                        FrameRole::Node { subject } => clone_resource(subject, self.session)?,
+                        FrameRole::Node { subject, .. } => clone_resource(subject, self.session)?,
                         _ => return Err(xml_syntax()),
                     };
                     self.set_parent_object(object)?;
@@ -650,7 +662,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                         None,
                     )?;
                     let member = match &role {
-                        FrameRole::Node { subject } => clone_resource(subject, self.session)?,
+                        FrameRole::Node { subject, .. } => clone_resource(subject, self.session)?,
                         _ => return Err(xml_syntax()),
                     };
                     self.append_collection_member(member)?;
@@ -689,6 +701,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         language: Option<&str>,
         linked_subject: Option<Resource>,
     ) -> NativeResult<FrameRole> {
+        if !is_node_element_iri(expanded_name) {
+            return Err(xml_syntax());
+        }
         let about = self.attribute(attributes, RDF, "about")?;
         let id = self.attribute(attributes, RDF, "ID")?;
         let node_id = self.attribute(attributes, RDF, "nodeID")?;
@@ -730,7 +745,10 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             })?;
         }
         self.add_node_property_attributes(attributes, &subject, base, language)?;
-        Ok(FrameRole::Node { subject })
+        Ok(FrameRole::Node {
+            subject,
+            next_li: 1,
+        })
     }
 
     fn add_node_property_attributes(
@@ -838,6 +856,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         base: Option<&str>,
         language: Option<&str>,
     ) -> NativeResult<FrameRole> {
+        if !is_property_element_iri(predicate) {
+            return Err(xml_syntax());
+        }
         let resource = self.attribute(attributes, RDF, "resource")?;
         let node_id = self.attribute(attributes, RDF, "nodeID")?;
         let parse_type = self.attribute(attributes, RDF, "parseType")?;
@@ -877,7 +898,10 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     // Reusing the normal node role lets its nested property
                     // elements stream into that node without a synthetic XML
                     // frame or an intermediate graph representation.
-                    Ok(FrameRole::Node { subject: object })
+                    Ok(FrameRole::Node {
+                        subject: object,
+                        next_li: 1,
+                    })
                 }
                 _ => Err(mapping_incomplete()),
             };
@@ -927,6 +951,20 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 .map(|value| owned_text(value, self.session))
                 .transpose()?,
         })
+    }
+
+    fn next_li_property(&mut self) -> NativeResult<String> {
+        let next = match self.frames.last_mut().map(|frame| &mut frame.role) {
+            Some(FrameRole::Node { next_li, .. }) => {
+                let current = *next_li;
+                *next_li = next_li
+                    .checked_add(1)
+                    .ok_or_else(|| NativeError::limit("native RDF/XML rdf:li counter overflow"))?;
+                current
+            }
+            _ => return Err(xml_syntax()),
+        };
+        rdf_membership_property(next, self.session)
     }
 
     fn set_parent_object(&mut self, object: Resource) -> NativeResult<()> {
@@ -5477,6 +5515,38 @@ fn generated_blank(value: u64, session: &mut Session<'_>) -> NativeResult<String
     Ok(output)
 }
 
+fn rdf_membership_property(value: u64, session: &mut Session<'_>) -> NativeResult<String> {
+    use std::fmt::Write;
+
+    let digits = if value == 0 {
+        1
+    } else {
+        usize::try_from(value.ilog10())
+            .map_err(|_| NativeError::limit("native RDF membership IRI size overflow"))?
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native RDF membership IRI size overflow"))?
+    };
+    let size = RDF
+        .len()
+        .checked_add(1)
+        .and_then(|prefix| prefix.checked_add(digits))
+        .ok_or_else(|| NativeError::limit("native RDF membership IRI size overflow"))?;
+    enforce_usize(
+        size,
+        session.limits().value(LimitKey::MaxIriBytes),
+        "native RDF membership IRI exceeds max_iri_bytes",
+    )?;
+    session.reserve_bytes(size)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native RDF membership IRI allocation failed"))?;
+    output.push_str(RDF);
+    write!(&mut output, "_{value}")
+        .map_err(|_| NativeError::protocol("native RDF membership IRI formatting failed"))?;
+    Ok(output)
+}
+
 fn expanded_name_matches(expanded: &str, namespace: &str, local: &str) -> bool {
     expanded
         .len()
@@ -5485,22 +5555,30 @@ fn expanded_name_matches(expanded: &str, namespace: &str, local: &str) -> bool {
         && expanded.ends_with(local)
 }
 
-fn is_property_attribute_iri(value: &str) -> bool {
-    !matches!(
+fn is_core_syntax_iri(value: &str) -> bool {
+    matches!(
         value,
-        RDF_RDF
-            | RDF_ID
-            | RDF_ABOUT
-            | RDF_PARSE_TYPE
-            | RDF_RESOURCE
-            | RDF_NODE_ID
-            | RDF_DATATYPE
-            | RDF_DESCRIPTION
-            | RDF_LI
-            | RDF_ABOUT_EACH
-            | RDF_ABOUT_EACH_PREFIX
-            | RDF_BAG_ID
-    ) && !value.starts_with(XML)
+        RDF_RDF | RDF_ID | RDF_ABOUT | RDF_PARSE_TYPE | RDF_RESOURCE | RDF_NODE_ID | RDF_DATATYPE
+    )
+}
+
+fn is_old_syntax_iri(value: &str) -> bool {
+    matches!(value, RDF_ABOUT_EACH | RDF_ABOUT_EACH_PREFIX | RDF_BAG_ID)
+}
+
+fn is_node_element_iri(value: &str) -> bool {
+    !is_core_syntax_iri(value) && value != RDF_LI && !is_old_syntax_iri(value)
+}
+
+fn is_property_element_iri(value: &str) -> bool {
+    !is_core_syntax_iri(value) && value != RDF_DESCRIPTION && !is_old_syntax_iri(value)
+}
+
+fn is_property_attribute_iri(value: &str) -> bool {
+    !is_core_syntax_iri(value)
+        && !matches!(value, RDF_DESCRIPTION | RDF_LI)
+        && !is_old_syntax_iri(value)
+        && !value.starts_with(XML)
 }
 
 fn owned_text(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
@@ -5916,6 +5994,105 @@ mod tests {
                 "NATIVE_RDF_MAPPING_INCOMPLETE"
             );
         }
+    }
+
+    #[test]
+    fn rdf_li_expands_in_each_node_scope_in_document_order() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><rdf:li rdf:resource=\"urn:a\"/><e:p rdf:parseType=\"Resource\"><rdf:li rdf:resource=\"urn:b\"/><rdf:li rdf:resource=\"urn:c\"/></e:p><rdf:li rdf:resource=\"urn:d\"/></rdf:Description></rdf:RDF>"
+        );
+        let parsed = graph(&source).expect("rdf:li graph");
+
+        assert_eq!(parsed.len(), 5);
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            &format!("{RDF}_1"),
+            iri_resource("urn:a").into(),
+        ));
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            &format!("{RDF}_2"),
+            iri_resource("urn:d").into(),
+        ));
+        assert!(contains_edge(
+            &parsed,
+            blank_resource("generated-1"),
+            &format!("{RDF}_1"),
+            iri_resource("urn:b").into(),
+        ));
+        assert!(contains_edge(
+            &parsed,
+            blank_resource("generated-1"),
+            &format!("{RDF}_2"),
+            iri_resource("urn:c").into(),
+        ));
+    }
+
+    #[test]
+    fn rdf_element_grammar_rejects_reserved_roles_and_root_attributes() {
+        for (source, expected) in [
+            (
+                format!(
+                    "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\" e:ignored=\"value\"/>"
+                ),
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            ),
+            (
+                format!("<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:about/></rdf:RDF>"),
+                "NATIVE_RDFXML_SYNTAX",
+            ),
+            (
+                format!(
+                    "<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"urn:s\"><rdf:Description rdf:resource=\"urn:o\"/></rdf:Description></rdf:RDF>"
+                ),
+                "NATIVE_RDFXML_SYNTAX",
+            ),
+            (
+                format!(
+                    "<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"urn:s\"><rdf:bagID rdf:resource=\"urn:o\"/></rdf:Description></rdf:RDF>"
+                ),
+                "NATIVE_RDFXML_SYNTAX",
+            ),
+        ] {
+            assert_eq!(graph(&source).unwrap_err().code, expected);
+        }
+    }
+
+    #[test]
+    fn rdf_li_counter_overflow_fails_before_graph_mutation() {
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut parser = GraphParser::new("", None, &mut session).expect("parser");
+        parser.frames.push(Frame {
+            raw_name: "rdf:Description".to_owned(),
+            namespace_start: parser.namespaces.len(),
+            base: None,
+            language: None,
+            role: FrameRole::Node {
+                subject: iri_resource("urn:s"),
+                next_li: u64::MAX,
+            },
+        });
+
+        assert_eq!(
+            parser.next_li_property().unwrap_err().code,
+            "NATIVE_WIRE_LIMIT"
+        );
+        assert!(parser.triples.is_empty());
+        assert!(matches!(
+            parser.frames.last().map(|frame| &frame.role),
+            Some(FrameRole::Node {
+                next_li: u64::MAX,
+                ..
+            })
+        ));
     }
 
     #[test]
