@@ -652,6 +652,34 @@ def test_generated_membership_iri_limit_matches_python(
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_canonical_model_nesting_limit_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'>
+  <owl:equivalentClass rdf:nodeID='x1'/>
+ </owl:Class>
+ <owl:Class rdf:nodeID='x1'><owl:complementOf rdf:nodeID='x2'/></owl:Class>
+ <owl:Class rdf:nodeID='x2'><owl:complementOf rdf:nodeID='x3'/></owl:Class>
+ <owl:Class rdf:nodeID='x3'><owl:complementOf rdf:resource='urn:D'/></owl:Class>
+</rdf:RDF>"""
+    boundary = ParseLimits(max_nesting_depth=5)
+
+    _owner, observed = _ingest(extension, source, limits=boundary)
+    python = parse_rdfxml(source, limits=boundary, document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+
+    limited = ParseLimits(max_nesting_depth=4)
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(source, limits=limited, document_iri=None)
+    assert python_error.value.limit == "max_nesting_depth"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 @pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (

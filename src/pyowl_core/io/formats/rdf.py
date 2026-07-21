@@ -209,7 +209,7 @@ class RDFMapper:
                 f"{len(unconsumed)} unconsumed triple(s): {examples}",
                 code="RDF_MAPPING_INCOMPLETE",
             )
-        return ParsedOntology(
+        parsed = ParsedOntology(
             ontology_id,
             imports,
             ontology_annotations,
@@ -217,6 +217,9 @@ class RDFMapper:
             occurrences=tuple(occurrences),
             rdf_mapping_report=report,
         )
+        for root in (*parsed.annotations, *parsed.axioms, *parsed.extensions):
+            m.canonical_bytes(root, limits=self.context.limits)
+        return parsed
 
     def _scan_entity_kinds(self) -> None:
         mapping = {

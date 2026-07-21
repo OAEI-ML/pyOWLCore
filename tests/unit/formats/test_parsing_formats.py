@@ -619,6 +619,40 @@ def test_rdfxml_generated_membership_iris_enforce_utf8_byte_limits() -> None:
     assert raised.value.limit == "max_iri_bytes"
 
 
+def test_rdf_mapping_enforces_canonical_model_nesting_limits() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}" xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C">
+    <owl:equivalentClass rdf:nodeID="x1"/>
+  </owl:Class>
+  <owl:Class rdf:nodeID="x1"><owl:complementOf rdf:nodeID="x2"/></owl:Class>
+  <owl:Class rdf:nodeID="x2"><owl:complementOf rdf:nodeID="x3"/></owl:Class>
+  <owl:Class rdf:nodeID="x3"><owl:complementOf rdf:resource="urn:D"/></owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(
+        source,
+        format="rdfxml",
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            limits=ParseLimits(max_nesting_depth=5),
+        ),
+    )
+    assert len(document.axioms) == 2
+
+    with pytest.raises(ResourceLimitError) as raised:
+        parse_document(
+            source,
+            format="rdfxml",
+            options=LoadOptions(
+                backend=BackendPreference.PYTHON,
+                limits=ParseLimits(max_nesting_depth=4),
+            ),
+        )
+    assert raised.value.limit == "max_nesting_depth"
+
+
 @pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (
