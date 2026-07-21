@@ -114,6 +114,37 @@ def test_rdfxml_empty_language_resets_inherited_literal_language() -> None:
     assert all(value.value.datatype == m.XSD_STRING for value in assertions)
 
 
+@pytest.mark.parametrize(
+    "document",
+    (
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<rdfs:label xml:lang='not_valid'>value</rdfs:label>"
+            "</owl:Class></rdf:RDF>"
+        ),
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C' "
+            "xml:lang='en--GB' rdfs:label='value'/></rdf:RDF>"
+        ),
+        (
+            "<rdf:RDF {namespaces} xml:lang='x'><owl:Class rdf:about='urn:C'>"
+            "<rdfs:label>value</rdfs:label></owl:Class></rdf:RDF>"
+        ),
+    ),
+)
+def test_rdfxml_invalid_language_tags_fail_at_mapping_boundary(document: str) -> None:
+    namespaces = (
+        "xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#'"
+    )
+    source = document.format(namespaces=namespaces).encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
 def test_rdfxml_unicode_ids_are_unique_within_each_xml_base() -> None:
     source = """\
 <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"

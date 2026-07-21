@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from pyowl_core import IRI, OntologySyntaxError, ParseLimits
+from pyowl_core import IRI, OntologySyntaxError, ParseLimits, UnsupportedSyntaxError
 from pyowl_core.backends import native
 from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.model import canonical_bytes
@@ -646,6 +646,43 @@ def test_empty_xml_language_resets_inherited_literal_language(
     assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
     assert observed.total_triples == observed.consumed_triples == 3
     assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+
+@pytest.mark.parametrize(
+    "document",
+    (
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<rdfs:label xml:lang='not_valid'>value</rdfs:label>"
+            "</owl:Class></rdf:RDF>"
+        ),
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C' "
+            "xml:lang='en--GB' rdfs:label='value'/></rdf:RDF>"
+        ),
+        (
+            "<rdf:RDF {namespaces} xml:lang='x'><owl:Class rdf:about='urn:C'>"
+            "<rdfs:label>value</rdfs:label></owl:Class></rdf:RDF>"
+        ),
+    ),
+)
+def test_invalid_language_tags_fail_at_mapping_boundary_in_both_backends(
+    extension: NativeTestExtension,
+    document: str,
+) -> None:
+    namespaces = (
+        "xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#'"
+    )
+    source = document.format(namespaces=namespaces).encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_UNSUPPORTED"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_UNSUPPORTED"
 
 
 def test_unicode_xml_qnames_match_python_mapping(

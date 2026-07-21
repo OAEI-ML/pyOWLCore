@@ -13,7 +13,7 @@ from pyowl_core.cancellation import CancellationToken
 from pyowl_core.document import OntologyDocument, OntologyID
 from pyowl_core.document.document import provisional_anonymous
 from pyowl_core.document.provenance import RDFMappingReport, RDFTripleEvidence
-from pyowl_core.exceptions import OntologySyntaxError, UnsupportedSyntaxError
+from pyowl_core.exceptions import InvalidLiteralError, OntologySyntaxError, UnsupportedSyntaxError
 from pyowl_core.limits import ParseLimits
 
 from .common import ParseContext, ParsedOntology
@@ -1038,14 +1038,16 @@ class RDFMapper:
         self._claim(value, "individual")
         return provisional_anonymous(value.label)
 
-    @staticmethod
-    def _literal(value: RDFLiteral) -> m.Literal:
-        if value.language is not None:
-            return m.Literal(value.lexical, m.RDF_PLAIN_LITERAL, value.language)
-        if value.datatype == m.RDF_PLAIN_LITERAL_IRI and value.lexical.endswith("@"):
-            return m.Literal(value.lexical[:-1], m.RDF_PLAIN_LITERAL)
-        datatype = m.XSD_STRING if value.datatype is None else m.Datatype(m.IRI(value.datatype))
-        return m.Literal(value.lexical, datatype)
+    def _literal(self, value: RDFLiteral) -> m.Literal:
+        try:
+            if value.language is not None:
+                return m.Literal(value.lexical, m.RDF_PLAIN_LITERAL, value.language)
+            if value.datatype == m.RDF_PLAIN_LITERAL_IRI and value.lexical.endswith("@"):
+                return m.Literal(value.lexical[:-1], m.RDF_PLAIN_LITERAL)
+            datatype = m.XSD_STRING if value.datatype is None else m.Datatype(m.IRI(value.datatype))
+            return m.Literal(value.lexical, datatype)
+        except InvalidLiteralError as error:
+            self._mapping_error(str(error))
 
     def _class_resource(self, value: RDFResource) -> m.Class:
         if not isinstance(value, RDFIRI):
