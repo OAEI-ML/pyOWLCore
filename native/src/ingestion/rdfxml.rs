@@ -182,7 +182,11 @@ impl<'a> XmlStream<'a> {
             let column = self.column;
             if self.byte(start) != Some(b'<') {
                 let end = self.find_byte(start, b'<').unwrap_or(self.text.len());
-                let value = decode_references(&self.text[start..end], session)?;
+                let raw = &self.text[start..end];
+                if raw.contains("]]>") {
+                    return Err(xml_syntax());
+                }
+                let value = decode_references(raw, session)?;
                 self.advance(end, session)?;
                 return Ok(Some(XmlEvent::Text {
                     value,
@@ -203,6 +207,7 @@ impl<'a> XmlStream<'a> {
                 {
                     return Err(xml_syntax());
                 }
+                validate_xml_characters(&self.text[body_start..marker])?;
                 let end = marker + 3;
                 self.advance(end, session)?;
                 continue;
@@ -217,7 +222,11 @@ impl<'a> XmlStream<'a> {
                     session,
                 )?
                 .ok_or_else(xml_syntax)?;
-                let value = owned_text(&self.text[body_start..body_end], session)?;
+                let value = normalize_xml_characters(
+                    &self.text[body_start..body_end],
+                    XmlValueKind::Text,
+                    session,
+                )?;
                 let end = body_end + 3;
                 self.advance(end, session)?;
                 return Ok(Some(XmlEvent::Text {
@@ -336,7 +345,7 @@ impl<'a> XmlStream<'a> {
             if bytes.get(cursor) != Some(&quote) {
                 return Err(xml_syntax());
             }
-            let value = decode_references(&self.text[value_start..cursor], session)?;
+            let value = decode_attribute_references(&self.text[value_start..cursor], session)?;
             cursor += 1;
             reserve_vec_item::<Attribute>(&mut attributes, session)?;
             attributes.push(Attribute {
@@ -5704,10 +5713,25 @@ fn invalid_base_iri() -> NativeError {
     )
 }
 
+#[derive(Clone, Copy)]
+enum XmlValueKind {
+    Text,
+    Attribute,
+}
+
 fn decode_references(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
-    if !value.contains('&') {
-        return owned_text(value, session);
-    }
+    decode_xml_value(value, XmlValueKind::Text, session)
+}
+
+fn decode_attribute_references(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
+    decode_xml_value(value, XmlValueKind::Attribute, session)
+}
+
+fn decode_xml_value(
+    value: &str,
+    kind: XmlValueKind,
+    session: &mut Session<'_>,
+) -> NativeResult<String> {
     session.reserve_bytes(value.len())?;
     let mut output = String::new();
     output
@@ -5716,7 +5740,7 @@ fn decode_references(value: &str, session: &mut Session<'_>) -> NativeResult<Str
     let mut cursor = 0;
     while let Some(relative) = value[cursor..].find('&') {
         let start = cursor + relative;
-        output.push_str(&value[cursor..start]);
+        append_normalized_xml_characters(&mut output, &value[cursor..start], kind)?;
         let end = value[start + 1..]
             .find(';')
             .map(|offset| start + 1 + offset)
@@ -5740,16 +5764,72 @@ fn decode_references(value: &str, session: &mut Session<'_>) -> NativeResult<Str
         }
         cursor = end + 1;
     }
-    output.push_str(&value[cursor..]);
+    append_normalized_xml_characters(&mut output, &value[cursor..], kind)?;
     Ok(output)
+}
+
+fn normalize_xml_characters(
+    value: &str,
+    kind: XmlValueKind,
+    session: &mut Session<'_>,
+) -> NativeResult<String> {
+    session.reserve_bytes(value.len())?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(value.len())
+        .map_err(|_| NativeError::limit("native XML value allocation failed"))?;
+    append_normalized_xml_characters(&mut output, value, kind)?;
+    Ok(output)
+}
+
+fn append_normalized_xml_characters(
+    output: &mut String,
+    value: &str,
+    kind: XmlValueKind,
+) -> NativeResult<()> {
+    let mut characters = value.chars().peekable();
+    while let Some(character) = characters.next() {
+        if !is_xml_character(character as u32) {
+            return Err(xml_syntax());
+        }
+        match character {
+            '\r' => {
+                if characters.peek() == Some(&'\n') {
+                    characters.next();
+                }
+                output.push(match kind {
+                    XmlValueKind::Text => '\n',
+                    XmlValueKind::Attribute => ' ',
+                });
+            }
+            '\n' | '\t' if matches!(kind, XmlValueKind::Attribute) => output.push(' '),
+            _ => output.push(character),
+        }
+    }
+    Ok(())
+}
+
+fn validate_xml_characters(value: &str) -> NativeResult<()> {
+    if value
+        .chars()
+        .all(|character| is_xml_character(character as u32))
+    {
+        Ok(())
+    } else {
+        Err(xml_syntax())
+    }
 }
 
 fn xml_character(value: u32) -> NativeResult<char> {
     let character = char::from_u32(value).ok_or_else(xml_syntax)?;
-    if !matches!(value, 0x09 | 0x0a | 0x0d | 0x20..=0xd7ff | 0xe000..=0xfffd | 0x10000..=0x10ffff) {
+    if !is_xml_character(value) {
         return Err(xml_syntax());
     }
     Ok(character)
+}
+
+fn is_xml_character(value: u32) -> bool {
+    matches!(value, 0x09 | 0x0a | 0x0d | 0x20..=0xd7ff | 0xe000..=0xfffd | 0x10000..=0x10ffff)
 }
 
 fn scan_name(text: &str, start: usize) -> NativeResult<usize> {
@@ -6487,6 +6567,47 @@ mod tests {
     }
 
     #[test]
+    fn xml_text_cdata_and_attributes_apply_xml_10_normalization() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:rdfs=\"{rdfs}\" xmlns:x=\"urn:x:\"><rdf:Description rdf:about=\"urn:s\" rdfs:label=\"a\tb\r\nc&#10;d&#9;e\"><rdfs:comment>one\r\n<![CDATA[two\rthree]]>&#13;four</rdfs:comment><rdfs:comment rdf:parseType=\"Literal\">one\r\n<x:a v=\"a\tb\r\nc&#10;d&#9;e\">two\rthree&#13;four</x:a>tail\r\n</rdfs:comment></rdf:Description></rdf:RDF>"
+        );
+        let parsed = graph(&source).expect("normalized XML values");
+
+        assert_eq!(parsed.len(), 3);
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            &format!("{rdfs}label"),
+            Term::Literal {
+                lexical: "a b c\nd\te".to_owned(),
+                datatype: Some(XSD_STRING.to_owned()),
+                language: None,
+            },
+        ));
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            &format!("{rdfs}comment"),
+            Term::Literal {
+                lexical: "one\ntwo\nthree\rfour".to_owned(),
+                datatype: Some(XSD_STRING.to_owned()),
+                language: None,
+            },
+        ));
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            &format!("{rdfs}comment"),
+            Term::Literal {
+                lexical: "one\n<ns0:a xmlns:ns0=\"urn:x:\" v=\"a b c&#10;d&#09;e\">two\nthree\rfour</ns0:a>tail\n".to_owned(),
+                datatype: Some(RDF_XML_LITERAL.to_owned()),
+                language: None,
+            },
+        ));
+    }
+
+    #[test]
     fn malformed_qnames_and_empty_property_node_ids_fail_as_syntax() {
         for source in [
             format!(
@@ -6495,6 +6616,24 @@ mod tests {
             format!("<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e:bad=\"urn:e:\"/>"),
             format!(
                 "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:nodeID=\"\"/></rdf:Description></rdf:RDF>"
+            ),
+        ] {
+            assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
+    }
+
+    #[test]
+    fn forbidden_raw_xml_characters_and_cdata_close_text_fail_as_syntax() {
+        for source in [
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p>bad\u{1}</e:p></rdf:Description></rdf:RDF>"
+            ),
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p><![CDATA[bad\u{1}]]></e:p></rdf:Description></rdf:RDF>"
+            ),
+            format!("<rdf:RDF xmlns:rdf=\"{RDF}\"><!--bad\u{1}--></rdf:RDF>"),
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p>bad]]></e:p></rdf:Description></rdf:RDF>"
             ),
         ] {
             assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");

@@ -291,6 +291,34 @@ def test_unicode_xml_qnames_match_python_mapping(
     assert limited.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_xml_text_cdata_and_attribute_normalization_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = (
+        b"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        b"xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        b"xmlns:owl='http://www.w3.org/2002/07/owl#' xmlns:x='urn:x:'>"
+        b"<owl:Class rdf:about='urn:C' rdfs:label='a\tb\r\nc&#10;d&#9;e'>"
+        b"<rdfs:comment>one\r\n<![CDATA[two\rthree]]>&#13;four</rdfs:comment>"
+        b"<rdfs:comment rdf:parseType='Literal'>one\r\n"
+        b"<x:a v='a\tb\r\nc&#10;d&#9;e'>two\rthree&#13;four</x:a>tail\r\n"
+        b"</rdfs:comment>"
+        b"</owl:Class></rdf:RDF>"
+    )
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 4
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+    with pytest.raises(extension._NativeError) as limited:
+        _ingest(extension, source, limits=ParseLimits(max_literal_bytes=12))
+    assert limited.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 def test_empty_property_attributes_match_python_object_descriptions(
     extension: NativeTestExtension,
 ) -> None:
@@ -485,6 +513,18 @@ def test_rfc3986_document_and_nested_xml_bases_match_python(
             b"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
             b"xmlns:e='urn:e:'><rdf:Description rdf:about='urn:s'>"
             b"<e:p rdf:nodeID=''/></rdf:Description></rdf:RDF>",
+            "NATIVE_RDFXML_SYNTAX",
+        ),
+        (
+            b"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+            b"xmlns:e='urn:e:'><rdf:Description rdf:about='urn:s'>"
+            b"<e:p>bad\x01</e:p></rdf:Description></rdf:RDF>",
+            "NATIVE_RDFXML_SYNTAX",
+        ),
+        (
+            b"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+            b"xmlns:e='urn:e:'><rdf:Description rdf:about='urn:s'>"
+            b"<e:p>bad]]></e:p></rdf:Description></rdf:RDF>",
             "NATIVE_RDFXML_SYNTAX",
         ),
     ),
