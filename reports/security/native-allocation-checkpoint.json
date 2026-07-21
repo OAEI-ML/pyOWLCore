@@ -1,0 +1,108 @@
+{
+  "schema": "pyowl-core.native-allocation-checkpoint/1",
+  "subject_revision": "e7abee8f5a5dbd1dc6bb0f15dab8cd5ef4161718",
+  "recorded_date": "2026-07-21",
+  "claim": "checkpoint-only",
+  "capability_advertised": false,
+  "environment": {
+    "working_tree": "clean detached worktree at subject_revision",
+    "operating_system": "macOS 26.5.2 (25F84)",
+    "architecture": "x86_64",
+    "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "1.97.1 (c980f4866 2026-06-30)",
+    "python": "CPython 3.12.3"
+  },
+  "artifact": {
+    "kind": "local test-hook extension",
+    "profile": "dev",
+    "features": ["extension-module", "test-hooks"],
+    "path": "/private/tmp/pyowlcore-allocation-target-e7abee8/debug/lib_native.dylib",
+    "sha256": "799b7cc1bcff6b1ec4f014e3fa7e3534cd31c8e7617fca292b8712bbeb407c52"
+  },
+  "continuous_workflow": {
+    "path": ".github/workflows/native-safety.yml",
+    "job": "runtime-lifecycle",
+    "status": "configured-not-run",
+    "reason": "the supported native CPython matrix includes the exhaustive allocation suite, but no hosted run is evidence for this local checkpoint"
+  },
+  "sweep": {
+    "constructors": 76,
+    "phases": [
+      {
+        "name": "build",
+        "allocation_checkpoints": 4460,
+        "minimum_per_constructor": 6,
+        "maximum_per_constructor": 194,
+        "injected_failures": 4460,
+        "boundary_successes": 76
+      },
+      {
+        "name": "freeze",
+        "allocation_checkpoints": 16137,
+        "minimum_per_constructor": 95,
+        "maximum_per_constructor": 284,
+        "injected_failures": 16137,
+        "boundary_successes": 76
+      },
+      {
+        "name": "encode",
+        "allocation_checkpoints": 76,
+        "minimum_per_constructor": 1,
+        "maximum_per_constructor": 1,
+        "injected_failures": 76,
+        "boundary_successes": 76
+      }
+    ],
+    "total_allocation_checkpoints": 20673,
+    "total_injected_failures": 20673,
+    "total_boundary_successes": 228,
+    "invariants": [
+      "every injected failure is NATIVE_WIRE_LIMIT with a stable allocation-failure message",
+      "a build-phase failure poisons later mutation and prevents freeze",
+      "a freeze-phase failure consumes the builder without publishing an owner",
+      "an encode-phase failure leaves the immutable arena recoverable with exact canonical bytes",
+      "the first non-failing boundary after every phase reproduces the exact input"
+    ]
+  },
+  "runs": [
+    {
+      "id": "cpython-3.12-retained-allocation-boundary",
+      "status": "pass",
+      "working_directory": "/private/tmp/pyowlcore-allocation-evidence.A5AzQU",
+      "command": "PYTHONPATH=src:. PYOWL_CORE_TEST_NATIVE_LIBRARY=/private/tmp/pyowlcore-allocation-target-e7abee8/debug/lib_native.dylib PYOWL_CORE_TEST_HOOKS_REQUIRED=1 python -m pytest -q tests/native/foundation/test_allocation_failure.py tests/native/foundation/test_native_boundary.py",
+      "observations": {
+        "tests_passed": 90,
+        "tests_failed": 0,
+        "subtests_passed": 157,
+        "seconds": 36.02
+      },
+      "notes": "All 76 generated model constructors completed the dynamic build/freeze/encode failpoint sweep and retained-boundary parity suite."
+    },
+    {
+      "id": "rust-retained-allocation-regressions",
+      "status": "pass",
+      "working_directory": "/private/tmp/pyowlcore-allocation-evidence.A5AzQU",
+      "command": "cargo test --manifest-path native/Cargo.toml --locked --no-default-features --lib --quiet",
+      "observations": {
+        "tests_passed": 218,
+        "tests_failed": 0,
+        "seconds": 1.94
+      },
+      "notes": "The production Rust library suite passed without the CPython extension feature; all-feature Clippy with warnings denied, rustfmt, and focused Ruff also passed at the same revision."
+    }
+  ],
+  "release_effect": {
+    "retained_component_allocation_failures": "local-pass",
+    "end_to_end_allocation_failure_matrix": "not-run",
+    "security_resource_determinism": "not-run",
+    "core_release_eligible": false,
+    "reason": "the retained component builder, freeze, and encoder sweep passes locally, but parser/publication/view/wire allocation paths, hosted interpreters, and supported platforms remain incomplete"
+  },
+  "limitations": [
+    "The hook controls explicit retained-component allocation checkpoints; it does not replace a process allocator failure campaign.",
+    "The artifact is a local development build, not an installed release wheel.",
+    "Only macOS x86-64 with CPython 3.12 ran locally.",
+    "Parser, publication, encoded-view, and wire end-to-end allocation-failure sweeps remain open.",
+    "No retained-load or encoded-view capability promotion follows from this checkpoint."
+  ]
+}

@@ -18,6 +18,9 @@ NATIVE_LIFECYCLE = (
 NATIVE_VIEW_LIFECYCLE = (
     ROOT / "reports" / "security" / "native-view-lifecycle-checkpoint.json"
 )
+NATIVE_ALLOCATION = (
+    ROOT / "reports" / "security" / "native-allocation-checkpoint.json"
+)
 
 
 def test_conformance_and_security_reports_are_reproducible() -> None:
@@ -191,6 +194,66 @@ def test_native_view_lifecycle_checkpoint_is_exact_and_fail_closed() -> None:
     ):
         text = report.read_text(encoding="utf-8")
         assert "native-view-lifecycle-checkpoint.json" in text
+
+
+def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
+    checkpoint = json.loads(NATIVE_ALLOCATION.read_text(encoding="utf-8"))
+
+    assert checkpoint["schema"] == "pyowl-core.native-allocation-checkpoint/1"
+    assert re.fullmatch(r"[0-9a-f]{40}", checkpoint["subject_revision"])
+    assert checkpoint["claim"] == "checkpoint-only"
+    assert checkpoint["capability_advertised"] is False
+    assert checkpoint["artifact"]["kind"] == "local test-hook extension"
+    assert re.fullmatch(r"[0-9a-f]{64}", checkpoint["artifact"]["sha256"])
+
+    workflow = checkpoint["continuous_workflow"]
+    assert workflow["path"] == ".github/workflows/native-safety.yml"
+    assert workflow["job"] == "runtime-lifecycle"
+    assert workflow["status"] == "configured-not-run"
+    workflow_text = (ROOT / workflow["path"]).read_text(encoding="utf-8")
+    assert "test_allocation_failure.py" in workflow_text
+
+    sweep = checkpoint["sweep"]
+    assert sweep["constructors"] == 76
+    phases = {phase["name"]: phase for phase in sweep["phases"]}
+    assert set(phases) == {"build", "freeze", "encode"}
+    assert all(phase["allocation_checkpoints"] > 0 for phase in phases.values())
+    assert all(
+        phase["allocation_checkpoints"] == phase["injected_failures"]
+        for phase in phases.values()
+    )
+    assert sweep["total_allocation_checkpoints"] == sum(
+        phase["allocation_checkpoints"] for phase in phases.values()
+    )
+    assert sweep["total_injected_failures"] == sweep["total_allocation_checkpoints"]
+    assert sweep["total_boundary_successes"] == 3 * sweep["constructors"]
+    assert len(sweep["invariants"]) >= 5
+
+    assert {run["id"]: run["status"] for run in checkpoint["runs"]} == {
+        "cpython-3.12-retained-allocation-boundary": "pass",
+        "rust-retained-allocation-regressions": "pass",
+    }
+    for run in checkpoint["runs"]:
+        assert run["command"]
+        assert run["working_directory"]
+        assert run["observations"]["tests_failed"] == 0
+        assert run["notes"]
+
+    release = checkpoint["release_effect"]
+    assert release["retained_component_allocation_failures"] == "local-pass"
+    assert release["end_to_end_allocation_failure_matrix"] == "not-run"
+    assert release["security_resource_determinism"] == "not-run"
+    assert release["core_release_eligible"] is False
+    assert release["reason"]
+    assert checkpoint["limitations"]
+
+    for report in (
+        ROOT / "reports" / "security" / "README.md",
+        ROOT / "reports" / "workpackages" / "WP15.md",
+        ROOT / "reports" / "workpackages" / "WP18.md",
+    ):
+        text = report.read_text(encoding="utf-8")
+        assert "native-allocation-checkpoint.json" in text
 
 
 def test_minimized_regression_workflow_reaches_one_minimal_subsequence() -> None:
