@@ -190,6 +190,17 @@ class _Subinterpreters(Protocol):
     def get_main(self) -> int: ...
 
 
+class _InterpreterReference(Protocol):
+    @property
+    def id(self) -> int: ...
+
+
+class _Interpreters(Protocol):
+    def get_current(self) -> _InterpreterReference: ...
+
+    def get_main(self) -> _InterpreterReference: ...
+
+
 @dataclass(frozen=True, slots=True)
 class NativeProbe:
     available: bool
@@ -1414,13 +1425,24 @@ def _runtime_policy_reason() -> str | None:
 def _interpreter_id() -> int:
     try:
         interpreters = cast(
+            _Interpreters,
+            importlib.import_module("concurrent.interpreters"),
+        )
+        current = int(interpreters.get_current().id)
+        main = int(interpreters.get_main().id)
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
+        pass
+    else:
+        return 0 if current == main else current + 1
+
+    try:
+        legacy = cast(
             _Subinterpreters,
             importlib.import_module("_xxsubinterpreters"),
         )
-
-        current = int(interpreters.get_current())
-        main = int(interpreters.get_main())
-    except (ImportError, AttributeError, RuntimeError):
+        current = int(legacy.get_current())
+        main = int(legacy.get_main())
+    except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
         return 0
     return 0 if current == main else current + 1
 

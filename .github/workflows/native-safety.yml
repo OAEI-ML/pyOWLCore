@@ -64,6 +64,60 @@ jobs:
           cargo +${RUST_NIGHTLY} miri test
           --manifest-path tests/miri/native/Cargo.toml --locked
 
+  runtime-lifecycle:
+    name: CPython ${{ matrix.python }} lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.10"
+            native: true
+          - python: "3.12"
+            native: true
+          - python: "3.14"
+            native: true
+          - python: "3.14t"
+            native: false
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/pyowl-core-lifecycle-target
+      PYO3_PYTHON: python
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the pinned test runner
+        run: python -m pip install pytest==9.1.1
+      - name: Build the owning test-hook extension
+        if: matrix.native
+        run: |
+          rustup toolchain install 1.83.0 --profile minimal --no-self-update
+          cargo +1.83.0 build --manifest-path native/Cargo.toml --locked --features test-hooks
+      - name: Exercise native teardown, signals, threads, fork, and policy
+        if: matrix.native
+        env:
+          PYTHONPATH: src
+          PYOWL_CORE_TEST_HOOKS_REQUIRED: "1"
+          PYOWL_CORE_TEST_NATIVE_LIBRARY: ${{ runner.temp }}/pyowl-core-lifecycle-target/debug/lib_native.so
+        run: >-
+          python -m pytest -q
+          tests/native/foundation/test_native_boundary.py
+          tests/native/foundation/test_runtime_policy_lifecycle.py
+          tests/native/retained_facade/test_rust_process_lifecycle.py
+      - name: Exercise the free-threaded pure fallback
+        if: ${{ !matrix.native }}
+        env:
+          PYTHONPATH: src
+        run: >-
+          python -m pytest -q
+          tests/native/foundation/test_runtime_policy_lifecycle.py
+          -k free_threaded
+
   fuzz:
     name: Bounded native libFuzzer campaign
     runs-on: ubuntu-24.04

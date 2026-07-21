@@ -79,6 +79,13 @@ def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
         "--target x86_64-unknown-linux-gnu",
         "--component miri",
         "tests/miri/native/Cargo.toml --locked",
+        'python: "3.14t"',
+        "pytest==9.1.1",
+        "--features test-hooks",
+        "test_runtime_policy_lifecycle.py",
+        "test_rust_process_lifecycle.py",
+        "PYOWL_CORE_TEST_HOOKS_REQUIRED",
+        "-k free_threaded",
         "cargo-fuzz --version 0.12.0 --locked",
         "--sanitizer address functional",
         "--sanitizer address wire",
@@ -89,7 +96,7 @@ def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
         "tests/fuzz/native/artifacts/",
     ):
         assert requirement in NATIVE_SAFETY
-    assert NATIVE_SAFETY.count("timeout-minutes:") == 3
+    assert NATIVE_SAFETY.count("timeout-minutes:") == 4
     assert "continue-on-error" not in NATIVE_SAFETY
 
 
