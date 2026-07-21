@@ -17,6 +17,11 @@ teardown/fork/signal/thread results and repeated CPython subinterpreter fallback
 probe. It records unsupported or unavailable interpreter lanes as `not-run`
 and the hosted 3.10/3.12/3.14/3.14t matrix as `configured-not-run`.
 
+`native-view-lifecycle-checkpoint.json` binds an exact test-hook artifact to
+direct and mmap encoded-buffer concurrency, close, and real-fork coverage. The
+local slice passes, while installed-wheel, allocation-failure, and supported-
+platform lifecycle evidence remain open and the capability stays hidden.
+
 Run the ordinary bounded security lanes with:
 
 ```console

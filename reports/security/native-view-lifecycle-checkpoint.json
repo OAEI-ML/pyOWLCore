@@ -1,0 +1,62 @@
+{
+  "schema": "pyowl-core.native-view-lifecycle-checkpoint/1",
+  "subject_revision": "f6f2b2231bb24e0157e4f68550477c74b3947138",
+  "recorded_date": "2026-07-21",
+  "claim": "checkpoint-only",
+  "capability_advertised": false,
+  "environment": {
+    "working_tree": "clean detached worktree at subject_revision",
+    "operating_system": "macOS 26.5.2 (25F84)",
+    "architecture": "x86_64",
+    "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "1.97.1 (c980f4866 2026-06-30)",
+    "python": "CPython 3.12.3"
+  },
+  "artifact": {
+    "kind": "local test-hook extension",
+    "profile": "dev",
+    "features": ["extension-module", "test-hooks"],
+    "path": "/private/tmp/pyowlcore-wp17-lifecycle-target-f6f2b22/debug/lib_native.dylib",
+    "sha256": "1af2aa48e59f3fe7b42b32c203ee844923ffd618935564f12a10ec2b74751a15"
+  },
+  "continuous_workflow": {
+    "path": ".github/workflows/native-safety.yml",
+    "job": "runtime-lifecycle",
+    "status": "configured-not-run",
+    "reason": "the lifecycle job includes the encoded-view process suite, but no hosted run is evidence for this local checkpoint"
+  },
+  "run": {
+    "id": "cpython-3.12-native-view-process-lifecycle",
+    "status": "pass",
+    "working_directory": "/private/tmp/pyowlcore-wp17-lifecycle.8IA1ww",
+    "command": "PYTHONPATH=src:. PYOWL_CORE_TEST_NATIVE_LIBRARY=/private/tmp/pyowlcore-wp17-lifecycle-target-f6f2b22/debug/lib_native.dylib PYOWL_CORE_TEST_HOOKS_REQUIRED=1 python -m pytest -q tests/native/foundation/test_native_boundary.py tests/native/foundation/test_runtime_policy_lifecycle.py tests/native/encoded_views/test_process_lifecycle.py tests/native/retained_facade/test_rust_process_lifecycle.py",
+    "observations": {
+      "tests_passed": 21,
+      "tests_failed": 0,
+      "tests_skipped": 2,
+      "subtests_passed": 157,
+      "seconds": 37.92
+    },
+    "encoded_view_cases": [
+      "concurrent direct-buffer reads followed by owning-publication close",
+      "publication-versus-close linearization",
+      "inherited direct buffers and a fresh direct request after fork",
+      "inherited mmap buffers and parent-side close fencing"
+    ],
+    "notes": "All four encoded-view process cases pass against the exact test-hook artifact. The two aggregate-suite skips are the pre-existing local CPython 3.12 ssl subinterpreter finalization limitation and the absence of a local free-threaded interpreter."
+  },
+  "release_effect": {
+    "local_encoded_view_lifecycle": "pass",
+    "supported_platform_lifecycle": "not-run",
+    "security_resource_determinism": "not-run",
+    "core_release_eligible": false,
+    "reason": "one exact local native artifact passes the direct and mmap lifecycle slice, but hosted interpreter/platform coverage, allocation-failure evidence, and the aggregate release gates remain incomplete"
+  },
+  "limitations": [
+    "The artifact is a local development build, not an installed release wheel.",
+    "Only macOS x86-64 with CPython 3.12 ran locally.",
+    "Hosted CPython 3.10, 3.12, 3.14, and 3.14t lifecycle lanes remain configured-not-run.",
+    "Allocation-failure and full supported-platform lifecycle evidence remain open.",
+    "No encoded-view capability promotion or release claim follows from this checkpoint."
+  ]
+}

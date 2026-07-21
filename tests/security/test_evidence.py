@@ -15,6 +15,9 @@ NATIVE_SAFETY = ROOT / "reports" / "security" / "native-safety-checkpoint.json"
 NATIVE_LIFECYCLE = (
     ROOT / "reports" / "security" / "native-lifecycle-checkpoint.json"
 )
+NATIVE_VIEW_LIFECYCLE = (
+    ROOT / "reports" / "security" / "native-view-lifecycle-checkpoint.json"
+)
 
 
 def test_conformance_and_security_reports_are_reproducible() -> None:
@@ -145,6 +148,49 @@ def test_native_lifecycle_checkpoint_is_exact_and_fail_closed() -> None:
     ):
         text = report.read_text(encoding="utf-8")
         assert "native-lifecycle-checkpoint.json" in text
+
+
+def test_native_view_lifecycle_checkpoint_is_exact_and_fail_closed() -> None:
+    checkpoint = json.loads(NATIVE_VIEW_LIFECYCLE.read_text(encoding="utf-8"))
+
+    assert checkpoint["schema"] == "pyowl-core.native-view-lifecycle-checkpoint/1"
+    assert re.fullmatch(r"[0-9a-f]{40}", checkpoint["subject_revision"])
+    assert checkpoint["claim"] == "checkpoint-only"
+    assert checkpoint["capability_advertised"] is False
+    assert checkpoint["artifact"]["kind"] == "local test-hook extension"
+    assert re.fullmatch(r"[0-9a-f]{64}", checkpoint["artifact"]["sha256"])
+
+    workflow = checkpoint["continuous_workflow"]
+    assert workflow["path"] == ".github/workflows/native-safety.yml"
+    assert workflow["job"] == "runtime-lifecycle"
+    assert workflow["status"] == "configured-not-run"
+    workflow_text = (ROOT / workflow["path"]).read_text(encoding="utf-8")
+    assert "test_process_lifecycle.py" in workflow_text
+
+    run = checkpoint["run"]
+    assert run["status"] == "pass"
+    assert run["command"]
+    assert run["working_directory"]
+    assert run["observations"]["tests_failed"] == 0
+    assert run["observations"]["tests_passed"] >= 4
+    assert len(run["encoded_view_cases"]) == 4
+    assert run["notes"]
+
+    release = checkpoint["release_effect"]
+    assert release["local_encoded_view_lifecycle"] == "pass"
+    assert release["supported_platform_lifecycle"] == "not-run"
+    assert release["security_resource_determinism"] == "not-run"
+    assert release["core_release_eligible"] is False
+    assert release["reason"]
+    assert checkpoint["limitations"]
+
+    for report in (
+        ROOT / "reports" / "security" / "README.md",
+        ROOT / "reports" / "workpackages" / "WP17.md",
+        ROOT / "reports" / "workpackages" / "WP18.md",
+    ):
+        text = report.read_text(encoding="utf-8")
+        assert "native-view-lifecycle-checkpoint.json" in text
 
 
 def test_minimized_regression_workflow_reaches_one_minimal_subsequence() -> None:
