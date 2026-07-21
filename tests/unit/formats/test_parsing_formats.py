@@ -359,6 +359,61 @@ def test_rdfxml_root_and_parse_type_attributes_are_restricted(document: str) -> 
 
 
 @pytest.mark.parametrize(
+    ("role", "local"),
+    [
+        *[
+            ("node", local)
+            for local in (
+                "RDF",
+                "ID",
+                "about",
+                "parseType",
+                "resource",
+                "nodeID",
+                "datatype",
+                "li",
+                "aboutEach",
+                "aboutEachPrefix",
+                "bagID",
+            )
+        ],
+        *[
+            ("property", local)
+            for local in (
+                "RDF",
+                "ID",
+                "about",
+                "parseType",
+                "resource",
+                "nodeID",
+                "datatype",
+                "Description",
+                "aboutEach",
+                "aboutEachPrefix",
+                "bagID",
+            )
+        ],
+    ],
+)
+def test_rdfxml_reserved_names_are_rejected_in_element_roles(
+    role: str,
+    local: str,
+) -> None:
+    content = (
+        f"<rdf:{local}/>"
+        if role == "node"
+        else f"<rdf:Description rdf:about='urn:s'><rdf:{local}/></rdf:Description>"
+    )
+    source = (
+        f"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>{content}</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
+
+
+@pytest.mark.parametrize(
     "property_element",
     (
         "<rdfs:subClassOf rdf:resource='urn:D' rdf:datatype='urn:type'/>",

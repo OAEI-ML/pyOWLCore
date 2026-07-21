@@ -427,6 +427,65 @@ def test_root_and_parse_type_attributes_fail_in_both_backends(
     assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
 
 
+@pytest.mark.parametrize(
+    ("role", "local"),
+    [
+        *[
+            ("node", local)
+            for local in (
+                "RDF",
+                "ID",
+                "about",
+                "parseType",
+                "resource",
+                "nodeID",
+                "datatype",
+                "li",
+                "aboutEach",
+                "aboutEachPrefix",
+                "bagID",
+            )
+        ],
+        *[
+            ("property", local)
+            for local in (
+                "RDF",
+                "ID",
+                "about",
+                "parseType",
+                "resource",
+                "nodeID",
+                "datatype",
+                "Description",
+                "aboutEach",
+                "aboutEachPrefix",
+                "bagID",
+            )
+        ],
+    ],
+)
+def test_reserved_names_fail_in_element_roles_in_both_backends(
+    extension: NativeTestExtension,
+    role: str,
+    local: str,
+) -> None:
+    content = (
+        f"<rdf:{local}/>"
+        if role == "node"
+        else f"<rdf:Description rdf:about='urn:s'><rdf:{local}/></rdf:Description>"
+    )
+    source = (
+        f"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>{content}</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
 def test_processing_instructions_map_to_no_rdf_events(
     extension: NativeTestExtension,
 ) -> None:

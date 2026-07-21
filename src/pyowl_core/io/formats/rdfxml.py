@@ -37,6 +37,10 @@ XML_NS = "http://www.w3.org/XML/1998/namespace"
 _XML_SPACE = frozenset(" \t\r\n")
 _IRI_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
 _XML_UNDEFINED_ENTITY = expat.errors.codes[expat.errors.XML_ERROR_UNDEFINED_ENTITY]
+_RDF_CORE_SYNTAX_IRIS = frozenset(
+    RDF + local for local in ("RDF", "ID", "about", "parseType", "resource", "nodeID", "datatype")
+)
+_RDF_OLD_SYNTAX_IRIS = frozenset(RDF + local for local in ("aboutEach", "aboutEachPrefix", "bagID"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +166,14 @@ class RDFXMLGraphParser:
         self.context.check()
         if _has_non_whitespace_content(element):
             self._syntax("RDF node elements cannot contain direct character data")
+        if element.tag == _tag(RDF, "Description"):
+            expanded_name = RDF + "Description"
+        else:
+            if not _namespace(element.tag):
+                self._syntax("typed RDF node element requires a namespace")
+            expanded_name = self._expanded(element.tag)
+        if not _is_node_element_iri(expanded_name):
+            self._syntax("RDF node element uses a reserved RDF name")
         base = self._base(element, parent_base)
         language = element.get(f"{{{XML_NS}}}lang", parent_language)
         identities = [
@@ -180,11 +192,8 @@ class RDFXMLGraphParser:
             subject = RDFIRI(self._rdf_id(present[0][1] or "", base))
         else:
             subject = RDFIRI(self._resolve(present[0][1] or "", base))
-        if element.tag != _tag(RDF, "Description"):
-            namespace = _namespace(element.tag)
-            if not namespace:
-                self._syntax("typed RDF node element requires a namespace")
-            self._add(subject, RDF + "type", RDFIRI(self._expanded(element.tag)))
+        if expanded_name != RDF + "Description":
+            self._add(subject, RDF + "type", RDFIRI(expanded_name))
         self._node_property_attributes(element, subject, base, language)
         li_index = 0
         for child in element:
@@ -233,6 +242,8 @@ class RDFXMLGraphParser:
         parent_language: str | None,
     ) -> None:
         self.context.check()
+        if not _is_property_element_iri(predicate):
+            self._syntax("RDF property element uses a reserved RDF name")
         base = self._base(element, parent_base)
         language = element.get(f"{{{XML_NS}}}lang", parent_language)
         resource = element.get(_tag(RDF, "resource"))
@@ -614,6 +625,22 @@ def _expanded(tag: str) -> str:
         )
     namespace, local = tag[1:].split("}", 1)
     return namespace + local
+
+
+def _is_node_element_iri(value: str) -> bool:
+    return (
+        value not in _RDF_CORE_SYNTAX_IRIS
+        and value != RDF + "li"
+        and value not in _RDF_OLD_SYNTAX_IRIS
+    )
+
+
+def _is_property_element_iri(value: str) -> bool:
+    return (
+        value not in _RDF_CORE_SYNTAX_IRIS
+        and value != RDF + "Description"
+        and value not in _RDF_OLD_SYNTAX_IRIS
+    )
 
 
 def _parse_iri_reference(value: str) -> _IRIReference:
