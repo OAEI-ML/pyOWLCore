@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TypeAlias, cast
 
-from pyowl_core.backends.python.parser import parse_document as _parse_document
+from pyowl_core.backends.parser import parse_document as _parse_document
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.config import BackendPreference, DocumentFormat, LoadOptions
 from pyowl_core.document.composite import OntologyComposite, compose_views

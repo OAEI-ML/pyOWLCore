@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy, LoadOptions
@@ -24,12 +24,13 @@ from pyowl_core.exceptions import (
     PyOWLCoreError,
 )
 from pyowl_core.io.formats.common import ParseContext, ParsedOntology
-from pyowl_core.io.formats.detection import coerce_format, detect_format
+from pyowl_core.io.formats.detection import FormatDetection, coerce_format, detect_format
 from pyowl_core.io.formats.functional import FunctionalLexer, parse_functional
 from pyowl_core.io.formats.owlxml import parse_owlxml
 from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.io.formats.turtle import TurtleLexer, parse_turtle
-from pyowl_core.io.source import DocumentSource, acquire_source
+from pyowl_core.io.source import DocumentSource, SourcePayload, acquire_source
+from pyowl_core.limits import ParseLimits
 from pyowl_core.model import (
     IRI,
     AnonymousIndividual,
@@ -63,6 +64,53 @@ class _ParsedDocumentResult:
     snapshot: OntologySnapshot | None = None
 
 
+class _BackendDriver(Protocol):
+    """Backend-aware operations injected outside the pure Python package."""
+
+    def select(
+        self,
+        preference: BackendPreference,
+        format: DocumentFormat,
+    ) -> str: ...
+
+    def parse_functional(
+        self,
+        data: bytes,
+        *,
+        limits: ParseLimits,
+        cancellation_token: CancellationToken | None,
+        allow_swrl: bool,
+        retain_native_storage: bool,
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        record_unresolved: bool,
+        require_empty_imports: bool,
+    ) -> _ParsedPayloadResult: ...
+
+    def publish_retained_functional(
+        self,
+        summary: bytes,
+        *,
+        parsed_native_storage: object,
+        phase_timings: tuple[tuple[str, float], ...],
+        payload: SourcePayload,
+        detection: FormatDetection,
+        document_iri: IRI | None,
+        media_type: str | None,
+        options: LoadOptions,
+        resolver: ImportResolver | None,
+        cancellation_token: CancellationToken | None,
+        load_started: float,
+        root_parse_started: float,
+    ) -> OntologySnapshot: ...
+
+    def decode_functional(
+        self,
+        encoded: bytes,
+        limits: ParseLimits,
+    ) -> ParsedOntology: ...
+
+
 class PythonParser:
     """Reusable stateless parser facade with explicit expert controls."""
 
@@ -90,10 +138,14 @@ class PythonParser:
             allow_swrl=allow_swrl,
             cancellation_token=cancellation_token,
             retain_native_storage=False,
+            backend_driver=self._backend_driver(),
         )
         if result.document is None:
             raise AssertionError("single-document parsing did not publish a document")
         return result.document
+
+    def _backend_driver(self) -> _BackendDriver | None:
+        return None
 
     def _parse(
         self,
@@ -110,6 +162,7 @@ class PythonParser:
         retained_resolver: ImportResolver | None = None,
         retained_load_started: float | None = None,
         retained_root_parse_started: float | None = None,
+        backend_driver: _BackendDriver | None = None,
     ) -> _ParsedDocumentResult:
         selected_options = LoadOptions() if options is None else options
         if not isinstance(selected_options, LoadOptions):
@@ -127,18 +180,16 @@ class PythonParser:
         forced = explicit or selected_options.format
         iri = _coerce_iri(document_iri)
         preselected_backend: str | None = None
-        if selected_options.backend is BackendPreference.NATIVE and forced is not None:
+        if (
+            backend_driver is not None
+            and selected_options.backend is BackendPreference.NATIVE
+            and forced is not None
+        ):
             # An explicitly formatted forced-native request has enough
             # information to prove capability before opening or reading the
             # source. This keeps unsupported formats outside acquisition and
             # prevents a private/incomplete parser from becoming a fallback.
-            from pyowl_core.backends.dispatch import select_backend
-
-            preselected_backend = select_backend(
-                selected_options.backend,
-                capability=f"parse-{forced.value}-v1",
-                operation=f"{forced.value} document parse",
-            ).backend
+            preselected_backend = backend_driver.select(selected_options.backend, forced)
         payload = acquire_source(
             source,
             format=forced,
@@ -157,7 +208,8 @@ class PythonParser:
         )
         selected_backend = preselected_backend or "python"
         if (
-            preselected_backend is None
+            backend_driver is not None
+            and preselected_backend is None
             and selected_options.backend is not BackendPreference.PYTHON
             and not (
                 selected_options.backend is BackendPreference.AUTO
@@ -165,13 +217,10 @@ class PythonParser:
                 and len(payload.data) < _NATIVE_AUTO_MIN_SOURCE_BYTES
             )
         ):
-            from pyowl_core.backends.dispatch import select_backend
-
-            selected_backend = select_backend(
+            selected_backend = backend_driver.select(
                 selected_options.backend,
-                capability=f"parse-{detection.format.value}-v1",
-                operation=f"{detection.format.value} document parse",
-            ).backend
+                detection.format,
+            )
         parsed_result = _parse_payload(
             payload.data,
             detection.format,
@@ -184,9 +233,7 @@ class PythonParser:
             retain_native_storage=retain_native_storage,
             collect_provenance=selected_options.collect_provenance,
             preserve_source_map=selected_options.preserve_source_map,
-            record_unresolved=(
-                selected_options.imports is ImportPolicy.RECORD_UNRESOLVED
-            ),
+            record_unresolved=(selected_options.imports is ImportPolicy.RECORD_UNRESOLVED),
             require_empty_imports=(
                 selected_options.imports
                 in {ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT}
@@ -195,6 +242,7 @@ class PythonParser:
                     and retained_resolver is not None
                 )
             ),
+            backend_driver=backend_driver,
         )
         if parsed_result.native_summary is not None:
             if (
@@ -202,13 +250,10 @@ class PythonParser:
                 or parsed_result.native_storage is None
                 or retained_load_started is None
                 or retained_root_parse_started is None
+                or backend_driver is None
             ):
                 raise AssertionError("retained native result has no publication context")
-            from pyowl_core.backends.native_ingestion import (
-                publish_retained_functional_snapshot_v2,
-            )
-
-            snapshot = publish_retained_functional_snapshot_v2(
+            snapshot = backend_driver.publish_retained_functional(
                 parsed_result.native_summary,
                 parsed_native_storage=parsed_result.native_storage,
                 phase_timings=parsed_result.phase_timings,
@@ -224,9 +269,9 @@ class PythonParser:
             )
             return _ParsedDocumentResult(None, snapshot=snapshot)
         if parsed_result.native_encoded is not None:
-            from pyowl_core.backends.native import _decode_parsed_functional
-
-            parsed = _decode_parsed_functional(
+            if backend_driver is None:
+                raise AssertionError("native framing has no backend driver")
+            parsed = backend_driver.decode_functional(
                 parsed_result.native_encoded,
                 selected_options.limits,
             )
@@ -304,9 +349,7 @@ class PythonParser:
                             {"language-tag": spelling},
                         )
                         source_map_entries += 1
-                    selected_options.limits.enforce(
-                        "max_source_map_entries", source_map_entries
-                    )
+                    selected_options.limits.enforce("max_source_map_entries", source_map_entries)
             source_map = builder.freeze()
         origin_index = None
         if selected_options.collect_provenance:
@@ -371,30 +414,6 @@ def parse_document(
     )
 
 
-def _parse_document_for_retained_load(
-    source: DocumentSource,
-    *,
-    document_iri: IRI | str | None,
-    options: LoadOptions,
-    resolver: ImportResolver | None,
-    cancellation_token: CancellationToken | None,
-    load_started: float,
-    root_parse_started: float,
-) -> _ParsedDocumentResult:
-    """Parse a root while retaining an unadvertised native structural owner."""
-
-    return PythonParser()._parse(
-        source,
-        document_iri=document_iri,
-        options=options,
-        cancellation_token=cancellation_token,
-        retain_native_storage=True,
-        retained_resolver=resolver,
-        retained_load_started=load_started,
-        retained_root_parse_started=root_parse_started,
-    )
-
-
 def _source_language_tags(
     data: bytes,
     format: DocumentFormat,
@@ -456,7 +475,7 @@ def _parse_payload(
     data: bytes,
     format: DocumentFormat,
     *,
-    limits: object,
+    limits: ParseLimits,
     document_iri: IRI | None,
     cancellation_token: CancellationToken | None,
     allow_partial_rdf_mapping: bool,
@@ -467,45 +486,25 @@ def _parse_payload(
     preserve_source_map: bool,
     record_unresolved: bool,
     require_empty_imports: bool,
+    backend_driver: _BackendDriver | None,
 ) -> _ParsedPayloadResult:
-    from pyowl_core.limits import ParseLimits
-
     if not isinstance(limits, ParseLimits):
         raise TypeError("limits must be ParseLimits")
     try:
         if format is DocumentFormat.FUNCTIONAL:
             if backend == "native":
-                if retain_native_storage:
-                    from pyowl_core.backends.dispatch import (
-                        _parse_functional_native_retained_v2,
-                    )
-
-                    retained = _parse_functional_native_retained_v2(
-                        data,
-                        limits=limits,
-                        cancellation_token=cancellation_token,
-                        allow_swrl=allow_swrl,
-                        collect_provenance=collect_provenance,
-                        preserve_source_map=preserve_source_map,
-                        record_unresolved=record_unresolved,
-                        require_empty_imports=require_empty_imports,
-                    )
-                    return _ParsedPayloadResult(
-                        ontology=retained.parsed,
-                        native_storage=retained.storage,
-                        phase_timings=retained.phase_timings,
-                        native_encoded=retained.encoded,
-                        native_summary=retained.summary,
-                    )
-                from pyowl_core.backends.dispatch import parse_functional_native
-
-                return _ParsedPayloadResult(
-                    parse_functional_native(
-                        data,
-                        limits=limits,
-                        cancellation_token=cancellation_token,
-                        allow_swrl=allow_swrl,
-                    )
+                if backend_driver is None:
+                    raise AssertionError("native selection has no backend driver")
+                return backend_driver.parse_functional(
+                    data,
+                    limits=limits,
+                    cancellation_token=cancellation_token,
+                    allow_swrl=allow_swrl,
+                    retain_native_storage=retain_native_storage,
+                    collect_provenance=collect_provenance,
+                    preserve_source_map=preserve_source_map,
+                    record_unresolved=record_unresolved,
+                    require_empty_imports=require_empty_imports,
                 )
             return _ParsedPayloadResult(
                 parse_functional(

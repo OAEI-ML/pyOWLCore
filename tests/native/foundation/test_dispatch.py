@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from pyowl_core.backends import dispatch
 from pyowl_core.backends.native import NativeProbe
-from pyowl_core.config import BackendPreference
+from pyowl_core.backends.python import PythonParser
+from pyowl_core.config import BackendPreference, LoadOptions
 from pyowl_core.exceptions import BackendUnavailableError, NativeBackendUnavailableWarning
 
 
@@ -97,6 +98,18 @@ assert 'pyowl_core.backends.native' not in sys.modules
             capture_output=True,
             text=True,
         )
+
+    def test_semantic_reference_parser_never_probes_native(self) -> None:
+        with patch(
+            "pyowl_core.backends.native.probe",
+            side_effect=AssertionError("PythonParser probed the native backend"),
+        ):
+            document = PythonParser().parse(
+                b"Ontology(Declaration(Class(<urn:pure:C>)))",
+                options=LoadOptions(backend=BackendPreference.NATIVE),
+            )
+
+        self.assertEqual(document.provenance.backend, "python")
 
 
 if __name__ == "__main__":

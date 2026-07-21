@@ -389,7 +389,7 @@ class SnapshotLoader:
             root = source
             root_cache_hit = False
         elif _prepare_retained_native_root(selected):
-            from pyowl_core.backends.python.parser import _parse_document_for_retained_load
+            from pyowl_core.backends.parser import _parse_document_for_retained_load
 
             parsed = _parse_document_for_retained_load(
                 source,
@@ -409,7 +409,7 @@ class SnapshotLoader:
             native_phase_timings = parsed.phase_timings
             root_cache_hit = False
         else:
-            from pyowl_core.backends.python import parse_document
+            from pyowl_core.backends.parser import parse_document
 
             root = parse_document(
                 source,
@@ -634,9 +634,9 @@ class SnapshotLoader:
         cached = self._document_cache.get(key)
         if cached is not None:
             return cached, True
-        from pyowl_core.backends.python import PythonParser
+        from pyowl_core.backends.parser import parse_document
 
-        document = PythonParser().parse(
+        document = parse_document(
             acquired.data,
             format=resolved.format,
             document_iri=resolved.document_iri,
