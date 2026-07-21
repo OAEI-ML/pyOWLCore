@@ -340,7 +340,8 @@ public final class OwlApiRunner {
             OWLOntology ontology = load(request, prepared);
             long loadNs = elapsed(loadStarted);
             long commonStarted = System.nanoTime();
-            ModelMapper.MappedDocument mapped = new ModelMapper().map(ontology);
+            ModelMapper.MappedDocument mapped = new ModelMapper().map(
+                    ontology, request.format.value);
             CommonContract.Build built = CommonContract.build(mapped,
                     new CommonContract.RequestContext(
                             request.corpusId, request.source, request.sourceSha256,

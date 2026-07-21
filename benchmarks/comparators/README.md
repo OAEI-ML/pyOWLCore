@@ -61,10 +61,8 @@ py-horned, OWLAPI, a JVM, or a comparator runner. Missing launchers and pending
 artifact pins produce `not-run`; they can never become a pass.
 
 Every external lane has its own runner pin: direct retained Rust, raw Horned,
-common-contract Horned, py-horned, and OWLAPI. The direct retained-Rust, Horned,
-and py-horned runners are complete and SHA-256 bound. The OWLAPI runner remains
-`pending`, so that lane is non-runnable even if its launcher environment
-variable is configured. Horned-OWL 1.4.0 has one
+common-contract Horned, py-horned, and OWLAPI. All five runners are complete
+and SHA-256 bound. Horned-OWL 1.4.0 has one
 exact engine and executable artifact shared by its raw and common lanes, while
 the boundary and runner revision remain lane-bound. The installed retained-
 native-wheel lane is separate and rejects source-tree/native builds; it
@@ -158,6 +156,17 @@ sdist SHA-256, and a byte-for-byte match for every SHA-256 entry in the
 installed distribution's RECORD. A renamed, editable, differently sourced, or
 post-install modified engine fails before producing samples.
 
+The OWLAPI runner is likewise excluded from package artifacts and dependencies.
+It pins OWLAPI distribution 5.5.1, an exact 521-file Temurin 21.0.7+6 runtime,
+the deterministic runner JAR, launcher, 8 GiB fixed heap, G1GC with
+`AlwaysPreTouch`, and one active processor. Its complete reproduction and
+runtime-authentication procedure is in
+`runners/owlapi/README.md`. The independent Java mapper constructs and validates
+the complete model-schema/common-contract ledger inside the timer. Functional
+Syntax, OWL/XML, RDF/XML, and Turtle use explicit readers; anonymous-individual
+identity and any RDF occurrence ordering that cannot be recovered from OWLAPI
+semantics return `ineligible` instead of a reduced result.
+
 Each external command reads one
 `pyowl-core/comparator-adapter-request/v2` JSON object on standard input and
 writes one `pyowl-core/comparator-adapter-result/v1` object to standard output.
@@ -227,8 +236,7 @@ persistent lifecycle are implemented and contract-tested. File inputs are
 hash-checked and prepared before timing, use the same stable source-bound
 document IRI as resident bytes, and include the implementation's file open/read
 in the timer. The complete direct retained-Rust, raw/common Horned, and
-py-horned runners can exercise that lifecycle, while the OWLAPI runner remains
-pending.
+py-horned, and OWLAPI runners can exercise that lifecycle.
 Representative medium/large approved-machine samples, native retention/copy
 counters, and phase profiles remain open. The configured ratio gates therefore
 fail closed; no performance threshold has passed merely because its evaluator,

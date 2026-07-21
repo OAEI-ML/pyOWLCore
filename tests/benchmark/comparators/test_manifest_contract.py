@@ -18,6 +18,7 @@ from tools.benchmark.comparators.runner import ComparatorRunError, check_compara
 
 MANIFEST = Path("benchmarks/comparators/comparators.toml")
 HORNED_1_4_0_SHA256 = "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e"
+OWLAPI_5_5_1_SHA256 = "747b1a5269fee2992487dcde946f16dfbc14aa458d50854994a0485cf263ce07"
 
 
 def test_pin_ledger_covers_normative_lanes_and_exact_phases() -> None:
@@ -109,8 +110,16 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     )
     assert direct.artifact_is_runnable is True
 
+    owlapi = manifest.by_id("owlapi-common")
+    owlapi_runner = Path("benchmarks/comparators/runners/owlapi/launcher.sh")
+    assert owlapi.artifact_sha256 == OWLAPI_5_5_1_SHA256
+    assert owlapi.runner_pin_state == "complete"
+    assert owlapi.runner_revision == "pyowl-core-owlapi-common-runner-v1"
+    assert owlapi.runner_sha256 == hashlib.sha256(owlapi_runner.read_bytes()).hexdigest()
+    assert owlapi.artifact_is_runnable is True
+
     for pin in external:
-        if pin in {py_horned, raw_horned, common_horned, direct}:
+        if pin in {py_horned, raw_horned, common_horned, direct, owlapi}:
             continue
         assert pin.runner_pin_state == "pending"
         assert pin.runner_revision

@@ -157,7 +157,7 @@ final class CommonContract {
     private static Map<String, Object> provenance(
             ModelMapper.MappedDocument document, RequestContext request, String key) {
         NavigableMap<byte[], List<Object>> origins = new TreeMap<>(UNSIGNED_BYTES);
-        List<byte[]> roots = roots(document, false);
+        List<byte[]> roots = document.provenanceRoots;
         for (int occurrence = 0; occurrence < roots.size(); occurrence++) {
             byte[] digest = Canonical.structuralDigest(roots.get(occurrence));
             origins.computeIfAbsent(digest, ignored -> new ArrayList<>())
@@ -425,21 +425,6 @@ final class CommonContract {
         }
         int end = value.offsetByCodePoints(0, 509);
         return value.substring(0, end) + "...";
-    }
-
-    private static List<byte[]> roots(ModelMapper.MappedDocument document, boolean logical) {
-        List<byte[]> output = new ArrayList<>();
-        if (!logical) {
-            output.addAll(document.annotations);
-        }
-        document.axioms.forEach(value -> {
-            byte[] selected = logical ? value.logical : value.value;
-            if (selected != null) {
-                output.add(selected);
-            }
-        });
-        document.extensions.forEach(value -> output.add(logical ? value.logical : value.value));
-        return output;
     }
 
     @SuppressWarnings("unchecked")

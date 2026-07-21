@@ -134,10 +134,10 @@ def test_complete_direct_adapter_requires_an_explicit_launcher(
     assert "pyowl-direct-rust-common" not in completion["missing_required_pins"]
 
 
-def test_pending_owlapi_pin_cannot_execute_even_when_launcher_is_set(
+def test_complete_owlapi_pin_rejects_a_different_launcher(
     monkeypatch: object,
 ) -> None:
-    cast(Any, monkeypatch).setenv("PYOWL_CORE_OWLAPI_RUNNER", "/bin/false")
+    cast(Any, monkeypatch).setenv("PYOWL_CORE_OWLAPI_RUNNER", "/usr/bin/false")
     report = run_comparator_baseline(
         corpus_ids=("generated-tiny-functional",),
         comparator_ids=("pyowl-python-common", "owlapi-common"),
@@ -146,8 +146,8 @@ def test_pending_owlapi_pin_cannot_execute_even_when_launcher_is_set(
     )
     rows = {value["lane"]: value for value in cast(list[dict[str, Any]], report["lanes"])}
 
-    assert rows["owlapi-common"]["status"] == "not-run"
-    assert "pending" in rows["owlapi-common"]["reason"]
+    assert rows["owlapi-common"]["status"] == "error"
+    assert "SHA-256 differs" in rows["owlapi-common"]["reason"]
 
 
 def test_cli_requires_explicit_partial_evidence_mode(tmp_path: Path) -> None:
