@@ -540,6 +540,27 @@ def test_processing_instructions_map_to_no_rdf_events(
     assert observed.total_triples == python.rdf_mapping_report.total_triples
 
 
+@pytest.mark.parametrize(
+    "instruction",
+    ("<??>", "<?1target?>", "<?target/data?>", "<?a:b?>", "<?XML version='1.0'?>"),
+)
+def test_malformed_processing_instructions_fail_in_both_backends(
+    extension: NativeTestExtension,
+    instruction: str,
+) -> None:
+    source = (
+        f"{instruction}<rdf:RDF "
+        "xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
 def test_named_node_axiom_slice_matches_python_canonical_bytes(
     extension: NativeTestExtension,
 ) -> None:

@@ -272,6 +272,9 @@ impl<'a> XmlStream<'a> {
                     return Err(xml_syntax());
                 }
                 let target = &body[..target_end];
+                if !is_xml_ncname(target) {
+                    return Err(xml_syntax());
+                }
                 if target == "xml" {
                     if start != 0 || self.xml_declaration_seen {
                         return Err(xml_syntax());
@@ -10651,6 +10654,7 @@ mod tests {
             "<??>",
             "<?1target?>",
             "<?target/data?>",
+            "<?a:b?>",
             "<?XML version='1.0'?>",
             " <?xml version='1.0'?><rdf:RDF/>",
         ] {

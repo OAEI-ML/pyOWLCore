@@ -338,6 +338,23 @@ def test_rdfxml_forbidden_keywords_are_inert_inside_xml_data_regions() -> None:
 
 
 @pytest.mark.parametrize(
+    "instruction",
+    ("<??>", "<?1target?>", "<?target/data?>", "<?a:b?>", "<?XML version='1.0'?>"),
+)
+def test_rdfxml_malformed_processing_instructions_are_syntax_errors(
+    instruction: str,
+) -> None:
+    source = (
+        f"{instruction}<rdf:RDF "
+        "xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
+
+
+@pytest.mark.parametrize(
     "document",
     (
         (
