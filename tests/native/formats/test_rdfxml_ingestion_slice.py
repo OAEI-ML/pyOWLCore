@@ -374,6 +374,28 @@ def test_empty_property_attributes_match_python_object_descriptions(
     assert triple_limited.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_datatyped_empty_property_with_legacy_attribute_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xmlns:e='urn:e:'>
+ <owl:Ontology rdf:about='urn:o'>
+  <rdfs:comment rdf:datatype='urn:datatype' e:ignored='discarded'/>
+ </owl:Ontology>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 2
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+
 def test_rdf_li_expansion_matches_python_annotation_properties(
     extension: NativeTestExtension,
 ) -> None:

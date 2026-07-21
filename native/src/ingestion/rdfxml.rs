@@ -1017,11 +1017,6 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             };
         }
         let has_property_attributes = self.has_empty_property_attributes(attributes)?;
-        if has_property_attributes && datatype_attribute.is_some() {
-            // The retained mapper does not yet own the legacy datatype plus
-            // property-attribute branch, so keep it outside this closed slice.
-            return Err(mapping_incomplete());
-        }
         let datatype = datatype_attribute
             .map(|value| resolve_iri(value, base, self.session))
             .transpose()?;
@@ -1032,7 +1027,11 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 .map(|value| owned_text(value, self.session).map(Resource::Blank))
                 .transpose()?
         };
-        let object = if object.is_none() && has_property_attributes {
+        // Keep the established Python/RDFLib compatibility behavior: on the
+        // legacy datatype-plus-property-attribute form, rdf:datatype selects
+        // the typed literal and the extra property attributes are ignored.
+        let object = if object.is_none() && has_property_attributes && datatype_attribute.is_none()
+        {
             Some(self.fresh_blank()?)
         } else {
             object
@@ -7189,15 +7188,29 @@ mod tests {
                 ),
                 "NATIVE_RDF_MAPPING_INCOMPLETE",
             ),
-            (
-                format!(
-                    "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:datatype=\"urn:datatype\" e:q=\"value\"/></rdf:Description></rdf:RDF>"
-                ),
-                "NATIVE_RDF_MAPPING_INCOMPLETE",
-            ),
         ] {
             assert_eq!(graph(&source).unwrap_err().code, expected);
         }
+    }
+
+    #[test]
+    fn datatype_empty_properties_keep_literal_semantics_with_legacy_attributes() {
+        let parsed = graph(&format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:datatype=\"urn:datatype\" e:q=\"ignored\"/></rdf:Description></rdf:RDF>"
+        ))
+        .expect("datatyped empty property with a legacy property attribute");
+
+        assert_eq!(parsed.len(), 1);
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            "urn:e:p",
+            Term::Literal {
+                lexical: String::new(),
+                datatype: Some("urn:datatype".to_owned()),
+                language: None,
+            },
+        ));
     }
 
     #[test]
