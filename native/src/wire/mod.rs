@@ -525,6 +525,7 @@ fn validate_table(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_semantics(
     data: &[u8],
     tables: &[Table],
