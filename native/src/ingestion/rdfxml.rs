@@ -1896,7 +1896,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 .iter()
                 .any(|(namespace, local)| expanded_name_matches(&expanded, namespace, local))
             {
-                return Err(mapping_incomplete());
+                return Err(xml_syntax());
             }
         }
         Ok(())
@@ -7397,7 +7397,7 @@ mod tests {
                 format!(
                     "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\" e:ignored=\"value\"/>"
                 ),
-                "NATIVE_RDF_MAPPING_INCOMPLETE",
+                "NATIVE_RDFXML_SYNTAX",
             ),
             (
                 format!("<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:about/></rdf:RDF>"),
@@ -7464,6 +7464,9 @@ mod tests {
             ),
             format!(
                 "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Collection\">not-whitespace</e:p></rdf:Description></rdf:RDF>"
+            ),
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Collection\" e:ignored=\"value\"/></rdf:Description></rdf:RDF>"
             ),
         ] {
             assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");

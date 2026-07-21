@@ -325,6 +325,40 @@ def test_rdfxml_root_and_node_elements_reject_character_data(document: str) -> N
 
 
 @pytest.mark.parametrize(
+    "document",
+    (
+        "<rdf:RDF {namespaces} e:ignored='value'/>",
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<rdfs:subClassOf rdf:parseType='Resource' e:ignored='value'/>"
+            "</owl:Class></rdf:RDF>"
+        ),
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<owl:equivalentClass rdf:parseType='Collection' e:ignored='value'/>"
+            "</owl:Class></rdf:RDF>"
+        ),
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<rdfs:label rdf:parseType='Literal' e:ignored='value'>text</rdfs:label>"
+            "</owl:Class></rdf:RDF>"
+        ),
+    ),
+)
+def test_rdfxml_root_and_parse_type_attributes_are_restricted(document: str) -> None:
+    namespaces = (
+        "xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' xmlns:e='urn:e:'"
+    )
+    source = document.format(namespaces=namespaces).encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
+
+
+@pytest.mark.parametrize(
     "property_element",
     (
         "<rdfs:subClassOf rdf:resource='urn:D' rdf:datatype='urn:type'/>",

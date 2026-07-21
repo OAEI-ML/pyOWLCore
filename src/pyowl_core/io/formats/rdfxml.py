@@ -142,6 +142,9 @@ class RDFXMLGraphParser:
         base = self._base(self.root, self.base)
         language = self.root.get(f"{{{XML_NS}}}lang")
         if self.root.tag == _tag(RDF, "RDF"):
+            allowed = {f"{{{XML_NS}}}base", f"{{{XML_NS}}}lang"}
+            if any(name not in allowed for name in self.root.attrib):
+                self._syntax("rdf:RDF has an invalid attribute")
             if _has_non_whitespace_content(self.root):
                 self._syntax("rdf:RDF cannot contain direct character data")
             for child in self.root:
@@ -243,6 +246,8 @@ class RDFXMLGraphParser:
             self._syntax("RDF property element has conflicting object attributes")
         triple: Triple
         if parse_type is not None:
+            if self._non_syntax_attributes(element):
+                self._syntax("parseType property element has an invalid attribute")
             if parse_type == "Resource":
                 if _has_non_whitespace_content(element):
                     self._syntax("parseType Resource cannot contain character data")

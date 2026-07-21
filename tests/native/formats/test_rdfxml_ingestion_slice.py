@@ -387,6 +387,46 @@ def test_root_and_node_character_data_fail_in_both_backends(
     assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
 
 
+@pytest.mark.parametrize(
+    "document",
+    (
+        "<rdf:RDF {namespaces} e:ignored='value'/>",
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<rdfs:subClassOf rdf:parseType='Resource' e:ignored='value'/>"
+            "</owl:Class></rdf:RDF>"
+        ),
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<owl:equivalentClass rdf:parseType='Collection' e:ignored='value'/>"
+            "</owl:Class></rdf:RDF>"
+        ),
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<rdfs:label rdf:parseType='Literal' e:ignored='value'>text</rdfs:label>"
+            "</owl:Class></rdf:RDF>"
+        ),
+    ),
+)
+def test_root_and_parse_type_attributes_fail_in_both_backends(
+    extension: NativeTestExtension,
+    document: str,
+) -> None:
+    namespaces = (
+        "xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' xmlns:e='urn:e:'"
+    )
+    source = document.format(namespaces=namespaces).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
 def test_processing_instructions_map_to_no_rdf_events(
     extension: NativeTestExtension,
 ) -> None:
