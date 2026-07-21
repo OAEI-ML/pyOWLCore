@@ -46,13 +46,82 @@ pub(super) fn publish_timed(
     interrupt: Option<InterruptSlot>,
     caller_external_bytes: usize,
 ) -> NativeResult<PublishedV2> {
-    let mapped_document_bytes = mapped_document_bytes(documents)?;
+    publish_timed_inner(
+        documents,
+        None,
+        effective_documents,
+        closure_documents,
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn publish_scoped_timed(
+    document: &CanonicalDocument,
+    effective_roots: &[Vec<Vec<u8>>; 3],
+    limits: Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    caller_external_bytes: usize,
+) -> NativeResult<PublishedV2> {
+    publish_timed_inner(
+        std::slice::from_ref(document),
+        Some(effective_roots),
+        &[vec![0]],
+        &[0],
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_timed_inner(
+    documents: &[CanonicalDocument],
+    scoped_effective_roots: Option<&[Vec<Vec<u8>>; 3]>,
+    effective_documents: &[Vec<u64>],
+    closure_documents: &[u64],
+    limits: Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    caller_external_bytes: usize,
+) -> NativeResult<PublishedV2> {
+    if scoped_effective_roots.is_some() && documents.len() != 1 {
+        return Err(NativeError::protocol(
+            "native scoped RDF/XML publication requires one document",
+        ));
+    }
+    let mapped_document_bytes = mapped_document_bytes(documents)?
+        .checked_add(
+            scoped_effective_roots
+                .map(rows_bytes)
+                .transpose()?
+                .unwrap_or(0),
+        )
+        .ok_or_else(|| NativeError::limit("native V2 scoped memory accounting overflow"))?;
     let external_bytes = caller_external_bytes
         .checked_add(mapped_document_bytes)
         .ok_or_else(|| NativeError::limit("native V2 ingestion memory accounting overflow"))?;
     let arena_started = Instant::now();
     let mut builder = TypedFacadeBuilderV2::new(limits, cancellation, interrupt, external_bytes)?;
-    for document in documents {
+    for (index, document) in documents.iter().enumerate() {
+        if index == 0 {
+            if let Some(effective) = scoped_effective_roots {
+                builder.add_scoped_document(
+                    &document.ontology_annotations,
+                    &document.axioms,
+                    &document.extensions,
+                    &effective[0],
+                    &effective[1],
+                    &effective[2],
+                )?;
+                continue;
+            }
+        }
         builder.add_document(
             &document.ontology_annotations,
             &document.axioms,
@@ -67,6 +136,21 @@ pub(super) fn publish_timed(
         storage,
         arena_construction_ns,
         freeze_ns,
+    })
+}
+
+fn rows_bytes(rows: &[Vec<Vec<u8>>; 3]) -> NativeResult<usize> {
+    rows.iter().try_fold(0_usize, |total, values| {
+        let metadata = values
+            .capacity()
+            .checked_mul(size_of::<Vec<u8>>())
+            .ok_or_else(|| NativeError::limit("native V2 scoped row metadata overflow"))?;
+        values.iter().try_fold(
+            total
+                .checked_add(metadata)
+                .ok_or_else(|| NativeError::limit("native V2 scoped row size overflow"))?,
+            |subtotal, row| checked_add(subtotal, row.capacity()),
+        )
     })
 }
 

@@ -64,6 +64,7 @@ pub(crate) struct FingerprintEvidenceV2 {
 #[derive(Clone, Debug)]
 pub(crate) struct RetainedOccurrenceV2 {
     digest: [u8; 32],
+    effective_digest: [u8; 32],
     span: Option<Span>,
     source_order: u64,
     language_details: Vec<RetainedLanguageDetailV2>,
@@ -83,6 +84,7 @@ pub(crate) struct RetainedParseMetadataV2 {
     occurrences: Vec<RetainedOccurrenceV2>,
     source_prefixes: Option<Vec<(String, String)>>,
     rdf_total_triples: Option<u64>,
+    scoped_roots: bool,
 }
 
 type RetainedSeedV2 = (Vec<u8>, RetainedParseMetadataV2, [Vec<Vec<u8>>; 3]);
@@ -117,6 +119,7 @@ pub(crate) struct PreparedRetainedPublicationV2 {
     pub(crate) node_count: u64,
     pub(crate) source_map: Option<TypedSourceMapRowsV2>,
     pub(crate) origin_rows: Option<Vec<Vec<u8>>>,
+    pub(crate) raw_origin_rows: Option<Vec<Vec<u8>>>,
     pub(crate) rdf_report: Option<PreparedRetainedRdfReportV2>,
     pub(crate) max_facade_row_bytes: u64,
     pub(crate) canonical_rows_encoded: u64,
@@ -124,6 +127,7 @@ pub(crate) struct PreparedRetainedPublicationV2 {
     pub(crate) fingerprint_temporary_bytes: u64,
     pub(crate) origin_bytes_retained: u64,
     pub(crate) document_key: Box<str>,
+    pub(crate) scoped_roots: bool,
 }
 
 #[derive(Debug)]
@@ -144,10 +148,8 @@ impl PreparedRetainedPublicationV2 {
             .map_err(|_| NativeError::limit("native retained summary allocation failed"))?;
         append(&mut output, RETAINED_PREPARED_MAGIC_V2)?;
         append(&mut output, &RETAINED_PREPARED_SCHEMA_V2.to_le_bytes())?;
-        append(
-            &mut output,
-            &u16::from(self.rdf_report.is_some()).to_le_bytes(),
-        )?;
+        let flags = u16::from(self.rdf_report.is_some()) | (u16::from(self.scoped_roots) << 1);
+        append(&mut output, &flags.to_le_bytes())?;
         for evidence in [
             self.document_fingerprint,
             self.structural_fingerprint,
@@ -281,6 +283,7 @@ impl RetainedParseMetadataV2 {
 /// Build bounded publication evidence from canonical rows produced by a
 /// non-Functional native mapper. Structural rows stay in Rust and only this
 /// compact seed crosses the Python boundary.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_rdfxml_seed(
     ontology_iri: Option<&str>,
     version_iri: Option<&str>,
@@ -289,6 +292,7 @@ pub(crate) fn build_rdfxml_seed(
     decoded_codepoints: u64,
     total_triples: u64,
     collect_provenance: bool,
+    effective_occurrence_digests: Option<&[[u8; 32]]>,
 ) -> NativeResult<(Vec<u8>, RetainedParseMetadataV2)> {
     let ontology_node = ontology_iri
         .map(|value| iri(value.to_owned()))
@@ -324,7 +328,12 @@ pub(crate) fn build_rdfxml_seed(
     let canonical_rows_scanned = occurrence_count
         .checked_add(metadata_iri_objects)
         .ok_or_else(|| NativeError::limit("native RDF/XML canonical row count overflow"))?;
-    let occurrences = rdfxml_retained_occurrences(rows, occurrence_count, collect_provenance)?;
+    let occurrences = rdfxml_retained_occurrences(
+        rows,
+        occurrence_count,
+        collect_provenance,
+        effective_occurrence_digests,
+    )?;
 
     let mut encoded = Vec::new();
     append(&mut encoded, RETAINED_RDFXML_SEED_MAGIC_V2)?;
@@ -363,6 +372,7 @@ pub(crate) fn build_rdfxml_seed(
             occurrences,
             source_prefixes: None,
             rdf_total_triples: Some(total_triples),
+            scoped_roots: effective_occurrence_digests.is_some(),
         },
     ))
 }
@@ -496,6 +506,7 @@ pub(crate) fn build_seed(
             occurrences,
             source_prefixes: preserve_source_map.then_some(prefixes),
             rdf_total_triples: None,
+            scoped_roots: false,
         },
         rows,
     ))
@@ -621,45 +632,122 @@ pub(crate) fn prepare_publication(
         inventory.varint(expected)?;
         let mut inventory_canonical_bytes = 0_u64;
         let mut emitted = 0_u64;
-        storage.visit_canonical_roots(
-            collection,
-            TypedFacadeScopeV2::Document,
-            Some(0),
-            true,
-            cancellation.clone(),
-            interrupt.clone(),
-            |row| {
-                emitted = checked_add(emitted, 1, "native retained root count overflow")?;
-                canonical_rows_encoded = checked_add(
-                    canonical_rows_encoded,
-                    1,
-                    "native retained canonical row count overflow",
-                )?;
-                let row_bytes = u64::try_from(row.len())
-                    .map_err(|_| NativeError::limit("native retained canonical row exceeds u64"))?;
-                canonical_bytes_encoded = checked_add(
-                    canonical_bytes_encoded,
-                    row_bytes,
-                    "native retained canonical byte count overflow",
-                )?;
-                inventory_canonical_bytes = checked_add(
-                    inventory_canonical_bytes,
-                    row_bytes,
-                    "native retained inventory canonical byte count overflow",
-                )?;
-                raw_document.frame64(row)?;
-                effective_document.frame64(row)?;
-                structural.frame_varint(row)?;
-                inventory.frame_varint(row)?;
-                if collection == TypedFacadeCollectionV2::Axioms && is_logical_axiom(row_tag(row)?)
-                {
-                    logical_axioms.push(without_annotations(row)?);
-                } else if collection == TypedFacadeCollectionV2::Extensions {
-                    logical_extensions.push(without_annotations(row)?);
-                }
-                Ok(())
-            },
-        )?;
+        if metadata.scoped_roots {
+            let mut raw_emitted = 0_u64;
+            storage.visit_canonical_roots(
+                collection,
+                TypedFacadeScopeV2::Document,
+                Some(0),
+                true,
+                cancellation.clone(),
+                interrupt.clone(),
+                |row| {
+                    raw_emitted =
+                        checked_add(raw_emitted, 1, "native retained raw root count overflow")?;
+                    canonical_rows_encoded = checked_add(
+                        canonical_rows_encoded,
+                        1,
+                        "native retained canonical row count overflow",
+                    )?;
+                    let row_bytes = u64::try_from(row.len()).map_err(|_| {
+                        NativeError::limit("native retained canonical row exceeds u64")
+                    })?;
+                    canonical_bytes_encoded = checked_add(
+                        canonical_bytes_encoded,
+                        row_bytes,
+                        "native retained canonical byte count overflow",
+                    )?;
+                    raw_document.frame64(row)
+                },
+            )?;
+            if raw_emitted != expected {
+                return Err(NativeError::protocol(
+                    "native retained raw traversal diverges from its count",
+                ));
+            }
+            storage.visit_canonical_roots(
+                collection,
+                TypedFacadeScopeV2::Document,
+                Some(0),
+                false,
+                cancellation.clone(),
+                interrupt.clone(),
+                |row| {
+                    emitted = checked_add(emitted, 1, "native retained root count overflow")?;
+                    canonical_rows_encoded = checked_add(
+                        canonical_rows_encoded,
+                        1,
+                        "native retained canonical row count overflow",
+                    )?;
+                    let row_bytes = u64::try_from(row.len()).map_err(|_| {
+                        NativeError::limit("native retained canonical row exceeds u64")
+                    })?;
+                    canonical_bytes_encoded = checked_add(
+                        canonical_bytes_encoded,
+                        row_bytes,
+                        "native retained canonical byte count overflow",
+                    )?;
+                    inventory_canonical_bytes = checked_add(
+                        inventory_canonical_bytes,
+                        row_bytes,
+                        "native retained inventory canonical byte count overflow",
+                    )?;
+                    effective_document.frame64(row)?;
+                    structural.frame_varint(row)?;
+                    inventory.frame_varint(row)?;
+                    if collection == TypedFacadeCollectionV2::Axioms
+                        && is_logical_axiom(row_tag(row)?)
+                    {
+                        logical_axioms.push(without_annotations(row)?);
+                    } else if collection == TypedFacadeCollectionV2::Extensions {
+                        logical_extensions.push(without_annotations(row)?);
+                    }
+                    Ok(())
+                },
+            )?;
+        } else {
+            storage.visit_canonical_roots(
+                collection,
+                TypedFacadeScopeV2::Document,
+                Some(0),
+                true,
+                cancellation.clone(),
+                interrupt.clone(),
+                |row| {
+                    emitted = checked_add(emitted, 1, "native retained root count overflow")?;
+                    canonical_rows_encoded = checked_add(
+                        canonical_rows_encoded,
+                        1,
+                        "native retained canonical row count overflow",
+                    )?;
+                    let row_bytes = u64::try_from(row.len()).map_err(|_| {
+                        NativeError::limit("native retained canonical row exceeds u64")
+                    })?;
+                    canonical_bytes_encoded = checked_add(
+                        canonical_bytes_encoded,
+                        row_bytes,
+                        "native retained canonical byte count overflow",
+                    )?;
+                    inventory_canonical_bytes = checked_add(
+                        inventory_canonical_bytes,
+                        row_bytes,
+                        "native retained inventory canonical byte count overflow",
+                    )?;
+                    raw_document.frame64(row)?;
+                    effective_document.frame64(row)?;
+                    structural.frame_varint(row)?;
+                    inventory.frame_varint(row)?;
+                    if collection == TypedFacadeCollectionV2::Axioms
+                        && is_logical_axiom(row_tag(row)?)
+                    {
+                        logical_axioms.push(without_annotations(row)?);
+                    } else if collection == TypedFacadeCollectionV2::Extensions {
+                        logical_extensions.push(without_annotations(row)?);
+                    }
+                    Ok(())
+                },
+            )?;
+        }
         if emitted != expected {
             return Err(NativeError::protocol(
                 "native retained root traversal diverges from its count",
@@ -815,19 +903,25 @@ pub(crate) fn prepare_publication(
     } else {
         None
     };
-    let (origin_rows, origin_bytes_retained) = if collect_provenance {
-        let rows = encode_origin_rows(metadata, document_key, limits, &cancellation)?;
-        let bytes = rows
+    let (origin_rows, raw_origin_rows, origin_bytes_retained) = if collect_provenance {
+        let effective = encode_origin_rows(metadata, document_key, false, limits, &cancellation)?;
+        let raw = metadata
+            .scoped_roots
+            .then(|| encode_origin_rows(metadata, document_key, true, limits, &cancellation))
+            .transpose()?;
+        let bytes = effective
             .iter()
+            .chain(raw.as_deref().unwrap_or_default())
             .try_fold(0_u64, |total, row| {
                 total.checked_add(u64::try_from(row.len()).ok()?)
             })
             .ok_or_else(|| NativeError::limit("native retained origin byte count overflow"))?;
-        (Some(rows), bytes)
+        (Some(effective), raw, bytes)
     } else {
-        (None, 0)
+        (None, None, 0)
     };
     let selected_origins = origin_rows.as_deref().unwrap_or_default();
+    let selected_raw_origins = raw_origin_rows.as_deref().unwrap_or(selected_origins);
     let rdf_report = metadata
         .rdf_total_triples
         .map(|total| prepare_conformant_rdf_report(document_key, total))
@@ -836,7 +930,7 @@ pub(crate) fn prepare_publication(
     let provenance_manifest_sha256 = provenance_manifest_digest(
         document_key,
         origin_rows.is_some(),
-        selected_origins,
+        selected_raw_origins,
         rdf_report.as_ref(),
     )?;
     let effective_origin_manifest_sha256 =
@@ -848,14 +942,17 @@ pub(crate) fn prepare_publication(
         logical_fingerprint,
         signature_fingerprint,
     )?;
-    let origin_max = selected_origins.iter().try_fold(1_u64, |maximum, row| {
-        Ok::<u64, NativeError>(
-            maximum.max(
-                u64::try_from(row.len())
-                    .map_err(|_| NativeError::limit("native retained origin row exceeds u64"))?,
-            ),
-        )
-    })?;
+    let origin_max =
+        selected_origins
+            .iter()
+            .chain(selected_raw_origins)
+            .try_fold(1_u64, |maximum, row| {
+                Ok::<u64, NativeError>(maximum.max(
+                    u64::try_from(row.len()).map_err(|_| {
+                        NativeError::limit("native retained origin row exceeds u64")
+                    })?,
+                ))
+            })?;
     let rdf_max = rdf_report
         .as_ref()
         .map_or(1_u64, |report| report.rows.header.len() as u64);
@@ -887,6 +984,7 @@ pub(crate) fn prepare_publication(
         node_count,
         source_map,
         origin_rows,
+        raw_origin_rows,
         rdf_report,
         max_facade_row_bytes: storage
             .maximum_row_bytes()
@@ -898,6 +996,7 @@ pub(crate) fn prepare_publication(
         fingerprint_temporary_bytes,
         origin_bytes_retained,
         document_key: document_key.into(),
+        scoped_roots: metadata.scoped_roots,
     })
 }
 
@@ -951,6 +1050,25 @@ fn document_fingerprint_slices(
     Ok(hasher.finish())
 }
 
+pub(super) fn rdfxml_document_fingerprint(
+    ontology_iri: Option<&str>,
+    version_iri: Option<&str>,
+    imports: &[String],
+    rows: [&[Vec<u8>]; 3],
+) -> NativeResult<FingerprintEvidenceV2> {
+    let ontology_node = ontology_iri
+        .map(|value| iri(value.to_owned()))
+        .transpose()?;
+    let version_node = version_iri.map(|value| iri(value.to_owned())).transpose()?;
+    let mut import_nodes = imports
+        .iter()
+        .map(|value| iri(value.clone()))
+        .collect::<NativeResult<Vec<_>>>()?;
+    import_nodes.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    import_nodes.dedup_by(|left, right| left.as_bytes() == right.as_bytes());
+    document_fingerprint_slices(&ontology_node, &version_node, &import_nodes, rows)
+}
+
 fn retained_occurrences(
     parsed: &ParsedDocument,
     count: u64,
@@ -978,6 +1096,7 @@ fn retained_occurrences(
     {
         result.push(RetainedOccurrenceV2 {
             digest: structural_digest_v1(value.node.as_bytes()),
+            effective_digest: structural_digest_v1(value.node.as_bytes()),
             span: Some(value.span),
             source_order: u64::try_from(source_order)
                 .map_err(|_| NativeError::limit("native occurrence ordinal exceeds u64"))?,
@@ -1278,6 +1397,7 @@ fn rdfxml_retained_occurrences(
     rows: [&[Vec<u8>]; 3],
     count: u64,
     collect: bool,
+    effective_digests: Option<&[[u8; 32]]>,
 ) -> NativeResult<Vec<RetainedOccurrenceV2>> {
     if !collect {
         return Ok(Vec::new());
@@ -1288,9 +1408,18 @@ fn rdfxml_retained_occurrences(
     result
         .try_reserve_exact(capacity)
         .map_err(|_| NativeError::limit("native RDF/XML occurrence allocation failed"))?;
+    if let Some(digests) = effective_digests {
+        if u64::try_from(digests.len()).ok() != Some(count) {
+            return Err(NativeError::protocol(
+                "native RDF/XML effective occurrence digests are incomplete",
+            ));
+        }
+    }
     for (source_order, row) in rows.into_iter().flatten().enumerate() {
+        let digest = structural_digest_v1(row);
         result.push(RetainedOccurrenceV2 {
-            digest: structural_digest_v1(row),
+            digest,
+            effective_digest: effective_digests.map_or(digest, |values| values[source_order]),
             span: None,
             source_order: u64::try_from(source_order)
                 .map_err(|_| NativeError::limit("native RDF/XML occurrence ordinal exceeds u64"))?,
@@ -1322,6 +1451,7 @@ fn canonical_root_rows(values: Vec<SpannedNode>) -> Vec<Vec<u8>> {
 fn encode_origin_rows(
     metadata: &RetainedParseMetadataV2,
     document_key: &str,
+    raw_owner_role: bool,
     limits: &Limits,
     cancellation: &Cancellation,
 ) -> NativeResult<Vec<Vec<u8>>> {
@@ -1333,13 +1463,18 @@ fn encode_origin_rows(
         cancellation.checkpoint()?;
         let occurrence = u64::try_from(occurrence)
             .map_err(|_| NativeError::limit("native origin occurrence exceeds u64"))?;
-        let row = encode_origin_row(value.digest, document_key, occurrence, value.span)?;
+        let digest = if raw_owner_role {
+            value.digest
+        } else {
+            value.effective_digest
+        };
+        let row = encode_origin_row(digest, document_key, occurrence, value.span)?;
         if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
             return Err(NativeError::limit(
                 "native retained origin row exceeds max_wire_bytes",
             ));
         }
-        keyed.push((value.digest, occurrence, row));
+        keyed.push((digest, occurrence, row));
     }
     keyed.sort_unstable_by(|left, right| {
         left.0
@@ -2098,6 +2233,7 @@ mod tests {
         };
         let mut occurrences = vec![RetainedOccurrenceV2 {
             digest: structural_digest_v1(root.as_bytes()),
+            effective_digest: structural_digest_v1(root.as_bytes()),
             span: Some(span),
             source_order: 0,
             language_details: Vec::new(),

@@ -1,9 +1,13 @@
 //! Complete advertised native parser implementations and result framing.
 
+#[cfg(not(fuzzing))]
+mod anonymous;
 mod functional;
 #[cfg(not(fuzzing))]
 mod retained;
 
+#[cfg(not(fuzzing))]
+pub(crate) use anonymous::{scope_rdfxml_anonymous_rows_v2, ScopedAnonymousRowsV2};
 #[cfg(not(fuzzing))]
 pub(crate) use retained::{
     build_rdfxml_seed as build_retained_rdfxml_seed_v2,

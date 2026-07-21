@@ -102,7 +102,7 @@ pub(crate) fn parse_rdfxml_retained_v2(
     require_empty_imports: bool,
 ) -> NativeResult<RetainedRdfXmlOutcomeV2> {
     let parse_started = Instant::now();
-    let (document, mapping_ns) = parse_rdfxml_timed(source, document_iri, session)?;
+    let (mut document, mapping_ns) = parse_rdfxml_timed(source, document_iri, session)?;
     let parse_mapping_ns = elapsed_ns(parse_started)?;
     let syntax_parse_ns = parse_mapping_ns.saturating_sub(mapping_ns);
     if require_empty_imports && !document.imports.is_empty() {
@@ -116,12 +116,36 @@ pub(crate) fn parse_rdfxml_retained_v2(
         document.axioms.as_slice(),
         document.extensions.as_slice(),
     ];
-    if crate::parse::retained_rows_contain_anonymous_v2(rows, &limits)? {
-        return Err(NativeError::new(
-            "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
-            "native retained RDF/XML publication does not yet own anonymous re-scoping",
-        ));
+    let contains_anonymous = crate::parse::retained_rows_contain_anonymous_v2(rows, &limits)?;
+    let anonymous_started = Instant::now();
+    let mut effective_rows = None;
+    let mut effective_occurrence_digests = None;
+    if contains_anonymous {
+        let scoped = crate::parse::scope_rdfxml_anonymous_rows_v2(
+            document.ontology_iri.as_deref(),
+            document.version_iri.as_deref(),
+            &document.imports,
+            rows,
+            &limits,
+            &cancellation,
+        )?;
+        let crate::parse::ScopedAnonymousRowsV2 {
+            raw: [annotations, axioms, extensions],
+            effective,
+            effective_occurrence_digests: digests,
+        } = scoped;
+        document.ontology_annotations = annotations;
+        document.axioms = axioms;
+        document.extensions = extensions;
+        effective_occurrence_digests = Some(digests);
+        effective_rows = Some(effective);
     }
+    let anonymous_scope_ns = elapsed_ns(anonymous_started)?;
+    let rows = [
+        document.ontology_annotations.as_slice(),
+        document.axioms.as_slice(),
+        document.extensions.as_slice(),
+    ];
     let encode_started = Instant::now();
     let (encoded, metadata) = crate::parse::build_retained_rdfxml_seed_v2(
         document.ontology_iri.as_deref(),
@@ -131,18 +155,29 @@ pub(crate) fn parse_rdfxml_retained_v2(
         document.decoded_codepoints,
         document.mapping.total_triples,
         collect_provenance,
+        effective_occurrence_digests.as_deref(),
     )?;
     let result_encode_ns = elapsed_ns(encode_started)?;
     session.finish()?;
-    let published = v2_adapter::publish_timed(
-        std::slice::from_ref(&document),
-        &[vec![0]],
-        &[0],
-        limits,
-        cancellation,
-        interrupt,
-        caller_external_bytes,
-    )?;
+    let published = match effective_rows.as_ref() {
+        Some(effective) => v2_adapter::publish_scoped_timed(
+            &document,
+            effective,
+            limits,
+            cancellation,
+            interrupt,
+            caller_external_bytes,
+        )?,
+        None => v2_adapter::publish_timed(
+            std::slice::from_ref(&document),
+            &[vec![0]],
+            &[0],
+            limits,
+            cancellation,
+            interrupt,
+            caller_external_bytes,
+        )?,
+    };
     Ok(RetainedRdfXmlOutcomeV2 {
         encoded,
         storage: published.storage,
@@ -151,7 +186,7 @@ pub(crate) fn parse_rdfxml_retained_v2(
             syntax_parse_ns,
             result_encode_ns,
             arena_construction_ns: published.arena_construction_ns,
-            freeze_ns: published.freeze_ns,
+            freeze_ns: published.freeze_ns.saturating_add(anonymous_scope_ns),
         },
         mapping_ns,
     })
@@ -324,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_rdfxml_rejects_anonymous_scope_and_resolver_bypass() {
+    fn retained_rdfxml_owns_anonymous_scope_and_rejects_resolver_bypass() {
         let anonymous = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
             xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#">
           <rdf:Description rdf:nodeID="anonymous"><rdfs:comment rdf:resource="urn:value"/></rdf:Description>
@@ -333,32 +368,71 @@ mod tests {
             xmlns:owl="http://www.w3.org/2002/07/owl#">
           <owl:Ontology rdf:about="urn:o"><owl:imports rdf:resource="urn:i"/></owl:Ontology>
         </rdf:RDF>"#;
-        for (source, require_empty_imports) in
-            [(anonymous.as_slice(), false), (imported.as_slice(), true)]
-        {
-            let limits = Limits::default();
-            let cancellation = Cancellation::with_duration(None);
-            let mut guard = Guard::new(
-                cancellation.clone(),
-                limits.deadline,
-                limits.cancellation_stride,
-            );
-            let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
-            let error = parse_rdfxml_retained_v2(
-                source,
-                None,
-                &mut session,
-                limits,
-                cancellation,
-                None,
-                source.len(),
-                false,
-                require_empty_imports,
-            )
-            .err()
-            .expect("unsupported retained shape");
-            assert_eq!(error.code, "NATIVE_RDFXML_RETAINED_UNSUPPORTED");
-        }
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, anonymous.len()).expect("session");
+        let outcome = parse_rdfxml_retained_v2(
+            anonymous,
+            None,
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            anonymous.len(),
+            true,
+            false,
+        )
+        .expect("scoped retained RDF/XML");
+        let prepared = crate::parse::prepare_retained_publication_v2(
+            &outcome.storage,
+            &outcome.metadata,
+            b"manifest",
+            "document-key",
+            true,
+            false,
+            &limits,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect("prepared scoped publication");
+        assert!(prepared.scoped_roots);
+        assert_eq!(prepared.origin_rows.as_ref().map(Vec::len), Some(1));
+        assert_eq!(prepared.raw_origin_rows.as_ref().map(Vec::len), Some(1));
+        assert_ne!(
+            prepared.content.root_table_sha256,
+            prepared.content.effective_root_table_sha256,
+        );
+        assert_ne!(
+            prepared.content.provenance_manifest_sha256,
+            prepared.content.effective_origin_manifest_sha256,
+        );
+
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, imported.len()).expect("session");
+        let error = parse_rdfxml_retained_v2(
+            imported,
+            None,
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            imported.len(),
+            false,
+            true,
+        )
+        .err()
+        .expect("resolver bypass must fail");
+        assert_eq!(error.code, "NATIVE_RDFXML_RETAINED_UNSUPPORTED");
     }
 
     #[test]

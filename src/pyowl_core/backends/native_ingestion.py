@@ -621,6 +621,7 @@ class _PreparedRetainedPublicationV2:
     fingerprint_temporary_bytes: int
     origin_bytes_retained: int
     prepare_seconds: float
+    scoped_roots: bool
     rdf_report: _PreparedRetainedRdfReportV2 | None
 
 
@@ -781,7 +782,8 @@ def _decode_prepared_retained_publication_v2(
     if (
         magic != native._RETAINED_FUNCTIONAL_PREPARED_MAGIC_V2
         or schema != 3
-        or flags != int(expect_rdf_report)
+        or flags & 1 != int(expect_rdf_report)
+        or flags & ~3
     ):
         raise BackendProtocolError(
             "native retained publication summary has incompatible metadata",
@@ -900,6 +902,7 @@ def _decode_prepared_retained_publication_v2(
         fingerprint_temporary_bytes,
         origin_bytes,
         prepare_ns / 1_000_000_000,
+        bool(flags & 2),
         rdf_report,
     )
 
@@ -1441,9 +1444,13 @@ def _publish_retained_snapshot_v2(
     )
     snapshot = ontology_snapshot_from_native_publication_v2(
         publication,
-        _wire_structural_aliases=_WIRE_STRUCTURAL_ALIAS_SEAL_V1,
+        _wire_structural_aliases=(
+            None if prepared.scoped_roots else _WIRE_STRUCTURAL_ALIAS_SEAL_V1
+        ),
         _ingestion_counters=ingestion_counters,
-        _anonymous_scope_evidence=_NO_ANONYMOUS_SCOPES_SEAL_V2,
+        _anonymous_scope_evidence=(
+            None if prepared.scoped_roots else _NO_ANONYMOUS_SCOPES_SEAL_V2
+        ),
         _common_contract_summary=common_contract_summary,
     )
     for diagnostic in public_diagnostics:

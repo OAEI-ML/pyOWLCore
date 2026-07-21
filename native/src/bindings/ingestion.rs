@@ -350,7 +350,7 @@ fn _finalize_parsed_structural_snapshot_v2<'py>(
         attestation,
         storage,
         prepared.origin_rows,
-        None,
+        prepared.raw_origin_rows,
         source_map,
         rdf_report,
         parser_bytes,
@@ -395,13 +395,17 @@ fn validate_prepared_attestation(
             )));
         }
     }
-    let origins = prepared.origin_rows.as_ref().map_or(Ok(0_u64), |rows| {
-        u64::try_from(rows.len()).map_err(|_| {
-            crate::python_error(NativeError::limit(
-                "native retained origin count exceeds u64",
-            ))
-        })
-    })?;
+    let origins = prepared
+        .raw_origin_rows
+        .as_ref()
+        .or(prepared.origin_rows.as_ref())
+        .map_or(Ok(0_u64), |rows| {
+            u64::try_from(rows.len()).map_err(|_| {
+                crate::python_error(NativeError::limit(
+                    "native retained origin count exceeds u64",
+                ))
+            })
+        })?;
     let source_entries = prepared.source_map.as_ref().map_or(Ok(0_u64), |source| {
         u64::try_from(source.entries.len()).map_err(|_| {
             crate::python_error(NativeError::limit(

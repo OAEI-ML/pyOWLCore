@@ -230,6 +230,38 @@ PARSE_TYPE_OTHER_SOURCE = b"""\
   </owl:Class>
 </rdf:RDF>
 """
+ANONYMOUS_SOURCE = b"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdf:Description rdf:nodeID="lexical-z">
+    <owl:sameAs rdf:nodeID="lexical-a"/>
+  </rdf:Description>
+</rdf:RDF>
+"""
+ANONYMOUS_ASSERTION_SOURCE = b"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#"
+  xmlns:e="urn:">
+  <owl:Ontology rdf:about="urn:anonymous:ontology">
+    <owl:versionIRI rdf:resource="urn:anonymous:version"/>
+  </owl:Ontology>
+  <owl:ObjectProperty rdf:about="urn:p"/>
+  <rdf:Description rdf:nodeID="lexical-source">
+    <e:p rdf:nodeID="lexical-target"/>
+  </rdf:Description>
+</rdf:RDF>
+"""
+ANONYMOUS_SYMMETRIC_SOURCE = (
+    b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+    + b"".join(
+        f'<rdf:Description rdf:nodeID="b{index}"><rdf:type rdf:resource="urn:C"/>'
+        f"</rdf:Description>".encode()
+        for index in range(6)
+    )
+    + b"</rdf:RDF>"
+)
 DOCUMENT_IRI = IRI("urn:rdfxml:document")
 
 
@@ -757,17 +789,6 @@ def test_private_rdfxml_seam_rejects_unowned_semantics_before_publication() -> N
             allow_partial_rdf_mapping=True,
         )
 
-    anonymous = b"""\
-    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-      xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#">
-      <rdf:Description rdf:nodeID="anonymous">
-        <rdfs:comment rdf:resource="urn:value"/>
-      </rdf:Description>
-    </rdf:RDF>
-    """
-    with pytest.raises(UnsupportedSyntaxError, match="anonymous re-scoping"):
-        native._parse_rdfxml_retained_v2(anonymous, document_iri=None)
-
     reified = b"""\
     <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
       xmlns:owl="http://www.w3.org/2002/07/owl#" xmlns:e="urn:"
@@ -788,6 +809,103 @@ def test_private_rdfxml_seam_rejects_unowned_semantics_before_publication() -> N
             document_iri=DOCUMENT_IRI.value,
             require_empty_imports=True,
         )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [ANONYMOUS_SOURCE, ANONYMOUS_ASSERTION_SOURCE, ANONYMOUS_SYMMETRIC_SOURCE],
+)
+def test_anonymous_individuals_keep_distinct_raw_and_effective_native_owners(
+    extension: NativeTestExtension,
+    source: bytes,
+) -> None:
+    reference = load_snapshot(
+        source,
+        document_iri=None,
+        options=_options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("anonymous RDF/XML crossed the Python parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(Any, _retained_snapshot(source, document_iri=None))
+
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    before = raw_owner._publication_counters_v2()
+    raw_axioms = tuple(canonical_bytes(value) for value in selected.root.axioms)
+    effective_axioms = tuple(canonical_bytes(value) for value in selected.iter_axioms())
+    reference_raw = tuple(canonical_bytes(value) for value in reference.root.axioms)
+    reference_effective = tuple(canonical_bytes(value) for value in reference.iter_axioms())
+
+    assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert raw_axioms == reference_raw
+    assert effective_axioms == reference_effective
+    assert raw_axioms != effective_axioms
+    assert selected.root.document_fingerprint == reference.root.document_fingerprint
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected._anonymous_scopes == reference._anonymous_scopes
+    assert not selected._native_wire_structural_aliases_v1()
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert before.parser_bytes == len(source)
+    assert before.publication_structural_rows_copied == 0
+    assert before.publication_structural_bytes_copied == 0
+
+
+def test_anonymous_alpha_permutations_obey_the_shared_canonical_work_limit() -> None:
+    limits = ParseLimits(max_canonical_work=5_000)
+    with pytest.raises(ResourceLimitError, match="max_canonical_work"):
+        native._parse_rdfxml_retained_v2(
+            ANONYMOUS_SYMMETRIC_SOURCE,
+            document_iri=None,
+            limits=limits,
+        )
+    with pytest.raises(ResourceLimitError, match="max_canonical_work"):
+        load_snapshot(
+            ANONYMOUS_SYMMETRIC_SOURCE,
+            document_iri=None,
+            options=LoadOptions(
+                format=DocumentFormat.RDF_XML,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.PYTHON,
+                limits=limits,
+                collect_provenance=False,
+            ),
+        )
+
+
+def test_anonymous_provenance_uses_effective_digests_without_python_rescoping() -> None:
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            collect_provenance=True,
+        )
+
+    reference = load_snapshot(
+        ANONYMOUS_SOURCE,
+        document_iri=None,
+        options=options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("anonymous provenance crossed the Python parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(
+            Any,
+            _retained_snapshot(
+                ANONYMOUS_SOURCE,
+                options=options(BackendPreference.NATIVE),
+                document_iri=None,
+            ),
+        )
+
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    counters = raw_owner._publication_counters_v2()
+    assert tuple(selected.root.origin_index.entries) == tuple(reference.root.origin_index.entries)
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert counters.retained_origin_rows == 3
+    assert counters.retained_origin_bytes > 0
 
 
 def test_private_provenance_rows_match_python_and_remain_native_until_access() -> None:
