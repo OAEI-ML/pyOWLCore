@@ -920,7 +920,25 @@ def test_anonymous_individuals_keep_distinct_raw_and_effective_native_owners(
     assert selected.signature_fingerprint == reference.signature_fingerprint
     assert selected._anonymous_scopes == reference._anonymous_scopes
     assert not selected._native_wire_structural_aliases_v1()
-    assert encode_snapshot(selected) == encode_snapshot(reference)
+    reference_wire = encode_snapshot(reference)
+    before_wire_native = raw_owner._publication_counters_v2()
+    before_wire_python = selected._native_python_counters()
+    wire_error = AssertionError("anonymous RDF/XML wire crossed scalar traversal")
+    with (
+        patch.object(type(selected), "iter_axioms", side_effect=wire_error),
+        patch.object(type(selected), "iter_extensions", side_effect=wire_error),
+        patch.object(type(selected), "ontology_annotations", side_effect=wire_error),
+        patch.object(type(selected), "signature", side_effect=wire_error),
+    ):
+        selected_wire = encode_snapshot(selected)
+    after_wire_native = raw_owner._publication_counters_v2()
+    after_wire_python = selected._native_python_counters()
+    assert selected_wire == reference_wire
+    assert (
+        after_wire_native.encoded_view_requests
+        == before_wire_native.encoded_view_requests + 3
+    )
+    assert after_wire_python == before_wire_python
     assert before.parser_bytes == len(source)
     assert before.publication_structural_rows_copied == 0
     assert before.publication_structural_bytes_copied == 0

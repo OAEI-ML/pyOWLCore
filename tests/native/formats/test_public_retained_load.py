@@ -427,10 +427,29 @@ def test_anonymous_re_scope_retains_distinct_raw_and_effective_native_owners(
     assert raw_axioms != effective_axioms
     assert tuple(selected.root.origin_index.entries) == tuple(reference.root.origin_index.entries)
     assert selected.origin_index == reference.origin_index
-    assert encode_snapshot(selected) == encode_snapshot(reference)
 
-    after_native = cast(Any, owner)._publication_counters_v2()
-    after_python = cast(Any, selected)._native_python_counters()
+    reference_wire = encode_snapshot(reference)
+    before_wire_native = cast(Any, owner)._publication_counters_v2()
+    before_wire_python = cast(Any, selected)._native_python_counters()
+    wire_error = AssertionError("anonymous retained wire crossed scalar traversal")
+    with (
+        patch.object(type(selected), "iter_axioms", side_effect=wire_error),
+        patch.object(type(selected), "iter_extensions", side_effect=wire_error),
+        patch.object(type(selected), "ontology_annotations", side_effect=wire_error),
+        patch.object(type(selected), "signature", side_effect=wire_error),
+    ):
+        selected_wire = encode_snapshot(selected)
+    after_wire_native = cast(Any, owner)._publication_counters_v2()
+    after_wire_python = cast(Any, selected)._native_python_counters()
+    assert selected_wire == reference_wire
+    assert (
+        after_wire_native.encoded_view_requests
+        == before_wire_native.encoded_view_requests + 3
+    )
+    assert after_wire_python == before_wire_python
+
+    after_native = after_wire_native
+    after_python = after_wire_python
     assert after_native.axiom_rows_emitted > before_native.axiom_rows_emitted
     assert after_native.origin_rows_emitted > before_native.origin_rows_emitted
     assert after_python.model_rows_materialized > before_python.model_rows_materialized

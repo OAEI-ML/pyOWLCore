@@ -1002,6 +1002,81 @@ def _produce_native_direct_view_v1(
     if type(scope_value) is not str or scope_value not in {"closure", "document"}:
         _fail("native owner returned an invalid encoded-view scope", "NATIVE_VIEW_SCOPE")
 
+    operation = cast(Callable[..., object], raw_operation)
+    result = _invoke_native_column_operation_v1(
+        extension,
+        operation,
+        (raw_owner, scope_value, document_ordinal),
+        limits,
+        cancellation_token,
+    )
+    return _native_direct_view_from_result_v1(
+        owner,
+        scope=scope,
+        document_key=document_key,
+        result=result,
+        limits=limits,
+        budget=budget,
+        retained_source=owner,
+    )
+
+
+def _produce_native_raw_document_view_v1(
+    owner: OntologyView,
+    *,
+    document_key: str,
+    limits: ParseLimits,
+    budget: IndexBuildBudget | None,
+    cancellation_token: CancellationToken | None,
+) -> EncodedStructuralViewV1 | None:
+    """Return raw retained document columns for internal wire publication."""
+
+    document_reader = getattr(owner, "document", None)
+    if not callable(document_reader):
+        return None
+    document = document_reader(document_key)
+    state = getattr(document, "_native_document_state", None)
+    owner_state = getattr(state, "owner", None)
+    handle = getattr(owner_state, "handle", None)
+    if handle is None:
+        return None
+    try:
+        raw_owner = object.__getattribute__(handle, "_owner_v2")
+    except AttributeError:
+        return None
+    try:
+        extension = importlib.import_module(type(raw_owner).__module__)
+    except (ImportError, ValueError):
+        return None
+    raw_operation = getattr(extension, "_encoded_structural_document_columns_v1", None)
+    if not callable(raw_operation):
+        return None
+    operation = cast(Callable[..., object], raw_operation)
+    result = _invoke_native_column_operation_v1(
+        extension,
+        operation,
+        (raw_owner,),
+        limits,
+        cancellation_token,
+    )
+    return _native_direct_view_from_result_v1(
+        owner,
+        scope=AxiomScope.DOCUMENT,
+        document_key=document_key,
+        result=result,
+        limits=limits,
+        budget=budget,
+        retained_source=(owner, document),
+    )
+
+
+def _invoke_native_column_operation_v1(
+    extension: object,
+    operation: Callable[..., object],
+    arguments: tuple[object, ...],
+    limits: ParseLimits,
+    cancellation_token: CancellationToken | None,
+) -> object:
     from . import native
 
     config_encoder = cast(Callable[..., bytes], native._encode_config)
@@ -1009,17 +1084,10 @@ def _produce_native_direct_view_v1(
         Callable[[object, ParseLimits, object | None], _NativeCancellationRelay],
         native._relay,
     )
-    operation = cast(Callable[..., object], raw_operation)
     config = config_encoder(limits, cancellation_token, verify=False)
     try:
         with relay_factory(extension, limits, cancellation_token) as cancel:
-            result = operation(
-                raw_owner,
-                scope_value,
-                document_ordinal,
-                config,
-                cancel,
-            )
+            return operation(*arguments, config, cancel)
     except (MemoryError, KeyboardInterrupt, SystemExit):
         raise
     except (ClosedSnapshotError, OperationCancelledError, ResourceLimitError):
@@ -1040,6 +1108,17 @@ def _produce_native_direct_view_v1(
             ) from error
         raise BackendProtocolError(message, code=code) from error
 
+
+def _native_direct_view_from_result_v1(
+    owner: OntologyView,
+    *,
+    scope: AxiomScope,
+    document_key: str | None,
+    result: object,
+    limits: ParseLimits,
+    budget: IndexBuildBudget | None,
+    retained_source: object,
+) -> EncodedStructuralViewV1:
     if type(result) is not tuple or len(result) != 2:
         _fail("native encoded-view result has invalid framing", "NATIVE_VIEW_RESULT")
     raw_buffers, raw_counters = result
@@ -1070,7 +1149,7 @@ def _produce_native_direct_view_v1(
         _empty_bytes_view(),
         _empty_bytes_view(),
         None,
-        owner,
+        retained_source,
     )
     segments = (segment,)
     candidate = EncodedStructuralViewV1(
@@ -1084,7 +1163,7 @@ def _produce_native_direct_view_v1(
         segments,
         scope,
         document_key,
-        owner,
+        retained_source,
         None,
     )
     return _freeze_encoded_structural_view_v1(
@@ -2088,16 +2167,15 @@ def _encoded_structural_wire_rows_v1(
 ) -> _EncodedStructuralWireRowsV1:
     """Reconstruct canonical rows from one already validated direct publication.
 
-    This is deliberately private wire plumbing.  It accepts only the sealed
-    direct view shape, so segmented owners and caller-forged buffers cannot use
-    it to bypass the normal scalar materialization path.
+    This is deliberately private wire plumbing. It accepts only a sealed
+    direct view, whether closure, effective document, or raw document, so
+    segmented owners and caller-forged buffers cannot bypass the normal scalar
+    materialization path.
     """
 
     if (
         type(publication) is not EncodedStructuralViewV1
         or publication._seal is not _VALIDATED_VIEW_SEAL
-        or publication.scope is not AxiomScope.CLOSURE
-        or publication.document_key is not None
         or len(publication.segments) != 1
         or publication.segments[0].role != _SEGMENT_DIRECT
     ):

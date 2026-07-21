@@ -236,6 +236,13 @@ class _NativeWireOrigin:
 
 
 @dataclass(frozen=True, slots=True)
+class _NativeWireDocumentRoots:
+    document_key: str
+    raw: tuple[tuple[int, bytes], ...]
+    effective: tuple[tuple[int, bytes], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _NativeWireSource:
     publication: object
     nodes: tuple[tuple[int, str, bytes], ...]
@@ -243,6 +250,7 @@ class _NativeWireSource:
     scalar_strings: tuple[bytes, ...]
     sequences: tuple[bytes, ...]
     origins: tuple[_NativeWireOrigin, ...]
+    document_roots: tuple[_NativeWireDocumentRoots, ...] = ()
 
 
 def encode_snapshot(
@@ -693,8 +701,14 @@ def _native_wire_source_v1(
     if type(snapshot) is not _NativeOntologySnapshot:
         return None
     aliases = getattr(snapshot, "_native_wire_structural_aliases_v1", None)
-    if not callable(aliases) or aliases() is not True:
+    if not callable(aliases):
         return None
+    structural_aliases = aliases()
+    if type(structural_aliases) is not bool:
+        raise BackendProtocolError(
+            "attested native wire source returned an invalid alias decision",
+            code="NATIVE_WIRE_SOURCE",
+        )
     origin_records = getattr(snapshot, "_native_origin_records_v2", None)
     if not callable(origin_records):
         raise BackendProtocolError(
@@ -703,7 +717,9 @@ def _native_wire_source_v1(
         )
     from pyowl_core.backends.native_views import (
         _encoded_structural_wire_rows_v1,
+        _EncodedStructuralWireRowsV1,
         _produce_native_direct_view_v1,
+        _produce_native_raw_document_view_v1,
     )
 
     publication = _produce_native_direct_view_v1(
@@ -718,8 +734,72 @@ def _native_wire_source_v1(
         raise BackendProtocolError(
             "attested native wire source lacks direct retained columns",
             code="NATIVE_WIRE_SOURCE",
-    )
+        )
     structural = _encoded_structural_wire_rows_v1(publication, limits)
+    nodes_by_canonical: dict[bytes, tuple[int, str, bytes]] = {}
+    scalar_strings: set[bytes] = set()
+    sequences: set[bytes] = set()
+    temporary = 0
+
+    def merge_rows(value: _EncodedStructuralWireRowsV1) -> None:
+        nonlocal temporary
+        for node in value.nodes:
+            previous = nodes_by_canonical.get(node[2])
+            if previous is not None and previous[:2] != node[:2]:
+                raise BackendProtocolError(
+                    "native wire views disagree on a canonical node",
+                    code="NATIVE_WIRE_SOURCE",
+                )
+            if previous is None:
+                nodes_by_canonical[node[2]] = node
+                temporary += len(node[2])
+        for item in value.scalar_strings:
+            if item not in scalar_strings:
+                scalar_strings.add(item)
+                temporary += len(item)
+        for item in value.sequences:
+            if item not in sequences:
+                sequences.add(item)
+                temporary += len(item)
+        limits.enforce("max_temporary_bytes", max(1, temporary))
+
+    merge_rows(structural)
+    document_roots: list[_NativeWireDocumentRoots] = []
+    if not structural_aliases:
+        for record, _document in snapshot.iter_documents():
+            if cancellation_token is not None:
+                cancellation_token.check()
+            effective_publication = _produce_native_direct_view_v1(
+                snapshot,
+                scope=AxiomScope.DOCUMENT,
+                document_key=record.document_key,
+                limits=limits,
+                budget=None,
+                cancellation_token=cancellation_token,
+            )
+            raw_publication = _produce_native_raw_document_view_v1(
+                snapshot,
+                document_key=record.document_key,
+                limits=limits,
+                budget=None,
+                cancellation_token=cancellation_token,
+            )
+            if effective_publication is None or raw_publication is None:
+                raise BackendProtocolError(
+                    "scoped native wire source lacks retained document columns",
+                    code="NATIVE_WIRE_SOURCE",
+                )
+            effective = _encoded_structural_wire_rows_v1(effective_publication, limits)
+            raw = _encoded_structural_wire_rows_v1(raw_publication, limits)
+            merge_rows(effective)
+            merge_rows(raw)
+            document_roots.append(
+                _NativeWireDocumentRoots(
+                    record.document_key,
+                    raw.roots,
+                    effective.roots,
+                )
+            )
     origins: list[_NativeWireOrigin] = []
     for record in origin_records():
         if type(record) is not tuple or len(record) != 4:
@@ -751,11 +831,12 @@ def _native_wire_source_v1(
         )
     return _NativeWireSource(
         publication,
-        structural.nodes,
+        tuple(sorted(nodes_by_canonical.values(), key=lambda value: value[2])),
         structural.roots,
-        structural.scalar_strings,
-        structural.sequences,
+        tuple(sorted(scalar_strings)),
+        tuple(sorted(sequences)),
         tuple(origins),
+        tuple(document_roots),
     )
 
 
@@ -832,10 +913,45 @@ def _collect_native_sections(
         kind: tuple(encoded for selected, encoded in source.roots if selected == kind)
         for kind in (1, 2, 3)
     }
-    document_rows = [
-        _document_row(snapshot, record, document, ids, encoded_roots=roots)
-        for record, document in snapshot.iter_documents()
-    ]
+    document_sources = {
+        item.document_key: (
+            _group_encoded_roots(item.raw),
+            _group_encoded_roots(item.effective),
+        )
+        for item in source.document_roots
+    }
+    if len(document_sources) != len(source.document_roots):
+        raise BackendProtocolError(
+            "native wire source contains duplicate document roots",
+            code="NATIVE_WIRE_SOURCE",
+        )
+    document_rows: list[bytes] = []
+    for record, document in snapshot.iter_documents():
+        if source.document_roots:
+            selected = document_sources.pop(record.document_key, None)
+            if selected is None:
+                raise BackendProtocolError(
+                    "native wire source omits retained document roots",
+                    code="NATIVE_WIRE_SOURCE",
+                )
+            raw_roots, effective_roots = selected
+        else:
+            raw_roots = effective_roots = roots
+        document_rows.append(
+            _document_row(
+                snapshot,
+                record,
+                document,
+                ids,
+                encoded_roots=raw_roots,
+                encoded_effective_roots=effective_roots,
+            )
+        )
+    if document_sources:
+        raise BackendProtocolError(
+            "native wire source contains unknown document roots",
+            code="NATIVE_WIRE_SOURCE",
+        )
     rows[SectionKind.DOCUMENTS] = sorted(document_rows)
     rows[SectionKind.IMPORTS] = [_imports_row(snapshot.import_manifest, ids)]
     rows[SectionKind.VIEW] = [_view_row(snapshot, ids, encoded_roots=roots)]
@@ -845,6 +961,15 @@ def _collect_native_sections(
         rows[SectionKind.SWRL] = sorted(model_rows[SectionKind.SWRL])
         flags |= FEATURE_SWRL
     return rows, flags
+
+
+def _group_encoded_roots(
+    roots: Sequence[tuple[int, bytes]],
+) -> dict[int, tuple[bytes, ...]]:
+    return {
+        kind: tuple(encoded for selected, encoded in roots if selected == kind)
+        for kind in (1, 2, 3)
+    }
 
 
 def _native_model_section(tag: int, category: str) -> SectionKind:
@@ -1050,6 +1175,7 @@ def _document_row(
     ids: Mapping[SectionKind, Mapping[bytes, int]],
     *,
     encoded_roots: Mapping[int, Sequence[bytes]] | None = None,
+    encoded_effective_roots: Mapping[int, Sequence[bytes]] | None = None,
 ) -> bytes:
     # Required wire sections describe canonical ontology structure. Exact
     # acquisition provenance remains available on direct documents and may be
@@ -1109,7 +1235,11 @@ def _document_row(
         )
     else:
         _write_encoded_root_references(writer, encoded_roots, ids)
-        _write_encoded_root_references(writer, encoded_roots, ids)
+        _write_encoded_root_references(
+            writer,
+            encoded_roots if encoded_effective_roots is None else encoded_effective_roots,
+            ids,
+        )
     return writer.finish()
 
 

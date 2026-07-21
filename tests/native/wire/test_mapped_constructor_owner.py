@@ -6,11 +6,14 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 
 import pyowl_core.model as model
 from pyowl_core import (
+    BackendPreference,
     MappedOntologySnapshot,
     OntologyView,
     ParseLimits,
@@ -18,11 +21,14 @@ from pyowl_core import (
     open_snapshot,
 )
 from pyowl_core.backends import native
+from pyowl_core.backends.native_ingestion import _publish_structural_snapshot_v2
 from pyowl_core.backends.native_views import produce_encoded_structural_view_v1
 from pyowl_core.cancellation import CancellationToken
+from pyowl_core.document.provenance import OriginIndex
 from pyowl_core.exceptions import ResourceLimitError, SnapshotInUseError
 from pyowl_core.wire import codec as wire_codec
 from pyowl_core.wire.codec import InspectedWire
+from tests.conformance._support import python_snapshot
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
 from tests.native.encoded_views._support import (
     complete_constructor_snapshot,
@@ -134,6 +140,85 @@ def test_every_constructor_mapped_owner_matches_scalar_native_and_wire(
         gc.collect()
         assert opened._mapped_state.dependents == 0
         opened.close()
+
+
+def test_every_constructor_scoped_retained_owner_uses_native_wire_and_mapping(
+    extension: NativeTestExtension,
+    tmp_path: Path,
+) -> None:
+    fixture = complete_constructor_snapshot()
+    base = python_snapshot(replace(fixture.root, origin_index=OriginIndex()))
+    source = replace(
+        base,
+        load_options=replace(base.load_options, backend=BackendPreference.NATIVE),
+    )
+    expected_roots = _roots(source)
+    expected_tags = {spec.tag for spec in model.CONSTRUCTOR_SPECS}
+    assert _reachable_tags(expected_roots) == expected_tags
+    expected_wire = encode_snapshot(source)
+
+    retained = _publish_structural_snapshot_v2(
+        source,
+        cast(Any, extension),
+        None,
+        None,
+    )
+    selected = cast(Any, retained)
+    assert type(retained).__name__ == "_NativeOntologySnapshot"
+    assert not selected._native_wire_structural_aliases_v1()
+    handle = selected._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    before_native = raw_owner._publication_counters_v2()
+    before_python = selected._native_python_counters()
+
+    scalar_error = AssertionError("scoped retained wire crossed scalar traversal")
+    with (
+        patch.object(type(retained), "iter_axioms", side_effect=scalar_error),
+        patch.object(type(retained), "iter_extensions", side_effect=scalar_error),
+        patch.object(type(retained), "ontology_annotations", side_effect=scalar_error),
+        patch.object(type(retained), "signature", side_effect=scalar_error),
+    ):
+        retained_wire = encode_snapshot(retained)
+
+    after_native = raw_owner._publication_counters_v2()
+    after_python = selected._native_python_counters()
+    assert retained_wire == expected_wire
+    assert after_native.encoded_view_requests == before_native.encoded_view_requests + 3
+    assert after_python == before_python
+
+    path = tmp_path / "retained-every-constructor.pyocore"
+    path.write_bytes(retained_wire)
+    opened = open_snapshot(path)
+    assert isinstance(opened, MappedOntologySnapshot)
+    encoded = None
+    try:
+        assert opened._mapped_state.decoded is None
+        assert encode_snapshot(opened) == retained_wire
+        assert opened._mapped_state.decoded is None
+
+        encoded = produce_encoded_structural_view_v1(opened)
+        assert encoded.owner is opened
+        assert decode_root_canonical_bytes(encoded.buffers) == scalar_root_bytes(source)
+        assert opened._mapped_state.decoded is None
+
+        materialized = opened.materialize()
+        mapped_roots = _roots(materialized)
+        assert _reachable_tags(mapped_roots) == expected_tags
+        assert tuple(model.canonical_bytes(value) for value in mapped_roots) == tuple(
+            model.canonical_bytes(value) for value in expected_roots
+        )
+        assert tuple(hash(value) for value in mapped_roots) == tuple(
+            hash(value) for value in expected_roots
+        )
+        assert materialized.structural_fingerprint == source.structural_fingerprint
+        assert materialized.logical_fingerprint == source.logical_fingerprint
+        assert materialized.signature_fingerprint == source.signature_fingerprint
+        assert materialized.diagnostics == source.diagnostics
+    finally:
+        encoded = None
+        gc.collect()
+        opened.close()
+        selected.close()
 
 
 def test_mapped_wire_fast_path_honors_limits_without_materialization(
