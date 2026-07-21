@@ -839,6 +839,107 @@ def test_rdf_mapping_rejects_anonymous_owl1_named_enumeration_member() -> None:
     assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
 
 
+@pytest.mark.parametrize(
+    "body",
+    (
+        (
+            '<owl:Class rdf:about="urn:C">'
+            '<rdf:type rdf:resource="http://www.w3.org/2000/01/rdf-schema#Class"/>'
+            "</owl:Class>"
+        ),
+        (
+            '<owl:ObjectProperty rdf:about="urn:p">'
+            f'<rdf:type rdf:resource="{RDF_NAMESPACE}Property"/>'
+            "</owl:ObjectProperty>"
+        ),
+    ),
+)
+def test_rdf_mapping_consumes_redundant_owl1_types(body: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert len(tuple(document.iter_axioms(m.Declaration))) == 1
+    assert len(document.axioms) == 1
+
+
+@pytest.mark.parametrize(
+    "legacy_type",
+    (RDF_NAMESPACE + "Property", "http://www.w3.org/2000/01/rdf-schema#Class"),
+)
+def test_rdf_mapping_rejects_standalone_owl1_structural_types(legacy_type: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}">
+  <rdf:Description rdf:about="urn:value">
+    <rdf:type rdf:resource="{legacy_type}"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
+def test_rdf_mapping_maps_empty_owl1_data_range() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:DatatypeProperty rdf:about="urn:d"/>
+  <rdf:Description rdf:about="urn:A">
+    <rdfs:subClassOf>
+      <owl:Restriction>
+        <owl:onProperty rdf:resource="urn:d"/>
+        <owl:allValuesFrom>
+          <owl:DataRange>
+            <rdf:type rdf:resource="http://www.w3.org/2000/01/rdf-schema#Class"/>
+            <owl:oneOf rdf:resource="{RDF_NAMESPACE}nil"/>
+          </owl:DataRange>
+        </owl:allValuesFrom>
+      </owl:Restriction>
+    </rdfs:subClassOf>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    expected = m.SubClassOf(
+        m.Class(m.IRI("urn:A")),
+        m.DataAllValuesFrom(
+            (m.DataProperty(m.IRI("urn:d")),),
+            m.DataComplementOf(m.RDFS_LITERAL),
+        ),
+    )
+    assert expected in document.axioms
+
+
+def test_rdf_mapping_rejects_empty_modern_data_enumeration() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:DatatypeProperty rdf:about="urn:d"/>
+  <rdf:Description rdf:about="urn:A">
+    <rdfs:subClassOf>
+      <owl:Restriction>
+        <owl:onProperty rdf:resource="urn:d"/>
+        <owl:allValuesFrom>
+          <rdfs:Datatype><owl:oneOf rdf:resource="{RDF_NAMESPACE}nil"/></rdfs:Datatype>
+        </owl:allValuesFrom>
+      </owl:Restriction>
+    </rdfs:subClassOf>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
 def test_rdf_mapping_enforces_the_distinct_ontology_annotation_limit() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"

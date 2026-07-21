@@ -167,6 +167,7 @@ class RDFMapper:
 
     def map(self, *, allow_partial: bool = False) -> ParsedOntology:
         self._scan_entity_kinds()
+        self._consume_owl1_redundant_types()
         self._collect_axiom_annotations()
         ontology_id, imports, ontology_annotations, ontology_node = self._header()
         axioms: list[m.AxiomNode] = []
@@ -250,6 +251,40 @@ class RDFMapper:
                 self.data_kinds.add(triple.subject.value)
             elif kind is m.EntityKind.ANNOTATION_PROPERTY:
                 self.annotation_kinds.add(triple.subject.value)
+
+    def _consume_owl1_redundant_types(self) -> None:
+        compatible_types = {
+            RDFS + "Class": {
+                OWL + "Ontology",
+                OWL + "Class",
+                RDFS + "Datatype",
+                OWL + "DataRange",
+                OWL + "Restriction",
+            },
+            RDF + "Property": {
+                OWL + "ObjectProperty",
+                OWL + "FunctionalProperty",
+                OWL + "InverseFunctionalProperty",
+                OWL + "TransitiveProperty",
+                OWL + "DatatypeProperty",
+                OWL + "AnnotationProperty",
+                OWL + "OntologyProperty",
+            },
+            OWL + "Class": {OWL + "Restriction"},
+        }
+        for triple in self.graph.find(predicate=RDF + "type"):
+            if not isinstance(triple.object, RDFIRI):
+                continue
+            expected = compatible_types.get(triple.object.value)
+            if expected is None:
+                continue
+            if any(
+                self.graph.contains(
+                    Triple(triple.subject, RDFIRI(RDF + "type"), RDFIRI(candidate))
+                )
+                for candidate in expected
+            ):
+                self._consume(triple)
 
     def _collect_axiom_annotations(self) -> None:
         annotation_nodes: dict[Triple, list[RDFResource]] = {}
@@ -961,16 +996,27 @@ class RDFMapper:
                 head = self.graph.one(term, predicate)
                 if head is not None:
                     self._consume_only(term, predicate, head)
-                    self._consume_marker(term, RDFS + "Datatype")
+                    standard_marker = self._consume_marker(term, RDFS + "Datatype")
+                    compatibility_marker = self._consume_marker(term, OWL + "DataRange")
+                    if standard_marker and compatibility_marker:
+                        self._mapping_error("data range has conflicting datatype markers")
+                    if compatibility_marker and predicate != OWL + "oneOf":
+                        self._mapping_error("OWL 1 data range marker requires owl:oneOf")
                     items = self._list(head)
                     if predicate == OWL + "oneOf":
+                        if not items:
+                            if compatibility_marker:
+                                return m.DataComplementOf(m.RDFS_LITERAL)
+                            self._mapping_error("data enumeration has no literal values")
                         if not all(isinstance(item, RDFLiteral) for item in items):
                             self._mapping_error("data enumeration must contain literals")
                         return m.DataOneOf(
                             m.CanonicalSet(self._literal(cast(RDFLiteral, item)) for item in items)
                         )
+                    if len(items) < 2:
+                        self._mapping_error("boolean data range has fewer than two operands")
                     ranges = m.CanonicalSet(map(self._data_range, items))
-                    if len(items) >= 2 and len(ranges) == 1:
+                    if len(ranges) == 1:
                         return next(iter(ranges))
                     return (
                         m.DataIntersectionOf(ranges)
@@ -982,7 +1028,12 @@ class RDFMapper:
                 if isinstance(complement, RDFLiteral):
                     self._mapping_error("datatype complement target cannot be literal")
                 self._consume_only(term, OWL + "datatypeComplementOf", complement)
-                self._consume_marker(term, RDFS + "Datatype")
+                standard_marker = self._consume_marker(term, RDFS + "Datatype")
+                compatibility_marker = self._consume_marker(term, OWL + "DataRange")
+                if standard_marker and compatibility_marker:
+                    self._mapping_error("data range has conflicting datatype markers")
+                if compatibility_marker:
+                    self._mapping_error("OWL 1 data range marker requires owl:oneOf")
                 return m.DataComplementOf(self._data_range(complement))
             datatype = self.graph.one(term, OWL + "onDatatype")
             restrictions = self.graph.one(term, OWL + "withRestrictions")
@@ -991,7 +1042,12 @@ class RDFMapper:
                     self._mapping_error("datatype restriction is incomplete")
                 self._consume_only(term, OWL + "onDatatype", datatype)
                 self._consume_only(term, OWL + "withRestrictions", restrictions)
-                self._consume_marker(term, RDFS + "Datatype")
+                standard_marker = self._consume_marker(term, RDFS + "Datatype")
+                compatibility_marker = self._consume_marker(term, OWL + "DataRange")
+                if standard_marker and compatibility_marker:
+                    self._mapping_error("data range has conflicting datatype markers")
+                if compatibility_marker:
+                    self._mapping_error("OWL 1 data range marker requires owl:oneOf")
                 facets: list[m.FacetRestriction] = []
                 for item in self._list(restrictions):
                     if not isinstance(item, RDFBlank):
@@ -1792,7 +1848,12 @@ _STRUCTURAL_PREDICATES = {
 
 
 def _is_structural_type(value: str) -> bool:
-    return value.startswith(OWL) or value in {RDF + "List", RDFS + "Datatype"}
+    return value.startswith(OWL) or value in {
+        RDF + "List",
+        RDF + "Property",
+        RDFS + "Class",
+        RDFS + "Datatype",
+    }
 
 
 def _resource_key(value: RDFResource) -> tuple[str, str]:
