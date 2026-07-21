@@ -410,6 +410,100 @@ def test_foundation_bridge_probe_rejects_an_unknown_operation(
 
 
 @pytest.fixture(scope="module")
+def retained_view_layout_bridge_extension(
+    extension: NativeTestExtension,
+) -> NativeTestExtension:
+    required = (
+        "_retained_signature_layout_bridge_allocation_probe_v1",
+        "_retained_identity_layout_bridge_allocation_probe_v1",
+        "_retained_axiom_type_layout_bridge_allocation_probe_v1",
+    )
+    missing = tuple(name for name in required if not hasattr(extension, name))
+    if missing:
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail(
+                "selected native test-hooks artifact lacks retained-view layout probes: "
+                + ", ".join(missing)
+            )
+        pytest.skip("native retained-view layout allocation hooks are unavailable")
+    return extension
+
+
+def test_retained_view_layout_bridge_failures_publish_no_layout(
+    retained_view_layout_bridge_extension: NativeTestExtension,
+) -> None:
+    extension = cast(Any, retained_view_layout_bridge_extension)
+    selected = cast(
+        Any,
+        load_snapshot(
+            b"Ontology(<urn:allocation:view> "
+            b"Declaration(Class(<urn:allocation:view:A>)) "
+            b"SubClassOf(<urn:allocation:view:A> <urn:allocation:view:B>))",
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.NATIVE,
+            ),
+        ),
+    )
+    owner = object.__getattribute__(
+        selected._native_snapshot_state.owner.handle,
+        "_owner_v2",
+    )
+    config = bytearray(native._encode_config(ParseLimits(), None, verify=False))
+    original_config = bytes(config)
+    cases: tuple[tuple[str, Any, tuple[object, ...], int, int], ...] = (
+        (
+            "signature",
+            extension._retained_signature_layout_bridge_allocation_probe_v1,
+            (owner, "closure", None, memoryview(config)),
+            15,
+            6,
+        ),
+        (
+            "identity",
+            extension._retained_identity_layout_bridge_allocation_probe_v1,
+            (owner,),
+            10,
+            5,
+        ),
+        (
+            "axiom-type",
+            extension._retained_axiom_type_layout_bridge_allocation_probe_v1,
+            (owner, "closure", None, memoryview(config)),
+            13,
+            6,
+        ),
+    )
+
+    for _name, probe, arguments, expected_allocations, layout_size in cases:
+        layout, allocations = probe(*arguments, None)
+        assert isinstance(layout, tuple)
+        assert len(layout) == layout_size
+        assert allocations == expected_allocations
+        assert owner._publication_closed_v2() is False
+        assert config == original_config
+
+        for fail_after in range(allocations):
+            with pytest.raises(
+                MemoryError,
+                match=r"^injected native retained-view layout bridge allocation failure$",
+            ):
+                probe(*arguments, fail_after)
+            assert owner._publication_closed_v2() is False
+            assert config == original_config
+
+        boundary_layout, boundary_allocations = probe(*arguments, allocations)
+        assert boundary_layout == layout
+        assert boundary_allocations == allocations
+        assert owner._publication_closed_v2() is False
+        assert config == original_config
+
+    selected.close()
+    assert selected.closed
+
+
+@pytest.fixture(scope="module")
 def functional_retained_bridge_extension(
     extension: NativeTestExtension,
 ) -> NativeTestExtension:

@@ -128,6 +128,18 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
             _encoded_structural_workspace_allocation_probe_v1,
             _module
         )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_signature_layout_bridge_allocation_probe_v1,
+            _module
+        )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_identity_layout_bridge_allocation_probe_v1,
+            _module
+        )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_axiom_type_layout_bridge_allocation_probe_v1,
+            _module
+        )?)?;
     }
     Ok(())
 }
@@ -157,40 +169,57 @@ type PyRetainedSignatureLayoutV1 = (
 #[pymethods]
 impl NativeRetainedSignatureIndexV1 {
     fn _layout_v1<'py>(&self, py: Python<'py>) -> PyResult<PyRetainedSignatureLayoutV1> {
-        let (root_table_sha256, effective_root_table_sha256) =
-            self.storage.retained_signature_binding_v1();
-        let referenced = PyTuple::new(py, self.index.referenced_counts().iter().copied())?.unbind();
-        let nonannotation =
-            PyTuple::new(py, self.index.nonannotation_counts().iter().copied())?.unbind();
-        let declarations =
-            PyTuple::new(py, self.index.declaration_counts().iter().copied())?.unbind();
-        let counters = self.index.counters();
-        let observed = PyDict::new(py);
-        for (name, value) in [
-            ("structural_root_rows", counters.structural_root_rows),
-            ("entity_rows", counters.entity_rows),
-            ("referenced_links", counters.referenced_links),
-            ("nonannotation_links", counters.nonannotation_links),
-            ("declaration_links", counters.declaration_links),
-            ("retained_buffer_bytes", counters.retained_buffer_bytes),
-            ("peak_owned_bytes", counters.peak_owned_bytes),
-            ("canonical_work", counters.canonical_work),
-            (
-                "complete_root_encode_calls",
-                counters.complete_root_encode_calls,
-            ),
-        ] {
-            observed.set_item(name, value)?;
-        }
-        Ok((
-            PyBytes::new(py, root_table_sha256).unbind(),
-            PyBytes::new(py, effective_root_table_sha256).unbind(),
-            referenced,
-            nonannotation,
-            declarations,
-            observed.unbind(),
-        ))
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        retained_signature_layout_to_python(py, self, &mut allocations)
     }
+}
+
+fn retained_signature_layout_to_python<'py>(
+    py: Python<'py>,
+    owner: &NativeRetainedSignatureIndexV1,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<PyRetainedSignatureLayoutV1> {
+    let (root_table_sha256, effective_root_table_sha256) =
+        owner.storage.retained_signature_binding_v1();
+    allocations.checkpoint()?;
+    let referenced = PyTuple::new(py, owner.index.referenced_counts().iter().copied())?.unbind();
+    allocations.checkpoint()?;
+    let nonannotation =
+        PyTuple::new(py, owner.index.nonannotation_counts().iter().copied())?.unbind();
+    allocations.checkpoint()?;
+    let declarations = PyTuple::new(py, owner.index.declaration_counts().iter().copied())?.unbind();
+    let counters = owner.index.counters();
+    allocations.checkpoint()?;
+    let observed = PyDict::new(py);
+    for (name, value) in [
+        ("structural_root_rows", counters.structural_root_rows),
+        ("entity_rows", counters.entity_rows),
+        ("referenced_links", counters.referenced_links),
+        ("nonannotation_links", counters.nonannotation_links),
+        ("declaration_links", counters.declaration_links),
+        ("retained_buffer_bytes", counters.retained_buffer_bytes),
+        ("peak_owned_bytes", counters.peak_owned_bytes),
+        ("canonical_work", counters.canonical_work),
+        (
+            "complete_root_encode_calls",
+            counters.complete_root_encode_calls,
+        ),
+    ] {
+        allocations.checkpoint()?;
+        observed.set_item(name, value)?;
+    }
+    allocations.checkpoint()?;
+    let root_table_sha256 = PyBytes::new(py, root_table_sha256).unbind();
+    allocations.checkpoint()?;
+    let effective_root_table_sha256 = PyBytes::new(py, effective_root_table_sha256).unbind();
+    Ok((
+        root_table_sha256,
+        effective_root_table_sha256,
+        referenced,
+        nonannotation,
+        declarations,
+        observed.unbind(),
+    ))
 }
 
 /// Count retained signature contributions without encoding complete roots or
@@ -257,25 +286,45 @@ type PyRetainedOntologyIdentityLayoutV1 = (
 #[pymethods]
 impl NativeRetainedOntologyIdentityIndexV1 {
     fn _layout_v1<'py>(&self, py: Python<'py>) -> PyResult<PyRetainedOntologyIdentityLayoutV1> {
-        let contract = self.storage.retained_ontology_identity_contract_v1();
-        let counters = PyDict::new(py);
-        for (name, value) in [
-            ("document_count", contract.document_count),
-            ("import_edge_count", contract.import_edge_count),
-            ("diagnostic_count", contract.diagnostic_count),
-            ("retained_owner_bytes", contract.retained_owner_bytes),
-            ("complete_root_encode_calls", 0),
-        ] {
-            counters.set_item(name, value)?;
-        }
-        Ok((
-            PyString::new(py, contract.root_document_key).unbind(),
-            PyBytes::new(py, contract.metadata_manifest_sha256).unbind(),
-            PyBytes::new(py, contract.diagnostics_manifest_sha256).unbind(),
-            PyBytes::new(py, contract.report_sha256).unbind(),
-            counters.unbind(),
-        ))
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        retained_identity_layout_to_python(py, self, &mut allocations)
     }
+}
+
+fn retained_identity_layout_to_python<'py>(
+    py: Python<'py>,
+    owner: &NativeRetainedOntologyIdentityIndexV1,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<PyRetainedOntologyIdentityLayoutV1> {
+    let contract = owner.storage.retained_ontology_identity_contract_v1();
+    allocations.checkpoint()?;
+    let counters = PyDict::new(py);
+    for (name, value) in [
+        ("document_count", contract.document_count),
+        ("import_edge_count", contract.import_edge_count),
+        ("diagnostic_count", contract.diagnostic_count),
+        ("retained_owner_bytes", contract.retained_owner_bytes),
+        ("complete_root_encode_calls", 0),
+    ] {
+        allocations.checkpoint()?;
+        counters.set_item(name, value)?;
+    }
+    allocations.checkpoint()?;
+    let root_document_key = PyString::new(py, contract.root_document_key).unbind();
+    allocations.checkpoint()?;
+    let metadata_manifest_sha256 = PyBytes::new(py, contract.metadata_manifest_sha256).unbind();
+    allocations.checkpoint()?;
+    let diagnostics_manifest_sha256 =
+        PyBytes::new(py, contract.diagnostics_manifest_sha256).unbind();
+    allocations.checkpoint()?;
+    let report_sha256 = PyBytes::new(py, contract.report_sha256).unbind();
+    Ok((
+        root_document_key,
+        metadata_manifest_sha256,
+        diagnostics_manifest_sha256,
+        report_sha256,
+        counters.unbind(),
+    ))
 }
 
 /// Retain the exact publication storage used by the public ontology identity
@@ -329,37 +378,8 @@ impl NativeRetainedAxiomTypeIndexV1 {
     }
 
     fn _layout_v1<'py>(&self, py: Python<'py>) -> PyResult<PyRetainedAxiomTypeLayoutV1> {
-        let tags = PyTuple::new(py, self.index.tags().iter().copied())?.unbind();
-        let offsets = PyTuple::new(py, self.index.offsets().iter().copied())?.unbind();
-        let category_codes =
-            PyTuple::new(py, self.index.category_codes().iter().copied())?.unbind();
-        let category_offsets =
-            PyTuple::new(py, self.index.category_offsets().iter().copied())?.unbind();
-        let postings = PyTuple::new(py, self.index.postings().iter().copied())?.unbind();
-        let counters = self.index.counters();
-        let observed = PyDict::new(py);
-        for (name, value) in [
-            ("axiom_rows", counters.axiom_rows),
-            ("constructor_groups", counters.constructor_groups),
-            ("category_groups", counters.category_groups),
-            ("retained_buffer_bytes", counters.retained_buffer_bytes),
-            ("peak_owned_bytes", counters.peak_owned_bytes),
-            ("canonical_work", counters.canonical_work),
-            (
-                "complete_root_encode_calls",
-                self.index.complete_root_encode_calls(),
-            ),
-        ] {
-            observed.set_item(name, value)?;
-        }
-        Ok((
-            tags,
-            offsets,
-            category_codes,
-            category_offsets,
-            postings,
-            observed.unbind(),
-        ))
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        retained_axiom_type_layout_to_python(py, self, &mut allocations)
     }
 
     #[pyo3(signature = (tag, start, max_rows, max_bytes, config, cancel=None))]
@@ -395,6 +415,50 @@ impl NativeRetainedAxiomTypeIndexV1 {
         .unbind();
         Ok((rows, page.total_count, page.next_cursor))
     }
+}
+
+fn retained_axiom_type_layout_to_python<'py>(
+    py: Python<'py>,
+    owner: &NativeRetainedAxiomTypeIndexV1,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<PyRetainedAxiomTypeLayoutV1> {
+    allocations.checkpoint()?;
+    let tags = PyTuple::new(py, owner.index.tags().iter().copied())?.unbind();
+    allocations.checkpoint()?;
+    let offsets = PyTuple::new(py, owner.index.offsets().iter().copied())?.unbind();
+    allocations.checkpoint()?;
+    let category_codes = PyTuple::new(py, owner.index.category_codes().iter().copied())?.unbind();
+    allocations.checkpoint()?;
+    let category_offsets =
+        PyTuple::new(py, owner.index.category_offsets().iter().copied())?.unbind();
+    allocations.checkpoint()?;
+    let postings = PyTuple::new(py, owner.index.postings().iter().copied())?.unbind();
+    let counters = owner.index.counters();
+    allocations.checkpoint()?;
+    let observed = PyDict::new(py);
+    for (name, value) in [
+        ("axiom_rows", counters.axiom_rows),
+        ("constructor_groups", counters.constructor_groups),
+        ("category_groups", counters.category_groups),
+        ("retained_buffer_bytes", counters.retained_buffer_bytes),
+        ("peak_owned_bytes", counters.peak_owned_bytes),
+        ("canonical_work", counters.canonical_work),
+        (
+            "complete_root_encode_calls",
+            owner.index.complete_root_encode_calls(),
+        ),
+    ] {
+        allocations.checkpoint()?;
+        observed.set_item(name, value)?;
+    }
+    Ok((
+        tags,
+        offsets,
+        category_codes,
+        category_offsets,
+        postings,
+        observed.unbind(),
+    ))
 }
 
 /// Build constructor/category postings without encoding retained roots or
@@ -436,6 +500,63 @@ fn _retained_axiom_type_index_v1<'py>(
         storage: owner,
         index: Arc::new(index),
     })
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, fail_after=None))]
+fn _retained_signature_layout_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(PyRetainedSignatureLayoutV1, u64)> {
+    let owner = _retained_signature_index_v1(py, handle, scope, document_ordinal, config, None)?;
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-view layout bridge allocation failure",
+    );
+    let layout = retained_signature_layout_to_python(py, &owner, &mut allocations)?;
+    Ok((layout, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, fail_after=None))]
+fn _retained_identity_layout_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    fail_after: Option<u64>,
+) -> PyResult<(PyRetainedOntologyIdentityLayoutV1, u64)> {
+    let owner = _retained_ontology_identity_index_v1(py, handle)?;
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-view layout bridge allocation failure",
+    );
+    let layout = retained_identity_layout_to_python(py, &owner, &mut allocations)?;
+    Ok((layout, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, fail_after=None))]
+fn _retained_axiom_type_layout_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(PyRetainedAxiomTypeLayoutV1, u64)> {
+    let owner = _retained_axiom_type_index_v1(py, handle, scope, document_ordinal, config, None)?;
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-view layout bridge allocation failure",
+    );
+    let layout = retained_axiom_type_layout_to_python(py, &owner, &mut allocations)?;
+    Ok((layout, allocations.count()))
 }
 
 /// Exercise raw document-owner selection without relaxing the snapshot
