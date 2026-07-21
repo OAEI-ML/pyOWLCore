@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -23,9 +24,16 @@ def _environment() -> dict[str, str]:
     return environment
 
 
-def _run_isolated(script: str) -> subprocess.CompletedProcess[str]:
+def _run_isolated(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-X", "faulthandler", "-c", script],
+        [
+            sys.executable,
+            "-X",
+            "faulthandler",
+            "-m",
+            "tools.security.subinterpreter_probe",
+            *arguments,
+        ],
         cwd=ROOT,
         env=_environment(),
         capture_output=True,
@@ -33,33 +41,6 @@ def _run_isolated(script: str) -> subprocess.CompletedProcess[str]:
         timeout=30,
         check=False,
     )
-
-
-def _subinterpreter_worker(statement: str, *, repetitions: int) -> str:
-    return f"""
-try:
-    from concurrent import interpreters
-except ImportError:
-    import _xxsubinterpreters as interpreters
-
-    def run_once(source):
-        interpreter = interpreters.create()
-        try:
-            interpreters.run_string(interpreter, source)
-        finally:
-            interpreters.destroy(interpreter)
-else:
-    def run_once(source):
-        interpreter = interpreters.create()
-        try:
-            interpreter.exec(source)
-        finally:
-            interpreter.close()
-
-for _index in range({repetitions}):
-    run_once({statement!r})
-print("SUBINTERPRETER_LIFECYCLE_OK", flush=True)
-"""
 
 
 def _has_subinterpreter_api() -> bool:
@@ -102,48 +83,28 @@ def test_subinterpreter_repeatedly_selects_complete_python_fallback() -> None:
     # Some older CPython patch releases abort while finalizing stdlib ``ssl`` in
     # a subinterpreter. Isolate that runtime defect before importing pyowl-core,
     # which exposes the HTTP resolver and therefore imports ``ssl``.
-    preflight = _run_isolated(_subinterpreter_worker("import ssl", repetitions=1))
+    preflight = _run_isolated("--preflight-ssl", "--repetitions", "1")
     if preflight.returncode != 0:
         pytest.skip(
             "this CPython build cannot safely finalize its own ssl module in a "
             "subinterpreter"
         )
 
-    statement = r"""
-import importlib
-import sys
-import warnings
-
-from pyowl_core import BackendPreference, DocumentFormat, LoadOptions, parse_document
-from pyowl_core.backends import native
-
-original_import_module = importlib.import_module
-
-def guarded_import(name, package=None):
-    if name == "pyowl_core._native":
-        raise AssertionError("subinterpreter policy attempted to import the extension")
-    return original_import_module(name, package)
-
-importlib.import_module = guarded_import
-probe = native.probe(refresh=True)
-assert probe.available is False
-assert probe.reason == "native extension is not approved in subinterpreters"
-assert "pyowl_core._native" not in sys.modules
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    document = parse_document(
-        b"Ontology(Declaration(Class(<urn:lifecycle:C>)))",
-        format=DocumentFormat.FUNCTIONAL,
-        options=LoadOptions(backend=BackendPreference.AUTO),
-    )
-assert len(document.axioms) == 1
-assert "pyowl_core._native" not in sys.modules
-"""
-    completed = _run_isolated(_subinterpreter_worker(statement, repetitions=8))
+    completed = _run_isolated("--repetitions", "8")
 
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == "SUBINTERPRETER_LIFECYCLE_OK"
+    result = json.loads(completed.stdout)
+    assert result == {
+        "api": result["api"],
+        "documents_parsed": 8,
+        "interpreters_created": 8,
+        "interpreters_destroyed": 8,
+        "mode": "python-fallback",
+        "native_extension_import_attempts": 0,
+        "schema": "pyowl-core.subinterpreter-probe/1",
+        "status": "passed",
+    }
+    assert result["api"] in {"concurrent.interpreters", "_xxsubinterpreters"}
 
 
 @pytest.mark.skipif(
@@ -183,7 +144,15 @@ assert len(document.axioms) == 1
 assert "pyowl_core._native" not in sys.modules
 print("FREE_THREADED_FALLBACK_OK", flush=True)
 """
-    completed = _run_isolated(script)
+    completed = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", script],
+        cwd=ROOT,
+        env=_environment(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "FREE_THREADED_FALLBACK_OK"
