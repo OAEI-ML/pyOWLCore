@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+import pyowl_core.model as m
 from pyowl_core import (
     IRI,
     BackendPreference,
@@ -32,6 +33,7 @@ from pyowl_core import (
     encode_snapshot,
     load_snapshot,
     open_snapshot,
+    render_document,
 )
 from pyowl_core.backends import native
 from pyowl_core.backends.native_ingestion import publish_retained_rdfxml_snapshot_v2
@@ -41,6 +43,7 @@ from pyowl_core.index import AxiomTypeIndex, OntologyIdentityIndex
 from pyowl_core.io.formats.detection import detect_format
 from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.io.source import acquire_source
+from tests.conformance._support import every_constructor_document
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
 from tests.native.formats.test_rdfxml_ingestion_slice import SWRL_SOURCE
 from tests.native.foundation._support import NativeTestExtension, load_extension
@@ -454,6 +457,60 @@ def test_retained_swrl_extension_matches_python_canonical_bytes() -> None:
     assert decode_root_canonical_bytes(direct.buffers) == tuple((3, value) for value in expected)
     selected.close()
     assert decode_root_canonical_bytes(direct.buffers) == tuple((3, value) for value in expected)
+
+
+def test_generated_every_constructor_corpus_publishes_from_retained_owner(
+    extension: NativeTestExtension,
+) -> None:
+    source = render_document(
+        every_constructor_document(),
+        format=DocumentFormat.RDF_XML,
+    )
+    reference = load_snapshot(
+        source,
+        document_iri=DOCUMENT_IRI,
+        options=_options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("every-constructor corpus crossed the Python RDF/XML parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(Any, _retained_snapshot(source))
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.root.document_fingerprint == reference.root.document_fingerprint
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+    assert set(m.AXIOM_TYPES) <= {type(value) for value in reference.root.axioms}
+
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    before = raw_owner._publication_counters_v2()
+    before_python = selected._native_python_counters()
+    assert before.parser_bytes == len(source)
+    assert before.publication_structural_rows_copied == 0
+    assert before.publication_structural_bytes_copied == 0
+
+    expected_roots = tuple(
+        (kind, canonical_bytes(value))
+        for kind, values in (
+            (1, reference.root.ontology_annotations),
+            (2, tuple(reference.iter_axioms())),
+            (3, tuple(reference.iter_extensions())),
+        )
+        for value in values
+    )
+    direct = selected.view(EncodedStructuralView)
+    assert decode_root_canonical_bytes(direct.buffers) == expected_roots
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+    after = raw_owner._publication_counters_v2()
+    after_python = selected._native_python_counters()
+    assert after.publication_structural_rows_copied == 0
+    assert after.publication_structural_bytes_copied == 0
+    assert after_python.model_rows_materialized == before_python.model_rows_materialized
+    selected.close()
+    assert decode_root_canonical_bytes(direct.buffers) == expected_roots
 
 
 def test_parse_type_resource_publishes_from_the_retained_parser_owner(

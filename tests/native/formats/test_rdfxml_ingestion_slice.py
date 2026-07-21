@@ -6,16 +6,20 @@ from typing import Any, cast
 
 import pytest
 
+import pyowl_core.model as m
 from pyowl_core import (
     IRI,
+    DocumentFormat,
     OntologySyntaxError,
     ParseLimits,
     ResourceLimitError,
     UnsupportedSyntaxError,
+    render_document,
 )
 from pyowl_core.backends import native
 from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.model import canonical_bytes
+from tests.conformance._support import every_constructor_document
 from tests.native.foundation._support import NativeTestExtension, load_extension
 
 
@@ -204,6 +208,36 @@ def test_supported_slice_matches_python_mapping_and_crosses_v1_freeze(
     assert attestation.rdf_mapping_report_count == 1
     assert extension.INGESTION_FEATURES == ()
     assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
+def test_generated_every_constructor_corpus_matches_python_mapping(
+    extension: NativeTestExtension,
+) -> None:
+    source = render_document(
+        every_constructor_document(),
+        format=DocumentFormat.RDF_XML,
+    )
+    owner, observed = _ingest(extension, source, document_iri="urn:document")
+    python = parse_rdfxml(
+        source,
+        limits=ParseLimits(),
+        document_iri=IRI("urn:document"),
+    )
+    assert python.rdf_mapping_report is not None
+    assert python.ontology_id.ontology_iri is not None
+
+    assert observed.ontology_iri == python.ontology_id.ontology_iri.value
+    assert observed.imports == tuple(value.value for value in python.imports)
+    assert set(m.AXIOM_TYPES) <= {type(value) for value in python.axioms}
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.decoded_codepoints == python.decoded_codepoint_length
+
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == len(python.axioms)
+    assert attestation.total_source_bytes == len(source)
+    assert attestation.rdf_mapping_report_count == 1
 
 
 def test_valid_xml_declaration_and_explicit_xml_binding_match_python(
