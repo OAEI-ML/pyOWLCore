@@ -730,9 +730,6 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             return Err(xml_syntax());
         }
         if let Some(parse_type) = parse_type {
-            if parse_type != "Collection" {
-                return Err(mapping_incomplete());
-            }
             if self.attribute(attributes, RDF, "ID")?.is_some() {
                 return Err(mapping_incomplete());
             }
@@ -740,12 +737,25 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 attributes,
                 &[(RDF, "parseType"), (XML, "base"), (XML, "lang")],
             )?;
-            return Ok(FrameRole::Collection {
-                subject,
-                predicate: owned_text(predicate, self.session)?,
-                tail: None,
-                member_count: 0,
-            });
+            return match parse_type {
+                "Collection" => Ok(FrameRole::Collection {
+                    subject,
+                    predicate: owned_text(predicate, self.session)?,
+                    tail: None,
+                    member_count: 0,
+                }),
+                "Resource" => {
+                    let object = self.fresh_blank()?;
+                    let linked_object = clone_resource(&object, self.session)?;
+                    self.add_resource_edge(subject, predicate, linked_object)?;
+                    // RDF/XML parseType="Resource" is an implicit blank node.
+                    // Reusing the normal node role lets its nested property
+                    // elements stream into that node without a synthetic XML
+                    // frame or an intermediate graph representation.
+                    Ok(FrameRole::Node { subject: object })
+                }
+                _ => Err(mapping_incomplete()),
+            };
         }
         let datatype = datatype_attribute
             .map(|value| resolve_iri(value, base, self.session))
@@ -5537,6 +5547,50 @@ mod tests {
     }
 
     #[test]
+    fn parse_type_resource_streams_nested_properties_into_one_implicit_node() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Resource\"><e:q rdf:resource=\"urn:o\"/><e:label xml:lang=\"EN\">value</e:label></e:p></rdf:Description></rdf:RDF>"
+        );
+        let parsed = graph(&source).expect("parseType Resource graph");
+
+        assert_eq!(parsed.len(), 3);
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            "urn:e:p",
+            blank_resource("generated-1").into(),
+        ));
+        assert!(contains_edge(
+            &parsed,
+            blank_resource("generated-1"),
+            "urn:e:q",
+            iri_resource("urn:o").into(),
+        ));
+        assert!(contains_edge(
+            &parsed,
+            blank_resource("generated-1"),
+            "urn:e:label",
+            Term::Literal {
+                lexical: "value".to_owned(),
+                datatype: None,
+                language: Some("en".to_owned()),
+            },
+        ));
+
+        let empty = graph(&format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Resource\"/></rdf:Description></rdf:RDF>"
+        ))
+        .expect("empty parseType Resource graph");
+        assert_eq!(empty.len(), 1);
+        assert!(contains_edge(
+            &empty,
+            iri_resource("urn:s"),
+            "urn:e:p",
+            blank_resource("generated-1").into(),
+        ));
+    }
+
+    #[test]
     fn parse_type_collection_rejects_conflicts_text_and_preflights_length() {
         for source in [
             format!(
@@ -5549,10 +5603,17 @@ mod tests {
             assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
         }
         let unsupported = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Resource\"/></rdf:Description></rdf:RDF>"
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Literal\"/></rdf:Description></rdf:RDF>"
         );
         assert_eq!(
             graph(&unsupported).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE"
+        );
+        let reified_resource = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Resource\" rdf:ID=\"statement\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            graph(&reified_resource).unwrap_err().code,
             "NATIVE_RDF_MAPPING_INCOMPLETE"
         );
 

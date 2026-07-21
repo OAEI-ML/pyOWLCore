@@ -208,6 +208,36 @@ def test_named_node_axiom_slice_matches_python_canonical_bytes(
     assert attestation.stored_axiom_count == len(python.axioms)
 
 
+def test_parse_type_resource_class_expression_matches_python_canonical_bytes(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:A'>
+  <rdfs:subClassOf rdf:parseType='Resource'>
+   <owl:intersectionOf rdf:parseType='Collection'>
+    <rdf:Description rdf:about='urn:B'/>
+    <rdf:Description rdf:about='urn:C'/>
+   </owl:intersectionOf>
+  </rdfs:subClassOf>
+ </owl:Class>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+    with pytest.raises(extension._NativeError) as limited:
+        _ingest(extension, source, limits=ParseLimits(max_triples=2))
+    assert limited.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 def test_rfc3986_document_and_nested_xml_bases_match_python(
     extension: NativeTestExtension,
 ) -> None:
