@@ -17,6 +17,7 @@ from pyowl_core import (
     load_snapshot,
 )
 from pyowl_core.backends import native
+from pyowl_core.backends.native_ingestion import _publish_structural_snapshot_v2
 from pyowl_core.model import StructuralNode, constructor_spec
 from tests.generated.model.fixtures import model_fixtures
 from tests.native.foundation._support import NativeTestExtension, load_extension
@@ -592,6 +593,143 @@ def test_retained_preparation_bridge_allocations_fail_before_publication(
     assert boundary_output[:8] == output[:8]
     assert boundary_allocations == allocations
     assert request == original_request
+    assert config == original_config
+
+
+@pytest.fixture(scope="module")
+def retained_structural_bridge_extension(
+    extension: NativeTestExtension,
+) -> NativeTestExtension:
+    if not hasattr(extension, "_retained_structural_bridge_allocation_probe_v2"):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail(
+                "selected native test-hooks artifact lacks "
+                "_retained_structural_bridge_allocation_probe_v2"
+            )
+        pytest.skip("native retained structural bridge allocation hook is unavailable")
+    return extension
+
+
+def test_retained_structural_bridge_allocations_fail_before_owner_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    retained_structural_bridge_extension: NativeTestExtension,
+) -> None:
+    extension = cast(Any, retained_structural_bridge_extension)
+    source = b"Ontology(<urn:allocation:retained> ClassAssertion(<urn:C> _:person))"
+    snapshot = load_snapshot(
+        source,
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=BackendPreference.PYTHON,
+            collect_provenance=True,
+        ),
+    )
+    object.__setattr__(snapshot.load_options, "backend", BackendPreference.NATIVE)
+    object.__setattr__(snapshot.root.provenance, "backend", "native")
+
+    captured: dict[str, object] = {}
+    retain = extension._retain_structural_snapshot_v2
+
+    def capture_retain(
+        documents: object,
+        origins: object,
+        attestation: object,
+        config: object,
+        cancel: object | None = None,
+        *,
+        effective_documents: object | None = None,
+        effective_origins: object | None = None,
+    ) -> object:
+        captured.update(
+            documents=documents,
+            origins=origins,
+            attestation=attestation,
+            config=bytes(cast(Any, config)),
+            effective_documents=effective_documents,
+            effective_origins=effective_origins,
+        )
+        return retain(
+            documents,
+            origins,
+            attestation,
+            config,
+            cancel,
+            effective_documents=effective_documents,
+            effective_origins=effective_origins,
+        )
+
+    monkeypatch.setattr(extension, "_retain_structural_snapshot_v2", capture_retain)
+    selected = cast(Any, _publish_structural_snapshot_v2)(
+        snapshot,
+        extension,
+        None,
+        None,
+    )
+    selected.close()
+    monkeypatch.setattr(extension, "_retain_structural_snapshot_v2", retain)
+
+    documents = captured["documents"]
+    origins = captured["origins"]
+    attestation = captured["attestation"]
+    config = bytearray(cast(bytes, captured["config"]))
+    effective_documents = captured["effective_documents"]
+    effective_origins = captured["effective_origins"]
+    assert effective_documents is not None
+    assert effective_origins is not None
+    original_documents = documents
+    original_origins = origins
+    original_config = bytes(config)
+    probe = extension._retained_structural_bridge_allocation_probe_v2
+
+    handle, allocations = probe(
+        documents,
+        origins,
+        attestation,
+        memoryview(config),
+        None,
+        effective_documents=effective_documents,
+        effective_origins=effective_origins,
+    )
+    assert allocations == 17
+    assert handle._publication_closed_v2() is False
+    handle._publication_close_v2()
+    assert documents == original_documents
+    assert origins == original_origins
+    assert config == original_config
+
+    for fail_after in range(allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native retained structural bridge allocation failure$",
+        ):
+            probe(
+                documents,
+                origins,
+                attestation,
+                memoryview(config),
+                fail_after,
+                effective_documents=effective_documents,
+                effective_origins=effective_origins,
+            )
+        assert documents == original_documents
+        assert origins == original_origins
+        assert config == original_config
+
+    boundary_handle, boundary_allocations = probe(
+        documents,
+        origins,
+        attestation,
+        memoryview(config),
+        allocations,
+        effective_documents=effective_documents,
+        effective_origins=effective_origins,
+    )
+    assert boundary_allocations == allocations
+    assert boundary_handle._publication_closed_v2() is False
+    boundary_handle._publication_close_v2()
+    assert documents == original_documents
+    assert origins == original_origins
     assert config == original_config
 
 

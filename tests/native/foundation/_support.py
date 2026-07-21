@@ -89,6 +89,18 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...
 
+    def _retained_structural_bridge_allocation_probe_v2(
+        self,
+        documents: object,
+        origins: object,
+        attestation: object,
+        config: object,
+        fail_after: int | None = None,
+        *,
+        effective_documents: object | None = None,
+        effective_origins: object | None = None,
+    ) -> tuple[object, int]: ...
+
     def _prepare_parsed_structural_bridge_allocation_probe_v2(
         self,
         parsed: object,

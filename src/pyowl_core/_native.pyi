@@ -217,6 +217,16 @@ def _retain_structural_snapshot_v2(
     effective_documents: object | None = None,
     effective_origins: object | None = None,
 ) -> _NativeSnapshotHandle: ...
+def _retained_structural_bridge_allocation_probe_v2(
+    documents: object,
+    origins: object,
+    attestation: NativeSnapshotAttestationV2,
+    config: object,
+    fail_after: int | None = None,
+    *,
+    effective_documents: object | None = None,
+    effective_origins: object | None = None,
+) -> tuple[_NativeSnapshotHandle, int]: ...
 def _parse_functional_retained_v2(
     source: object,
     config: object,

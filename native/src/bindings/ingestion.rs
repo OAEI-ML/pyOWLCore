@@ -51,6 +51,11 @@ type RetainedRdfXmlParseBindingResult = (
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
     _module.add_class::<NativeParsedStructuralStorageV2>()?;
     _module.add_function(wrap_pyfunction!(_retain_structural_snapshot_v2, _module)?)?;
+    #[cfg(feature = "test-hooks")]
+    _module.add_function(wrap_pyfunction!(
+        _retained_structural_bridge_allocation_probe_v2,
+        _module
+    )?)?;
     _module.add_function(wrap_pyfunction!(_parse_functional_retained_v2, _module)?)?;
     _module.add_function(wrap_pyfunction!(_parse_rdfxml_retained_v2, _module)?)?;
     #[cfg(feature = "test-hooks")]
@@ -699,12 +704,79 @@ fn _retain_structural_snapshot_v2<'py>(
     effective_documents: Option<&Bound<'py, PyAny>>,
     effective_origins: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<NativeSnapshotHandle> {
-    let limits = crate::limits_from_python(config)?;
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    retain_structural_snapshot_v2_with_allocations(
+        py,
+        documents,
+        origins,
+        attestation,
+        config,
+        cancel,
+        effective_documents,
+        effective_origins,
+        &mut allocations,
+    )
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (
+    documents,
+    origins,
+    attestation,
+    config,
+    fail_after=None,
+    *,
+    effective_documents=None,
+    effective_origins=None
+))]
+#[allow(clippy::too_many_arguments)]
+fn _retained_structural_bridge_allocation_probe_v2<'py>(
+    py: Python<'py>,
+    documents: &Bound<'py, PyAny>,
+    origins: &Bound<'py, PyAny>,
+    attestation: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+    effective_documents: Option<&Bound<'py, PyAny>>,
+    effective_origins: Option<&Bound<'py, PyAny>>,
+) -> PyResult<(NativeSnapshotHandle, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained structural bridge allocation failure",
+    );
+    let handle = retain_structural_snapshot_v2_with_allocations(
+        py,
+        documents,
+        origins,
+        attestation,
+        config,
+        None,
+        effective_documents,
+        effective_origins,
+        &mut allocations,
+    )?;
+    Ok((handle, allocations.count()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retain_structural_snapshot_v2_with_allocations<'py>(
+    py: Python<'py>,
+    documents: &Bound<'py, PyAny>,
+    origins: &Bound<'py, PyAny>,
+    attestation: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    effective_documents: Option<&Bound<'py, PyAny>>,
+    effective_origins: Option<&Bound<'py, PyAny>>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<NativeSnapshotHandle> {
+    let limits = crate::limits_from_python_with_allocations(config, allocations)?;
     let cancellation = crate::cancellation_or_default(cancel);
     let (owned_documents, mut external_bytes) =
-        owned_structural_documents(py, documents, &limits, &cancellation)?;
+        owned_structural_documents(py, documents, &limits, &cancellation, allocations)?;
     let owned_effective_documents = effective_documents
-        .map(|value| owned_structural_documents(py, value, &limits, &cancellation))
+        .map(|value| owned_structural_documents(py, value, &limits, &cancellation, allocations))
         .transpose()?;
     if let Some((_, effective_bytes)) = &owned_effective_documents {
         external_bytes = external_bytes
@@ -716,10 +788,25 @@ fn _retain_structural_snapshot_v2<'py>(
             })?;
         enforce_retained_boundary(external_bytes, &limits)?;
     }
-    let owned_origins =
-        owned_origin_rows(py, origins, &limits, &cancellation, &mut external_bytes)?;
+    let owned_origins = owned_origin_rows(
+        py,
+        origins,
+        &limits,
+        &cancellation,
+        &mut external_bytes,
+        allocations,
+    )?;
     let owned_effective_origins = effective_origins
-        .map(|value| owned_origin_rows(py, value, &limits, &cancellation, &mut external_bytes))
+        .map(|value| {
+            owned_origin_rows(
+                py,
+                value,
+                &limits,
+                &cancellation,
+                &mut external_bytes,
+                allocations,
+            )
+        })
         .transpose()?;
     let owned_effective_documents = owned_effective_documents.map(|(rows, _bytes)| rows);
     let (storage, retained_origins, raw_origins) = crate::run_detached(py, move |interrupt| {
@@ -756,6 +843,7 @@ fn _retain_structural_snapshot_v2<'py>(
         };
         Ok((builder.freeze(&[vec![0]], &[0])?, effective, raw))
     })?;
+    allocations.checkpoint()?;
     crate::publication::typed_structural_handle_v2(
         attestation,
         storage,
@@ -792,6 +880,7 @@ fn owned_structural_documents(
     value: &Bound<'_, PyAny>,
     limits: &Limits,
     cancellation: &crate::cancel::Cancellation,
+    allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<(Vec<OwnedStructuralDocument>, usize)> {
     if !value.get_type().is(py.get_type::<PyTuple>()) {
         return Err(pyo3::exceptions::PyTypeError::new_err(
@@ -805,6 +894,7 @@ fn owned_structural_documents(
         ));
     }
     let mut owned = Vec::new();
+    allocations.checkpoint()?;
     owned.try_reserve_exact(1).map_err(|_| {
         crate::python_error(NativeError::limit(
             "native structural document allocation failed",
@@ -831,6 +921,7 @@ fn owned_structural_documents(
             limits,
             cancellation,
             &mut total_bytes,
+            allocations,
         )?;
         let axioms = owned_structural_rows(
             py,
@@ -839,6 +930,7 @@ fn owned_structural_documents(
             limits,
             cancellation,
             &mut total_bytes,
+            allocations,
         )?;
         let extensions = owned_structural_rows(
             py,
@@ -847,6 +939,7 @@ fn owned_structural_documents(
             limits,
             cancellation,
             &mut total_bytes,
+            allocations,
         )?;
         owned.push([annotations, axioms, extensions]);
     }
@@ -860,6 +953,7 @@ fn owned_structural_rows(
     limits: &Limits,
     cancellation: &crate::cancel::Cancellation,
     total_bytes: &mut usize,
+    allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<Vec<Vec<u8>>> {
     if !value.get_type().is(py.get_type::<PyTuple>()) {
         return Err(pyo3::exceptions::PyTypeError::new_err(
@@ -873,6 +967,9 @@ fn owned_structural_rows(
         )));
     }
     let mut owned = Vec::new();
+    if !rows.is_empty() {
+        allocations.checkpoint()?;
+    }
     owned.try_reserve_exact(rows.len()).map_err(|_| {
         crate::python_error(NativeError::limit(
             "native structural root allocation failed",
@@ -919,6 +1016,7 @@ fn owned_structural_rows(
             )));
         }
         let mut copied = Vec::new();
+        allocations.checkpoint()?;
         copied.try_reserve_exact(bytes.len()).map_err(|_| {
             crate::python_error(NativeError::limit(
                 "native structural row allocation failed",
@@ -936,6 +1034,7 @@ fn owned_origin_rows(
     limits: &Limits,
     cancellation: &crate::cancel::Cancellation,
     total_bytes: &mut usize,
+    allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<Vec<Vec<u8>>> {
     if !value.get_type().is(py.get_type::<PyTuple>()) {
         return Err(pyo3::exceptions::PyTypeError::new_err(
@@ -949,6 +1048,9 @@ fn owned_origin_rows(
         )));
     }
     let mut owned = Vec::new();
+    if !rows.is_empty() {
+        allocations.checkpoint()?;
+    }
     owned.try_reserve_exact(rows.len()).map_err(|_| {
         crate::python_error(NativeError::limit("native origin row allocation failed"))
     })?;
@@ -991,6 +1093,7 @@ fn owned_origin_rows(
             )));
         }
         let mut copied = Vec::new();
+        allocations.checkpoint()?;
         copied.try_reserve_exact(bytes.len()).map_err(|_| {
             crate::python_error(NativeError::limit("native origin row allocation failed"))
         })?;
