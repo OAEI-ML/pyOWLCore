@@ -38,6 +38,7 @@ const RDF_RESOURCE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#resource"
 const RDF_NODE_ID: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nodeID";
 const RDF_DATATYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#datatype";
 const RDF_LI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#li";
+const RDF_XML_LITERAL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral";
 const RDF_ABOUT_EACH: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#aboutEach";
 const RDF_ABOUT_EACH_PREFIX: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#aboutEachPrefix";
 const RDF_BAG_ID: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#bagID";
@@ -459,6 +460,11 @@ enum FrameRole {
         datatype: Option<String>,
         language: Option<String>,
     },
+    XmlLiteralProperty {
+        subject: Resource,
+        predicate: String,
+        text: String,
+    },
     Collection {
         subject: Resource,
         predicate: String,
@@ -667,6 +673,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     };
                     self.append_collection_member(member)?;
                     role
+                }
+                Some(FrameRole::XmlLiteralProperty { .. }) => {
+                    return Err(mapping_incomplete());
                 }
                 _ => return Err(xml_syntax()),
             }
@@ -903,6 +912,11 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                         next_li: 1,
                     })
                 }
+                "Literal" => Ok(FrameRole::XmlLiteralProperty {
+                    subject,
+                    predicate: owned_text(predicate, self.session)?,
+                    text: String::new(),
+                }),
                 _ => Err(mapping_incomplete()),
             };
         }
@@ -1078,11 +1092,14 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             return Ok(());
         }
         match self.frames.last_mut().map(|frame| &mut frame.role) {
-            Some(FrameRole::Property {
-                object_set: false,
-                text,
-                ..
-            }) => {
+            Some(
+                FrameRole::Property {
+                    object_set: false,
+                    text,
+                    ..
+                }
+                | FrameRole::XmlLiteralProperty { text, .. },
+            ) => {
                 let next = text
                     .len()
                     .checked_add(value.len())
@@ -1168,6 +1185,22 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     Some(tail) => self.add_resource_edge(tail, RDF_REST, nil)?,
                     None => self.add_resource_edge(subject, &predicate, nil)?,
                 }
+            }
+            FrameRole::XmlLiteralProperty {
+                subject,
+                predicate,
+                text,
+            } => {
+                let datatype = owned_text(RDF_XML_LITERAL, self.session)?;
+                self.add(Triple {
+                    subject,
+                    predicate,
+                    object: Term::Literal {
+                        lexical: text,
+                        datatype: Some(datatype),
+                        language: None,
+                    },
+                })?;
             }
             FrameRole::Root | FrameRole::Node { .. } => {}
         }
@@ -5815,6 +5848,53 @@ mod tests {
     }
 
     #[test]
+    fn parse_type_literal_streams_markup_free_xml_literal_content() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\" xml:lang=\"EN\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Literal\">a &amp; <![CDATA[b < c]]></e:p><e:q rdf:parseType=\"Literal\"></e:q></rdf:Description></rdf:RDF>"
+        );
+        let parsed = graph(&source).expect("markup-free XML literals");
+
+        assert_eq!(parsed.len(), 2);
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            "urn:e:p",
+            Term::Literal {
+                lexical: "a & b < c".to_owned(),
+                datatype: Some(RDF_XML_LITERAL.to_owned()),
+                language: None,
+            },
+        ));
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            "urn:e:q",
+            Term::Literal {
+                lexical: String::new(),
+                datatype: Some(RDF_XML_LITERAL.to_owned()),
+                language: None,
+            },
+        ));
+    }
+
+    #[test]
+    fn parse_type_literal_rejects_nested_markup_and_reification() {
+        for source in [
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Literal\"><e:markup/></e:p></rdf:Description></rdf:RDF>"
+            ),
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Literal\" rdf:ID=\"statement\"/></rdf:Description></rdf:RDF>"
+            ),
+        ] {
+            assert_eq!(
+                graph(&source).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE"
+            );
+        }
+    }
+
+    #[test]
     fn node_property_attributes_emit_resolved_types_and_language_literals() {
         let source = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\" xml:lang=\"FR\"><rdf:Description xml:base=\"http://example.test/base/\" rdf:about=\"subject\" rdf:type=\"../Class\" e:label=\"bonjour\"/></rdf:RDF>"
@@ -6108,7 +6188,7 @@ mod tests {
             assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
         }
         let unsupported = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Literal\"/></rdf:Description></rdf:RDF>"
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Other\"/></rdf:Description></rdf:RDF>"
         );
         assert_eq!(
             graph(&unsupported).unwrap_err().code,
