@@ -282,6 +282,7 @@ class RDFMapper:
                 for item in self.graph.find(subject=node):
                     self._consume(item)
                     if item.predicate.value not in _REIFICATION_METADATA:
+                        self.context.limits.enforce("max_annotations", len(values) + 1)
                         values.append(
                             m.Annotation(
                                 m.AnnotationProperty(m.IRI(item.predicate.value)),

@@ -807,6 +807,48 @@ def test_structural_node_annotation_limit_matches_python(
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_nested_annotation_reification_limit_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'><rdfs:subClassOf rdf:resource='urn:D'/></owl:Class>
+ <owl:Class rdf:about='urn:D'/>
+ <owl:Axiom rdf:nodeID='axiom'>
+  <owl:annotatedSource rdf:resource='urn:C'/>
+  <owl:annotatedProperty
+   rdf:resource='http://www.w3.org/2000/01/rdf-schema#subClassOf'/>
+  <owl:annotatedTarget rdf:resource='urn:D'/>
+  <rdfs:label>base</rdfs:label>
+ </owl:Axiom>
+ <owl:Annotation>
+  <owl:annotatedSource rdf:nodeID='axiom'/>
+  <owl:annotatedProperty rdf:resource='http://www.w3.org/2000/01/rdf-schema#label'/>
+  <owl:annotatedTarget>base</owl:annotatedTarget>
+  <rdfs:comment>nested</rdfs:comment>
+  <rdfs:seeAlso rdf:resource='urn:nested'/>
+ </owl:Annotation>
+</rdf:RDF>"""
+    boundary = ParseLimits(max_annotations=2)
+
+    _owner, observed = _ingest(extension, source, limits=boundary)
+    python = parse_rdfxml(source, limits=boundary, document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    annotated = next(value for value in python.axioms if value.annotations)
+    assert len(annotated.annotations) == 1
+    assert len(next(iter(annotated.annotations)).annotations) == 2
+
+    limited = ParseLimits(max_annotations=1)
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(source, limits=limited, document_iri=None)
+    assert python_error.value.limit == "max_annotations"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 @pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (
