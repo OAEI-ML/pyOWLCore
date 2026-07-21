@@ -18,6 +18,9 @@ NATIVE_LIFECYCLE = (
 NATIVE_VIEW_LIFECYCLE = (
     ROOT / "reports" / "security" / "native-view-lifecycle-checkpoint.json"
 )
+NATIVE_MAPPED_WIRE = (
+    ROOT / "reports" / "security" / "native-mapped-wire-checkpoint.json"
+)
 NATIVE_ALLOCATION = (
     ROOT / "reports" / "security" / "native-allocation-checkpoint.json"
 )
@@ -194,6 +197,54 @@ def test_native_view_lifecycle_checkpoint_is_exact_and_fail_closed() -> None:
     ):
         text = report.read_text(encoding="utf-8")
         assert "native-view-lifecycle-checkpoint.json" in text
+
+
+def test_native_mapped_wire_checkpoint_is_exact_and_fail_closed() -> None:
+    checkpoint = json.loads(NATIVE_MAPPED_WIRE.read_text(encoding="utf-8"))
+
+    assert checkpoint["schema"] == "pyowl-core.native-mapped-wire-checkpoint/1"
+    assert re.fullmatch(r"[0-9a-f]{40}", checkpoint["subject_revision"])
+    assert checkpoint["claim"] == "checkpoint-only"
+    assert checkpoint["capability_advertised"] is False
+    assert checkpoint["artifact"]["kind"] == "local test-hook extension"
+    assert re.fullmatch(r"[0-9a-f]{64}", checkpoint["artifact"]["sha256"])
+
+    implementation = checkpoint["implementation"]
+    assert implementation["constructor_fixture_tags"] == 76
+    assert len(implementation["invariants"]) >= 7
+
+    runs = {run["id"]: run for run in checkpoint["runs"]}
+    assert set(runs) == {
+        "cpython-3.12-mapped-wire-constructor-matrix",
+        "rust-native-library",
+        "static-quality-gates",
+    }
+    assert all(run["status"] == "pass" for run in runs.values())
+    python_run = runs["cpython-3.12-mapped-wire-constructor-matrix"]
+    assert python_run["observations"]["tests_failed"] == 0
+    assert python_run["observations"]["tests_passed"] >= 109
+    assert python_run["observations"]["subtests_passed"] >= 2987
+    assert runs["rust-native-library"]["observations"]["tests_failed"] == 0
+    assert runs["static-quality-gates"]["commands"]
+
+    release = checkpoint["release_effect"]
+    assert release["local_mapped_wire_constructor_matrix"] == "pass"
+    assert release["installed_artifact_matrix"] == "not-run"
+    assert release["supported_platform_matrix"] == "not-run"
+    assert release["complete_format_option_import_matrix"] == "not-run"
+    assert release["security_resource_determinism"] == "not-run"
+    assert release["core_release_eligible"] is False
+    assert release["reason"]
+    assert checkpoint["limitations"]
+
+    for report in (
+        ROOT / "reports" / "security" / "README.md",
+        ROOT / "reports" / "workpackages" / "WP15.md",
+        ROOT / "reports" / "workpackages" / "WP17.md",
+        ROOT / "reports" / "workpackages" / "WP18.md",
+    ):
+        text = report.read_text(encoding="utf-8")
+        assert "native-mapped-wire-checkpoint.json" in text
 
 
 def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:

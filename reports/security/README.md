@@ -22,6 +22,12 @@ direct and mmap encoded-buffer concurrency, close, and real-fork coverage. The
 local slice passes, while installed-wheel, allocation-failure, and supported-
 platform lifecycle evidence remain open and the capability stays hidden.
 
+`native-mapped-wire-checkpoint.json` binds an exact test-hook artifact to the
+complete generated-constructor mapped-wire fixture. Verified mappings preserve
+their owner lease and avoid model materialization during exact wire copying and
+encoded-column publication; unverified mappings rebuild trusted bytes. The
+installed-artifact, full-format, and supported-platform matrices remain open.
+
 `native-allocation-checkpoint.json` records an exact, dynamic failpoint sweep
 through retained-component build, freeze, and encode for all 76 model
 constructors, plus the five explicit native wire validation/receipt allocation
