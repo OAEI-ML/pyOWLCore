@@ -1,4 +1,5 @@
 #![no_main]
+#![allow(unexpected_cfgs)]
 
 use libfuzzer_sys::fuzz_target;
 
@@ -8,16 +9,29 @@ mod cancel;
 mod canonical;
 #[path = "../../../../native/src/error.rs"]
 mod error;
+#[path = "../../../../native/src/hash.rs"]
+mod hash;
+#[cfg(not(fuzzing))]
+#[path = "../../../../native/src/index/mod.rs"]
+mod index;
 #[path = "../../../../native/src/limits.rs"]
 mod limits;
 #[path = "../../../../native/src/model/mod.rs"]
 mod model;
 #[path = "../../../../native/src/parse/mod.rs"]
 mod parse;
+#[cfg(not(fuzzing))]
+#[path = "../../../../native/src/publication/mod.rs"]
+mod publication;
 #[path = "../../../../native/src/session.rs"]
 mod session;
 #[path = "../../../../native/src/source.rs"]
 mod source;
+
+#[cfg(not(fuzzing))]
+fn python_error(error: error::NativeError) -> pyo3::PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err((error.code, error.message))
+}
 
 use cancel::{Cancellation, Guard};
 use limits::Limits;

@@ -1,4 +1,5 @@
 #![no_main]
+#![allow(unexpected_cfgs)]
 
 use libfuzzer_sys::fuzz_target;
 
@@ -6,6 +7,8 @@ use libfuzzer_sys::fuzz_target;
 mod cancel;
 #[path = "../../../../native/src/error.rs"]
 mod error;
+#[path = "../../../../native/src/hash.rs"]
+mod hash;
 #[path = "../../../../native/src/limits.rs"]
 mod limits;
 #[path = "../../../../native/src/model/mod.rs"]

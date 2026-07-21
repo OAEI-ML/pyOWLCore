@@ -1,0 +1,110 @@
+name: Native safety
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-safety-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_NIGHTLY: nightly-2026-07-14
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sanitizer:
+    name: ${{ matrix.sanitizer }} sanitizer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, thread]
+    env:
+      RUSTFLAGS: -Zsanitizer=${{ matrix.sanitizer }}
+      RUSTDOCFLAGS: -Zsanitizer=${{ matrix.sanitizer }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install the pinned sanitizer toolchain
+        run: |
+          rustup toolchain install "$RUST_NIGHTLY" --profile minimal --component rust-src --no-self-update
+          rustup run "$RUST_NIGHTLY" rustc --version --verbose
+      - name: Test the native library and sanitized standard library
+        run: >-
+          cargo +${RUST_NIGHTLY} test -Zbuild-std
+          --manifest-path native/Cargo.toml --locked --no-default-features --lib
+          --target x86_64-unknown-linux-gnu
+
+  miri:
+    name: Miri pure ownership slice
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install the pinned Miri toolchain
+        run: |
+          rustup toolchain install "$RUST_NIGHTLY" --profile minimal --component miri --no-self-update
+          cargo +${RUST_NIGHTLY} miri --version
+      - name: Check pure canonical and retained ownership primitives
+        run: >-
+          cargo +${RUST_NIGHTLY} miri test
+          --manifest-path tests/miri/native/Cargo.toml --locked
+
+  fuzz:
+    name: Bounded native libFuzzer campaign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/pyowl-core-fuzz-target
+      FUZZ_CORPUS_ROOT: ${{ runner.temp }}/pyowl-core-fuzz-corpus
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install the pinned fuzz toolchain
+        run: |
+          rustup toolchain install "$RUST_NIGHTLY" --profile minimal --component rust-src --no-self-update
+          cargo +${RUST_NIGHTLY} install cargo-fuzz --version 0.12.0 --locked
+          cargo +${RUST_NIGHTLY} fuzz --version
+      - name: Copy immutable seeds to runner-local corpora
+        run: |
+          mkdir -p "$FUZZ_CORPUS_ROOT/functional" "$FUZZ_CORPUS_ROOT/wire"
+          cp tests/data/corpus/w3c/functional/*.ofn "$FUZZ_CORPUS_ROOT/functional/"
+          cp tests/data/corpus/hostile/short-wire.bin "$FUZZ_CORPUS_ROOT/wire/"
+      - name: Fuzz the Functional Syntax parser under AddressSanitizer
+        working-directory: native
+        run: >-
+          cargo +${RUST_NIGHTLY} fuzz run --fuzz-dir ../tests/fuzz/native
+          --sanitizer address functional "$FUZZ_CORPUS_ROOT/functional" --
+          -max_total_time=60 -max_len=1048576 -timeout=10 -rss_limit_mb=2048
+      - name: Fuzz the wire decoder under AddressSanitizer
+        working-directory: native
+        run: >-
+          cargo +${RUST_NIGHTLY} fuzz run --fuzz-dir ../tests/fuzz/native
+          --sanitizer address wire "$FUZZ_CORPUS_ROOT/wire" --
+          -max_total_time=60 -max_len=4194304 -timeout=10 -rss_limit_mb=2048
+      - name: Retain native crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-fuzz-crash-${{ github.sha }}
+          path: tests/fuzz/native/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

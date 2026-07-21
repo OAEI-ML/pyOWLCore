@@ -9,6 +9,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 WHEELS = (WORKFLOWS / "wheels.yml").read_text(encoding="utf-8")
 RELEASE = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
 CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+NATIVE_SAFETY = (WORKFLOWS / "native-safety.yml").read_text(encoding="utf-8")
 PLATFORM_AUDIT = (ROOT / "tools" / "packaging" / "platform_audit.py").read_text(
     encoding="utf-8"
 )
@@ -37,7 +38,7 @@ def _inline_python(workflow: str) -> tuple[str, ...]:
 
 
 def test_every_external_action_is_pinned_to_a_full_commit() -> None:
-    for workflow in (CI, WHEELS, RELEASE):
+    for workflow in (CI, WHEELS, RELEASE, NATIVE_SAFETY):
         actions = ACTION.findall(workflow)
         assert actions
         for action in actions:
@@ -66,6 +67,30 @@ def test_wheel_matrix_covers_supported_runtime_and_platforms() -> None:
     assert "--default-toolchain 1.83.0" in WHEELS
     assert "pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55" in WHEELS
     assert "MACOSX_DEPLOYMENT_TARGET: \"13.0\"" in WHEELS
+
+
+def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
+    for requirement in (
+        "nightly-2026-07-14",
+        "sanitizer: [address, thread]",
+        "-Zsanitizer=${{ matrix.sanitizer }}",
+        "--component rust-src",
+        "test -Zbuild-std",
+        "--target x86_64-unknown-linux-gnu",
+        "--component miri",
+        "tests/miri/native/Cargo.toml --locked",
+        "cargo-fuzz --version 0.12.0 --locked",
+        "--sanitizer address functional",
+        "--sanitizer address wire",
+        "-max_total_time=60",
+        "-timeout=10",
+        "-rss_limit_mb=2048",
+        "if: failure()",
+        "tests/fuzz/native/artifacts/",
+    ):
+        assert requirement in NATIVE_SAFETY
+    assert NATIVE_SAFETY.count("timeout-minutes:") == 3
+    assert "continue-on-error" not in NATIVE_SAFETY
 
 
 def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:

@@ -13,6 +13,7 @@ const GENERATED_SOURCE: &str = "encoded_view_v1.rs";
 const GENERATED_DESCRIPTOR: &str = "encoded-view-v1.json";
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(fuzzing)");
     if let Err(error) = generate_encoded_view_schema() {
         panic!("cannot generate native encoded-view schema: {error}");
     }

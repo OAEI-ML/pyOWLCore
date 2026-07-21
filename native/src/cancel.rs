@@ -1,19 +1,27 @@
 //! Process-local atomic cancellation/deadline state.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(not(fuzzing))]
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[cfg(not(fuzzing))]
 use pyo3::prelude::*;
 
 use crate::error::{NativeError, NativeResult};
 
+#[cfg(not(fuzzing))]
 pub(crate) type InterruptSlot = Arc<Mutex<Option<PyErr>>>;
+#[cfg(fuzzing)]
+pub(crate) type InterruptSlot = Arc<()>;
 
+#[cfg(not(fuzzing))]
 pub(crate) fn interrupt_slot() -> InterruptSlot {
     Arc::new(Mutex::new(None))
 }
 
+#[cfg(not(fuzzing))]
 pub(crate) fn take_interrupt(slot: &InterruptSlot) -> NativeResult<Option<PyErr>> {
     slot.lock()
         .map_err(|_| NativeError::panic())
@@ -26,17 +34,21 @@ struct SharedCancel {
     deadline: Option<Instant>,
 }
 
-#[pyclass(
-    module = "pyowl_core._native",
-    frozen,
-    name = "_Cancellation",
-    skip_from_py_object
+#[cfg_attr(
+    not(fuzzing),
+    pyclass(
+        module = "pyowl_core._native",
+        frozen,
+        name = "_Cancellation",
+        skip_from_py_object
+    )
 )]
 #[derive(Clone, Debug)]
 pub(crate) struct Cancellation {
     inner: Arc<SharedCancel>,
 }
 
+#[cfg(not(fuzzing))]
 #[pymethods]
 impl Cancellation {
     #[new]
@@ -151,6 +163,7 @@ impl Guard {
                 .ok_or_else(|| NativeError::limit("native work counter overflow"))?;
         }
         self.cancellation.checkpoint()?;
+        #[cfg(not(fuzzing))]
         if let Some(interrupt) = &self.interrupt {
             if let Err(error) = Python::attach(|py| py.check_signals()) {
                 let mut retained = interrupt.lock().map_err(|_| NativeError::panic())?;

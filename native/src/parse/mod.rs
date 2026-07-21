@@ -1,8 +1,10 @@
 //! Complete advertised native parser implementations and result framing.
 
 mod functional;
+#[cfg(not(fuzzing))]
 mod retained;
 
+#[cfg(not(fuzzing))]
 pub(crate) use retained::{
     build_rdfxml_seed as build_retained_rdfxml_seed_v2,
     contains_anonymous_rows as retained_rows_contain_anonymous_v2,
@@ -10,14 +12,18 @@ pub(crate) use retained::{
     RetainedParseMetadataV2,
 };
 
+#[cfg(not(fuzzing))]
 use std::mem::size_of;
+#[cfg(not(fuzzing))]
 use std::time::Instant;
 
+#[cfg(not(fuzzing))]
 use crate::cancel::{Cancellation, InterruptSlot};
 use crate::canonical::{encode_frame, Node};
 use crate::error::{NativeError, NativeResult};
 use crate::limits::{LimitKey, Limits};
 use crate::model::{scan_canonical, Category, ScanBudget};
+#[cfg(not(fuzzing))]
 use crate::publication::{TypedFacadeBuilderV2, TypedFacadeStorageV2};
 use crate::session::Session;
 use crate::source::SourceRequest;
@@ -53,6 +59,7 @@ pub(crate) struct ParsedDocument {
     pub(crate) language_spellings: Vec<String>,
 }
 
+#[cfg(not(fuzzing))]
 pub(crate) struct RetainedParseOutcome {
     pub(crate) encoded: Vec<u8>,
     pub(crate) storage: TypedFacadeStorageV2,
@@ -60,6 +67,7 @@ pub(crate) struct RetainedParseOutcome {
     pub(crate) phases: RetainedParsePhases,
 }
 
+#[cfg(not(fuzzing))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RetainedParsePhases {
     pub(crate) syntax_parse_ns: u64,
@@ -112,6 +120,7 @@ impl ParsedDocument {
         Ok(output)
     }
 
+    #[cfg(not(fuzzing))]
     fn into_structural_rows(self) -> [Vec<Vec<u8>>; 3] {
         [
             canonical_root_rows(self.annotations),
@@ -200,6 +209,7 @@ pub(crate) fn parse(
         .encode(session)
 }
 
+#[cfg(not(fuzzing))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn parse_retained(
     request: SourceRequest<'_>,
@@ -315,6 +325,7 @@ fn encode_spanned(values: &[SpannedNode], output: &mut Vec<u8>) -> NativeResult<
     Ok(())
 }
 
+#[cfg(not(fuzzing))]
 fn canonical_root_rows(values: Vec<SpannedNode>) -> Vec<Vec<u8>> {
     let mut rows: Vec<Vec<u8>> = values
         .into_iter()
@@ -325,6 +336,7 @@ fn canonical_root_rows(values: Vec<SpannedNode>) -> Vec<Vec<u8>> {
     rows
 }
 
+#[cfg(not(fuzzing))]
 fn retained_parse_external_bytes(
     input_bytes: usize,
     encoded_capacity: usize,
@@ -348,6 +360,7 @@ fn retained_parse_external_bytes(
     Ok(total)
 }
 
+#[cfg(not(fuzzing))]
 fn elapsed_ns(started: Instant) -> NativeResult<u64> {
     u64::try_from(started.elapsed().as_nanos())
         .map_err(|_| NativeError::limit("native parser phase duration exceeds u64"))
