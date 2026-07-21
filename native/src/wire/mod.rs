@@ -34,6 +34,57 @@ const HASH_CHUNK: usize = 64 * 1024;
 pub(crate) const RECEIPT_MAGIC: &[u8; 8] = b"PYNVAL1\0";
 pub(crate) const RECEIPT_BYTES: usize = 76;
 
+#[derive(Debug, Default)]
+struct AllocationProbe {
+    #[cfg(feature = "test-hooks")]
+    fail_after: Option<u64>,
+    #[cfg(feature = "test-hooks")]
+    allocations: u64,
+}
+
+impl AllocationProbe {
+    const fn disabled() -> Self {
+        Self {
+            #[cfg(feature = "test-hooks")]
+            fail_after: None,
+            #[cfg(feature = "test-hooks")]
+            allocations: 0,
+        }
+    }
+
+    #[cfg(feature = "test-hooks")]
+    const fn configured(fail_after: Option<u64>) -> Self {
+        Self {
+            fail_after,
+            allocations: 0,
+        }
+    }
+
+    fn checkpoint(&mut self) -> NativeResult<()> {
+        #[cfg(feature = "test-hooks")]
+        {
+            if self
+                .fail_after
+                .is_some_and(|maximum| self.allocations >= maximum)
+            {
+                return Err(NativeError::limit(
+                    "injected native wire allocation failure",
+                ));
+            }
+            self.allocations = self
+                .allocations
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native wire allocation counter overflow"))?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "test-hooks")]
+    const fn count(&self) -> u64 {
+        self.allocations
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Entry {
     kind: u16,
@@ -103,7 +154,13 @@ pub(crate) struct Validation {
 
 impl Validation {
     pub(crate) fn receipt(self) -> NativeResult<Vec<u8>> {
+        let mut allocations = AllocationProbe::disabled();
+        self.receipt_with_allocations(&mut allocations)
+    }
+
+    fn receipt_with_allocations(self, allocations: &mut AllocationProbe) -> NativeResult<Vec<u8>> {
         let mut result = Vec::new();
+        allocations.checkpoint()?;
         result
             .try_reserve_exact(RECEIPT_BYTES)
             .map_err(|_| NativeError::limit("native receipt allocation failed"))?;
@@ -140,6 +197,16 @@ impl WireArena {
 }
 
 fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Validation> {
+    let mut allocations = AllocationProbe::disabled();
+    validate_with_allocations(data, limits, guard, &mut allocations)
+}
+
+fn validate_with_allocations(
+    data: &[u8],
+    limits: &Limits,
+    guard: &mut Guard,
+    allocations: &mut AllocationProbe,
+) -> NativeResult<Validation> {
     guard.check(0, true)?;
     limits.check_source_size(data.len())?;
     let mut memory = MemoryBudget::new(limits, data.len())?;
@@ -217,6 +284,7 @@ fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Val
         .map_err(|_| NativeError::limit("wire section count exceeds address space"))?;
     let mut entries = Vec::new();
     memory.reserve::<Entry>(entry_capacity)?;
+    allocations.checkpoint()?;
     entries
         .try_reserve_exact(entry_capacity)
         .map_err(|_| NativeError::limit("wire directory allocation failed"))?;
@@ -310,6 +378,7 @@ fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Val
 
     let mut by_offset = Vec::new();
     memory.reserve::<Entry>(entries.len())?;
+    allocations.checkpoint()?;
     by_offset
         .try_reserve_exact(entries.len())
         .map_err(|_| NativeError::limit("wire range validation allocation failed"))?;
@@ -337,6 +406,7 @@ fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Val
 
     let mut tables = Vec::new();
     memory.reserve::<Table>(16)?;
+    allocations.checkpoint()?;
     tables
         .try_reserve_exact(16)
         .map_err(|_| NativeError::limit("wire table ledger allocation failed"))?;
@@ -374,6 +444,7 @@ fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Val
         guard,
         &mut work,
         &mut memory,
+        allocations,
     )?;
     guard.check(work, true)?;
     Ok(Validation {
@@ -462,6 +533,7 @@ fn validate_semantics(
     guard: &mut Guard,
     work: &mut u64,
     memory: &mut MemoryBudget,
+    allocations: &mut AllocationProbe,
 ) -> NativeResult<()> {
     let swrl = find_table(tables, SWRL_KIND);
     if swrl.is_some() != (feature_flags & FEATURE_SWRL != 0) {
@@ -549,7 +621,7 @@ fn validate_semantics(
     if let Some(table) = swrl {
         validate_model_table(data, table, Category::Swrl, limits, guard, work)?;
     }
-    let docs = validate_documents(data, tables, limits, guard, work, memory)?;
+    let docs = validate_documents(data, tables, limits, guard, work, memory, allocations)?;
     validate_imports(data, tables, &docs, limits, guard, work)?;
     let view = validate_view(data, tables, &docs, limits)?;
     validate_encoded_structural(data, tables, limits)?;
@@ -622,6 +694,7 @@ fn validate_documents(
     guard: &mut Guard,
     work: &mut u64,
     memory: &mut MemoryBudget,
+    allocations: &mut AllocationProbe,
 ) -> NativeResult<Documents> {
     let table = required_table(tables, 10)?;
     if table.count > limits.max_documents {
@@ -634,6 +707,7 @@ fn validate_documents(
     let extensions = find_table(tables, SWRL_KIND).map_or(0, |value| value.count);
     let mut key_ids = Vec::new();
     memory.reserve::<u32>(usize_from_u64(table.count)?)?;
+    allocations.checkpoint()?;
     key_ids
         .try_reserve_exact(usize_from_u64(table.count)?)
         .map_err(|_| NativeError::limit("DOCUMENTS key ledger allocation failed"))?;
@@ -732,6 +806,19 @@ fn validate_documents(
         root_key_id,
         total_source_bytes,
     })
+}
+
+#[cfg(feature = "test-hooks")]
+pub(crate) fn allocation_probe(
+    data: &[u8],
+    limits: &Limits,
+    guard: &mut Guard,
+    fail_after: Option<u64>,
+) -> NativeResult<(Vec<u8>, u64)> {
+    let mut allocations = AllocationProbe::configured(fail_after);
+    let validation = validate_with_allocations(data, limits, guard, &mut allocations)?;
+    let receipt = validation.receipt_with_allocations(&mut allocations)?;
+    Ok((receipt, allocations.count()))
 }
 
 fn validate_imports(

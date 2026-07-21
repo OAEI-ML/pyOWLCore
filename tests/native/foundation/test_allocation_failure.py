@@ -4,11 +4,12 @@ import os
 
 import pytest
 
-from pyowl_core import ParseLimits, canonical_bytes
+from pyowl_core import ParseLimits, canonical_bytes, encode_snapshot
 from pyowl_core.backends import native
 from pyowl_core.model import StructuralNode, constructor_spec
 from tests.generated.model.fixtures import model_fixtures
 from tests.native.foundation._support import NativeTestExtension, load_extension
+from tests.unit.wire.conftest import snapshot
 
 
 @pytest.fixture(scope="module")
@@ -16,10 +17,7 @@ def extension() -> NativeTestExtension:
     selected = load_extension()
     if not hasattr(selected, "_component_allocation_probe_v1"):
         if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
-            pytest.fail(
-                "selected native test-hooks artifact lacks "
-                "_component_allocation_probe_v1"
-            )
+            pytest.fail("selected native test-hooks artifact lacks _component_allocation_probe_v1")
         pytest.skip("native retained-component allocation hook is unavailable")
     return selected
 
@@ -85,3 +83,49 @@ def test_component_allocation_probe_rejects_an_unknown_phase(
     config = native._encode_config(ParseLimits(), None, verify=True)
     with pytest.raises(ValueError, match="must be build, freeze, or encode"):
         _invoke(extension, expected, config, "publish", None)
+
+
+@pytest.fixture(scope="module")
+def wire_extension(extension: NativeTestExtension) -> NativeTestExtension:
+    if not hasattr(extension, "_wire_allocation_probe_v1"):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail("selected native test-hooks artifact lacks _wire_allocation_probe_v1")
+        pytest.skip("native wire allocation hook is unavailable")
+    return extension
+
+
+def test_wire_validation_allocation_checkpoints_fail_closed(
+    wire_extension: NativeTestExtension,
+) -> None:
+    encoded = bytearray(encode_snapshot(snapshot("Allocation")))
+    original = bytes(encoded)
+    config = native._encode_config(ParseLimits(), None, verify=True)
+
+    receipt, allocations = wire_extension._wire_allocation_probe_v1(
+        memoryview(encoded),
+        config,
+        None,
+    )
+    assert receipt[:8] == b"PYNVAL1\0"
+    assert allocations > 0
+
+    for fail_after in range(allocations):
+        with pytest.raises(wire_extension._NativeError) as raised:
+            wire_extension._wire_allocation_probe_v1(
+                memoryview(encoded),
+                config,
+                fail_after,
+            )
+        assert raised.value.args == (
+            "NATIVE_WIRE_LIMIT",
+            "injected native wire allocation failure",
+        )
+        assert encoded == original
+
+    boundary_receipt, boundary_allocations = wire_extension._wire_allocation_probe_v1(
+        memoryview(encoded),
+        config,
+        allocations,
+    )
+    assert boundary_receipt == receipt
+    assert boundary_allocations == allocations

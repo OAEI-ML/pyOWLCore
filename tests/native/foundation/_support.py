@@ -46,6 +46,13 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...
 
+    def _wire_allocation_probe_v1(
+        self,
+        snapshot_wire: object,
+        config: object,
+        fail_after: int | None = None,
+    ) -> tuple[bytes, int]: ...
+
 
 def load_extension() -> NativeTestExtension:
     """Load an installed extension or an explicitly supplied developer build."""

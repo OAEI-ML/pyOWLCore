@@ -656,6 +656,35 @@ fn _component_allocation_probe_v1<'py>(
     Ok((output, allocations))
 }
 
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (snapshot_wire, config, fail_after=None))]
+fn _wire_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    snapshot_wire: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Bound<'py, PyBytes>, u64)> {
+    let limits = limits_from_python(config)?;
+    let owned = owned_buffer(py, snapshot_wire, Some(&limits), false)?;
+    let input_size = owned.len();
+    contain(|| limits.check_output_size(input_size, wire::RECEIPT_BYTES)).map_err(python_error)?;
+    let (receipt, allocations) = run_detached(py, move |interrupt| {
+        let mut guard = Guard::with_interrupt(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+            interrupt,
+        );
+        wire::allocation_probe(&owned, &limits, &mut guard, fail_after)
+    })?;
+    let receipt = PyBytes::new_with(py, receipt.len(), |buffer| {
+        buffer.copy_from_slice(&receipt);
+        Ok(())
+    })?;
+    Ok((receipt, allocations))
+}
+
 #[pyfunction]
 #[pyo3(signature = (source, config, cancel=None))]
 fn parse_document<'py>(
@@ -770,6 +799,8 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(_component_roundtrip_v1, module)?)?;
     #[cfg(feature = "test-hooks")]
     module.add_function(wrap_pyfunction!(_component_allocation_probe_v1, module)?)?;
+    #[cfg(feature = "test-hooks")]
+    module.add_function(wrap_pyfunction!(_wire_allocation_probe_v1, module)?)?;
     module.add_function(wrap_pyfunction!(parse_document, module)?)?;
     module.add_function(wrap_pyfunction!(build_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(build_index, module)?)?;
