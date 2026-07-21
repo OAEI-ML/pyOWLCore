@@ -40,7 +40,6 @@ def main() -> None:
     from pyowl_core.model import canonical_bytes
     from tests.native.encoded_views import _independent as independent_decoder
     from tests.native.encoded_views._independent import decode_root_canonical_bytes
-    from tests.native.encoded_views._support import scalar_root_bytes
     from tools.benchmark.comparators.common_contract import build_core_common_contract
     from tools.wire_reference import read_wire
 
@@ -71,6 +70,18 @@ def main() -> None:
             backend=backend,
             collect_provenance=True,
         )
+
+    def scalar_root_bytes(snapshot: object) -> tuple[tuple[int, bytes], ...]:
+        selected_snapshot = cast(Any, snapshot)
+        roots = [
+            *(
+                (1, canonical_bytes(value))
+                for value in selected_snapshot.ontology_annotations()
+            ),
+            *((2, canonical_bytes(value)) for value in selected_snapshot.iter_axioms()),
+            *((3, canonical_bytes(value)) for value in selected_snapshot.iter_extensions()),
+        ]
+        return tuple(sorted(roots))
 
     reference = load_snapshot(source, options=options(BackendPreference.PYTHON))
 
