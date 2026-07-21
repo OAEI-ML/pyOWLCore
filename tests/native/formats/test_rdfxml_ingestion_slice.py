@@ -169,6 +169,30 @@ def test_valid_xml_declaration_and_explicit_xml_binding_match_python(
     assert observed.total_triples == python.rdf_mapping_report.total_triples
 
 
+def test_processing_instructions_map_to_no_rdf_events(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<?audit before?>
+<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <?xml-stylesheet href='ignored.xsl'?>
+ <owl:Class rdf:about='urn:C'>
+  <rdfs:comment>a<?audit nested?>b</rdfs:comment>
+ </owl:Class>
+</rdf:RDF>
+<?audit after?>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 2
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+
 def test_named_node_axiom_slice_matches_python_canonical_bytes(
     extension: NativeTestExtension,
 ) -> None:

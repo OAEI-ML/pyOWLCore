@@ -250,14 +250,31 @@ impl<'a> XmlStream<'a> {
                 .ok_or_else(xml_syntax)?;
                 let end = marker + 2;
                 let body = &self.text[start + 2..end - 2];
-                let target_end =
-                    bounded_find_xml_space(body.as_bytes(), session)?.unwrap_or(body.len());
-                let target = &body[..target_end];
-                if target != "xml" || start != 0 || self.xml_declaration_seen {
-                    return Err(xml_forbidden());
+                let target_end = scan_name(body, 0)?;
+                if target_end != body.len()
+                    && !body
+                        .as_bytes()
+                        .get(target_end)
+                        .is_some_and(|value| is_xml_space(*value))
+                {
+                    return Err(xml_syntax());
                 }
-                validate_xml_declaration(body)?;
-                self.xml_declaration_seen = true;
+                let target = &body[..target_end];
+                if target == "xml" {
+                    if start != 0 || self.xml_declaration_seen {
+                        return Err(xml_syntax());
+                    }
+                    validate_xml_declaration(body)?;
+                    self.xml_declaration_seen = true;
+                } else {
+                    // RDF/XML maps no processing-instruction Infoset item to
+                    // a graph event. Validate the XML envelope, then discard
+                    // the instruction without invoking any target handler.
+                    if target.eq_ignore_ascii_case("xml") {
+                        return Err(xml_syntax());
+                    }
+                    validate_xml_characters(&body[target_end..])?;
+                }
                 self.advance(end, session)?;
                 continue;
             }
@@ -6089,24 +6106,6 @@ fn bounded_find(
     Ok(None)
 }
 
-fn bounded_find_xml_space(bytes: &[u8], session: &mut Session<'_>) -> NativeResult<Option<usize>> {
-    session.finish()?;
-    for (batch, chunk) in bytes.chunks(64 * 1024).enumerate() {
-        if let Some(position) = chunk
-            .iter()
-            .position(|value| matches!(*value, b' ' | b'\t' | b'\r' | b'\n'))
-        {
-            return batch
-                .checked_mul(64 * 1024)
-                .and_then(|offset| offset.checked_add(position))
-                .map(Some)
-                .ok_or_else(|| NativeError::limit("native XML scan offset overflow"));
-        }
-        session.finish()?;
-    }
-    Ok(None)
-}
-
 fn skip_space(bytes: &[u8], cursor: &mut usize) {
     while bytes
         .get(*cursor)
@@ -10397,6 +10396,34 @@ mod tests {
         ] {
             let source = format!("<rdf:RDF xmlns:rdf=\"{RDF}\" {declaration}/>");
             assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
+    }
+
+    #[test]
+    fn processing_instructions_are_validated_and_map_to_no_rdf_events() {
+        let with_instructions = format!(
+            "<?audit before?><rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><?xml-stylesheet href=\"ignored.xsl\"?><owl:Class rdf:about=\"urn:C\"><rdfs:comment>a<?audit nested?>b</rdfs:comment></owl:Class></rdf:RDF><?audit after?>"
+        );
+        let without_instructions = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:Class rdf:about=\"urn:C\"><rdfs:comment>ab</rdfs:comment></owl:Class></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(with_instructions.as_bytes(), None)
+                .expect("RDF/XML with processing instructions")
+                .axioms,
+            mapped(without_instructions.as_bytes(), None)
+                .expect("RDF/XML without processing instructions")
+                .axioms,
+        );
+
+        for malformed in [
+            "<??>",
+            "<?1target?>",
+            "<?target/data?>",
+            "<?XML version='1.0'?>",
+            " <?xml version='1.0'?><rdf:RDF/>",
+        ] {
+            assert_eq!(graph(malformed).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
         }
     }
 
