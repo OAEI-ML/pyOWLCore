@@ -47,6 +47,58 @@ const ENCODED_VIEW_SCHEMA_V1: EncodedViewSchema = EncodedViewSchema {
 #[cfg(feature = "test-hooks")]
 type PyEncodedViewSchemaV1 = (String, u32, u32, Py<PyBytes>, Py<PyBytes>, String, bool);
 
+#[derive(Debug, Default)]
+struct EncodedBridgeAllocationProbe {
+    #[cfg(feature = "test-hooks")]
+    fail_after: Option<u64>,
+    #[cfg(feature = "test-hooks")]
+    allocations: u64,
+}
+
+impl EncodedBridgeAllocationProbe {
+    const fn disabled() -> Self {
+        Self {
+            #[cfg(feature = "test-hooks")]
+            fail_after: None,
+            #[cfg(feature = "test-hooks")]
+            allocations: 0,
+        }
+    }
+
+    #[cfg(feature = "test-hooks")]
+    const fn configured(fail_after: Option<u64>) -> Self {
+        Self {
+            fail_after,
+            allocations: 0,
+        }
+    }
+
+    fn checkpoint(&mut self) -> PyResult<()> {
+        #[cfg(feature = "test-hooks")]
+        {
+            if self
+                .fail_after
+                .is_some_and(|maximum| self.allocations >= maximum)
+            {
+                return Err(pyo3::exceptions::PyMemoryError::new_err(
+                    "injected native encoded-view bridge allocation failure",
+                ));
+            }
+            self.allocations = self.allocations.checked_add(1).ok_or_else(|| {
+                pyo3::exceptions::PyMemoryError::new_err(
+                    "native encoded-view bridge allocation counter overflow",
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "test-hooks")]
+    const fn count(&self) -> u64 {
+        self.allocations
+    }
+}
+
 pub(super) const FEATURES: &[&str] = &[];
 
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -68,6 +120,10 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     {
         _module.add_function(wrap_pyfunction!(_encoded_view_schema_v1, _module)?)?;
         _module.add_function(wrap_pyfunction!(_encoded_structural_fixture_v1, _module)?)?;
+        _module.add_function(wrap_pyfunction!(
+            _encoded_structural_bridge_allocation_probe_v1,
+            _module
+        )?)?;
     }
     Ok(())
 }
@@ -440,6 +496,42 @@ fn _encoded_structural_columns_v1<'py>(
     )
 }
 
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, fail_after=None))]
+fn _encoded_structural_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyDict>, Py<PyDict>, u64)> {
+    if !scope.get_type().is(py.get_type::<PyString>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "encoded structural scope must be an exact str",
+        ));
+    }
+    let scope: String = scope.extract()?;
+    let selected_scope = encoded_selection(&scope, document_ordinal)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let limits = crate::limits_from_python(config)?;
+    let storage = handle.encoded_storage_v2(py)?;
+    drop(handle);
+    let mut allocations = EncodedBridgeAllocationProbe::configured(fail_after);
+    let (buffers, counters) = encoded_columns_to_python_with_allocations(
+        py,
+        storage.as_ref(),
+        selected_scope,
+        document_ordinal,
+        false,
+        &limits,
+        crate::cancel::Cancellation::with_duration(None),
+        &mut allocations,
+    )?;
+    Ok((buffers, counters, allocations.count()))
+}
+
 fn encoded_selection(
     scope: &str,
     document_ordinal: Option<u64>,
@@ -461,6 +553,30 @@ fn encoded_columns_to_python(
     limits: &crate::limits::Limits,
     cancellation: crate::cancel::Cancellation,
 ) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
+    let mut allocations = EncodedBridgeAllocationProbe::disabled();
+    encoded_columns_to_python_with_allocations(
+        py,
+        storage,
+        scope,
+        document_ordinal,
+        raw_document_owner,
+        limits,
+        cancellation,
+        &mut allocations,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encoded_columns_to_python_with_allocations(
+    py: Python<'_>,
+    storage: &PublicationStorageV2,
+    scope: TypedFacadeScopeV2,
+    document_ordinal: Option<u64>,
+    raw_document_owner: bool,
+    limits: &crate::limits::Limits,
+    cancellation: crate::cancel::Cancellation,
+    allocations: &mut EncodedBridgeAllocationProbe,
+) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
     let prepared = crate::run_detached(py, move |interrupt| {
         storage.prepare_encoded_structural_columns(
             scope,
@@ -478,11 +594,14 @@ fn encoded_columns_to_python(
             "native encoded-column Python owner exceeds Py_ssize_t",
         ))
     })?;
+    allocations.checkpoint()?;
     let backing = PyBytes::new_with(py, total_bytes, |output| {
         py.detach(|| crate::contain(|| prepared.write_into(output)))
             .map_err(crate::python_error)
     })?;
+    allocations.checkpoint()?;
     let owner_view = PyMemoryView::from(backing.as_any())?;
+    allocations.checkpoint()?;
     let buffers = PyDict::new(py);
     for (name, start, length) in layout.named_ranges() {
         let stop = start.checked_add(length).ok_or_else(|| {
@@ -500,10 +619,15 @@ fn encoded_columns_to_python(
                 "native encoded-column Python range exceeds Py_ssize_t",
             ))
         })?;
-        let view = owner_view.get_item(PySlice::new(py, start, stop, 1))?;
+        allocations.checkpoint()?;
+        let slice = PySlice::new(py, start, stop, 1);
+        allocations.checkpoint()?;
+        let view = owner_view.get_item(slice)?;
+        allocations.checkpoint()?;
         buffers.set_item(name, view)?;
     }
     let counters = prepared.counters();
+    allocations.checkpoint()?;
     let observed = PyDict::new(py);
     for (name, value) in [
         ("root_rows", counters.root_rows),
@@ -529,6 +653,7 @@ fn encoded_columns_to_python(
         // one Python bytes allocation filled directly by Rust.
         ("python_bridge_copy_bytes", 0),
     ] {
+        allocations.checkpoint()?;
         observed.set_item(name, value)?;
     }
     storage

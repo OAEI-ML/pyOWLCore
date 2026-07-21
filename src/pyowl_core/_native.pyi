@@ -132,6 +132,13 @@ def _encoded_structural_columns_v1(
     config: object,
     cancel: _Cancellation | None = None,
 ) -> tuple[dict[str, memoryview], dict[str, int]]: ...
+def _encoded_structural_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    fail_after: int | None = None,
+) -> tuple[dict[str, memoryview], dict[str, int], int]: ...
 def _encoded_structural_document_columns_v1(
     handle: _NativeDocumentHandle,
     config: object,
