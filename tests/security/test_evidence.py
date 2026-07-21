@@ -335,6 +335,14 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     )
     assert preparation_bridge["boundary_successes"] == 1
     assert preparation_bridge["scope"]
+    structural_bridge = sweep["retained_structural_bridge"]
+    assert structural_bridge["allocation_checkpoints"] == 17
+    assert (
+        structural_bridge["injected_failures"]
+        == structural_bridge["allocation_checkpoints"]
+    )
+    assert structural_bridge["boundary_successes"] == 1
+    assert structural_bridge["scope"]
     index_bridge = sweep["index_bridge"]
     assert index_bridge["allocation_checkpoints"] == 13
     assert index_bridge["injected_failures"] == index_bridge["allocation_checkpoints"]
@@ -358,6 +366,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + functional_retained_bridge["allocation_checkpoints"]
         + rdfxml_bridge["allocation_checkpoints"]
         + preparation_bridge["allocation_checkpoints"]
+        + structural_bridge["allocation_checkpoints"]
         + index_bridge["allocation_checkpoints"]
         + foundation_bridge["allocation_checkpoints"]
     )
@@ -373,6 +382,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + functional_retained_bridge["boundary_successes"]
         + rdfxml_bridge["boundary_successes"]
         + preparation_bridge["boundary_successes"]
+        + structural_bridge["boundary_successes"]
         + index_bridge["boundary_successes"]
         + foundation_bridge["boundary_successes"]
     )
@@ -405,6 +415,10 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     )
     assert (
         release["native_retained_preparation_python_bridge_allocation_failures"]
+        == "local-pass"
+    )
+    assert (
+        release["native_retained_structural_python_bridge_allocation_failures"]
         == "local-pass"
     )
     assert release["native_index_python_bridge_allocation_failures"] == "local-pass"
