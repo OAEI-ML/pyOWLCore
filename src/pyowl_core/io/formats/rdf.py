@@ -987,6 +987,7 @@ class RDFMapper:
         current = head
         while True:
             self.context.limits.enforce("max_rdf_list_length", len(items) + 1)
+            self.context.limits.enforce("max_sequence_arity", len(items) + 1)
             if current in visited:
                 self._mapping_error("cyclic RDF collection")
             visited.add(current)

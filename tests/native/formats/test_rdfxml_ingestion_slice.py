@@ -705,6 +705,39 @@ def test_distinct_axiom_limit_matches_python(
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_raw_rdf_list_sequence_arity_limit_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'>
+  <rdfs:subClassOf>
+   <owl:Class>
+    <owl:oneOf rdf:parseType='Collection'>
+     <rdf:Description rdf:about='urn:i'/>
+     <rdf:Description rdf:about='urn:i'/>
+    </owl:oneOf>
+   </owl:Class>
+  </rdfs:subClassOf>
+ </owl:Class>
+</rdf:RDF>"""
+    boundary = ParseLimits(max_sequence_arity=2)
+
+    _owner, observed = _ingest(extension, source, limits=boundary)
+    python = parse_rdfxml(source, limits=boundary, document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+
+    limited = ParseLimits(max_sequence_arity=1)
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(source, limits=limited, document_iri=None)
+    assert python_error.value.limit == "max_sequence_arity"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 def test_distinct_ontology_annotation_limit_matches_python(
     extension: NativeTestExtension,
 ) -> None:
