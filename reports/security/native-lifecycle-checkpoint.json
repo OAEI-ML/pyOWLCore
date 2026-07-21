@@ -1,0 +1,106 @@
+{
+  "schema": "pyowl-core.native-lifecycle-checkpoint/1",
+  "subject_revision": "0bc75d42003e43fc3adddbf3745355e406e13843",
+  "recorded_date": "2026-07-21",
+  "claim": "checkpoint-only",
+  "capability_advertised": false,
+  "environment": {
+    "working_tree": "clean detached worktree at subject_revision",
+    "operating_system": "macOS 26.5.2 (25F84)",
+    "architecture": "x86_64",
+    "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "1.97.1 (c980f4866 2026-06-30)",
+    "native_test_python": "CPython 3.12.3",
+    "subinterpreter_python": "CPython 3.11.3"
+  },
+  "artifact": {
+    "kind": "local test-hook extension",
+    "profile": "dev",
+    "features": ["extension-module", "test-hooks"],
+    "path": "/private/tmp/pyowlcore-lifecycle-target-0bc75d4/debug/lib_native.dylib"
+  },
+  "continuous_workflow": {
+    "path": ".github/workflows/native-safety.yml",
+    "job": "runtime-lifecycle",
+    "status": "configured-not-run",
+    "reason": "the SHA-pinned hosted matrix is committed, but no GitHub Actions run is evidence for this local checkpoint",
+    "matrix": [
+      {
+        "python": "3.10",
+        "native_test_hooks": true
+      },
+      {
+        "python": "3.12",
+        "native_test_hooks": true
+      },
+      {
+        "python": "3.14",
+        "native_test_hooks": true
+      },
+      {
+        "python": "3.14t",
+        "native_test_hooks": false
+      }
+    ]
+  },
+  "runs": [
+    {
+      "id": "cpython-3.12-native-owner-lifecycle",
+      "status": "pass",
+      "working_directory": "/private/tmp/pyowlcore-lifecycle-evidence-0bc.I5DbWA",
+      "command": "PYTHONPATH=src:. PYOWL_CORE_TEST_NATIVE_LIBRARY=/private/tmp/pyowlcore-lifecycle-target-0bc75d4/debug/lib_native.dylib PYOWL_CORE_TEST_HOOKS_REQUIRED=1 python -m pytest -q tests/native/foundation/test_native_boundary.py tests/native/foundation/test_runtime_policy_lifecycle.py tests/native/retained_facade/test_rust_process_lifecycle.py",
+      "observations": {
+        "tests_passed": 17,
+        "tests_failed": 0,
+        "tests_skipped": 2,
+        "subtests_passed": 157,
+        "seconds": 31.38
+      },
+      "notes": "Main-interpreter metadata, panic containment, GIL release, atomic cancellation, SIGINT, real fork reset, repeated owning-publication close/GC, and interpreter teardown passed. The two skips are represented as separate not-run rows below."
+    },
+    {
+      "id": "cpython-3.11-subinterpreter-python-fallback",
+      "status": "pass",
+      "working_directory": "/private/tmp/pyowlcore-lifecycle-evidence-0bc.I5DbWA",
+      "command": "PYTHONPATH=src python3.11 -m tools.security.subinterpreter_probe --repetitions 8",
+      "observations": {
+        "interpreters_created": 8,
+        "interpreters_destroyed": 8,
+        "documents_parsed": 8,
+        "native_extension_import_attempts": 0,
+        "process_exit_code": 0
+      },
+      "notes": "Every subinterpreter received the explicit policy reason, parsed one Functional document through AUTO's complete Python fallback, and finalized cleanly."
+    },
+    {
+      "id": "cpython-3.12-subinterpreter-python-fallback",
+      "status": "not-run",
+      "reason": "the local CPython 3.12.3 build aborts when its own stdlib ssl module is imported and finalized in a subinterpreter; the isolated preflight detects this before pyowl-core runs",
+      "evidence": "the same preflight passes on local CPython 3.11.3; the hosted 3.12 lane remains configured-not-run"
+    },
+    {
+      "id": "cpython-3.14-public-interpreter-api",
+      "status": "not-run",
+      "reason": "the public concurrent.interpreters detector has focused fixture coverage, but no local CPython 3.14 interpreter is installed",
+      "evidence": "the hosted 3.14 native test-hook lane remains configured-not-run"
+    },
+    {
+      "id": "cpython-3.14t-python-fallback",
+      "status": "not-run",
+      "reason": "no local free-threaded CPython is installed",
+      "evidence": "the hosted 3.14t pure-fallback lane remains configured-not-run"
+    }
+  ],
+  "release_effect": {
+    "lifecycle_matrix": "not-run",
+    "security_resource_determinism": "not-run",
+    "core_release_eligible": false,
+    "reason": "the exact local owner and CPython 3.11 subinterpreter slices pass, but the hosted supported-interpreter/free-threaded matrix and broader allocation/platform gates are incomplete"
+  },
+  "limitations": [
+    "The test-hook artifact is a local development build, not a wheel-installed release artifact.",
+    "Actual concurrent.interpreters and free-threaded behavior await the hosted CPython 3.14 and 3.14t lanes.",
+    "The local CPython 3.12 subinterpreter lane is blocked by an isolated standard-library ssl finalization abort.",
+    "No release or retained-load capability follows from this checkpoint."
+  ]
+}

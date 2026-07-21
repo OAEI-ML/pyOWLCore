@@ -12,6 +12,9 @@ from tools.security.minimize import minimize
 
 ROOT = Path(__file__).parents[2]
 NATIVE_SAFETY = ROOT / "reports" / "security" / "native-safety-checkpoint.json"
+NATIVE_LIFECYCLE = (
+    ROOT / "reports" / "security" / "native-lifecycle-checkpoint.json"
+)
 
 
 def test_conformance_and_security_reports_are_reproducible() -> None:
@@ -80,6 +83,68 @@ def test_native_safety_checkpoint_is_exact_and_fail_closed() -> None:
     ):
         text = report.read_text(encoding="utf-8")
         assert "native-safety-checkpoint.json" in text
+
+
+def test_native_lifecycle_checkpoint_is_exact_and_fail_closed() -> None:
+    checkpoint = json.loads(NATIVE_LIFECYCLE.read_text(encoding="utf-8"))
+
+    assert checkpoint["schema"] == "pyowl-core.native-lifecycle-checkpoint/1"
+    assert re.fullmatch(r"[0-9a-f]{40}", checkpoint["subject_revision"])
+    assert checkpoint["claim"] == "checkpoint-only"
+    assert checkpoint["capability_advertised"] is False
+    assert checkpoint["artifact"]["kind"] == "local test-hook extension"
+
+    workflow = checkpoint["continuous_workflow"]
+    assert workflow["path"] == ".github/workflows/native-safety.yml"
+    assert workflow["job"] == "runtime-lifecycle"
+    assert workflow["status"] == "configured-not-run"
+    assert workflow["reason"]
+    assert [row["python"] for row in workflow["matrix"]] == [
+        "3.10",
+        "3.12",
+        "3.14",
+        "3.14t",
+    ]
+
+    runs = {run["id"]: run for run in checkpoint["runs"]}
+    assert {name: run["status"] for name, run in runs.items()} == {
+        "cpython-3.12-native-owner-lifecycle": "pass",
+        "cpython-3.11-subinterpreter-python-fallback": "pass",
+        "cpython-3.12-subinterpreter-python-fallback": "not-run",
+        "cpython-3.14-public-interpreter-api": "not-run",
+        "cpython-3.14t-python-fallback": "not-run",
+    }
+    for run in runs.values():
+        if run["status"] == "pass":
+            assert run["command"]
+            assert run["observations"]
+            assert run["notes"]
+        else:
+            assert run["reason"]
+            assert run["evidence"]
+
+    assert runs["cpython-3.12-native-owner-lifecycle"]["observations"][
+        "tests_failed"
+    ] == 0
+    fallback = runs["cpython-3.11-subinterpreter-python-fallback"]["observations"]
+    assert fallback["interpreters_created"] == fallback["interpreters_destroyed"] == 8
+    assert fallback["native_extension_import_attempts"] == 0
+    assert (ROOT / "tools" / "security" / "subinterpreter_probe.py").is_file()
+
+    release = checkpoint["release_effect"]
+    assert release["lifecycle_matrix"] == "not-run"
+    assert release["security_resource_determinism"] == "not-run"
+    assert release["core_release_eligible"] is False
+    assert release["reason"]
+    assert checkpoint["limitations"]
+
+    for report in (
+        ROOT / "reports" / "security" / "README.md",
+        ROOT / "reports" / "workpackages" / "WP15.md",
+        ROOT / "reports" / "workpackages" / "WP18.md",
+    ):
+        text = report.read_text(encoding="utf-8")
+        assert "native-lifecycle-checkpoint.json" in text
 
 
 def test_minimized_regression_workflow_reaches_one_minimal_subsequence() -> None:

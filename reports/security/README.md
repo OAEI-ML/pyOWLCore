@@ -12,6 +12,11 @@ ThreadSanitizer, Miri, and bounded libFuzzer results for safety commit
 those passing local runs from the committed-but-not-run hosted workflow and
 keeps the aggregate release gate at `not-run`.
 
+`native-lifecycle-checkpoint.json` separately binds the local owning-extension
+teardown/fork/signal/thread results and repeated CPython subinterpreter fallback
+probe. It records unsupported or unavailable interpreter lanes as `not-run`
+and the hosted 3.10/3.12/3.14/3.14t matrix as `configured-not-run`.
+
 Run the ordinary bounded security lanes with:
 
 ```console
