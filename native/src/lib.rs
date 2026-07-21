@@ -30,9 +30,9 @@ use limits::Limits;
 use model::NativeComponentBuilder;
 use model::{scan_canonical, CanonicalRow, ModelArena, ScanBudget};
 use pyo3::create_exception;
-#[cfg(feature = "test-hooks")]
-use pyo3::exceptions::PyValueError;
 use pyo3::exceptions::{PyException, PyTypeError};
+#[cfg(feature = "test-hooks")]
+use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyModule, PyTuple};
 use wire::WireArena;
@@ -54,6 +54,56 @@ const FOUNDATION_FEATURES: [&str; 10] = [
 ];
 
 create_exception!(_native, _NativeError, PyException);
+
+#[derive(Debug, Default)]
+struct ParserBridgeAllocationProbe {
+    #[cfg(feature = "test-hooks")]
+    fail_after: Option<u64>,
+    #[cfg(feature = "test-hooks")]
+    allocations: u64,
+}
+
+impl ParserBridgeAllocationProbe {
+    const fn disabled() -> Self {
+        Self {
+            #[cfg(feature = "test-hooks")]
+            fail_after: None,
+            #[cfg(feature = "test-hooks")]
+            allocations: 0,
+        }
+    }
+
+    #[cfg(feature = "test-hooks")]
+    const fn configured(fail_after: Option<u64>) -> Self {
+        Self {
+            fail_after,
+            allocations: 0,
+        }
+    }
+
+    fn checkpoint(&mut self) -> PyResult<()> {
+        #[cfg(feature = "test-hooks")]
+        {
+            if self
+                .fail_after
+                .is_some_and(|maximum| self.allocations >= maximum)
+            {
+                return Err(PyMemoryError::new_err(
+                    "injected native parser bridge allocation failure",
+                ));
+            }
+            self.allocations = self.allocations.checked_add(1).ok_or_else(|| {
+                PyMemoryError::new_err("native parser bridge allocation counter overflow")
+            })?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "test-hooks")]
+    const fn count(&self) -> u64 {
+        self.allocations
+    }
+}
 
 fn contain<T>(operation: impl FnOnce() -> NativeResult<T>) -> NativeResult<T> {
     catch_unwind(AssertUnwindSafe(operation)).unwrap_or_else(|_| Err(NativeError::panic()))
@@ -130,17 +180,29 @@ fn owned_source_request(
     value: &Bound<'_, PyAny>,
     limits: &Limits,
 ) -> PyResult<Vec<u8>> {
+    let mut allocations = ParserBridgeAllocationProbe::disabled();
+    owned_source_request_with_allocations(py, value, limits, &mut allocations)
+}
+
+fn owned_source_request_with_allocations(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    limits: &Limits,
+    allocations: &mut ParserBridgeAllocationProbe,
+) -> PyResult<Vec<u8>> {
+    allocations.checkpoint()?;
     let builtins = py.import("builtins")?;
-    let view = builtins
-        .getattr("memoryview")?
-        .call1((value,))
-        .map_err(|error| {
-            if error.is_instance_of::<PyTypeError>(py) {
-                PyTypeError::new_err("native parser request must expose a byte buffer")
-            } else {
-                error
-            }
-        })?;
+    allocations.checkpoint()?;
+    let memoryview = builtins.getattr("memoryview")?;
+    allocations.checkpoint()?;
+    let view = memoryview.call1((value,)).map_err(|error| {
+        if error.is_instance_of::<PyTypeError>(py) {
+            PyTypeError::new_err("native parser request must expose a byte buffer")
+        } else {
+            error
+        }
+    })?;
+    allocations.checkpoint()?;
     let nbytes: usize = view.getattr("nbytes")?.extract()?;
     let maximum = usize::try_from(limits.max_source_bytes)
         .unwrap_or(usize::MAX)
@@ -154,9 +216,13 @@ fn owned_source_request(
             "native parser request exceeds configured resource limits",
         )));
     }
+    allocations.checkpoint()?;
     let owned = view.call_method0("tobytes")?;
     let bytes = owned.cast::<PyBytes>()?.as_bytes();
     let mut result = Vec::new();
+    if !bytes.is_empty() {
+        allocations.checkpoint()?;
+    }
     result
         .try_reserve_exact(bytes.len())
         .map_err(|_| python_error(NativeError::limit("native owned-buffer allocation failed")))?;
@@ -788,6 +854,39 @@ fn _parser_allocation_probe_v1<'py>(
     Ok((output, allocations))
 }
 
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (source, config, fail_after=None))]
+fn _parser_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Bound<'py, PyBytes>, u64)> {
+    let limits = limits_from_python(config)?;
+    let mut allocations = ParserBridgeAllocationProbe::configured(fail_after);
+    let owned = owned_source_request_with_allocations(py, source, &limits, &mut allocations)?;
+    let input_size = owned.len();
+    let output = run_detached(py, move |interrupt| {
+        let mut guard = Guard::with_interrupt(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+            interrupt,
+        );
+        let request = source::SourceRequest::decode(&owned, &limits)?;
+        let mut session = session::Session::new(&mut guard, &limits, input_size)?;
+        parse::parse(request, &mut session)
+    })?;
+    contain(|| limits.check_output_size(input_size, output.len())).map_err(python_error)?;
+    allocations.checkpoint()?;
+    let output = PyBytes::new_with(py, output.len(), |buffer| {
+        buffer.copy_from_slice(&output);
+        Ok(())
+    })?;
+    Ok((output, allocations.count()))
+}
+
 #[pyfunction]
 #[pyo3(signature = (source, config, cancel=None))]
 fn parse_document<'py>(
@@ -908,6 +1007,11 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(_wire_allocation_probe_v1, module)?)?;
     #[cfg(feature = "test-hooks")]
     module.add_function(wrap_pyfunction!(_parser_allocation_probe_v1, module)?)?;
+    #[cfg(feature = "test-hooks")]
+    module.add_function(wrap_pyfunction!(
+        _parser_bridge_allocation_probe_v1,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(parse_document, module)?)?;
     module.add_function(wrap_pyfunction!(build_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(build_index, module)?)?;

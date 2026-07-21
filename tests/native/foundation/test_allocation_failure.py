@@ -141,18 +141,22 @@ def parser_extension(extension: NativeTestExtension) -> NativeTestExtension:
     return extension
 
 
-def test_parser_allocation_budget_checkpoints_fail_closed(
-    parser_extension: NativeTestExtension,
-) -> None:
+def _parser_request() -> bytearray:
     source = (
         b"Prefix(:=<urn:allocation:>) Ontology(<urn:ontology> "
         b"Import(<urn:import>) Annotation(:label \"hello\"@EN) "
         b"Declaration(Class(:C)) "
         b"SubClassOf(:C ObjectSomeValuesFrom(:property :D)))"
     )
-    request = bytearray(
+    return bytearray(
         struct.pack("<8sHHQ", b"PYNFSS1\0", 1, 0, len(source)) + source
     )
+
+
+def test_parser_allocation_budget_checkpoints_fail_closed(
+    parser_extension: NativeTestExtension,
+) -> None:
+    request = _parser_request()
     original = bytes(request)
     config = native._encode_config(ParseLimits(), None, verify=True)
 
@@ -181,6 +185,57 @@ def test_parser_allocation_budget_checkpoints_fail_closed(
         memoryview(request),
         config,
         allocations,
+    )
+    assert boundary_output == output
+    assert boundary_allocations == allocations
+    assert request == original
+
+
+@pytest.fixture(scope="module")
+def parser_bridge_extension(extension: NativeTestExtension) -> NativeTestExtension:
+    if not hasattr(extension, "_parser_bridge_allocation_probe_v1"):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail(
+                "selected native test-hooks artifact lacks "
+                "_parser_bridge_allocation_probe_v1"
+            )
+        pytest.skip("native parser bridge allocation hook is unavailable")
+    return extension
+
+
+def test_parser_bridge_allocation_checkpoints_fail_before_publication(
+    parser_bridge_extension: NativeTestExtension,
+) -> None:
+    request = _parser_request()
+    original = bytes(request)
+    config = native._encode_config(ParseLimits(), None, verify=True)
+
+    output, allocations = parser_bridge_extension._parser_bridge_allocation_probe_v1(
+        memoryview(request),
+        config,
+        None,
+    )
+    assert output[:8] == b"PYNFSSR1"
+    assert allocations == 7
+
+    for fail_after in range(allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native parser bridge allocation failure$",
+        ):
+            parser_bridge_extension._parser_bridge_allocation_probe_v1(
+                memoryview(request),
+                config,
+                fail_after,
+            )
+        assert request == original
+
+    boundary_output, boundary_allocations = (
+        parser_bridge_extension._parser_bridge_allocation_probe_v1(
+            memoryview(request),
+            config,
+            allocations,
+        )
     )
     assert boundary_output == output
     assert boundary_allocations == allocations

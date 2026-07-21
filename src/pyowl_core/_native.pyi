@@ -151,6 +151,11 @@ def _parser_allocation_probe_v1(
     config: object,
     fail_after: int | None = None,
 ) -> tuple[bytes, int]: ...
+def _parser_bridge_allocation_probe_v1(
+    source: object,
+    config: object,
+    fail_after: int | None = None,
+) -> tuple[bytes, int]: ...
 def _encoded_structural_document_columns_v1(
     handle: _NativeDocumentHandle,
     config: object,
