@@ -8,6 +8,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import NoReturn, cast
+from xml.parsers import expat
 
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.document import OntologyDocument
@@ -36,6 +37,7 @@ XML_NS = "http://www.w3.org/XML/1998/namespace"
 _FORBIDDEN_XML_TEXT = re.compile(r"(?is)<!\s*(?:DOCTYPE|ENTITY)")
 _XML_SPACE = frozenset(" \t\r\n")
 _IRI_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
+_XML_UNDEFINED_ENTITY = expat.errors.codes[expat.errors.XML_ERROR_UNDEFINED_ENTITY]
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +86,11 @@ def parse_rdfxml(
                     depth -= 1
         pull.close()
     except ET.ParseError as error:
+        if error.code == _XML_UNDEFINED_ENTITY:
+            raise OntologySyntaxError(
+                "external or undefined XML entities are forbidden",
+                code="XML_FORBIDDEN_CONSTRUCT",
+            ) from error
         raise OntologySyntaxError("malformed RDF/XML document", code="RDFXML_SYNTAX") from error
     if root is None:
         raise OntologySyntaxError("empty RDF/XML document", code="RDFXML_ROOT")

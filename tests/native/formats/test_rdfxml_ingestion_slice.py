@@ -287,6 +287,36 @@ def test_utf16_forbidden_construct_fails_before_publication(
     assert raised.value.args[0] == "NATIVE_XML_FORBIDDEN_CONSTRUCT"
 
 
+@pytest.mark.parametrize(
+    "class_element",
+    (
+        "<owl:Class rdf:about='urn:C' rdfs:label='&external;'/>",
+        (
+            "<owl:Class rdf:about='urn:C'>"
+            "<rdfs:label>&external;</rdfs:label>"
+            "</owl:Class>"
+        ),
+    ),
+)
+def test_unknown_entity_references_fail_in_both_backends(
+    extension: NativeTestExtension,
+    class_element: str,
+) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#'>"
+        f"{class_element}</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "XML_FORBIDDEN_CONSTRUCT"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_XML_FORBIDDEN_CONSTRUCT"
+
+
 def test_processing_instructions_map_to_no_rdf_events(
     extension: NativeTestExtension,
 ) -> None:
