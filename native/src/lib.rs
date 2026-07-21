@@ -127,7 +127,15 @@ fn python_error(error: NativeError) -> PyErr {
 }
 
 fn limits_from_python(config: &Bound<'_, PyAny>) -> PyResult<Limits> {
-    let bytes = owned_buffer(config.py(), config, None, true)?;
+    let mut allocations = ParserBridgeAllocationProbe::disabled();
+    limits_from_python_with_allocations(config, &mut allocations)
+}
+
+fn limits_from_python_with_allocations(
+    config: &Bound<'_, PyAny>,
+    allocations: &mut ParserBridgeAllocationProbe,
+) -> PyResult<Limits> {
+    let bytes = owned_buffer_with_allocations(config.py(), config, None, true, allocations)?;
     contain(|| Limits::decode(&bytes)).map_err(python_error)
 }
 
@@ -141,21 +149,34 @@ fn owned_buffer(
     limits: Option<&Limits>,
     configuration: bool,
 ) -> PyResult<Vec<u8>> {
+    let mut allocations = ParserBridgeAllocationProbe::disabled();
+    owned_buffer_with_allocations(py, value, limits, configuration, &mut allocations)
+}
+
+fn owned_buffer_with_allocations(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    limits: Option<&Limits>,
+    configuration: bool,
+    allocations: &mut ParserBridgeAllocationProbe,
+) -> PyResult<Vec<u8>> {
+    allocations.checkpoint()?;
     let builtins = py.import("builtins")?;
-    let view = builtins
-        .getattr("memoryview")?
-        .call1((value,))
-        .map_err(|error| {
-            if error.is_instance_of::<PyTypeError>(py) {
-                PyTypeError::new_err(if configuration {
-                    "native config must expose a byte buffer"
-                } else {
-                    "native input must expose a byte buffer"
-                })
+    allocations.checkpoint()?;
+    let memoryview = builtins.getattr("memoryview")?;
+    allocations.checkpoint()?;
+    let view = memoryview.call1((value,)).map_err(|error| {
+        if error.is_instance_of::<PyTypeError>(py) {
+            PyTypeError::new_err(if configuration {
+                "native config must expose a byte buffer"
             } else {
-                error
-            }
-        })?;
+                "native input must expose a byte buffer"
+            })
+        } else {
+            error
+        }
+    })?;
+    allocations.checkpoint()?;
     let nbytes: usize = view.getattr("nbytes")?.extract()?;
     if configuration && nbytes != 0 && nbytes != limits::CONFIG_BYTES {
         return Err(python_error(NativeError::protocol(
@@ -165,9 +186,13 @@ fn owned_buffer(
     if let Some(selected) = limits {
         contain(|| selected.check_source_size(nbytes)).map_err(python_error)?;
     }
+    allocations.checkpoint()?;
     let owned = view.call_method0("tobytes")?;
     let bytes = owned.cast::<PyBytes>()?.as_bytes();
     let mut result = Vec::new();
+    if !bytes.is_empty() {
+        allocations.checkpoint()?;
+    }
     result
         .try_reserve_exact(bytes.len())
         .map_err(|_| python_error(NativeError::limit("native owned-buffer allocation failed")))?;
@@ -863,8 +888,8 @@ fn _parser_bridge_allocation_probe_v1<'py>(
     config: &Bound<'py, PyAny>,
     fail_after: Option<u64>,
 ) -> PyResult<(Bound<'py, PyBytes>, u64)> {
-    let limits = limits_from_python(config)?;
     let mut allocations = ParserBridgeAllocationProbe::configured(fail_after);
+    let limits = limits_from_python_with_allocations(config, &mut allocations)?;
     let owned = owned_source_request_with_allocations(py, source, &limits, &mut allocations)?;
     let input_size = owned.len();
     let output = run_detached(py, move |interrupt| {

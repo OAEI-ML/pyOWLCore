@@ -208,7 +208,8 @@ def test_parser_bridge_allocation_checkpoints_fail_before_publication(
 ) -> None:
     request = _parser_request()
     original = bytes(request)
-    config = native._encode_config(ParseLimits(), None, verify=True)
+    config = bytearray(native._encode_config(ParseLimits(), None, verify=True))
+    original_config = bytes(config)
 
     output, allocations = parser_bridge_extension._parser_bridge_allocation_probe_v1(
         memoryview(request),
@@ -216,7 +217,8 @@ def test_parser_bridge_allocation_checkpoints_fail_before_publication(
         None,
     )
     assert output[:8] == b"PYNFSSR1"
-    assert allocations == 7
+    assert allocations == 13
+    assert config == original_config
 
     for fail_after in range(allocations):
         with pytest.raises(
@@ -229,6 +231,7 @@ def test_parser_bridge_allocation_checkpoints_fail_before_publication(
                 fail_after,
             )
         assert request == original
+        assert config == original_config
 
     boundary_output, boundary_allocations = (
         parser_bridge_extension._parser_bridge_allocation_probe_v1(
@@ -240,3 +243,4 @@ def test_parser_bridge_allocation_checkpoints_fail_before_publication(
     assert boundary_output == output
     assert boundary_allocations == allocations
     assert request == original
+    assert config == original_config
