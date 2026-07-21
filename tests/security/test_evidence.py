@@ -253,7 +253,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert parser["boundary_successes"] == 1
     assert parser["scope"]
     parser_bridge = sweep["parser_bridge"]
-    assert parser_bridge["allocation_checkpoints"] == 7
+    assert parser_bridge["allocation_checkpoints"] == 13
     assert parser_bridge["injected_failures"] == parser_bridge["allocation_checkpoints"]
     assert parser_bridge["boundary_successes"] == 1
     assert parser_bridge["scope"]

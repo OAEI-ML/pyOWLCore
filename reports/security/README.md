@@ -30,9 +30,9 @@ publication builder, plus 51 explicit backing-owner/slice/dictionary/counter
 publication checkpoints in the direct encoded-view Python bridge and 13 actual
 capacity-growth/owner checkpoints in its retained Rust encoded-column
 workspace, plus 38 positive Functional parser session allocation-budget
-claims and seven explicit Functional parser source/result Python-bridge
-checkpoints. It covers 20,844 checkpoints locally; the remaining configuration/
-other-bridge, process-allocator, and hosted-platform matrix stays open.
+claims and 13 explicit Functional parser configuration/source/result Python-
+bridge checkpoints. It covers 20,850 checkpoints locally; the remaining bridge,
+process-allocator, and hosted-platform matrix stays open.
 
 Run the ordinary bounded security lanes with:
 
