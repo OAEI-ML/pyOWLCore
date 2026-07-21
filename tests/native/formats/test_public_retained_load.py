@@ -959,6 +959,23 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["ingestion_native_origin_rows_retained"] == 3
     assert observed["ingestion_native_origin_bytes_retained"] > 0
     assert observed["decoded_parity"] is True
+    assert observed["decoded_root_parity"] is True
+    assert observed["overlay_root_parity"] is True
+    assert observed["overlay_owner_identity"] is True
+    assert observed["overlay_scalar_traversal_calls"] == 0
+    assert observed["overlay_referenced_copy_bytes"] == 0
+    assert observed["composite_root_parity"] is True
+    assert observed["composite_owner_identity"] is True
+    assert observed["composite_scalar_traversal_calls"] == 0
+    assert observed["composite_referenced_copy_bytes"] == 0
+    assert observed["segmented_left_model_rows"] == 0
+    assert observed["segmented_left_page_requests"] == 0
+    assert observed["segmented_left_rows_emitted"] == 0
+    assert observed["segmented_right_model_rows"] == 0
+    assert observed["segmented_right_page_requests"] == 0
+    assert observed["segmented_right_rows_emitted"] == 0
+    assert observed["hostile_descriptor_code"] == "ENCODED_VIEW_DESCRIPTOR"
+    assert observed["syntax_error_code"] == "FORMAT_SYNTAX"
     assert len(observed["wire_sha256"]) == 64
     assert len(observed["wire_python_sha256"]) == 64
     assert observed["wire_python_parity"] is True
@@ -992,6 +1009,7 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["mapped_closed"] is True
     assert observed["direct_survives_owner_close"] is True
     assert observed["selected_closed"] is True
+    assert observed["right_selected_closed"] is True
     assert observed["auto_backend"] == "native"
     assert observed["auto_retained_parity"] is True
     assert observed["auto_ignored_manifest_parity"] is True

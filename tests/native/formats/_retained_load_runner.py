@@ -5,8 +5,10 @@ import hashlib
 import json
 import tempfile
 import warnings
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 from tests.native.foundation._support import load_extension
 
@@ -16,13 +18,19 @@ def main() -> None:
 
     import pyowl_core
     from pyowl_core import (
+        AxiomScope,
         BackendPreference,
+        BackendProtocolError,
         DocumentFormat,
         EncodedStructuralView,
         ImportPolicy,
         LoadOptions,
+        OntologyDelta,
+        OntologySyntaxError,
         SnapshotInUseError,
         UnresolvedImportWarning,
+        apply_delta,
+        compose_views,
         decode_snapshot,
         encode_snapshot,
         load_snapshot,
@@ -30,7 +38,9 @@ def main() -> None:
     )
     from pyowl_core.backends import native
     from pyowl_core.model import canonical_bytes
+    from tests.native.encoded_views import _independent as independent_decoder
     from tests.native.encoded_views._independent import decode_root_canonical_bytes
+    from tests.native.encoded_views._support import scalar_root_bytes
     from tools.benchmark.comparators.common_contract import build_core_common_contract
     from tools.wire_reference import read_wire
 
@@ -46,6 +56,12 @@ def main() -> None:
         b"Declaration(Class(<urn:retained-installed:C>)) "
         b"Declaration(Class(<urn:retained-installed:D>)) "
         b"SubClassOf(<urn:retained-installed:C> <urn:retained-installed:D>))"
+    )
+    right_source = (
+        b"Ontology(<urn:retained-installed:right> "
+        b"Declaration(Class(<urn:retained-installed:E>)) "
+        b"Declaration(Class(<urn:retained-installed:F>)) "
+        b"SubClassOf(<urn:retained-installed:E> <urn:retained-installed:F>))"
     )
 
     def options(backend: BackendPreference) -> LoadOptions:
@@ -143,6 +159,115 @@ def main() -> None:
     if after_direct_python.model_rows_materialized != before_python.model_rows_materialized:
         raise AssertionError("retained direct columns materialized Python model rows")
 
+    right_reference = load_snapshot(right_source, options=options(BackendPreference.PYTHON))
+    right_selected = load_snapshot(right_source, options=options(BackendPreference.NATIVE))
+    right_handle = cast(Any, right_selected)._native_snapshot_state.owner.handle
+    right_owner = object.__getattribute__(right_handle, "_owner_v2")
+    right_before_native = right_owner._publication_counters_v2()
+    right_before_python = cast(Any, right_selected)._native_python_counters()
+    overlay = apply_delta(selected, OntologyDelta())
+    composite = compose_views(selected, right_selected, roles=("left", "right"))
+    expected_overlay = scalar_root_bytes(apply_delta(reference, OntologyDelta()))
+    expected_composite = scalar_root_bytes(
+        compose_views(reference, right_reference, roles=("left", "right"))
+    )
+    scalar_error = AssertionError("installed encoded matrix crossed native scalar traversal")
+    with (
+        patch.object(type(selected), "iter_axioms", side_effect=scalar_error),
+        patch.object(type(selected), "iter_extensions", side_effect=scalar_error),
+        patch.object(type(selected), "ontology_annotations", side_effect=scalar_error),
+        patch.object(type(selected), "signature", side_effect=scalar_error),
+    ):
+        overlay_encoded = overlay.view(EncodedStructuralView)
+        composite_encoded = composite.view(EncodedStructuralView)
+    overlay_decode = independent_decoder.decode_segmented_root_canonical_bytes(
+        overlay_encoded,
+        expected_owner=overlay,
+        expected_scope=AxiomScope.CLOSURE,
+        expected_document_key=None,
+    )
+    composite_decode = independent_decoder.decode_segmented_root_canonical_bytes(
+        composite_encoded,
+        expected_owner=composite,
+        expected_scope=AxiomScope.CLOSURE,
+        expected_document_key=None,
+    )
+    overlay_roots = tuple((root.root_kind, root.canonical) for root in overlay_decode.roots)
+    composite_roots = tuple((root.root_kind, root.canonical) for root in composite_decode.roots)
+    if overlay_roots != expected_overlay or composite_roots != expected_composite:
+        raise AssertionError("installed segmented columns disagree with scalar roots")
+    if overlay_decode.proof.scalar_traversal_calls != 0:
+        raise AssertionError("installed overlay decoder crossed scalar traversal")
+    if composite_decode.proof.scalar_traversal_calls != 0:
+        raise AssertionError("installed composite decoder crossed scalar traversal")
+    if overlay_decode.proof.referenced_buffer_copy_bytes != 0:
+        raise AssertionError("installed overlay decoder copied referenced buffers")
+    if composite_decode.proof.referenced_buffer_copy_bytes != 0:
+        raise AssertionError("installed composite decoder copied referenced buffers")
+    if not any(cast(Any, value).owner is selected for value in overlay_decode.proof.retained_views):
+        raise AssertionError("installed overlay decoder did not retain its native base")
+    if not any(
+        cast(Any, value).owner is selected for value in composite_decode.proof.retained_views
+    ):
+        raise AssertionError("installed composite decoder did not retain its left native member")
+    if not any(
+        cast(Any, value).owner is right_selected for value in composite_decode.proof.retained_views
+    ):
+        raise AssertionError("installed composite decoder did not retain its right native member")
+    after_segmented_native = raw_owner._publication_counters_v2()
+    after_segmented_python = cast(Any, selected)._native_python_counters()
+    right_after_segmented_native = right_owner._publication_counters_v2()
+    right_after_segmented_python = cast(Any, right_selected)._native_python_counters()
+    if after_segmented_native.page_requests != after_direct_native.page_requests:
+        raise AssertionError("installed segmented publication crossed left facade paging")
+    if after_segmented_native.rows_emitted != after_direct_native.rows_emitted:
+        raise AssertionError("installed segmented publication emitted left facade rows")
+    if right_after_segmented_native.page_requests != right_before_native.page_requests:
+        raise AssertionError("installed segmented publication crossed right facade paging")
+    if right_after_segmented_native.rows_emitted != right_before_native.rows_emitted:
+        raise AssertionError("installed segmented publication emitted right facade rows")
+    if after_segmented_python.model_rows_materialized != before_python.model_rows_materialized:
+        raise AssertionError("installed segmented publication materialized left model rows")
+    if (
+        right_after_segmented_python.model_rows_materialized
+        != right_before_python.model_rows_materialized
+    ):
+        raise AssertionError("installed segmented publication materialized right model rows")
+    if after_segmented_native.publication_structural_rows_copied != 0:
+        raise AssertionError("installed segmented publication copied left structural rows")
+    if right_after_segmented_native.publication_structural_rows_copied != 0:
+        raise AssertionError("installed segmented publication copied right structural rows")
+    overlay_owner_identity = overlay_encoded.owner is overlay
+    overlay_scalar_traversal_calls = overlay_decode.proof.scalar_traversal_calls
+    overlay_referenced_copy_bytes = overlay_decode.proof.referenced_buffer_copy_bytes
+    composite_owner_identity = composite_encoded.owner is composite
+    composite_scalar_traversal_calls = composite_decode.proof.scalar_traversal_calls
+    composite_referenced_copy_bytes = composite_decode.proof.referenced_buffer_copy_bytes
+
+    hostile_code = None
+    try:
+        independent_decoder.decode_segmented_root_canonical_bytes(
+            replace(direct, descriptor=b"hostile"),
+            expected_owner=selected,
+            expected_scope=AxiomScope.CLOSURE,
+            expected_document_key=None,
+        )
+    except BackendProtocolError as error:
+        hostile_code = error.code
+    if hostile_code != "ENCODED_VIEW_DESCRIPTOR":
+        raise AssertionError("installed consumer did not reject a hostile descriptor")
+
+    syntax_error_code = None
+    try:
+        load_snapshot(
+            b"Ontology(<urn:retained-installed:malformed> Declaration(Class(<urn:C>))",
+            options=options(BackendPreference.NATIVE),
+        )
+    except OntologySyntaxError as error:
+        syntax_error_code = error.code
+    if syntax_error_code is None:
+        raise AssertionError("forced native malformed input did not fail closed")
+
     reference_wire = encode_snapshot(reference)
     retained_wire = encode_snapshot(selected)
     reference_image = read_wire(reference_wire)
@@ -170,6 +295,8 @@ def main() -> None:
         raise AssertionError("wire handoff copied structural publication bytes")
 
     decoded = decode_snapshot(retained_wire)
+    decoded_encoded = decoded.view(EncodedStructuralView)
+    decoded_roots = decode_root_canonical_bytes(decoded_encoded.buffers)
     decoded_parity = (
         decoded.structural_fingerprint == reference.structural_fingerprint
         and decoded.logical_fingerprint == reference.logical_fingerprint
@@ -386,8 +513,11 @@ def main() -> None:
         mapped.close()
         mapped_closed = mapped.closed
 
+    del overlay_decode, composite_decode, overlay_encoded, composite_encoded, overlay, composite
+    gc.collect()
     selected.close()
     direct_survives_owner_close = decode_root_canonical_bytes(direct.buffers) == expected_roots
+    right_selected.close()
 
     print(
         json.dumps(
@@ -406,12 +536,14 @@ def main() -> None:
                 "auto_source_bytes": len(auto_source),
                 "backend": selected.capabilities.backend,
                 "decoded_parity": decoded_parity,
+                "decoded_root_parity": decoded_roots == expected_roots,
                 "direct_encoded_view_requests": (
                     after_direct_native.encoded_view_requests - before_native.encoded_view_requests
                 ),
                 "direct_owner_identity": direct.owner is selected,
                 "direct_root_parity": direct_roots == expected_roots,
                 "direct_survives_owner_close": direct_survives_owner_close,
+                "hostile_descriptor_code": hostile_code,
                 "encoded_view_schemas": dict(selected.capabilities.encoded_view_schemas),
                 "empty_closure_parity": empty_closure_parity,
                 "empty_closure_parser_result_bytes": empty_closure_parser_result_bytes,
@@ -463,6 +595,10 @@ def main() -> None:
                 "mapped_root_parity": mapped_roots == expected_roots,
                 "mapped_exporter_type": type(exporters[0]).__name__ if exporters else None,
                 "origin_parity": origin_parity,
+                "overlay_owner_identity": overlay_owner_identity,
+                "overlay_referenced_copy_bytes": overlay_referenced_copy_bytes,
+                "overlay_root_parity": overlay_roots == expected_overlay,
+                "overlay_scalar_traversal_calls": overlay_scalar_traversal_calls,
                 "package_file": pyowl_core.__file__,
                 "parser_bytes": before_native.parser_bytes,
                 "phase_timings": dict(selected.report.timings),
@@ -473,7 +609,33 @@ def main() -> None:
                 "reference_origin_rows": reference_origin_rows,
                 "retained_origin_rows": retained_origin_rows,
                 "selected_closed": selected.closed,
+                "right_selected_closed": right_selected.closed,
                 "snapshot_type": type(selected).__name__,
+                "composite_owner_identity": composite_owner_identity,
+                "composite_referenced_copy_bytes": composite_referenced_copy_bytes,
+                "composite_root_parity": composite_roots == expected_composite,
+                "composite_scalar_traversal_calls": composite_scalar_traversal_calls,
+                "segmented_left_model_rows": (
+                    after_segmented_python.model_rows_materialized
+                    - after_direct_python.model_rows_materialized
+                ),
+                "segmented_left_page_requests": (
+                    after_segmented_native.page_requests - after_direct_native.page_requests
+                ),
+                "segmented_left_rows_emitted": (
+                    after_segmented_native.rows_emitted - after_direct_native.rows_emitted
+                ),
+                "segmented_right_model_rows": (
+                    right_after_segmented_python.model_rows_materialized
+                    - right_before_python.model_rows_materialized
+                ),
+                "segmented_right_page_requests": (
+                    right_after_segmented_native.page_requests - right_before_native.page_requests
+                ),
+                "segmented_right_rows_emitted": (
+                    right_after_segmented_native.rows_emitted - right_before_native.rows_emitted
+                ),
+                "syntax_error_code": syntax_error_code,
                 "summary_fingerprint_parity": summary_fingerprint_parity,
                 "summary_inventory_parity": summary_inventory_parity,
                 "summary_node_count_parity": (
