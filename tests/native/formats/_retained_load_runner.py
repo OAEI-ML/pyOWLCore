@@ -350,6 +350,79 @@ def main() -> None:
     if not without_provenance_parity:
         raise AssertionError("provenance-disabled retained load differs from Python reference")
 
+    anonymous_source = (
+        b"Prefix(ex:=<urn:retained-installed-anonymous:>) "
+        b"Ontology(<urn:retained-installed-anonymous> "
+        b"ClassAssertion(ex:C _:left) ClassAssertion(ex:C _:left) "
+        b"ObjectPropertyAssertion(ex:p _:left _:right))"
+    )
+
+    def anonymous_options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            collect_provenance=True,
+            preserve_source_map=True,
+        )
+
+    anonymous_reference = load_snapshot(
+        anonymous_source,
+        options=anonymous_options(BackendPreference.PYTHON),
+    )
+    anonymous_selected = load_snapshot(
+        anonymous_source,
+        options=anonymous_options(BackendPreference.NATIVE),
+    )
+    anonymous_ingestion = cast(Any, anonymous_selected)._native_ingestion_counters_v2()
+    anonymous_raw_rows = tuple(
+        canonical_bytes(value) for value in anonymous_selected.root.axioms
+    )
+    anonymous_effective_rows = tuple(
+        canonical_bytes(value) for value in anonymous_selected.iter_axioms()
+    )
+    anonymous_raw_origin_parity = (
+        set(cast(Any, anonymous_selected.root.origin_index).entries)
+        == set(cast(Any, anonymous_reference.root.origin_index).entries)
+        and {
+            digest: tuple((item.occurrence, item.span) for item in occurrences)
+            for digest, occurrences in cast(
+                Any, anonymous_selected.root.origin_index
+            ).entries.items()
+        }
+        == {
+            digest: tuple((item.occurrence, item.span) for item in occurrences)
+            for digest, occurrences in cast(
+                Any, anonymous_reference.root.origin_index
+            ).entries.items()
+        }
+    )
+    anonymous_parity = (
+        type(anonymous_selected).__name__ == "_NativeOntologySnapshot"
+        and anonymous_selected.capabilities.backend == "native"
+        and anonymous_selected.structural_fingerprint
+        == anonymous_reference.structural_fingerprint
+        and anonymous_selected.logical_fingerprint == anonymous_reference.logical_fingerprint
+        and anonymous_selected.signature_fingerprint
+        == anonymous_reference.signature_fingerprint
+        and anonymous_raw_rows
+        == tuple(canonical_bytes(value) for value in anonymous_reference.root.axioms)
+        and anonymous_effective_rows
+        == tuple(canonical_bytes(value) for value in anonymous_reference.iter_axioms())
+        and anonymous_raw_rows != anonymous_effective_rows
+        and anonymous_raw_origin_parity
+        and anonymous_selected.origin_index == anonymous_reference.origin_index
+        and anonymous_selected.root.source_map == anonymous_reference.root.source_map
+        and encode_snapshot(anonymous_selected) == encode_snapshot(anonymous_reference)
+        and anonymous_ingestion.parser_result_bytes_scanned == 0
+        and anonymous_ingestion.eager_structural_objects_materialized == 0
+        and anonymous_ingestion.structural_occurrence_rows_scanned == 3
+        and anonymous_ingestion.structural_root_rows_published == 2
+    )
+    if not anonymous_parity:
+        raise AssertionError("anonymous retained load differs from Python reference")
+    anonymous_selected.close()
+
     empty_closure_parity: dict[str, bool] = {}
     empty_closure_snapshot_types: dict[str, str] = {}
     empty_closure_parser_result_bytes: dict[str, int] = {}
@@ -545,6 +618,11 @@ def main() -> None:
                 "auto_parser_bytes": auto_before_native.parser_bytes,
                 "auto_retained_parity": auto_parity,
                 "auto_source_bytes": len(auto_source),
+                "anonymous_retained_parity": anonymous_parity,
+                "anonymous_snapshot_type": type(anonymous_selected).__name__,
+                "anonymous_parser_result_bytes": (
+                    anonymous_ingestion.parser_result_bytes_scanned
+                ),
                 "backend": selected.capabilities.backend,
                 "decoded_parity": decoded_parity,
                 "decoded_root_parity": decoded_roots == expected_roots,

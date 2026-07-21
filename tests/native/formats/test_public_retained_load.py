@@ -1082,6 +1082,9 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["auto_parser_bytes"] == observed["auto_source_bytes"] == 262281
     assert observed["auto_direct_survives_owner_close"] is True
     assert observed["auto_closed"] is True
+    assert observed["anonymous_retained_parity"] is True
+    assert observed["anonymous_snapshot_type"] == "_NativeOntologySnapshot"
+    assert observed["anonymous_parser_result_bytes"] == 0
     assert observed["unresolved_retained_parity"] is True
     assert observed["unresolved_snapshot_type"] == "_NativeOntologySnapshot"
     assert observed["empty_closure_parity"] == {
