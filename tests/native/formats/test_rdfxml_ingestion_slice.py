@@ -585,6 +585,36 @@ def test_namespace_declaration_limit_matches_python(
 
 
 @pytest.mark.parametrize(
+    ("document", "expanded_iri_bytes"),
+    (
+        ("<rdf:RDF {namespace}/>", 46),
+        ("<rdf:Description {namespace} rdf:about='urn:C'/>", 54),
+    ),
+)
+def test_reserved_element_iri_limits_match_python(
+    extension: NativeTestExtension,
+    document: str,
+    expanded_iri_bytes: int,
+) -> None:
+    source = document.format(
+        namespace="xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'"
+    ).encode()
+    boundary = ParseLimits(max_iri_bytes=expanded_iri_bytes)
+
+    _owner, observed = _ingest(extension, source, limits=boundary)
+    python = parse_rdfxml(source, limits=boundary, document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+
+    limited = ParseLimits(max_iri_bytes=expanded_iri_bytes - 1)
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(source, limits=limited, document_iri=None)
+    assert python_error.value.limit == "max_iri_bytes"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
+@pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (
         (

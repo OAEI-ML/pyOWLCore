@@ -154,6 +154,7 @@ class RDFXMLGraphParser:
         base = self._base(self.root, self.base)
         language = self.root.get(f"{{{XML_NS}}}lang")
         if self.root.tag == _tag(RDF, "RDF"):
+            self._validate_iri(RDF + "RDF")
             allowed = {f"{{{XML_NS}}}base", f"{{{XML_NS}}}lang"}
             if any(name not in allowed for name in self.root.attrib):
                 self._syntax("rdf:RDF has an invalid attribute")
@@ -176,6 +177,7 @@ class RDFXMLGraphParser:
             self._syntax("RDF node elements cannot contain direct character data")
         if element.tag == _tag(RDF, "Description"):
             expanded_name = RDF + "Description"
+            self._validate_iri(expanded_name)
         else:
             if not _namespace(element.tag):
                 self._syntax("typed RDF node element requires a namespace")

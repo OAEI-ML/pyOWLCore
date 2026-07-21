@@ -550,6 +550,41 @@ def test_rdfxml_namespace_declarations_enforce_the_prefix_limit() -> None:
 
 
 @pytest.mark.parametrize(
+    ("document", "expanded_iri_bytes"),
+    (
+        ("<rdf:RDF {namespace}/>", 46),
+        ("<rdf:Description {namespace} rdf:about='urn:C'/>", 54),
+    ),
+)
+def test_rdfxml_reserved_element_iris_enforce_utf8_byte_limits(
+    document: str,
+    expanded_iri_bytes: int,
+) -> None:
+    source = document.format(
+        namespace="xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'"
+    ).encode()
+
+    parse_document(
+        source,
+        format="rdfxml",
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            limits=ParseLimits(max_iri_bytes=expanded_iri_bytes),
+        ),
+    )
+    with pytest.raises(ResourceLimitError) as raised:
+        parse_document(
+            source,
+            format="rdfxml",
+            options=LoadOptions(
+                backend=BackendPreference.PYTHON,
+                limits=ParseLimits(max_iri_bytes=expanded_iri_bytes - 1),
+            ),
+        )
+    assert raised.value.limit == "max_iri_bytes"
+
+
+@pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (
         (
