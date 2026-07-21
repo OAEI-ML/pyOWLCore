@@ -972,6 +972,62 @@ def test_empty_modern_data_enumeration_rejection_matches_python(
     assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_UNSUPPORTED"
 
 
+def test_owl1_declarations_characteristics_and_deprecation_match_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'>
+  <rdf:type rdf:resource='http://www.w3.org/2000/01/rdf-schema#Class'/>
+ </owl:Class>
+ <owl:ObjectProperty rdf:about='urn:p'>
+  <rdf:type rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#Property'/>
+ </owl:ObjectProperty>
+ <owl:OntologyProperty rdf:about='urn:ap'>
+  <rdf:type rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#Property'/>
+ </owl:OntologyProperty>
+ <rdf:Description rdf:about='urn:inverse'>
+  <rdf:type rdf:resource='http://www.w3.org/2002/07/owl#InverseFunctionalProperty'/>
+  <rdf:type rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#Property'/>
+ </rdf:Description>
+ <rdf:Description rdf:about='urn:symmetric'>
+  <rdf:type rdf:resource='http://www.w3.org/2002/07/owl#SymmetricProperty'/>
+ </rdf:Description>
+ <rdf:Description rdf:about='urn:transitive'>
+  <rdf:type rdf:resource='http://www.w3.org/2002/07/owl#TransitiveProperty'/>
+  <rdf:type rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#Property'/>
+ </rdf:Description>
+ <owl:Class rdf:about='urn:Old'>
+  <rdf:type rdf:resource='http://www.w3.org/2002/07/owl#DeprecatedClass'/>
+ </owl:Class>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert len(observed.axioms) == 11
+    assert observed.total_triples == observed.consumed_triples
+
+
+def test_explicit_inferred_declaration_deduplication_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:ObjectProperty rdf:about='urn:p'>
+  <rdf:type rdf:resource='http://www.w3.org/2002/07/owl#SymmetricProperty'/>
+ </owl:ObjectProperty>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert len(observed.axioms) == 2
+
+
 def test_distinct_ontology_annotation_limit_matches_python(
     extension: NativeTestExtension,
 ) -> None:

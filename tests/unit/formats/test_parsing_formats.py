@@ -940,6 +940,71 @@ def test_rdf_mapping_rejects_empty_modern_data_enumeration() -> None:
     assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
 
 
+def test_rdf_mapping_maps_owl1_declarations_characteristics_and_deprecation() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C">
+    <rdf:type rdf:resource="http://www.w3.org/2000/01/rdf-schema#Class"/>
+  </owl:Class>
+  <owl:ObjectProperty rdf:about="urn:p">
+    <rdf:type rdf:resource="{RDF_NAMESPACE}Property"/>
+  </owl:ObjectProperty>
+  <owl:OntologyProperty rdf:about="urn:ap">
+    <rdf:type rdf:resource="{RDF_NAMESPACE}Property"/>
+  </owl:OntologyProperty>
+  <rdf:Description rdf:about="urn:inverse">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#InverseFunctionalProperty"/>
+    <rdf:type rdf:resource="{RDF_NAMESPACE}Property"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="urn:symmetric">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#SymmetricProperty"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="urn:transitive">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#TransitiveProperty"/>
+    <rdf:type rdf:resource="{RDF_NAMESPACE}Property"/>
+  </rdf:Description>
+  <owl:Class rdf:about="urn:Old">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#DeprecatedClass"/>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert len(tuple(document.iter_axioms(m.Declaration))) == 7
+    assert (
+        m.InverseFunctionalObjectProperty(m.ObjectProperty(m.IRI("urn:inverse")))
+        in document.axioms
+    )
+    assert m.SymmetricObjectProperty(m.ObjectProperty(m.IRI("urn:symmetric"))) in document.axioms
+    assert m.TransitiveObjectProperty(m.ObjectProperty(m.IRI("urn:transitive"))) in document.axioms
+    assert m.AnnotationAssertion(
+        m.AnnotationProperty(m.IRI("http://www.w3.org/2002/07/owl#deprecated")),
+        m.IRI("urn:Old"),
+        m.Literal(
+            "true",
+            m.Datatype(m.IRI("http://www.w3.org/2001/XMLSchema#boolean")),
+        ),
+    ) in document.axioms
+    assert len(document.axioms) == 11
+
+
+def test_rdf_mapping_does_not_duplicate_explicit_inferred_declaration() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:ObjectProperty rdf:about="urn:p">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#SymmetricProperty"/>
+  </owl:ObjectProperty>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert len(tuple(document.iter_axioms(m.Declaration))) == 1
+    assert len(document.axioms) == 2
+
+
 def test_rdf_mapping_enforces_the_distinct_ontology_annotation_limit() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"

@@ -236,12 +236,18 @@ class RDFMapper:
             OWL + "ObjectProperty": m.EntityKind.OBJECT_PROPERTY,
             OWL + "DatatypeProperty": m.EntityKind.DATA_PROPERTY,
             OWL + "AnnotationProperty": m.EntityKind.ANNOTATION_PROPERTY,
+            OWL + "OntologyProperty": m.EntityKind.ANNOTATION_PROPERTY,
             OWL + "NamedIndividual": m.EntityKind.NAMED_INDIVIDUAL,
+        }
+        inferred = {
+            OWL + "InverseFunctionalProperty": m.EntityKind.OBJECT_PROPERTY,
+            OWL + "SymmetricProperty": m.EntityKind.OBJECT_PROPERTY,
+            OWL + "TransitiveProperty": m.EntityKind.OBJECT_PROPERTY,
         }
         for triple in self.graph.find(predicate=RDF + "type"):
             if not isinstance(triple.subject, RDFIRI) or not isinstance(triple.object, RDFIRI):
                 continue
-            kind = mapping.get(triple.object.value)
+            kind = mapping.get(triple.object.value) or inferred.get(triple.object.value)
             if kind is None:
                 continue
             self.kinds.setdefault(triple.subject.value, set()).add(kind)
@@ -425,18 +431,40 @@ class RDFMapper:
             OWL + "ObjectProperty": m.ObjectProperty,
             OWL + "DatatypeProperty": m.DataProperty,
             OWL + "AnnotationProperty": m.AnnotationProperty,
+            OWL + "OntologyProperty": m.AnnotationProperty,
             OWL + "NamedIndividual": m.NamedIndividual,
+        }
+        inferred = {
+            OWL + "InverseFunctionalProperty": m.ObjectProperty,
+            OWL + "SymmetricProperty": m.ObjectProperty,
+            OWL + "TransitiveProperty": m.ObjectProperty,
         }
         values: list[m.AxiomNode] = []
         for triple in self.graph.find(predicate=RDF + "type"):
             if not isinstance(triple.subject, RDFIRI) or not isinstance(triple.object, RDFIRI):
                 continue
             constructor = mapping.get(triple.object.value)
+            is_inferred = constructor is None
+            if is_inferred:
+                constructor = inferred.get(triple.object.value)
             if constructor is None:
                 continue
-            annotations = self.axiom_annotations.get(triple, m.CanonicalSet())
+            if is_inferred and self.graph.contains(
+                Triple(
+                    triple.subject,
+                    RDFIRI(RDF + "type"),
+                    RDFIRI(OWL + "ObjectProperty"),
+                )
+            ):
+                continue
+            annotations = (
+                m.CanonicalSet()
+                if is_inferred
+                else self.axiom_annotations.get(triple, m.CanonicalSet())
+            )
             values.append(m.Declaration(constructor(m.IRI(triple.subject.value)), annotations))
-            self._consume(triple)
+            if not is_inferred:
+                self._consume(triple)
         return tuple(values)
 
     def _special_axioms(self) -> tuple[m.AxiomNode, ...]:
@@ -726,6 +754,18 @@ class RDFMapper:
         elif p == OWL + "differentFrom" and not isinstance(o, RDFLiteral):
             value = m.DifferentIndividuals(
                 m.CanonicalSet((self._individual_resource(s), self._individual_resource(o))),
+                annotations,
+            )
+        elif (
+            p == RDF + "type"
+            and isinstance(s, RDFIRI)
+            and isinstance(o, RDFIRI)
+            and o.value in {OWL + "DeprecatedClass", OWL + "DeprecatedProperty"}
+        ):
+            value = m.AnnotationAssertion(
+                m.AnnotationProperty(m.IRI(OWL + "deprecated")),
+                m.IRI(s.value),
+                m.Literal("true", m.Datatype(m.IRI(XSD + "boolean"))),
                 annotations,
             )
         elif p == RDF + "type" and isinstance(o, (RDFIRI, RDFBlank)):
