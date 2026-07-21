@@ -257,6 +257,11 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert parser_bridge["injected_failures"] == parser_bridge["allocation_checkpoints"]
     assert parser_bridge["boundary_successes"] == 1
     assert parser_bridge["scope"]
+    index_bridge = sweep["index_bridge"]
+    assert index_bridge["allocation_checkpoints"] == 13
+    assert index_bridge["injected_failures"] == index_bridge["allocation_checkpoints"]
+    assert index_bridge["boundary_successes"] == 1
+    assert index_bridge["scope"]
     assert sweep["covered_allocation_checkpoints"] == (
         sweep["total_allocation_checkpoints"]
         + wire["allocation_checkpoints"]
@@ -265,6 +270,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + workspace["allocation_checkpoints"]
         + parser["allocation_checkpoints"]
         + parser_bridge["allocation_checkpoints"]
+        + index_bridge["allocation_checkpoints"]
     )
     assert sweep["covered_injected_failures"] == sweep["covered_allocation_checkpoints"]
     assert sweep["covered_boundary_successes"] == (
@@ -275,6 +281,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + workspace["boundary_successes"]
         + parser["boundary_successes"]
         + parser_bridge["boundary_successes"]
+        + index_bridge["boundary_successes"]
     )
 
     assert {run["id"]: run["status"] for run in checkpoint["runs"]} == {
