@@ -614,6 +614,44 @@ def test_reserved_element_iri_limits_match_python(
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_generated_membership_iri_limit_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    members = "".join("<rdf:li rdf:resource='urn:o'/>" for _ in range(100))
+    source = f"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:e="urn:e:">
+  <e:C rdf:about="urn:s">{members}</e:C>
+</rdf:RDF>
+""".encode()
+
+    boundary = ParseLimits(max_iri_bytes=47)
+    python = parse_rdfxml(
+        source,
+        limits=boundary,
+        document_iri=None,
+        allow_partial_rdf_mapping=True,
+    )
+    assert python.rdf_mapping_report is not None
+    assert python.rdf_mapping_report.total_triples == 101
+    with pytest.raises(extension._NativeError) as incomplete:
+        _ingest(extension, source, limits=boundary)
+    assert incomplete.value.args[0] == "NATIVE_RDF_MAPPING_INCOMPLETE"
+
+    limited = ParseLimits(max_iri_bytes=46)
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(
+            source,
+            limits=limited,
+            document_iri=None,
+            allow_partial_rdf_mapping=True,
+        )
+    assert python_error.value.limit == "max_iri_bytes"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 @pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (

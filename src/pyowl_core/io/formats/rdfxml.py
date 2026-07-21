@@ -211,6 +211,7 @@ class RDFXMLGraphParser:
             if predicate == RDF + "li":
                 li_index += 1
                 predicate = RDF + "_" + str(li_index)
+                self._validate_iri(predicate)
             self._property(child, subject, predicate, base, language)
         return subject
 
@@ -281,6 +282,7 @@ class RDFXMLGraphParser:
                     if child_predicate == RDF + "li":
                         li_index += 1
                         child_predicate = RDF + "_" + str(li_index)
+                        self._validate_iri(child_predicate)
                     self._property(child, resource_object, child_predicate, base, language)
             elif parse_type == "Collection":
                 if _has_non_whitespace_content(element):

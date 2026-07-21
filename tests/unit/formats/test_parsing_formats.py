@@ -584,6 +584,41 @@ def test_rdfxml_reserved_element_iris_enforce_utf8_byte_limits(
     assert raised.value.limit == "max_iri_bytes"
 
 
+def test_rdfxml_generated_membership_iris_enforce_utf8_byte_limits() -> None:
+    members = "".join("<rdf:li rdf:resource='urn:o'/>" for _ in range(100))
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}" xmlns:e="urn:e:">
+  <e:C rdf:about="urn:s">{members}</e:C>
+</rdf:RDF>
+""".encode()
+
+    partial = PythonParser().parse(
+        source,
+        format="rdfxml",
+        document_iri=None,
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            limits=ParseLimits(max_iri_bytes=47),
+        ),
+        allow_partial_rdf_mapping=True,
+    )
+    assert partial.rdf_mapping_report is not None
+    assert partial.rdf_mapping_report.total_triples == 101
+
+    with pytest.raises(ResourceLimitError) as raised:
+        PythonParser().parse(
+            source,
+            format="rdfxml",
+            document_iri=None,
+            options=LoadOptions(
+                backend=BackendPreference.PYTHON,
+                limits=ParseLimits(max_iri_bytes=46),
+            ),
+            allow_partial_rdf_mapping=True,
+        )
+    assert raised.value.limit == "max_iri_bytes"
+
+
 @pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (
