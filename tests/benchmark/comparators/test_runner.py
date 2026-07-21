@@ -613,10 +613,14 @@ def test_committed_direct_smoke_attests_retained_runner_lifecycle() -> None:
     assert evidence["not_run_required"] == []
     assert evidence["environment"]["git_commit"] == ("588853ef1a761101e721aeb4c527074a0a2276d6")
     assert evidence["environment"]["git_dirty"] is False
-    assert (
-        evidence["comparator_manifest_sha256"]
-        == hashlib.sha256(DEFAULT_COMPARATOR_MANIFEST.read_bytes()).hexdigest()
-    )
+    manifest_sha256 = "4a6fca7c0247ab973db960c49565713a2caf0b7fd826a6d94730042016ec8a05"
+    assert evidence["comparator_manifest_sha256"] == manifest_sha256
+    assert manifest_sha256 != hashlib.sha256(DEFAULT_COMPARATOR_MANIFEST.read_bytes()).hexdigest()
+    source_inputs = {
+        cast(str, value["path"]): value
+        for value in cast(list[dict[str, Any]], evidence["source_identity"]["inputs"])
+    }
+    assert source_inputs["benchmarks/comparators/comparators.toml"]["sha256"] == manifest_sha256
 
     corpora = cast(list[dict[str, Any]], evidence["corpora"])
     assert {(row["id"], row["format"]) for row in corpora} == {
@@ -668,14 +672,15 @@ def test_committed_owlapi_smoke_attests_exact_four_syntax_lifecycle() -> None:
     assert evidence["comparative_complete"] is False
     assert evidence["execution_errors"] == []
     assert evidence["not_run_required"] == []
-    assert evidence["environment"]["git_commit"] == (
-        "c7e8b7264bbe5513867bd37a4018bda3ce2ddb07"
-    )
+    assert evidence["environment"]["git_commit"] == ("c7e8b7264bbe5513867bd37a4018bda3ce2ddb07")
     assert evidence["environment"]["git_dirty"] is False
-    assert (
-        evidence["comparator_manifest_sha256"]
-        == hashlib.sha256(DEFAULT_COMPARATOR_MANIFEST.read_bytes()).hexdigest()
-    )
+    manifest_sha256 = "9b5672b86c13d39c64b5ad4ff109a55844200eb00272e4552210d28d0c429de3"
+    assert evidence["comparator_manifest_sha256"] == manifest_sha256
+    source_inputs = {
+        cast(str, value["path"]): value
+        for value in cast(list[dict[str, Any]], evidence["source_identity"]["inputs"])
+    }
+    assert source_inputs["benchmarks/comparators/comparators.toml"]["sha256"] == manifest_sha256
 
     corpora = cast(list[dict[str, Any]], evidence["corpora"])
     assert {row["format"] for row in corpora} == {
@@ -706,8 +711,7 @@ def test_committed_owlapi_smoke_attests_exact_four_syntax_lifecycle() -> None:
         for sample in cast(list[dict[str, Any]], row["samples"])
     ]
     assert all(
-        sample["artifact"]["runner_revision"]
-        == "pyowl-core-owlapi-common-runner-v1"
+        sample["artifact"]["runner_revision"] == "pyowl-core-owlapi-common-runner-v1"
         and sample["artifact"]["artifact_sha256"]
         == "747b1a5269fee2992487dcde946f16dfbc14aa458d50854994a0485cf263ce07"
         and sample["artifact"]["runner_sha256"]
