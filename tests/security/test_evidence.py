@@ -314,6 +314,14 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert parser_bridge["injected_failures"] == parser_bridge["allocation_checkpoints"]
     assert parser_bridge["boundary_successes"] == 1
     assert parser_bridge["scope"]
+    functional_retained_bridge = sweep["functional_retained_bridge"]
+    assert functional_retained_bridge["allocation_checkpoints"] == 13
+    assert (
+        functional_retained_bridge["injected_failures"]
+        == functional_retained_bridge["allocation_checkpoints"]
+    )
+    assert functional_retained_bridge["boundary_successes"] == 1
+    assert functional_retained_bridge["scope"]
     rdfxml_bridge = sweep["rdfxml_retained_bridge"]
     assert rdfxml_bridge["allocation_checkpoints"] == 9
     assert rdfxml_bridge["injected_failures"] == rdfxml_bridge["allocation_checkpoints"]
@@ -339,6 +347,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + workspace["allocation_checkpoints"]
         + parser["allocation_checkpoints"]
         + parser_bridge["allocation_checkpoints"]
+        + functional_retained_bridge["allocation_checkpoints"]
         + rdfxml_bridge["allocation_checkpoints"]
         + index_bridge["allocation_checkpoints"]
         + foundation_bridge["allocation_checkpoints"]
@@ -352,6 +361,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + workspace["boundary_successes"]
         + parser["boundary_successes"]
         + parser_bridge["boundary_successes"]
+        + functional_retained_bridge["boundary_successes"]
         + rdfxml_bridge["boundary_successes"]
         + index_bridge["boundary_successes"]
         + foundation_bridge["boundary_successes"]
@@ -375,6 +385,10 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert release["encoded_view_rust_workspace_allocation_failures"] == "local-pass"
     assert release["native_parser_session_allocation_failures"] == "local-pass"
     assert release["native_parser_python_bridge_allocation_failures"] == "local-pass"
+    assert (
+        release["native_functional_retained_python_bridge_allocation_failures"]
+        == "local-pass"
+    )
     assert (
         release["native_rdfxml_retained_python_bridge_allocation_failures"]
         == "local-pass"
