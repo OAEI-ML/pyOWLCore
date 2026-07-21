@@ -351,6 +351,33 @@ def test_markup_free_parse_type_literal_matches_python_xml_literal(
     assert limited.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_nested_parse_type_literal_matches_python_element_tree_serialization(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xmlns:x='urn:x:' xmlns:y='urn:y:'>
+ <owl:Class rdf:about='urn:C'>
+  <rdfs:comment rdf:parseType='Literal'>root<x:box z='2' a='1' xml:base='../'><y:item
+   x:attr='&quot;'>hi &amp;</y:item>tail&lt;</x:box>between<x:empty/>suffix</rdfs:comment>
+ </owl:Class>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 2
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+    with pytest.raises(extension._NativeError) as limited:
+        _ingest(extension, source, limits=ParseLimits(max_literal_bytes=64))
+    assert limited.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 def test_rfc3986_document_and_nested_xml_bases_match_python(
     extension: NativeTestExtension,
 ) -> None:
@@ -414,10 +441,11 @@ def test_rfc3986_document_and_nested_xml_bases_match_python(
         ),
         (
             b"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
-            b"xmlns:e='urn:e:'><rdf:Description rdf:about='urn:s'>"
-            b"<e:p rdf:parseType='Literal'><e:markup/></e:p>"
+            b"xmlns:e='urn:e:' xmlns:xi='http://www.w3.org/2001/XInclude'>"
+            b"<rdf:Description rdf:about='urn:s'>"
+            b"<e:p rdf:parseType='Literal'><xi:include href='other.xml'/></e:p>"
             b"</rdf:Description></rdf:RDF>",
-            "NATIVE_RDF_MAPPING_INCOMPLETE",
+            "NATIVE_XML_FORBIDDEN_CONSTRUCT",
         ),
     ),
 )

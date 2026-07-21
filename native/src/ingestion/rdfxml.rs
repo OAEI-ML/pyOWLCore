@@ -446,6 +446,39 @@ struct NamespaceBinding {
 }
 
 #[derive(Clone, Debug)]
+struct XmlLiteralName {
+    namespace: Option<String>,
+    local: String,
+}
+
+#[derive(Clone, Debug)]
+struct XmlLiteralAttribute {
+    name: XmlLiteralName,
+    value: String,
+}
+
+#[derive(Clone, Debug)]
+enum XmlLiteralEvent {
+    Start {
+        name: XmlLiteralName,
+        attributes: Vec<XmlLiteralAttribute>,
+    },
+    End,
+    Text(String),
+}
+
+#[derive(Clone, Debug, Default)]
+struct XmlLiteralCapture {
+    events: Vec<XmlLiteralEvent>,
+}
+
+#[derive(Clone, Debug)]
+struct XmlLiteralNamespace {
+    iri: String,
+    prefix: String,
+}
+
+#[derive(Clone, Debug)]
 enum FrameRole {
     Root,
     Node {
@@ -465,6 +498,7 @@ enum FrameRole {
         predicate: String,
         text: String,
     },
+    XmlLiteralElement,
     Collection {
         subject: Resource,
         predicate: String,
@@ -492,6 +526,7 @@ struct GraphParser<'text, 'session, 'guard> {
     blank_counter: u64,
     prefix_declarations: u64,
     root_closed: bool,
+    xml_literal_capture: Option<XmlLiteralCapture>,
 }
 
 impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
@@ -520,6 +555,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             blank_counter: 0,
             prefix_declarations: 0,
             root_closed: false,
+            xml_literal_capture: None,
         })
     }
 
@@ -576,14 +612,27 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         }
         self.validate_expanded_attribute_uniqueness(&event.attributes)?;
         let expanded_name = self.expand(&event.name, false)?;
+        if expanded_name.starts_with(XINCLUDE) {
+            return Err(xml_forbidden());
+        }
+        if matches!(
+            self.frames.last().map(|frame| &frame.role),
+            Some(FrameRole::XmlLiteralProperty { .. } | FrameRole::XmlLiteralElement)
+        ) {
+            self.capture_xml_literal_start(&event.name, &expanded_name, &event.attributes)?;
+            return self.push_frame(
+                event.name,
+                namespace_start,
+                None,
+                None,
+                FrameRole::XmlLiteralElement,
+            );
+        }
         super::check_iri(
             &expanded_name,
             self.session,
             "native RDF/XML element IRI exceeds max_iri_bytes",
         )?;
-        if expanded_name.starts_with(XINCLUDE) {
-            return Err(xml_forbidden());
-        }
         let parent_base = self
             .frames
             .last()
@@ -674,12 +723,20 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     self.append_collection_member(member)?;
                     role
                 }
-                Some(FrameRole::XmlLiteralProperty { .. }) => {
-                    return Err(mapping_incomplete());
-                }
                 _ => return Err(xml_syntax()),
             }
         };
+        self.push_frame(event.name, namespace_start, base, language, role)
+    }
+
+    fn push_frame(
+        &mut self,
+        raw_name: String,
+        namespace_start: usize,
+        base: Option<String>,
+        language: Option<String>,
+        role: FrameRole,
+    ) -> NativeResult<()> {
         let depth =
             self.frames.len().checked_add(1).ok_or_else(|| {
                 NativeError::limit("native RDF/XML nesting depth counter overflow")
@@ -693,7 +750,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         }
         reserve_vec_item::<Frame>(&mut self.frames, self.session)?;
         self.frames.push(Frame {
-            raw_name: event.name,
+            raw_name,
             namespace_start,
             base,
             language,
@@ -1091,6 +1148,17 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         if value.is_empty() {
             return Ok(());
         }
+        let capture = matches!(
+            self.frames.last().map(|frame| &frame.role),
+            Some(FrameRole::XmlLiteralElement)
+        ) || (self.xml_literal_capture.is_some()
+            && matches!(
+                self.frames.last().map(|frame| &frame.role),
+                Some(FrameRole::XmlLiteralProperty { .. })
+            ));
+        if capture {
+            return self.capture_xml_literal_text(value);
+        }
         match self.frames.last_mut().map(|frame| &mut frame.role) {
             Some(
                 FrameRole::Property {
@@ -1189,8 +1257,11 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             FrameRole::XmlLiteralProperty {
                 subject,
                 predicate,
-                text,
+                mut text,
             } => {
+                if let Some(capture) = self.xml_literal_capture.take() {
+                    self.append_xml_literal_capture(&capture, &mut text)?;
+                }
                 let datatype = owned_text(RDF_XML_LITERAL, self.session)?;
                 self.add(Triple {
                     subject,
@@ -1202,12 +1273,339 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     },
                 })?;
             }
+            FrameRole::XmlLiteralElement => self.capture_xml_literal_end()?,
             FrameRole::Root | FrameRole::Node { .. } => {}
         }
         self.namespaces.truncate(frame.namespace_start);
         if self.frames.is_empty() {
             self.root_closed = true;
         }
+        Ok(())
+    }
+
+    fn capture_xml_literal_start(
+        &mut self,
+        raw_name: &str,
+        expanded_name: &str,
+        attributes: &[Attribute],
+    ) -> NativeResult<()> {
+        let name = self.xml_literal_name(raw_name, expanded_name)?;
+        let mut captured_attributes = Vec::new();
+        for attribute in attributes {
+            if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
+                continue;
+            }
+            let expanded = self.expand(&attribute.name, true)?;
+            let name = self.xml_literal_name(&attribute.name, &expanded)?;
+            let value = owned_text(&attribute.value, self.session)?;
+            reserve_vec_item(&mut captured_attributes, self.session)?;
+            captured_attributes.push(XmlLiteralAttribute { name, value });
+        }
+        let capture = self
+            .xml_literal_capture
+            .get_or_insert_with(XmlLiteralCapture::default);
+        reserve_vec_item(&mut capture.events, self.session)?;
+        capture.events.push(XmlLiteralEvent::Start {
+            name,
+            attributes: captured_attributes,
+        });
+        Ok(())
+    }
+
+    fn capture_xml_literal_text(&mut self, value: String) -> NativeResult<()> {
+        let capture = self
+            .xml_literal_capture
+            .as_mut()
+            .ok_or_else(|| NativeError::protocol("native XML literal capture is absent"))?;
+        reserve_vec_item(&mut capture.events, self.session)?;
+        capture.events.push(XmlLiteralEvent::Text(value));
+        Ok(())
+    }
+
+    fn capture_xml_literal_end(&mut self) -> NativeResult<()> {
+        let capture = self
+            .xml_literal_capture
+            .as_mut()
+            .ok_or_else(|| NativeError::protocol("native XML literal capture is absent"))?;
+        reserve_vec_item(&mut capture.events, self.session)?;
+        capture.events.push(XmlLiteralEvent::End);
+        Ok(())
+    }
+
+    fn xml_literal_name(&mut self, raw: &str, expanded: &str) -> NativeResult<XmlLiteralName> {
+        let local = raw.split_once(':').map_or(raw, |(_, local)| local);
+        let namespace_length = expanded.len().checked_sub(local.len()).ok_or_else(|| {
+            NativeError::protocol("native XML literal expanded name is shorter than its local name")
+        })?;
+        if !expanded.ends_with(local) {
+            return Err(NativeError::protocol(
+                "native XML literal expanded name does not preserve its local name",
+            ));
+        }
+        let namespace = (namespace_length != 0)
+            .then(|| owned_text(&expanded[..namespace_length], self.session))
+            .transpose()?;
+        Ok(XmlLiteralName {
+            namespace,
+            local: owned_text(local, self.session)?,
+        })
+    }
+
+    fn append_xml_literal_capture(
+        &mut self,
+        capture: &XmlLiteralCapture,
+        output: &mut String,
+    ) -> NativeResult<()> {
+        let mut cursor = 0;
+        while cursor < capture.events.len() {
+            if !matches!(
+                capture.events.get(cursor),
+                Some(XmlLiteralEvent::Start { .. })
+            ) {
+                return Err(NativeError::protocol(
+                    "native XML literal capture has a non-element root",
+                ));
+            }
+            let end = self.xml_literal_element_end(&capture.events, cursor)?;
+            let mut namespaces = self.xml_literal_namespaces(&capture.events[cursor..=end])?;
+            namespaces.sort_unstable_by(|left, right| left.prefix.cmp(&right.prefix));
+            self.serialize_xml_literal_element(
+                &capture.events,
+                &mut cursor,
+                &namespaces,
+                output,
+                true,
+            )?;
+            while let Some(XmlLiteralEvent::Text(value)) = capture.events.get(cursor) {
+                self.append_xml_literal_escaped(output, value, false)?;
+                cursor += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn xml_literal_element_end(
+        &mut self,
+        events: &[XmlLiteralEvent],
+        start: usize,
+    ) -> NativeResult<usize> {
+        let mut depth = 0_u64;
+        for (offset, event) in events[start..].iter().enumerate() {
+            self.session.step(1)?;
+            match event {
+                XmlLiteralEvent::Start { .. } => {
+                    depth = depth.checked_add(1).ok_or_else(|| {
+                        NativeError::limit("native XML literal capture depth overflow")
+                    })?;
+                }
+                XmlLiteralEvent::End => {
+                    depth = depth.checked_sub(1).ok_or_else(|| {
+                        NativeError::protocol("native XML literal capture closes before it opens")
+                    })?;
+                    if depth == 0 {
+                        return start.checked_add(offset).ok_or_else(|| {
+                            NativeError::limit("native XML literal capture offset overflow")
+                        });
+                    }
+                }
+                XmlLiteralEvent::Text(_) => {}
+            }
+        }
+        Err(NativeError::protocol(
+            "native XML literal capture has an unclosed element",
+        ))
+    }
+
+    fn xml_literal_namespaces(
+        &mut self,
+        events: &[XmlLiteralEvent],
+    ) -> NativeResult<Vec<XmlLiteralNamespace>> {
+        let mut namespaces = Vec::new();
+        for event in events {
+            self.session.step(1)?;
+            let XmlLiteralEvent::Start { name, attributes } = event else {
+                continue;
+            };
+            self.add_xml_literal_namespace(&mut namespaces, name)?;
+            for attribute in attributes {
+                self.add_xml_literal_namespace(&mut namespaces, &attribute.name)?;
+            }
+        }
+        Ok(namespaces)
+    }
+
+    fn add_xml_literal_namespace(
+        &mut self,
+        namespaces: &mut Vec<XmlLiteralNamespace>,
+        name: &XmlLiteralName,
+    ) -> NativeResult<()> {
+        let Some(iri) = name.namespace.as_deref() else {
+            return Ok(());
+        };
+        if iri == XML || namespaces.iter().any(|entry| entry.iri == iri) {
+            return Ok(());
+        }
+        let prefix = match element_tree_namespace_prefix(iri) {
+            Some(value) => owned_text(value, self.session)?,
+            None => numbered_xml_prefix(namespaces.len(), self.session)?,
+        };
+        reserve_vec_item(namespaces, self.session)?;
+        namespaces.push(XmlLiteralNamespace {
+            iri: owned_text(iri, self.session)?,
+            prefix,
+        });
+        Ok(())
+    }
+
+    fn serialize_xml_literal_element(
+        &mut self,
+        events: &[XmlLiteralEvent],
+        cursor: &mut usize,
+        namespaces: &[XmlLiteralNamespace],
+        output: &mut String,
+        root: bool,
+    ) -> NativeResult<()> {
+        self.session.step(1)?;
+        let (name, attributes) = match events.get(*cursor) {
+            Some(XmlLiteralEvent::Start { name, attributes }) => (name, attributes),
+            _ => {
+                return Err(NativeError::protocol(
+                    "native XML literal serializer expected an element",
+                ))
+            }
+        };
+        *cursor = cursor
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native XML literal cursor overflow"))?;
+        self.append_xml_literal_piece(output, "<")?;
+        self.append_xml_literal_name(output, name, namespaces)?;
+        if root {
+            for namespace in namespaces {
+                self.append_xml_literal_piece(output, " xmlns:")?;
+                self.append_xml_literal_piece(output, &namespace.prefix)?;
+                self.append_xml_literal_piece(output, "=\"")?;
+                self.append_xml_literal_escaped(output, &namespace.iri, true)?;
+                self.append_xml_literal_piece(output, "\"")?;
+            }
+        }
+        for attribute in attributes {
+            self.append_xml_literal_piece(output, " ")?;
+            self.append_xml_literal_name(output, &attribute.name, namespaces)?;
+            self.append_xml_literal_piece(output, "=\"")?;
+            self.append_xml_literal_escaped(output, &attribute.value, true)?;
+            self.append_xml_literal_piece(output, "\"")?;
+        }
+        if matches!(events.get(*cursor), Some(XmlLiteralEvent::End)) {
+            self.append_xml_literal_piece(output, " />")?;
+            *cursor = cursor
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native XML literal cursor overflow"))?;
+            return Ok(());
+        }
+        self.append_xml_literal_piece(output, ">")?;
+        loop {
+            match events.get(*cursor) {
+                Some(XmlLiteralEvent::Text(value)) => {
+                    self.append_xml_literal_escaped(output, value, false)?;
+                    *cursor = cursor
+                        .checked_add(1)
+                        .ok_or_else(|| NativeError::limit("native XML literal cursor overflow"))?;
+                }
+                Some(XmlLiteralEvent::Start { .. }) => {
+                    self.serialize_xml_literal_element(events, cursor, namespaces, output, false)?
+                }
+                Some(XmlLiteralEvent::End) => {
+                    *cursor = cursor
+                        .checked_add(1)
+                        .ok_or_else(|| NativeError::limit("native XML literal cursor overflow"))?;
+                    self.append_xml_literal_piece(output, "</")?;
+                    self.append_xml_literal_name(output, name, namespaces)?;
+                    self.append_xml_literal_piece(output, ">")?;
+                    return Ok(());
+                }
+                None => {
+                    return Err(NativeError::protocol(
+                        "native XML literal serializer reached an unclosed element",
+                    ))
+                }
+            }
+        }
+    }
+
+    fn append_xml_literal_name(
+        &mut self,
+        output: &mut String,
+        name: &XmlLiteralName,
+        namespaces: &[XmlLiteralNamespace],
+    ) -> NativeResult<()> {
+        if let Some(iri) = name.namespace.as_deref() {
+            let prefix = if iri == XML {
+                "xml"
+            } else {
+                namespaces
+                    .iter()
+                    .find(|entry| entry.iri == iri)
+                    .map(|entry| entry.prefix.as_str())
+                    .ok_or_else(|| {
+                        NativeError::protocol("native XML literal namespace is absent")
+                    })?
+            };
+            if !prefix.is_empty() {
+                self.append_xml_literal_piece(output, prefix)?;
+                self.append_xml_literal_piece(output, ":")?;
+            }
+        }
+        self.append_xml_literal_piece(output, &name.local)
+    }
+
+    fn append_xml_literal_escaped(
+        &mut self,
+        output: &mut String,
+        value: &str,
+        attribute: bool,
+    ) -> NativeResult<()> {
+        let mut start = 0;
+        let mut checkpoint = 0;
+        for (offset, byte) in value.bytes().enumerate() {
+            if offset == checkpoint {
+                self.session.finish()?;
+                checkpoint = checkpoint.saturating_add(64 * 1024);
+            }
+            let replacement = match byte {
+                b'&' => Some("&amp;"),
+                b'<' => Some("&lt;"),
+                b'>' => Some("&gt;"),
+                b'\"' if attribute => Some("&quot;"),
+                b'\r' if attribute => Some("&#13;"),
+                b'\n' if attribute => Some("&#10;"),
+                b'\t' if attribute => Some("&#09;"),
+                _ => None,
+            };
+            let Some(replacement) = replacement else {
+                continue;
+            };
+            self.append_xml_literal_piece(output, &value[start..offset])?;
+            self.append_xml_literal_piece(output, replacement)?;
+            start = offset + 1;
+        }
+        self.append_xml_literal_piece(output, &value[start..])
+    }
+
+    fn append_xml_literal_piece(&mut self, output: &mut String, value: &str) -> NativeResult<()> {
+        let next = output
+            .len()
+            .checked_add(value.len())
+            .ok_or_else(|| NativeError::limit("native XML literal size overflow"))?;
+        enforce_usize(
+            next,
+            self.session.limits().value(LimitKey::MaxLiteralBytes),
+            "native XML literal exceeds max_literal_bytes",
+        )?;
+        self.session.reserve_bytes(value.len())?;
+        output
+            .try_reserve_exact(value.len())
+            .map_err(|_| NativeError::limit("native XML literal allocation failed"))?;
+        output.push_str(value);
         Ok(())
     }
 
@@ -5580,6 +5978,44 @@ fn rdf_membership_property(value: u64, session: &mut Session<'_>) -> NativeResul
     Ok(output)
 }
 
+fn element_tree_namespace_prefix(iri: &str) -> Option<&'static str> {
+    match iri {
+        "http://www.w3.org/1999/xhtml" => Some("html"),
+        RDF => Some("rdf"),
+        "http://schemas.xmlsoap.org/wsdl/" => Some("wsdl"),
+        "http://www.w3.org/2001/XMLSchema" => Some("xs"),
+        "http://www.w3.org/2001/XMLSchema-instance" => Some("xsi"),
+        "http://purl.org/dc/elements/1.1/" => Some("dc"),
+        _ => None,
+    }
+}
+
+fn numbered_xml_prefix(value: usize, session: &mut Session<'_>) -> NativeResult<String> {
+    use std::fmt::Write;
+
+    let value = u64::try_from(value)
+        .map_err(|_| NativeError::limit("native XML literal namespace count exceeds u64"))?;
+    let digits = if value == 0 {
+        1
+    } else {
+        usize::try_from(value.ilog10())
+            .map_err(|_| NativeError::limit("native XML literal prefix size overflow"))?
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native XML literal prefix size overflow"))?
+    };
+    let size = 2_usize
+        .checked_add(digits)
+        .ok_or_else(|| NativeError::limit("native XML literal prefix size overflow"))?;
+    session.reserve_bytes(size)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native XML literal prefix allocation failed"))?;
+    write!(&mut output, "ns{value}")
+        .map_err(|_| NativeError::protocol("native XML literal prefix formatting failed"))?;
+    Ok(output)
+}
+
 fn expanded_name_matches(expanded: &str, namespace: &str, local: &str) -> bool {
     expanded
         .len()
@@ -5878,13 +6314,32 @@ mod tests {
     }
 
     #[test]
-    fn parse_type_literal_rejects_nested_markup_and_reification() {
+    fn parse_type_literal_serializes_nested_markup_like_element_tree() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\" xmlns:x=\"urn:x:\" xmlns:y=\"urn:y:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Literal\">root<x:box z=\"2\" a=\"1\" xml:base=\"../\"><y:item x:attr=\"&quot;\">hi &amp;</y:item>tail&lt;</x:box>between<x:empty/>suffix</e:p></rdf:Description></rdf:RDF>"
+        );
+        let parsed = graph(&source).expect("nested XML literal");
+        assert_eq!(parsed.len(), 1);
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            "urn:e:p",
+            Term::Literal {
+                lexical: "root<ns0:box xmlns:ns0=\"urn:x:\" xmlns:ns1=\"urn:y:\" z=\"2\" a=\"1\" xml:base=\"../\"><ns1:item ns0:attr=\"&quot;\">hi &amp;</ns1:item>tail&lt;</ns0:box>between<ns0:empty xmlns:ns0=\"urn:x:\" />suffix".to_owned(),
+                datatype: Some(RDF_XML_LITERAL.to_owned()),
+                language: None,
+            },
+        ));
+    }
+
+    #[test]
+    fn parse_type_literal_rejects_reification_and_other_values() {
         for source in [
             format!(
-                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Literal\"><e:markup/></e:p></rdf:Description></rdf:RDF>"
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Literal\" rdf:ID=\"statement\"/></rdf:Description></rdf:RDF>"
             ),
             format!(
-                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Literal\" rdf:ID=\"statement\"/></rdf:Description></rdf:RDF>"
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Other\">value</e:p></rdf:Description></rdf:RDF>"
             ),
         ] {
             assert_eq!(

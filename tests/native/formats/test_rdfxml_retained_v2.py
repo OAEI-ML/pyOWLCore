@@ -134,6 +134,19 @@ PARSE_TYPE_LITERAL_SOURCE = b"""\
   </owl:Class>
 </rdf:RDF>
 """
+NESTED_XML_LITERAL_SOURCE = b"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#"
+  xmlns:x="urn:x:"
+  xmlns:y="urn:y:">
+  <owl:Class rdf:about="urn:C">
+    <rdfs:comment rdf:parseType="Literal">root<x:box z="2" a="1" xml:base="../"><y:item
+      x:attr="&quot;">hi &amp;</y:item>tail&lt;</x:box>between<x:empty/>suffix</rdfs:comment>
+  </owl:Class>
+</rdf:RDF>
+"""
 DOCUMENT_IRI = IRI("urn:rdfxml:document")
 
 
@@ -419,6 +432,33 @@ def test_markup_free_parse_type_literal_publishes_from_the_retained_parser_owner
     assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
     assert encode_snapshot(selected) == encode_snapshot(reference)
     assert counters.parser_bytes == len(PARSE_TYPE_LITERAL_SOURCE)
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
+
+
+def test_nested_xml_literal_publishes_from_the_retained_parser_owner(
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(
+        NESTED_XML_LITERAL_SOURCE,
+        document_iri=DOCUMENT_IRI,
+        options=_options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("nested XML literal crossed the Python RDF/XML parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(Any, _retained_snapshot(NESTED_XML_LITERAL_SOURCE))
+
+    owner = selected._native_snapshot_state.owner.handle._owner_v2
+    counters = owner._publication_counters_v2()
+    assert type(owner) is cast(Any, extension)._NativeSnapshotHandle
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.root.axioms == reference.root.axioms
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert counters.parser_bytes == len(NESTED_XML_LITERAL_SOURCE)
     assert counters.publication_structural_rows_copied == 0
     assert counters.publication_structural_bytes_copied == 0
 
