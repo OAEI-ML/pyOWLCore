@@ -262,6 +262,26 @@ def test_rdfxml_unknown_entity_references_are_forbidden(class_element: str) -> N
     assert raised.value.code == "XML_FORBIDDEN_CONSTRUCT"
 
 
+def test_rdfxml_forbidden_keywords_are_inert_inside_xml_data_regions() -> None:
+    source = b"""\
+<?audit <!DOCTYPE inert>?>
+<!-- <!ENTITY inert> -->
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C">
+    <rdfs:label><![CDATA[<!DOCTYPE inert>]]></rdfs:label>
+  </owl:Class>
+</rdf:RDF>
+"""
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assertion = next(document.iter_axioms(m.AnnotationAssertion))
+
+    assert isinstance(assertion.value, m.Literal)
+    assert assertion.value.lexical_form == "<!DOCTYPE inert>"
+
+
 @pytest.mark.parametrize(
     "document",
     (

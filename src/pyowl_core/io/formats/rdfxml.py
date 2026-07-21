@@ -34,7 +34,6 @@ from .rdf import (
 )
 
 XML_NS = "http://www.w3.org/XML/1998/namespace"
-_FORBIDDEN_XML_TEXT = re.compile(r"(?is)<!\s*(?:DOCTYPE|ENTITY)")
 _XML_SPACE = frozenset(" \t\r\n")
 _IRI_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
 _XML_UNDEFINED_ENTITY = expat.errors.codes[expat.errors.XML_ERROR_UNDEFINED_ENTITY]
@@ -59,7 +58,7 @@ def parse_rdfxml(
 ) -> ParsedOntology:
     text, source_encoding = _decode_xml_source(data)
     _validate_xml_envelope(text, source_encoding)
-    if _FORBIDDEN_XML_TEXT.search(text):
+    if _has_forbidden_xml_markup(text):
         raise OntologySyntaxError(
             "DTD and entity declarations are forbidden",
             code="XML_FORBIDDEN_CONSTRUCT",
@@ -680,6 +679,50 @@ def _serialize_iri(
     if fragment is not None:
         result += "#" + fragment
     return result
+
+
+def _has_forbidden_xml_markup(text: str) -> bool:
+    cursor = 0
+    while True:
+        start = text.find("<", cursor)
+        if start < 0:
+            return False
+        if text.startswith("<!--", start):
+            end = text.find("-->", start + 4)
+            if end < 0:
+                return False
+            cursor = end + 3
+        elif text.startswith("<![CDATA[", start):
+            end = text.find("]]>", start + 9)
+            if end < 0:
+                return False
+            cursor = end + 3
+        elif text.startswith("<?", start):
+            end = text.find("?>", start + 2)
+            if end < 0:
+                return False
+            cursor = end + 2
+        elif text.startswith("<!", start):
+            return True
+        else:
+            cursor = _xml_tag_end(text, start + 1)
+            if cursor < 0:
+                return False
+
+
+def _xml_tag_end(text: str, cursor: int) -> int:
+    quote: str | None = None
+    while cursor < len(text):
+        character = text[cursor]
+        if quote is not None:
+            if character == quote:
+                quote = None
+        elif character in {'"', "'"}:
+            quote = character
+        elif character == ">":
+            return cursor + 1
+        cursor += 1
+    return -1
 
 
 def _decode_xml_source(data: bytes) -> tuple[str, str]:

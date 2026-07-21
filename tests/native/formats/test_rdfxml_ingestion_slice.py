@@ -317,6 +317,28 @@ def test_unknown_entity_references_fail_in_both_backends(
     assert native_error.value.args[0] == "NATIVE_XML_FORBIDDEN_CONSTRUCT"
 
 
+def test_forbidden_keywords_in_xml_data_regions_match_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<?audit <!DOCTYPE inert>?>
+<!-- <!ENTITY inert> -->
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'>
+  <rdfs:label><![CDATA[<!DOCTYPE inert>]]></rdfs:label>
+ </owl:Class>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 2
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+
 @pytest.mark.parametrize(
     "document",
     (
