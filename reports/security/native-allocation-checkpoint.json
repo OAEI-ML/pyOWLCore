@@ -1,6 +1,6 @@
 {
   "schema": "pyowl-core.native-allocation-checkpoint/1",
-  "subject_revision": "e7abee8f5a5dbd1dc6bb0f15dab8cd5ef4161718",
+  "subject_revision": "be6622fb4ca847d185759af0891a971e5e63e631",
   "recorded_date": "2026-07-21",
   "claim": "checkpoint-only",
   "capability_advertised": false,
@@ -16,8 +16,8 @@
     "kind": "local test-hook extension",
     "profile": "dev",
     "features": ["extension-module", "test-hooks"],
-    "path": "/private/tmp/pyowlcore-allocation-target-e7abee8/debug/lib_native.dylib",
-    "sha256": "799b7cc1bcff6b1ec4f014e3fa7e3534cd31c8e7617fca292b8712bbeb407c52"
+    "path": "/private/tmp/pyowlcore-wire-allocation-target-be6622f/debug/lib_native.dylib",
+    "sha256": "e17c3986da7e65bed0f1461157359b41f6fbffb86dfe5150946715a6730213cc"
   },
   "continuous_workflow": {
     "path": ".github/workflows/native-safety.yml",
@@ -56,53 +56,68 @@
     "total_allocation_checkpoints": 20673,
     "total_injected_failures": 20673,
     "total_boundary_successes": 228,
+    "wire_validation": {
+      "allocation_checkpoints": 5,
+      "injected_failures": 5,
+      "boundary_successes": 1,
+      "boundaries": [
+        "directory ledger",
+        "range-validation ledger",
+        "table ledger",
+        "document-key ledger",
+        "validation receipt"
+      ]
+    },
     "invariants": [
       "every injected failure is NATIVE_WIRE_LIMIT with a stable allocation-failure message",
       "a build-phase failure poisons later mutation and prevents freeze",
       "a freeze-phase failure consumes the builder without publishing an owner",
       "an encode-phase failure leaves the immutable arena recoverable with exact canonical bytes",
-      "the first non-failing boundary after every phase reproduces the exact input"
+      "the first non-failing boundary after every component phase reproduces the exact input",
+      "every injected wire-validation failure publishes no receipt and leaves the caller's mutable input unchanged",
+      "the first non-failing wire boundary reproduces the exact validation receipt"
     ]
   },
   "runs": [
     {
       "id": "cpython-3.12-retained-allocation-boundary",
       "status": "pass",
-      "working_directory": "/private/tmp/pyowlcore-allocation-evidence.A5AzQU",
-      "command": "PYTHONPATH=src:. PYOWL_CORE_TEST_NATIVE_LIBRARY=/private/tmp/pyowlcore-allocation-target-e7abee8/debug/lib_native.dylib PYOWL_CORE_TEST_HOOKS_REQUIRED=1 python -m pytest -q tests/native/foundation/test_allocation_failure.py tests/native/foundation/test_native_boundary.py",
+      "working_directory": "/private/tmp/pyowlcore-wire-allocation-worktree.be6622f",
+      "command": "PYTHONPATH=src:. PYOWL_CORE_TEST_NATIVE_LIBRARY=/private/tmp/pyowlcore-wire-allocation-target-be6622f/debug/lib_native.dylib PYOWL_CORE_TEST_HOOKS_REQUIRED=1 python -m pytest -q tests/native/foundation/test_allocation_failure.py tests/native/foundation/test_native_boundary.py tests/native/wire/test_wire_parity.py",
       "observations": {
-        "tests_passed": 90,
+        "tests_passed": 99,
         "tests_failed": 0,
-        "subtests_passed": 157,
-        "seconds": 36.02
+        "subtests_passed": 3144,
+        "seconds": 44.43
       },
-      "notes": "All 76 generated model constructors completed the dynamic build/freeze/encode failpoint sweep and retained-boundary parity suite."
+      "notes": "All 76 generated model constructors completed the dynamic build/freeze/encode sweep; all five explicit wire validation/receipt allocations completed the dynamic failure sweep; retained-boundary and complete native wire parity remained green."
     },
     {
       "id": "rust-retained-allocation-regressions",
       "status": "pass",
-      "working_directory": "/private/tmp/pyowlcore-allocation-evidence.A5AzQU",
-      "command": "cargo test --manifest-path native/Cargo.toml --locked --no-default-features --lib --quiet",
+      "working_directory": "/private/tmp/pyowlcore-wire-allocation-worktree.be6622f",
+      "command": "cargo test --manifest-path native/Cargo.toml --locked --no-default-features --features test-hooks --lib --quiet",
       "observations": {
-        "tests_passed": 218,
+        "tests_passed": 223,
         "tests_failed": 0,
-        "seconds": 1.94
+        "seconds": 2.33
       },
       "notes": "The production Rust library suite passed without the CPython extension feature; all-feature Clippy with warnings denied, rustfmt, and focused Ruff also passed at the same revision."
     }
   ],
   "release_effect": {
     "retained_component_allocation_failures": "local-pass",
+    "native_wire_validation_allocation_failures": "local-pass",
     "end_to_end_allocation_failure_matrix": "not-run",
     "security_resource_determinism": "not-run",
     "core_release_eligible": false,
-    "reason": "the retained component builder, freeze, and encoder sweep passes locally, but parser/publication/view/wire allocation paths, hosted interpreters, and supported platforms remain incomplete"
+    "reason": "the retained component and native wire validation/receipt sweeps pass locally, but parser/publication/encoded-view/bridge allocation paths, hosted interpreters, and supported platforms remain incomplete"
   },
   "limitations": [
     "The hook controls explicit retained-component allocation checkpoints; it does not replace a process allocator failure campaign.",
     "The artifact is a local development build, not an installed release wheel.",
     "Only macOS x86-64 with CPython 3.12 ran locally.",
-    "Parser, publication, encoded-view, and wire end-to-end allocation-failure sweeps remain open.",
+    "Parser, publication, encoded-view, Python bridge, and process-allocator failure sweeps remain open; the wire checkpoint covers native validation ledgers and receipt allocation only.",
     "No retained-load or encoded-view capability promotion follows from this checkpoint."
   ]
 }

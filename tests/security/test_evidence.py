@@ -228,6 +228,10 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert sweep["total_injected_failures"] == sweep["total_allocation_checkpoints"]
     assert sweep["total_boundary_successes"] == 3 * sweep["constructors"]
     assert len(sweep["invariants"]) >= 5
+    wire = sweep["wire_validation"]
+    assert wire["allocation_checkpoints"] == len(wire["boundaries"]) == 5
+    assert wire["injected_failures"] == wire["allocation_checkpoints"]
+    assert wire["boundary_successes"] == 1
 
     assert {run["id"]: run["status"] for run in checkpoint["runs"]} == {
         "cpython-3.12-retained-allocation-boundary": "pass",
@@ -241,6 +245,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
 
     release = checkpoint["release_effect"]
     assert release["retained_component_allocation_failures"] == "local-pass"
+    assert release["native_wire_validation_allocation_failures"] == "local-pass"
     assert release["end_to_end_allocation_failure_matrix"] == "not-run"
     assert release["security_resource_determinism"] == "not-run"
     assert release["core_release_eligible"] is False
