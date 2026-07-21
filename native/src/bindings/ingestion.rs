@@ -82,6 +82,11 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
         _module
     )?)?;
     #[cfg(feature = "test-hooks")]
+    _module.add_function(wrap_pyfunction!(
+        _finalize_parsed_structural_bridge_allocation_probe_v2,
+        _module
+    )?)?;
+    #[cfg(feature = "test-hooks")]
     _module.add_function(wrap_pyfunction!(_ingest_rdfxml_slice_v1, _module)?)?;
     Ok(())
 }
@@ -552,10 +557,54 @@ fn prepare_parsed_structural_snapshot_v2_with_allocations<'py>(
 #[pyo3(signature = (parsed, prepared_summary, attestation, cancel=None))]
 fn _finalize_parsed_structural_snapshot_v2<'py>(
     py: Python<'py>,
+    parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
+    prepared_summary: &Bound<'py, PyBytes>,
+    attestation: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<NativeSnapshotHandle> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    finalize_parsed_structural_snapshot_v2_with_allocations(
+        py,
+        parsed,
+        prepared_summary,
+        attestation,
+        cancel,
+        &mut allocations,
+    )
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (parsed, prepared_summary, attestation, fail_after=None))]
+fn _finalize_parsed_structural_bridge_allocation_probe_v2<'py>(
+    py: Python<'py>,
+    parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
+    prepared_summary: &Bound<'py, PyBytes>,
+    attestation: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(NativeSnapshotHandle, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained finalization bridge allocation failure",
+    );
+    let handle = finalize_parsed_structural_snapshot_v2_with_allocations(
+        py,
+        parsed,
+        prepared_summary,
+        attestation,
+        None,
+        &mut allocations,
+    )?;
+    Ok((handle, allocations.count()))
+}
+
+fn finalize_parsed_structural_snapshot_v2_with_allocations<'py>(
+    py: Python<'py>,
     mut parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
     prepared_summary: &Bound<'py, PyBytes>,
     attestation: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<NativeSnapshotHandle> {
     let _cancellation = crate::cancellation_or_default(cancel);
     if parsed.prepared_summary.as_deref() != Some(prepared_summary.as_bytes()) {
@@ -563,6 +612,13 @@ fn _finalize_parsed_structural_snapshot_v2<'py>(
             "native retained summary diverges before final publication",
         )));
     }
+    let prepared = parsed.prepared.as_ref().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "native parsed structural storage was not prepared",
+        )
+    })?;
+    validate_prepared_attestation(py, prepared, attestation, allocations)?;
+    allocations.checkpoint()?;
     let parser_bytes = parsed.parser_bytes;
     let storage = parsed.storage.take().ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err(
@@ -575,7 +631,6 @@ fn _finalize_parsed_structural_snapshot_v2<'py>(
         )
     })?;
     parsed.prepared_summary = None;
-    validate_prepared_attestation(py, &prepared, attestation)?;
     let source_map = prepared.source_map;
     let rdf_report = prepared.rdf_report.map(|report| report.rows);
     crate::publication::typed_structural_handle_v2(
@@ -593,6 +648,7 @@ fn validate_prepared_attestation(
     py: Python<'_>,
     prepared: &crate::parse::PreparedRetainedPublicationV2,
     attestation: &Bound<'_, PyAny>,
+    allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<()> {
     let expected_digests = [
         ("root_table_sha256", prepared.content.root_table_sha256),
@@ -653,6 +709,7 @@ fn validate_prepared_attestation(
             0
         }
         | if prepared.rdf_report.is_some() { 32 } else { 0 };
+    allocations.checkpoint()?;
     if attestation
         .getattr("root_document_key")?
         .extract::<String>()?

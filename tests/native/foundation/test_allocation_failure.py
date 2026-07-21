@@ -597,6 +597,151 @@ def test_retained_preparation_bridge_allocations_fail_before_publication(
 
 
 @pytest.fixture(scope="module")
+def retained_finalization_bridge_extension(
+    extension: NativeTestExtension,
+) -> NativeTestExtension:
+    if not hasattr(extension, "_finalize_parsed_structural_bridge_allocation_probe_v2"):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail(
+                "selected native test-hooks artifact lacks "
+                "_finalize_parsed_structural_bridge_allocation_probe_v2"
+            )
+        pytest.skip("native retained finalization bridge allocation hook is unavailable")
+    return extension
+
+
+def test_retained_finalization_bridge_failures_preserve_prepared_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    retained_finalization_bridge_extension: NativeTestExtension,
+) -> None:
+    extension = cast(Any, retained_finalization_bridge_extension)
+    request = _parser_request()
+    source = bytes(request[struct.calcsize("<8sHHQ") :])
+    config = bytearray(native._encode_config(ParseLimits(), None, verify=False))
+    original_request = bytes(request)
+    original_config = bytes(config)
+    captured: dict[str, object] = {}
+    prepare = extension._prepare_parsed_structural_snapshot_v2
+    finalize = extension._finalize_parsed_structural_snapshot_v2
+
+    def capture_prepare(
+        parsed: object,
+        manifest: bytes,
+        document_key: str,
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        cancel: object | None = None,
+    ) -> bytes:
+        captured.update(
+            manifest=bytes(manifest),
+            document_key=document_key,
+            collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
+        )
+        return cast(
+            bytes,
+            prepare(
+                parsed,
+                manifest,
+                document_key,
+                collect_provenance,
+                preserve_source_map,
+                cancel,
+            ),
+        )
+
+    def capture_finalize(
+        parsed: object,
+        prepared_summary: bytes,
+        attestation: object,
+        cancel: object | None = None,
+    ) -> object:
+        captured["attestation"] = attestation
+        return finalize(parsed, prepared_summary, attestation, cancel)
+
+    monkeypatch.setattr(extension, "_prepare_parsed_structural_snapshot_v2", capture_prepare)
+    monkeypatch.setattr(extension, "_finalize_parsed_structural_snapshot_v2", capture_finalize)
+    native._reset_probe_cache_for_tests()
+    selected = load_snapshot(
+        source,
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=BackendPreference.NATIVE,
+            collect_provenance=True,
+            preserve_source_map=True,
+        ),
+    )
+    selected.close()
+    monkeypatch.setattr(extension, "_prepare_parsed_structural_snapshot_v2", prepare)
+    monkeypatch.setattr(extension, "_finalize_parsed_structural_snapshot_v2", finalize)
+
+    manifest = cast(bytes, captured["manifest"])
+    document_key = cast(str, captured["document_key"])
+    collect_provenance = cast(bool, captured["collect_provenance"])
+    preserve_source_map = cast(bool, captured["preserve_source_map"])
+    attestation = captured["attestation"]
+    probe = extension._finalize_parsed_structural_bridge_allocation_probe_v2
+
+    def prepared_storage() -> tuple[object, bytes]:
+        _summary, parsed, _phases = extension._parse_functional_retained_v2(
+            memoryview(request),
+            memoryview(config),
+            collect_provenance,
+            preserve_source_map,
+            False,
+            False,
+            None,
+        )
+        summary = cast(
+            bytes,
+            prepare(
+                parsed,
+                manifest,
+                document_key,
+                collect_provenance,
+                preserve_source_map,
+                None,
+            ),
+        )
+        return parsed, summary
+
+    parsed, summary = prepared_storage()
+    handle, allocations = probe(parsed, summary, attestation, None)
+    assert allocations == 2
+    assert handle._publication_closed_v2() is False
+    handle._publication_close_v2()
+    assert request == original_request
+    assert config == original_config
+
+    for fail_after in range(allocations):
+        parsed, summary = prepared_storage()
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native retained finalization bridge allocation failure$",
+        ):
+            probe(parsed, summary, attestation, fail_after)
+        recovered = finalize(parsed, summary, attestation, None)
+        assert recovered._publication_closed_v2() is False
+        recovered._publication_close_v2()
+        assert request == original_request
+        assert config == original_config
+
+    parsed, summary = prepared_storage()
+    boundary_handle, boundary_allocations = probe(
+        parsed,
+        summary,
+        attestation,
+        allocations,
+    )
+    assert boundary_allocations == allocations
+    assert boundary_handle._publication_closed_v2() is False
+    boundary_handle._publication_close_v2()
+    assert request == original_request
+    assert config == original_config
+
+
+@pytest.fixture(scope="module")
 def retained_structural_bridge_extension(
     extension: NativeTestExtension,
 ) -> NativeTestExtension:

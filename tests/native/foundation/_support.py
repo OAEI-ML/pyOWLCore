@@ -112,6 +112,14 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...
 
+    def _finalize_parsed_structural_bridge_allocation_probe_v2(
+        self,
+        parsed: object,
+        prepared_summary: bytes,
+        attestation: object,
+        fail_after: int | None = None,
+    ) -> tuple[object, int]: ...
+
     def _index_bridge_allocation_probe_v1(
         self,
         snapshot_wire: object,
