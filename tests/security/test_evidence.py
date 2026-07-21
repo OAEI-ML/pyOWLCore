@@ -211,24 +211,30 @@ def test_native_mapped_wire_checkpoint_is_exact_and_fail_closed() -> None:
 
     implementation = checkpoint["implementation"]
     assert implementation["constructor_fixture_tags"] == 76
-    assert len(implementation["invariants"]) >= 7
+    assert "raw-document" in implementation["scoped_retained_fast_path"]
+    assert len(implementation["invariants"]) >= 9
 
     runs = {run["id"]: run for run in checkpoint["runs"]}
     assert set(runs) == {
-        "cpython-3.12-mapped-wire-constructor-matrix",
+        "cpython-3.12-scoped-retained-wire-matrix",
+        "cpython-3.12-consumer-cache-contracts",
         "rust-native-library",
         "static-quality-gates",
     }
     assert all(run["status"] == "pass" for run in runs.values())
-    python_run = runs["cpython-3.12-mapped-wire-constructor-matrix"]
+    python_run = runs["cpython-3.12-scoped-retained-wire-matrix"]
     assert python_run["observations"]["tests_failed"] == 0
-    assert python_run["observations"]["tests_passed"] >= 109
+    assert python_run["observations"]["tests_passed"] >= 168
     assert python_run["observations"]["subtests_passed"] >= 2987
+    consumer_run = runs["cpython-3.12-consumer-cache-contracts"]
+    assert consumer_run["observations"]["tests_failed"] == 0
+    assert consumer_run["observations"]["tests_passed"] >= 36
     assert runs["rust-native-library"]["observations"]["tests_failed"] == 0
     assert runs["static-quality-gates"]["commands"]
 
     release = checkpoint["release_effect"]
     assert release["local_mapped_wire_constructor_matrix"] == "pass"
+    assert release["local_scoped_retained_wire_matrix"] == "pass"
     assert release["installed_artifact_matrix"] == "not-run"
     assert release["supported_platform_matrix"] == "not-run"
     assert release["complete_format_option_import_matrix"] == "not-run"

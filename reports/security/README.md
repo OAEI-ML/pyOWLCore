@@ -25,8 +25,10 @@ platform lifecycle evidence remain open and the capability stays hidden.
 `native-mapped-wire-checkpoint.json` binds an exact test-hook artifact to the
 complete generated-constructor mapped-wire fixture. Verified mappings preserve
 their owner lease and avoid model materialization during exact wire copying and
-encoded-column publication; unverified mappings rebuild trusted bytes. The
-installed-artifact, full-format, and supported-platform matrices remain open.
+encoded-column publication; scoped retained owners additionally source distinct
+raw/effective document roots from validated native columns without Python
+scalar traversal, and unverified mappings rebuild trusted bytes. The installed-
+artifact, full-format, and supported-platform matrices remain open.
 
 `native-allocation-checkpoint.json` records an exact, dynamic failpoint sweep
 through retained-component build, freeze, and encode for all 76 model

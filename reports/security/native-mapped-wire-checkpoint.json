@@ -1,6 +1,6 @@
 {
   "schema": "pyowl-core.native-mapped-wire-checkpoint/1",
-  "subject_revision": "beb31b15b0c158378a43f111c53cb19aa487d7ae",
+  "subject_revision": "801f51476feff439dd3f7366267c5757b55afbf5",
   "recorded_date": "2026-07-21",
   "claim": "checkpoint-only",
   "capability_advertised": false,
@@ -16,18 +16,21 @@
     "kind": "local test-hook extension",
     "profile": "dev",
     "features": ["extension-module", "test-hooks"],
-    "path": "/private/tmp/pyowlcore-mapped-wire-target-beb31b1/debug/lib_native.dylib",
-    "sha256": "630b86f7bcfd373d862baee189b295e8b73add9cb24f978b4830505ccd206dc3"
+    "path": "/private/tmp/pyowlcore-scoped-wire-target-801f514/debug/lib_native.dylib",
+    "sha256": "6e072b4ccd152faccaf17db5ddde9ffb0c7792892fbdc777da4c2683cffe2802"
   },
   "implementation": {
     "verified_mapping_fast_path": "revalidate the borrowed mapped image under the caller limits, hold a dependent lease, and copy the exact wire bytes without materializing the model",
     "unverified_mapping_fallback": "withhold wire-verified and materialize/rebuild instead of copying an untrusted digest",
+    "scoped_retained_fast_path": "merge attested closure, effective-document, and raw-document encoded columns into distinct wire roots without scalar structural traversal",
     "constructor_fixture_tags": 76,
     "invariants": [
       "the complete generated constructor fixture reaches every registered model tag",
       "Python, native, mapped-wire, and independently decoded encoded-column roots agree",
       "verified mapped encoding leaves both decoded and materialized-model caches empty",
       "mapped encoded columns retain the mapped snapshot as their exact owner",
+      "anonymous Functional and RDF/XML documents preserve distinct raw and effective roots from retained V2 columns",
+      "scoped retained encoding leaves Python scalar-access counters unchanged and requests exactly closure, effective-document, and raw-document columns",
       "wire and temporary-byte limits fail before model materialization",
       "a concurrent close is rejected while the mapped-wire lease is active",
       "an unverified mapping rebuilds trusted wire bytes and does not advertise wire-verified"
@@ -35,41 +38,55 @@
   },
   "runs": [
     {
-      "id": "cpython-3.12-mapped-wire-constructor-matrix",
+      "id": "cpython-3.12-scoped-retained-wire-matrix",
       "status": "pass",
-      "working_directory": "/private/tmp/pyowlcore-mapped-wire-worktree.beb31b1",
-      "command": "PYTHONPATH=src:. PYOWL_CORE_TEST_NATIVE_LIBRARY=/private/tmp/pyowlcore-mapped-wire-target-beb31b1/debug/lib_native.dylib PYOWL_CORE_TEST_HOOKS_REQUIRED=1 python -m pytest -q tests/unit/wire tests/native/wire tests/native/encoded_views tests/unit/composition/test_anonymous_provenance.py",
+      "working_directory": "/private/tmp/pyowlcore-scoped-wire-worktree.801f514",
+      "command": "PYTHONPATH=src:. PYOWL_CORE_TEST_NATIVE_LIBRARY=/private/tmp/pyowlcore-scoped-wire-target-801f514/debug/lib_native.dylib PYOWL_CORE_TEST_HOOKS_REQUIRED=1 python -m pytest -q tests/unit/wire tests/native/wire tests/native/encoded_views tests/native/formats/test_public_retained_load.py tests/native/formats/test_rdfxml_retained_v2.py tests/unit/composition/test_anonymous_provenance.py",
       "observations": {
-        "tests_passed": 109,
+        "tests_passed": 168,
         "tests_failed": 0,
         "tests_skipped": 0,
         "subtests_passed": 2987,
-        "seconds": 19.13
+        "seconds": 27.41
       },
-      "notes": "The exact artifact passes the complete local wire, mapped-wire, encoded-view, and anonymous-provenance slice."
+      "notes": "The exact artifact passes the complete local wire, mapped-wire, encoded-view, anonymous-provenance, and retained Functional/RDF/XML scoped-document slice."
+    },
+    {
+      "id": "cpython-3.12-consumer-cache-contracts",
+      "status": "pass",
+      "working_directory": "/private/tmp/pyowlcore-scoped-wire-worktree.801f514",
+      "command": "PYTHONPATH=src:. PYOWL_CORE_TEST_NATIVE_LIBRARY=/private/tmp/pyowlcore-scoped-wire-target-801f514/debug/lib_native.dylib PYOWL_CORE_TEST_HOOKS_REQUIRED=1 python -m pytest -q tests/integration/consumers tests/consumer_contract tests/integration/cache",
+      "observations": {
+        "tests_passed": 36,
+        "tests_failed": 0,
+        "tests_skipped": 1,
+        "seconds": 2.00
+      },
+      "notes": "The skip is the unavailable optional workspace pyELK native artifact; all available consumer and cache contracts pass in an isolated interpreter."
     },
     {
       "id": "rust-native-library",
       "status": "pass",
-      "working_directory": "/private/tmp/pyowlcore-mapped-wire-worktree.beb31b1",
-      "command": "CARGO_TARGET_DIR=/private/tmp/pyowlcore-mapped-wire-target-beb31b1 cargo test --manifest-path native/Cargo.toml --locked --no-default-features --features test-hooks --lib --quiet",
+      "working_directory": "/private/tmp/pyowlcore-scoped-wire-worktree.801f514",
+      "command": "CARGO_TARGET_DIR=/private/tmp/pyowlcore-scoped-wire-target-801f514 cargo test --manifest-path native/Cargo.toml --locked --no-default-features --features test-hooks --lib --quiet",
       "observations": {
         "tests_passed": 231,
         "tests_failed": 0,
-        "seconds": 1.94
+        "seconds": 1.54
       },
       "notes": "The exact subject revision passes the isolated Rust library suite."
     },
     {
       "id": "static-quality-gates",
       "status": "pass",
-      "working_directory": "/private/tmp/pyowlcore-mapped-wire-worktree.beb31b1",
+      "working_directory": "/private/tmp/pyowlcore-scoped-wire-worktree.801f514",
       "commands": [
-        "python -m ruff check src/pyowl_core/wire/codec.py src/pyowl_core/wire/mapping.py tests/native/wire/test_mapped_constructor_owner.py",
-        "python -m mypy --strict src/pyowl_core/wire/codec.py src/pyowl_core/wire/mapping.py",
+        "python -m ruff check src/pyowl_core/backends/native_views.py src/pyowl_core/wire/codec.py tests/native/wire/test_mapped_constructor_owner.py tests/native/formats/test_public_retained_load.py tests/native/formats/test_rdfxml_retained_v2.py",
+        "python -m mypy --strict src/pyowl_core/backends/native_views.py src/pyowl_core/wire/codec.py",
         "MYPYPATH=src python -m mypy --strict --follow-imports=skip tests/native/wire/test_mapped_constructor_owner.py",
+        "MYPYPATH=src python -m mypy --strict --follow-imports=skip --disable-error-code untyped-decorator tests/native/formats/test_public_retained_load.py tests/native/formats/test_rdfxml_retained_v2.py",
         "cargo fmt --manifest-path native/Cargo.toml --all -- --check",
-        "CARGO_TARGET_DIR=/private/tmp/pyowlcore-mapped-wire-target-beb31b1 cargo clippy --manifest-path native/Cargo.toml --locked --no-default-features --features test-hooks --all-targets -- -D warnings"
+        "CARGO_TARGET_DIR=/private/tmp/pyowlcore-scoped-wire-target-801f514 cargo clippy --manifest-path native/Cargo.toml --locked --no-default-features --features test-hooks --all-targets -- -D warnings"
       ],
       "observations": {
         "ruff_errors": 0,
@@ -82,17 +99,18 @@
   ],
   "release_effect": {
     "local_mapped_wire_constructor_matrix": "pass",
+    "local_scoped_retained_wire_matrix": "pass",
     "installed_artifact_matrix": "not-run",
     "supported_platform_matrix": "not-run",
     "complete_format_option_import_matrix": "not-run",
     "security_resource_determinism": "not-run",
     "core_release_eligible": false,
-    "reason": "one exact local source-tree artifact proves the mapped-wire implementation and complete constructor fixture, but installed artifacts, supported platforms, complete parser inputs, and aggregate release gates remain incomplete"
+    "reason": "one exact local source-tree artifact proves mapped-wire and scoped retained-column encoding across the complete constructor fixture plus anonymous Functional and RDF/XML documents, but installed artifacts, supported platforms, complete parser inputs, and aggregate release gates remain incomplete"
   },
   "limitations": [
     "The artifact is a local development build, not an installed release wheel.",
     "Only macOS x86-64 with CPython 3.12 ran locally.",
-    "The every-constructor fixture is not the complete WP16 format, option, and import-closure matrix.",
+    "The every-constructor plus Functional/RDFXML fixture is not the complete WP16 format, option, and import-closure matrix.",
     "The fast path returns an owning bytes copy; it does not claim zero-copy wire output.",
     "No encoded-view or retained-native capability promotion follows from this checkpoint."
   ]
