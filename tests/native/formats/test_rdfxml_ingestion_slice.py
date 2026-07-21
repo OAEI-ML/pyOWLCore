@@ -516,6 +516,43 @@ def test_reserved_names_fail_in_element_roles_in_both_backends(
     assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
 
 
+@pytest.mark.parametrize(
+    "document",
+    (
+        "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'><label/></owl:Class></rdf:RDF>",
+        "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C' label='value'/></rdf:RDF>",
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<rdfs:label note='value'/></owl:Class></rdf:RDF>"
+        ),
+        (
+            "<rdf:RDF {namespaces} xmlns='urn:default:'>"
+            "<owl:Class rdf:about='urn:C' label='value'/></rdf:RDF>"
+        ),
+        "<rdf:RDF {namespaces}><owl:1Class/></rdf:RDF>",
+        "<rdf:RDF {namespaces}><owl:Class owl:1label='value'/></rdf:RDF>",
+        "<rdf:RDF {namespaces} xmlns:1bad='urn:bad:'/>",
+    ),
+)
+def test_namespace_and_qname_errors_fail_as_syntax_in_both_backends(
+    extension: NativeTestExtension,
+    document: str,
+) -> None:
+    namespaces = (
+        "xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#'"
+    )
+    source = document.format(namespaces=namespaces).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
 def test_processing_instructions_map_to_no_rdf_events(
     extension: NativeTestExtension,
 ) -> None:

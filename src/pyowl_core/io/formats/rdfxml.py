@@ -621,7 +621,7 @@ def _expanded(tag: str) -> str:
     if not tag.startswith("{") or "}" not in tag:
         raise OntologySyntaxError(
             "RDF/XML element and property attributes require namespaces",
-            code="RDFXML_NAMESPACE",
+            code="RDFXML_SYNTAX",
         )
     namespace, local = tag[1:].split("}", 1)
     return namespace + local

@@ -646,7 +646,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         for attribute in &event.attributes {
             if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
                 let prefix = attribute.name.strip_prefix("xmlns:").unwrap_or("");
-                if prefix.contains(':')
+                if (!prefix.is_empty() && !is_xml_ncname(prefix))
                     || prefix == "xmlns"
                     || (prefix == "xml" && attribute.value != XML)
                     || (!prefix.is_empty() && attribute.value.is_empty())
@@ -1829,13 +1829,12 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
 
     fn expand(&mut self, raw: &str, attribute: bool) -> NativeResult<String> {
         let (prefix, local) = match raw.split_once(':') {
-            Some((prefix, local))
-                if !prefix.is_empty() && !local.is_empty() && !local.contains(':') =>
-            {
+            Some((prefix, local)) if is_xml_ncname(prefix) && is_xml_ncname(local) => {
                 (Some(prefix), local)
             }
             Some(_) => return Err(xml_syntax()),
-            None => (None, raw),
+            None if is_xml_ncname(raw) => (None, raw),
+            None => return Err(xml_syntax()),
         };
         let namespace = match prefix {
             Some(prefix) => self
@@ -7213,6 +7212,11 @@ mod tests {
                 "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:bad:name/></rdf:Description></rdf:RDF>"
             ),
             format!("<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e:bad=\"urn:e:\"/>"),
+            format!("<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:1bad=\"urn:e:\"/>"),
+            format!("<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><e:1node/></rdf:RDF>"),
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description e:1property=\"value\"/></rdf:RDF>"
+            ),
             format!(
                 "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:nodeID=\"\"/></rdf:Description></rdf:RDF>"
             ),
