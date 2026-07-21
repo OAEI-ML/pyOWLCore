@@ -263,6 +263,34 @@ def test_node_property_attributes_match_python_types_and_language_literals(
     assert limited.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_unicode_xml_qnames_match_python_mapping(
+    extension: NativeTestExtension,
+) -> None:
+    source = """<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xmlns:π='urn:unicode:'>
+ <owl:AnnotationProperty rdf:about='urn:unicode:qualité'/>
+ <owl:AnnotationProperty rdf:about='urn:unicode:étiquette'/>
+ <owl:Class rdf:about='urn:C' π:qualité='élevée'>
+  <π:étiquette xml:lang='FR'>café</π:étiquette>
+ </owl:Class>
+</rdf:RDF>""".encode()
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 5
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.decoded_codepoints == python.decoded_codepoint_length
+
+    with pytest.raises(extension._NativeError) as limited:
+        _ingest(extension, source, limits=ParseLimits(max_literal_bytes=6))
+    assert limited.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 def test_empty_property_attributes_match_python_object_descriptions(
     extension: NativeTestExtension,
 ) -> None:
@@ -446,6 +474,18 @@ def test_rfc3986_document_and_nested_xml_bases_match_python(
             b"<e:p rdf:parseType='Literal'><xi:include href='other.xml'/></e:p>"
             b"</rdf:Description></rdf:RDF>",
             "NATIVE_XML_FORBIDDEN_CONSTRUCT",
+        ),
+        (
+            b"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+            b"xmlns:e='urn:e:'><rdf:Description rdf:about='urn:s'>"
+            b"<e:bad:name/></rdf:Description></rdf:RDF>",
+            "NATIVE_RDFXML_SYNTAX",
+        ),
+        (
+            b"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+            b"xmlns:e='urn:e:'><rdf:Description rdf:about='urn:s'>"
+            b"<e:p rdf:nodeID=''/></rdf:Description></rdf:RDF>",
+            "NATIVE_RDFXML_SYNTAX",
         ),
     ),
 )

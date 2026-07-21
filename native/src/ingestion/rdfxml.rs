@@ -256,7 +256,7 @@ impl<'a> XmlStream<'a> {
             if self.starts_with(start, "</") {
                 let mut cursor = start + 2;
                 skip_space(self.text.as_bytes(), &mut cursor);
-                let name_end = scan_name(self.text.as_bytes(), cursor)?;
+                let name_end = scan_name(self.text, cursor)?;
                 let name = owned_text(&self.text[cursor..name_end], session)?;
                 cursor = name_end;
                 skip_space(self.text.as_bytes(), &mut cursor);
@@ -285,7 +285,7 @@ impl<'a> XmlStream<'a> {
     ) -> NativeResult<StartEvent> {
         let bytes = self.text.as_bytes();
         let mut cursor = start + 1;
-        let name_end = scan_name(bytes, cursor)?;
+        let name_end = scan_name(self.text, cursor)?;
         let name = owned_text(&self.text[cursor..name_end], session)?;
         cursor = name_end;
         let mut attributes = Vec::new();
@@ -306,7 +306,7 @@ impl<'a> XmlStream<'a> {
                 Some(_) => {}
                 None => return Err(xml_syntax()),
             }
-            let attribute_end = scan_name(bytes, cursor)?;
+            let attribute_end = scan_name(self.text, cursor)?;
             let attribute_name = owned_text(&self.text[cursor..attribute_end], session)?;
             if attributes
                 .iter()
@@ -590,7 +590,10 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         for attribute in &event.attributes {
             if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
                 let prefix = attribute.name.strip_prefix("xmlns:").unwrap_or("");
-                if prefix == "xmlns" || (prefix == "xml" && attribute.value != XML) {
+                if prefix.contains(':')
+                    || prefix == "xmlns"
+                    || (prefix == "xml" && attribute.value != XML)
+                {
                     return Err(xml_syntax());
                 }
                 self.prefix_declarations = self
@@ -936,6 +939,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             + usize::from(datatype_attribute.is_some())
             > 1
         {
+            return Err(xml_syntax());
+        }
+        if node_id.is_some_and(str::is_empty) {
             return Err(xml_syntax());
         }
         // Every property-element rdf:ID reifies its emitted statement. Keep
@@ -1611,7 +1617,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
 
     fn expand(&mut self, raw: &str, attribute: bool) -> NativeResult<String> {
         let (prefix, local) = match raw.split_once(':') {
-            Some((prefix, local)) if !prefix.is_empty() && !local.is_empty() => {
+            Some((prefix, local))
+                if !prefix.is_empty() && !local.is_empty() && !local.contains(':') =>
+            {
                 (Some(prefix), local)
             }
             Some(_) => return Err(xml_syntax()),
@@ -5744,18 +5752,55 @@ fn xml_character(value: u32) -> NativeResult<char> {
     Ok(character)
 }
 
-fn scan_name(bytes: &[u8], start: usize) -> NativeResult<usize> {
-    let first = *bytes.get(start).ok_or_else(xml_syntax)?;
-    if !(first.is_ascii_alphabetic() || matches!(first, b'_' | b':')) {
+fn scan_name(text: &str, start: usize) -> NativeResult<usize> {
+    let suffix = text.get(start..).ok_or_else(xml_syntax)?;
+    let mut characters = suffix.char_indices();
+    let (_, first) = characters.next().ok_or_else(xml_syntax)?;
+    if !is_xml_name_start(first) {
         return Err(xml_syntax());
     }
-    let mut end = start + 1;
-    while bytes.get(end).is_some_and(|value| {
-        value.is_ascii_alphanumeric() || matches!(*value, b'_' | b':' | b'.' | b'-')
-    }) {
-        end += 1;
+    let mut end = start
+        .checked_add(first.len_utf8())
+        .ok_or_else(|| NativeError::limit("native XML name offset overflow"))?;
+    for (offset, character) in characters {
+        if !is_xml_name_character(character) {
+            break;
+        }
+        end = start
+            .checked_add(offset)
+            .and_then(|value| value.checked_add(character.len_utf8()))
+            .ok_or_else(|| NativeError::limit("native XML name offset overflow"))?;
     }
     Ok(end)
+}
+
+fn is_xml_name_start(value: char) -> bool {
+    matches!(
+        value,
+        ':' | 'A'..='Z'
+            | '_'
+            | 'a'..='z'
+            | '\u{00c0}'..='\u{00d6}'
+            | '\u{00d8}'..='\u{00f6}'
+            | '\u{00f8}'..='\u{02ff}'
+            | '\u{0370}'..='\u{037d}'
+            | '\u{037f}'..='\u{1fff}'
+            | '\u{200c}'..='\u{200d}'
+            | '\u{2070}'..='\u{218f}'
+            | '\u{2c00}'..='\u{2fef}'
+            | '\u{3001}'..='\u{d7ff}'
+            | '\u{f900}'..='\u{fdcf}'
+            | '\u{fdf0}'..='\u{fffd}'
+            | '\u{10000}'..='\u{effff}'
+    )
+}
+
+fn is_xml_name_character(value: char) -> bool {
+    is_xml_name_start(value)
+        || matches!(
+            value,
+            '-' | '.' | '0'..='9' | '\u{00b7}' | '\u{0300}'..='\u{036f}' | '\u{203f}'..='\u{2040}'
+        )
 }
 
 fn bounded_find(
@@ -6409,6 +6454,51 @@ mod tests {
             graph(&source).unwrap_err().code,
             "NATIVE_RDF_MAPPING_INCOMPLETE"
         );
+    }
+
+    #[test]
+    fn unicode_qnames_expand_in_elements_and_attributes() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:π=\"urn:unicode:\"><rdf:Description rdf:about=\"urn:s\" π:qualité=\"élevée\"><π:étiquette xml:lang=\"FR\">café</π:étiquette></rdf:Description></rdf:RDF>"
+        );
+        let parsed = graph(&source).expect("Unicode XML qualified names");
+
+        assert_eq!(parsed.len(), 2);
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            "urn:unicode:qualité",
+            Term::Literal {
+                lexical: "élevée".to_owned(),
+                datatype: Some(XSD_STRING.to_owned()),
+                language: None,
+            },
+        ));
+        assert!(contains_edge(
+            &parsed,
+            iri_resource("urn:s"),
+            "urn:unicode:étiquette",
+            Term::Literal {
+                lexical: "café".to_owned(),
+                datatype: None,
+                language: Some("fr".to_owned()),
+            },
+        ));
+    }
+
+    #[test]
+    fn malformed_qnames_and_empty_property_node_ids_fail_as_syntax() {
+        for source in [
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:bad:name/></rdf:Description></rdf:RDF>"
+            ),
+            format!("<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e:bad=\"urn:e:\"/>"),
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:nodeID=\"\"/></rdf:Description></rdf:RDF>"
+            ),
+        ] {
+            assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
     }
 
     #[test]

@@ -94,6 +94,18 @@ PROPERTY_ATTRIBUTE_SOURCE = b"""\
     xml:lang="EN" rdfs:label="Class label"/>
 </rdf:RDF>
 """
+UNICODE_QNAME_SOURCE = """\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#"
+  xmlns:π="urn:unicode:">
+  <owl:AnnotationProperty rdf:about="urn:unicode:qualité"/>
+  <owl:AnnotationProperty rdf:about="urn:unicode:étiquette"/>
+  <owl:Class rdf:about="urn:C" π:qualité="élevée">
+    <π:étiquette xml:lang="FR">café</π:étiquette>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
 EMPTY_PROPERTY_ATTRIBUTE_SOURCE = b"""\
 <rdf:RDF
   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -351,6 +363,33 @@ def test_node_property_attributes_publish_from_the_retained_parser_owner(
     assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
     assert encode_snapshot(selected) == encode_snapshot(reference)
     assert counters.parser_bytes == len(PROPERTY_ATTRIBUTE_SOURCE)
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
+
+
+def test_unicode_qnames_publish_from_the_retained_parser_owner(
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(
+        UNICODE_QNAME_SOURCE,
+        document_iri=DOCUMENT_IRI,
+        options=_options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("Unicode QNames crossed the Python RDF/XML parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(Any, _retained_snapshot(UNICODE_QNAME_SOURCE))
+
+    owner = selected._native_snapshot_state.owner.handle._owner_v2
+    counters = owner._publication_counters_v2()
+    assert type(owner) is cast(Any, extension)._NativeSnapshotHandle
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.root.axioms == reference.root.axioms
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert counters.parser_bytes == len(UNICODE_QNAME_SOURCE)
     assert counters.publication_structural_rows_copied == 0
     assert counters.publication_structural_bytes_copied == 0
 
