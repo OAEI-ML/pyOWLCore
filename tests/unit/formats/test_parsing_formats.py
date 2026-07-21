@@ -653,6 +653,36 @@ def test_rdf_mapping_enforces_canonical_model_nesting_limits() -> None:
     assert raised.value.limit == "max_nesting_depth"
 
 
+def test_rdf_mapping_enforces_the_distinct_axiom_limit() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}" xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C"/>
+  <owl:Class rdf:about="urn:D"/>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(
+        source,
+        format="rdfxml",
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            limits=ParseLimits(max_axioms=2),
+        ),
+    )
+    assert len(document.axioms) == 2
+
+    with pytest.raises(ResourceLimitError) as raised:
+        parse_document(
+            source,
+            format="rdfxml",
+            options=LoadOptions(
+                backend=BackendPreference.PYTHON,
+                limits=ParseLimits(max_axioms=1),
+            ),
+        )
+    assert raised.value.limit == "max_axioms"
+
+
 @pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (

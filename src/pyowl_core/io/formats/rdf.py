@@ -188,7 +188,6 @@ class RDFMapper:
             if simple_axiom is not None:
                 axioms.append(simple_axiom)
                 occurrences.append((simple_axiom, None))
-                self.context.limits.enforce("max_axioms", len(axioms))
         unconsumed = tuple(item for item in self.graph.triples if item not in self.consumed)
         report = RDFMappingReport(
             conformant=not unconsumed,
@@ -217,7 +216,11 @@ class RDFMapper:
             occurrences=tuple(occurrences),
             rdf_mapping_report=report,
         )
-        for root in (*parsed.annotations, *parsed.axioms, *parsed.extensions):
+        axiom_rows = {
+            m.canonical_bytes(root, limits=self.context.limits) for root in parsed.axioms
+        }
+        self.context.limits.enforce("max_axioms", len(axiom_rows))
+        for root in (*parsed.annotations, *parsed.extensions):
             m.canonical_bytes(root, limits=self.context.limits)
         return parsed
 
