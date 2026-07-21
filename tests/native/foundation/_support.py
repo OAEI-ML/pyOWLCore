@@ -67,6 +67,17 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...
 
+    def _functional_retained_bridge_allocation_probe_v2(
+        self,
+        source: object,
+        config: object,
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        record_unresolved: bool,
+        require_empty_imports: bool,
+        fail_after: int | None = None,
+    ) -> tuple[bytes, int]: ...
+
     def _rdfxml_retained_bridge_allocation_probe_v2(
         self,
         source: object,

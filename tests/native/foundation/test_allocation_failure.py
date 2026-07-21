@@ -399,6 +399,78 @@ def test_foundation_bridge_probe_rejects_an_unknown_operation(
 
 
 @pytest.fixture(scope="module")
+def functional_retained_bridge_extension(
+    extension: NativeTestExtension,
+) -> NativeTestExtension:
+    if not hasattr(extension, "_functional_retained_bridge_allocation_probe_v2"):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail(
+                "selected native test-hooks artifact lacks "
+                "_functional_retained_bridge_allocation_probe_v2"
+            )
+        pytest.skip("native retained Functional bridge allocation hook is unavailable")
+    return extension
+
+
+def test_functional_retained_bridge_allocations_fail_before_publication(
+    functional_retained_bridge_extension: NativeTestExtension,
+) -> None:
+    source = _parser_request()
+    original_source = bytes(source)
+    config = bytearray(native._encode_config(ParseLimits(), None, verify=False))
+    original_config = bytes(config)
+
+    output, allocations = (
+        functional_retained_bridge_extension._functional_retained_bridge_allocation_probe_v2(
+            memoryview(source),
+            memoryview(config),
+            True,
+            True,
+            False,
+            False,
+            None,
+        )
+    )
+    assert output[:8] == b"PYNFRS2\0"
+    assert allocations == 13
+    assert source == original_source
+    assert config == original_config
+
+    for fail_after in range(allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native Functional retained bridge allocation failure$",
+        ):
+            functional_retained_bridge_extension._functional_retained_bridge_allocation_probe_v2(
+                memoryview(source),
+                memoryview(config),
+                True,
+                True,
+                False,
+                False,
+                fail_after,
+            )
+        assert source == original_source
+        assert config == original_config
+
+    boundary_output, boundary_allocations = (
+        functional_retained_bridge_extension._functional_retained_bridge_allocation_probe_v2(
+            memoryview(source),
+            memoryview(config),
+            True,
+            True,
+            False,
+            False,
+            allocations,
+        )
+    )
+    assert boundary_output == output
+    assert boundary_allocations == allocations
+    assert source == original_source
+    assert config == original_config
+
+
+@pytest.fixture(scope="module")
 def rdfxml_bridge_extension(extension: NativeTestExtension) -> NativeTestExtension:
     if not hasattr(extension, "_rdfxml_retained_bridge_allocation_probe_v2"):
         if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":

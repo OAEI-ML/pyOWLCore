@@ -58,6 +58,11 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
         _rdfxml_retained_bridge_allocation_probe_v2,
         _module
     )?)?;
+    #[cfg(feature = "test-hooks")]
+    _module.add_function(wrap_pyfunction!(
+        _functional_retained_bridge_allocation_probe_v2,
+        _module
+    )?)?;
     _module.add_function(wrap_pyfunction!(
         _prepare_parsed_structural_snapshot_v2,
         _module
@@ -263,8 +268,74 @@ fn _parse_functional_retained_v2<'py>(
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<RetainedParseBindingResult> {
-    let limits = crate::limits_from_python(config)?;
-    let owned = crate::owned_source_request(py, source, &limits)?;
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    parse_functional_retained_v2_with_allocations(
+        py,
+        source,
+        config,
+        collect_provenance,
+        preserve_source_map,
+        record_unresolved,
+        require_empty_imports,
+        cancel,
+        &mut allocations,
+    )
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    source,
+    config,
+    collect_provenance,
+    preserve_source_map,
+    record_unresolved,
+    require_empty_imports,
+    fail_after=None
+))]
+fn _functional_retained_bridge_allocation_probe_v2<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    record_unresolved: bool,
+    require_empty_imports: bool,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyBytes>, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native Functional retained bridge allocation failure",
+    );
+    let (encoded, _storage, _phases) = parse_functional_retained_v2_with_allocations(
+        py,
+        source,
+        config,
+        collect_provenance,
+        preserve_source_map,
+        record_unresolved,
+        require_empty_imports,
+        None,
+        &mut allocations,
+    )?;
+    Ok((encoded, allocations.count()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_functional_retained_v2_with_allocations<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    record_unresolved: bool,
+    require_empty_imports: bool,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<RetainedParseBindingResult> {
+    let limits = crate::limits_from_python_with_allocations(config, allocations)?;
+    let owned = crate::owned_source_request_with_allocations(py, source, &limits, allocations)?;
     let input_size = owned.len();
     let cancellation = crate::cancellation_or_default(cancel);
     let (outcome, parser_bytes) = crate::run_detached(py, move |interrupt| {
@@ -300,6 +371,7 @@ fn _parse_functional_retained_v2<'py>(
         outcome.phases.arena_construction_ns,
         outcome.phases.freeze_ns,
     );
+    allocations.checkpoint()?;
     let encoded = PyBytes::new_with(py, outcome.encoded.len(), |buffer| {
         buffer.copy_from_slice(&outcome.encoded);
         Ok(())
