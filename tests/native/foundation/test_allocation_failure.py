@@ -2,10 +2,20 @@ from __future__ import annotations
 
 import os
 import struct
+from typing import Any, cast
 
 import pytest
 
-from pyowl_core import ParseLimits, canonical_bytes, encode_snapshot
+from pyowl_core import (
+    BackendPreference,
+    DocumentFormat,
+    ImportPolicy,
+    LoadOptions,
+    ParseLimits,
+    canonical_bytes,
+    encode_snapshot,
+    load_snapshot,
+)
 from pyowl_core.backends import native
 from pyowl_core.model import StructuralNode, constructor_spec
 from tests.generated.model.fixtures import model_fixtures
@@ -467,6 +477,121 @@ def test_functional_retained_bridge_allocations_fail_before_publication(
     assert boundary_output == output
     assert boundary_allocations == allocations
     assert source == original_source
+    assert config == original_config
+
+
+def test_retained_preparation_bridge_allocations_fail_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    functional_retained_bridge_extension: NativeTestExtension,
+) -> None:
+    extension = cast(Any, functional_retained_bridge_extension)
+    request = _parser_request()
+    source = bytes(request[struct.calcsize("<8sHHQ") :])
+    config = bytearray(native._encode_config(ParseLimits(), None, verify=False))
+    original_request = bytes(request)
+    original_config = bytes(config)
+    captured: dict[str, object] = {}
+    prepare = extension._prepare_parsed_structural_snapshot_v2
+
+    def capture_prepare(
+        parsed: object,
+        manifest: bytes,
+        document_key: str,
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        cancel: object | None = None,
+    ) -> bytes:
+        captured.update(
+            manifest=bytes(manifest),
+            document_key=document_key,
+            collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
+        )
+        return cast(
+            bytes,
+            prepare(
+                parsed,
+                manifest,
+                document_key,
+                collect_provenance,
+                preserve_source_map,
+                cancel,
+            ),
+        )
+
+    monkeypatch.setattr(extension, "_prepare_parsed_structural_snapshot_v2", capture_prepare)
+    native._reset_probe_cache_for_tests()
+    selected = load_snapshot(
+        source,
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=BackendPreference.NATIVE,
+            collect_provenance=True,
+            preserve_source_map=True,
+        ),
+    )
+    selected.close()
+    monkeypatch.setattr(extension, "_prepare_parsed_structural_snapshot_v2", prepare)
+
+    manifest = cast(bytes, captured["manifest"])
+    document_key = cast(str, captured["document_key"])
+    collect_provenance = cast(bool, captured["collect_provenance"])
+    preserve_source_map = cast(bool, captured["preserve_source_map"])
+    probe = extension._prepare_parsed_structural_bridge_allocation_probe_v2
+
+    def parsed_storage() -> object:
+        _summary, storage, _phases = extension._parse_functional_retained_v2(
+            memoryview(request),
+            memoryview(config),
+            collect_provenance,
+            preserve_source_map,
+            False,
+            False,
+            None,
+        )
+        return storage
+
+    output, allocations = probe(
+        parsed_storage(),
+        manifest,
+        document_key,
+        collect_provenance,
+        preserve_source_map,
+        None,
+    )
+    assert output[:8] == b"PYNFPP2\0"
+    assert allocations == 2
+    assert request == original_request
+    assert config == original_config
+
+    for fail_after in range(allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native retained preparation bridge allocation failure$",
+        ):
+            probe(
+                parsed_storage(),
+                manifest,
+                document_key,
+                collect_provenance,
+                preserve_source_map,
+                fail_after,
+            )
+        assert request == original_request
+        assert config == original_config
+
+    boundary_output, boundary_allocations = probe(
+        parsed_storage(),
+        manifest,
+        document_key,
+        collect_provenance,
+        preserve_source_map,
+        allocations,
+    )
+    assert boundary_output[:8] == output[:8]
+    assert boundary_allocations == allocations
+    assert request == original_request
     assert config == original_config
 
 

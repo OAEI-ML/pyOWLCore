@@ -67,6 +67,11 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
         _prepare_parsed_structural_snapshot_v2,
         _module
     )?)?;
+    #[cfg(feature = "test-hooks")]
+    _module.add_function(wrap_pyfunction!(
+        _prepare_parsed_structural_bridge_allocation_probe_v2,
+        _module
+    )?)?;
     _module.add_function(wrap_pyfunction!(
         _finalize_parsed_structural_snapshot_v2,
         _module
@@ -404,12 +409,73 @@ fn parse_functional_retained_v2_with_allocations<'py>(
 ))]
 fn _prepare_parsed_structural_snapshot_v2<'py>(
     py: Python<'py>,
+    parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
+    manifest: &Bound<'py, PyBytes>,
+    document_key: String,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<Py<PyBytes>> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    prepare_parsed_structural_snapshot_v2_with_allocations(
+        py,
+        parsed,
+        manifest,
+        document_key,
+        collect_provenance,
+        preserve_source_map,
+        cancel,
+        &mut allocations,
+    )
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    parsed,
+    manifest,
+    document_key,
+    collect_provenance,
+    preserve_source_map,
+    fail_after=None
+))]
+fn _prepare_parsed_structural_bridge_allocation_probe_v2<'py>(
+    py: Python<'py>,
+    parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
+    manifest: &Bound<'py, PyBytes>,
+    document_key: String,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyBytes>, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained preparation bridge allocation failure",
+    );
+    let encoded = prepare_parsed_structural_snapshot_v2_with_allocations(
+        py,
+        parsed,
+        manifest,
+        document_key,
+        collect_provenance,
+        preserve_source_map,
+        None,
+        &mut allocations,
+    )?;
+    Ok((encoded, allocations.count()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_parsed_structural_snapshot_v2_with_allocations<'py>(
+    py: Python<'py>,
     mut parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
     manifest: &Bound<'py, PyBytes>,
     document_key: String,
     collect_provenance: bool,
     preserve_source_map: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<Py<PyBytes>> {
     if parsed.prepared.is_some() {
         return Err(pyo3::exceptions::PyRuntimeError::new_err(
@@ -417,6 +483,7 @@ fn _prepare_parsed_structural_snapshot_v2<'py>(
         ));
     }
     let mut owned_manifest = Vec::new();
+    allocations.checkpoint()?;
     owned_manifest
         .try_reserve_exact(manifest.as_bytes().len())
         .map_err(|_| {
@@ -455,6 +522,7 @@ fn _prepare_parsed_structural_snapshot_v2<'py>(
         let summary = prepared.encode_summary(prepare_ns)?;
         Ok((storage, prepared, summary))
     })?;
+    allocations.checkpoint()?;
     let encoded = PyBytes::new_with(py, summary.len(), |buffer| {
         buffer.copy_from_slice(&summary);
         Ok(())

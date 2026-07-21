@@ -243,6 +243,14 @@ def _prepare_parsed_structural_snapshot_v2(
     preserve_source_map: bool,
     cancel: _Cancellation | None = None,
 ) -> bytes: ...
+def _prepare_parsed_structural_bridge_allocation_probe_v2(
+    parsed: _NativeParsedStructuralStorageV2,
+    manifest: bytes,
+    document_key: str,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    fail_after: int | None = None,
+) -> tuple[bytes, int]: ...
 def _finalize_parsed_structural_snapshot_v2(
     parsed: _NativeParsedStructuralStorageV2,
     prepared_summary: bytes,
