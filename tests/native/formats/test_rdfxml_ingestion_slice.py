@@ -30,6 +30,59 @@ class _Observation:
     axioms: tuple[bytes, ...]
 
 
+SWRL_SOURCE = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xmlns:swrl='http://www.w3.org/2003/11/swrl#'
+ xmlns:e='urn:'>
+ <swrl:Variable rdf:about='urn:x'/>
+ <swrl:Variable rdf:about='urn:y'/>
+ <swrl:Imp rdf:nodeID='rule'>
+  <swrl:body rdf:parseType='Collection'>
+   <swrl:ClassAtom>
+    <swrl:classPredicate rdf:resource='urn:C'/>
+    <swrl:argument1 rdf:resource='urn:x'/>
+   </swrl:ClassAtom>
+   <swrl:DataRangeAtom>
+    <swrl:dataRange rdf:resource='urn:D'/>
+    <swrl:argument1 rdf:resource='urn:y'/>
+   </swrl:DataRangeAtom>
+   <swrl:IndividualPropertyAtom>
+    <swrl:propertyPredicate>
+     <rdf:Description><owl:inverseOf rdf:resource='urn:p'/></rdf:Description>
+    </swrl:propertyPredicate>
+    <swrl:argument1 rdf:resource='urn:x'/>
+    <swrl:argument2 rdf:resource='urn:i'/>
+   </swrl:IndividualPropertyAtom>
+   <swrl:DatavaluedPropertyAtom>
+    <swrl:propertyPredicate rdf:resource='urn:d'/>
+    <swrl:argument1 rdf:resource='urn:x'/>
+    <swrl:argument2
+     rdf:datatype='http://www.w3.org/2001/XMLSchema#integer'>007</swrl:argument2>
+   </swrl:DatavaluedPropertyAtom>
+   <swrl:BuiltinAtom>
+    <swrl:builtin rdf:resource='urn:lessThan'/>
+    <swrl:arguments rdf:parseType='Collection'>
+     <rdf:Description rdf:about='urn:x'/>
+     <rdf:Description rdf:about='urn:y'/>
+    </swrl:arguments>
+   </swrl:BuiltinAtom>
+   <swrl:SameIndividualAtom>
+    <swrl:argument1 rdf:resource='urn:x'/>
+    <swrl:argument2 rdf:resource='urn:i'/>
+   </swrl:SameIndividualAtom>
+  </swrl:body>
+  <swrl:head rdf:parseType='Collection'>
+   <swrl:DifferentIndividualsAtom>
+    <swrl:argument1 rdf:resource='urn:x'/>
+    <swrl:argument2 rdf:resource='urn:j'/>
+   </swrl:DifferentIndividualsAtom>
+  </swrl:head>
+  <e:note rdf:resource='urn:value'/>
+ </swrl:Imp>
+</rdf:RDF>"""
+
+
 @pytest.fixture(scope="module")
 def extension() -> NativeTestExtension:
     selected = load_extension()
@@ -1260,6 +1313,131 @@ def test_malformed_or_unclaimed_reification_rejection_matches_python(
     with pytest.raises(extension._NativeError) as native_error:
         _ingest(extension, source)
     assert native_error.value.args[0] == "NATIVE_RDF_AXIOM_REIFICATION"
+
+
+def test_swrl_rule_mapping_matches_python_extension_partition(
+    extension: NativeTestExtension,
+) -> None:
+    owner, observed = _ingest(extension, SWRL_SOURCE)
+    python = parse_rdfxml(
+        SWRL_SOURCE,
+        limits=ParseLimits(),
+        document_iri=None,
+        allow_swrl=True,
+    )
+
+    assert not observed.axioms
+    assert not python.axioms
+    assert len(python.extensions) == 1
+    assert type(python.extensions[0]).__name__ == "SWRLRule"
+    assert len(python.extensions[0].body) == 6
+    assert len(python.extensions[0].head) == 1
+    assert len(python.extensions[0].annotations) == 1
+    assert observed.total_triples == observed.consumed_triples == 48
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == 0
+    assert attestation.extension_count == len(python.extensions)
+
+
+@pytest.mark.parametrize(
+    ("body", "python_code", "native_code"),
+    (
+        (
+            """
+ <swrl:Imp>
+  <swrl:body rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </swrl:Imp>
+""",
+            "RDF_MAPPING_CARDINALITY",
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            """
+ <swrl:Imp>
+  <swrl:body rdf:parseType='Collection'>
+   <swrl:ClassAtom>
+    <swrl:classPredicate rdf:resource='urn:C'/>
+    <swrl:argument1 rdf:resource='urn:i'/>
+    <e:extra rdf:resource='urn:value'/>
+   </swrl:ClassAtom>
+  </swrl:body>
+  <swrl:head rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </swrl:Imp>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+ <swrl:Variable rdf:nodeID='x'/>
+ <swrl:Imp>
+  <swrl:body rdf:parseType='Collection'>
+   <swrl:ClassAtom>
+    <swrl:classPredicate rdf:resource='urn:C'/>
+    <swrl:argument1 rdf:nodeID='x'/>
+   </swrl:ClassAtom>
+  </swrl:body>
+  <swrl:head rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </swrl:Imp>
+""",
+            "RDF_MAPPING_TYPE",
+            "NATIVE_RDF_MAPPING_TYPE",
+        ),
+    ),
+)
+def test_malformed_swrl_rule_rejection_matches_python(
+    extension: NativeTestExtension,
+    body: str,
+    python_code: str,
+    native_code: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:swrl='http://www.w3.org/2003/11/swrl#'
+ xmlns:e='urn:'>
+{body}</rdf:RDF>""".encode()
+
+    with pytest.raises((OntologySyntaxError, UnsupportedSyntaxError)) as python_error:
+        parse_rdfxml(
+            source,
+            limits=ParseLimits(),
+            document_iri=None,
+            allow_swrl=True,
+        )
+    assert python_error.value.code == python_code
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == native_code
+
+
+def test_canonical_swrl_atom_limit_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    boundary = ParseLimits(max_rule_atoms=6)
+    owner, observed = _ingest(extension, SWRL_SOURCE, limits=boundary)
+    python = parse_rdfxml(
+        SWRL_SOURCE,
+        limits=boundary,
+        document_iri=None,
+        allow_swrl=True,
+    )
+    assert observed.total_triples == observed.consumed_triples
+    assert cast(Any, owner)._publication_attestation_v1().extension_count == 1
+    assert len(python.extensions) == 1
+
+    limited = ParseLimits(max_rule_atoms=5)
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(
+            SWRL_SOURCE,
+            limits=limited,
+            document_iri=None,
+            allow_swrl=True,
+        )
+    assert python_error.value.limit == "max_rule_atoms"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, SWRL_SOURCE, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
 @pytest.mark.parametrize(

@@ -15,6 +15,20 @@ from pyowl_core.document.document import provisional_anonymous
 from pyowl_core.document.provenance import RDFMappingReport, RDFTripleEvidence
 from pyowl_core.exceptions import InvalidLiteralError, OntologySyntaxError, UnsupportedSyntaxError
 from pyowl_core.limits import ParseLimits
+from pyowl_core.model.swrl import (
+    Atom,
+    BuiltInAtom,
+    ClassAtom,
+    DataArgument,
+    DataPropertyAtom,
+    DataRangeAtom,
+    DifferentIndividualsAtom,
+    IndividualArgument,
+    ObjectPropertyAtom,
+    SameIndividualAtom,
+    SWRLRule,
+    Variable,
+)
 
 from .common import ParseContext, ParsedOntology
 
@@ -22,6 +36,7 @@ RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 RDFS = "http://www.w3.org/2000/01/rdf-schema#"
 OWL = "http://www.w3.org/2002/07/owl#"
 XSD = "http://www.w3.org/2001/XMLSchema#"
+SWRL = "http://www.w3.org/2003/11/swrl#"
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -128,6 +143,7 @@ class RDFGraph:
 
 class RDFMapper:
     __slots__ = (
+        "allow_swrl",
         "annotation_annotations",
         "annotation_dependencies",
         "annotation_kinds",
@@ -153,10 +169,12 @@ class RDFMapper:
         limits: ParseLimits,
         document_iri: m.IRI | None,
         cancellation_token: CancellationToken | None = None,
+        allow_swrl: bool = False,
     ) -> None:
         self.graph = graph
         self.context = ParseContext(limits, cancellation_token)
         self.document_iri = document_iri
+        self.allow_swrl = allow_swrl
         self.consumed: set[Triple] = set()
         self.kinds: dict[str, set[m.EntityKind]] = {}
         self.object_kinds: set[str] = set()
@@ -177,10 +195,14 @@ class RDFMapper:
         self._collect_axiom_annotations()
         ontology_id, imports, ontology_annotations, ontology_node = self._header()
         axioms: list[m.AxiomNode] = []
+        extensions: list[m.StructuralNode] = []
         occurrences: list[tuple[m.StructuralNode, None]] = []
         for axiom in self._declarations():
             axioms.append(axiom)
             occurrences.append((axiom, None))
+        for extension in self._swrl_rules():
+            extensions.append(extension)
+            occurrences.append((extension, None))
         for axiom in self._special_axioms():
             axioms.append(axiom)
             occurrences.append((axiom, None))
@@ -225,6 +247,7 @@ class RDFMapper:
             imports,
             ontology_annotations,
             tuple(axioms),
+            extensions=tuple(extensions),
             occurrences=tuple(occurrences),
             rdf_mapping_report=report,
         )
@@ -570,6 +593,155 @@ class RDFMapper:
                 self._consume_subject(node)
                 values.append(collection_value)
         return tuple(values)
+
+    def _swrl_rules(self) -> tuple[SWRLRule, ...]:
+        values: list[SWRLRule] = []
+        for type_triple in self.graph.find(
+            predicate=RDF + "type", object=RDFIRI(SWRL + "Imp")
+        ):
+            if not self.allow_swrl:
+                raise UnsupportedSyntaxError(
+                    "SWRL extension requires explicit enablement",
+                    code="RDF_EXTENSION_DISABLED",
+                )
+            node = type_triple.subject
+            body_head = cast(RDFTerm, self.graph.one(node, SWRL + "body", required=True))
+            head_head = cast(RDFTerm, self.graph.one(node, SWRL + "head", required=True))
+            body: m.CanonicalSet[Atom] = m.CanonicalSet(
+                self._swrl_atom(item) for item in self._list(body_head)
+            )
+            head: m.CanonicalSet[Atom] = m.CanonicalSet(
+                self._swrl_atom(item) for item in self._list(head_head)
+            )
+            self.context.limits.enforce("max_rule_atoms", max(len(body), len(head)))
+            annotations = self._annotations_on_node(node, _SWRL_RULE_METADATA)
+            values.append(SWRLRule(body, head, annotations))
+            self._consume_subject(node)
+        return tuple(values)
+
+    def _swrl_atom(self, term: RDFTerm) -> Atom:
+        if not isinstance(term, (RDFIRI, RDFBlank)):
+            self._mapping_type("SWRL atom must be an RDF resource")
+        atom_type = self.graph.one(term, RDF + "type", required=True)
+        if not isinstance(atom_type, RDFIRI):
+            self._mapping_type("SWRL atom type must be an IRI")
+        kind = atom_type.value
+        if kind == SWRL + "ClassAtom":
+            self._ensure_predicates(term, _SWRL_CLASS_ATOM_METADATA)
+            predicate = cast(
+                RDFTerm, self.graph.one(term, SWRL + "classPredicate", required=True)
+            )
+            if not isinstance(predicate, (RDFIRI, RDFBlank)):
+                self._mapping_type("SWRL class predicate must be a resource")
+            argument = cast(RDFTerm, self.graph.one(term, SWRL + "argument1", required=True))
+            value: Atom = ClassAtom(
+                self._class_expression(predicate), self._swrl_individual_argument(argument)
+            )
+        elif kind == SWRL + "DataRangeAtom":
+            self._ensure_predicates(term, _SWRL_DATA_RANGE_ATOM_METADATA)
+            predicate = cast(RDFTerm, self.graph.one(term, SWRL + "dataRange", required=True))
+            if not isinstance(predicate, (RDFIRI, RDFBlank)):
+                self._mapping_type("SWRL data-range predicate must be a resource")
+            argument = cast(RDFTerm, self.graph.one(term, SWRL + "argument1", required=True))
+            value = DataRangeAtom(
+                self._data_range(predicate), self._swrl_data_argument(argument)
+            )
+        elif kind == SWRL + "IndividualPropertyAtom":
+            self._ensure_predicates(term, _SWRL_PROPERTY_ATOM_METADATA)
+            predicate = cast(
+                RDFTerm, self.graph.one(term, SWRL + "propertyPredicate", required=True)
+            )
+            if not isinstance(predicate, (RDFIRI, RDFBlank)):
+                self._mapping_type("SWRL object-property predicate must be a resource")
+            first = cast(RDFTerm, self.graph.one(term, SWRL + "argument1", required=True))
+            second = cast(RDFTerm, self.graph.one(term, SWRL + "argument2", required=True))
+            value = ObjectPropertyAtom(
+                self._object_property(predicate),
+                self._swrl_individual_argument(first),
+                self._swrl_individual_argument(second),
+            )
+        elif kind == SWRL + "DatavaluedPropertyAtom":
+            self._ensure_predicates(term, _SWRL_PROPERTY_ATOM_METADATA)
+            predicate = cast(
+                RDFTerm, self.graph.one(term, SWRL + "propertyPredicate", required=True)
+            )
+            if not isinstance(predicate, RDFIRI):
+                self._mapping_type("SWRL data-property predicate must be a named IRI")
+            first = cast(RDFTerm, self.graph.one(term, SWRL + "argument1", required=True))
+            second = cast(RDFTerm, self.graph.one(term, SWRL + "argument2", required=True))
+            value = DataPropertyAtom(
+                m.DataProperty(m.IRI(predicate.value)),
+                self._swrl_individual_argument(first),
+                self._swrl_data_argument(second),
+            )
+        elif kind == SWRL + "BuiltinAtom":
+            self._ensure_predicates(term, _SWRL_BUILTIN_ATOM_METADATA)
+            predicate = cast(RDFTerm, self.graph.one(term, SWRL + "builtin", required=True))
+            if not isinstance(predicate, RDFIRI):
+                self._mapping_type("SWRL builtin predicate must be a named IRI")
+            arguments_head = cast(
+                RDFTerm, self.graph.one(term, SWRL + "arguments", required=True)
+            )
+            value = BuiltInAtom(
+                m.IRI(predicate.value),
+                tuple(self._swrl_data_argument(item) for item in self._list(arguments_head)),
+            )
+        elif kind in {SWRL + "SameIndividualAtom", SWRL + "DifferentIndividualsAtom"}:
+            self._ensure_predicates(term, _SWRL_INDIVIDUAL_ATOM_METADATA)
+            first = cast(RDFTerm, self.graph.one(term, SWRL + "argument1", required=True))
+            second = cast(RDFTerm, self.graph.one(term, SWRL + "argument2", required=True))
+            constructor = (
+                SameIndividualAtom
+                if kind == SWRL + "SameIndividualAtom"
+                else DifferentIndividualsAtom
+            )
+            value = constructor(
+                self._swrl_individual_argument(first),
+                self._swrl_individual_argument(second),
+            )
+        else:
+            self._mapping_type("unknown SWRL atom type")
+        self._consume_subject(term)
+        return value
+
+    def _swrl_individual_argument(self, term: RDFTerm) -> IndividualArgument:
+        variable = self._swrl_variable(term)
+        if variable is not None:
+            return variable
+        if not isinstance(term, (RDFIRI, RDFBlank)):
+            self._mapping_type("SWRL individual argument must be a resource")
+        return self._individual(term)
+
+    def _swrl_data_argument(self, term: RDFTerm) -> DataArgument:
+        variable = self._swrl_variable(term)
+        if variable is not None:
+            return variable
+        if not isinstance(term, RDFLiteral):
+            self._mapping_type("SWRL data argument must be a variable or literal")
+        return self._literal(term)
+
+    def _swrl_variable(self, term: RDFTerm) -> Variable | None:
+        if not isinstance(term, (RDFIRI, RDFBlank)):
+            return None
+        markers = self.graph.find(
+            subject=term, predicate=RDF + "type", object=RDFIRI(SWRL + "Variable")
+        )
+        if not markers:
+            return None
+        if not isinstance(term, RDFIRI):
+            self._mapping_type("SWRL variables must be named IRIs")
+        for marker in markers:
+            self._consume(marker)
+        return Variable(m.IRI(term.value))
+
+    def _ensure_predicates(self, subject: RDFResource, allowed: set[str]) -> None:
+        if any(
+            triple.predicate.value not in allowed for triple in self.graph.find(subject=subject)
+        ):
+            raise UnsupportedSyntaxError(
+                "SWRL atom has an unsupported predicate",
+                code="RDF_MAPPING_INCOMPLETE",
+            )
 
     def _equivalence_components(self) -> tuple[m.AxiomNode, ...]:
         values: list[m.AxiomNode] = []
@@ -1343,6 +1515,10 @@ class RDFMapper:
     def _mapping_error(message: str) -> NoReturn:
         raise UnsupportedSyntaxError(message, code="RDF_MAPPING_UNSUPPORTED")
 
+    @staticmethod
+    def _mapping_type(message: str) -> NoReturn:
+        raise UnsupportedSyntaxError(message, code="RDF_MAPPING_TYPE")
+
 
 class RDFEncoder:
     __slots__ = ("blank_counter", "encoded_nodes", "expression_nodes", "triples")
@@ -1861,6 +2037,29 @@ _REIFICATION_METADATA = {
     OWL + "annotatedSource",
     OWL + "annotatedProperty",
     OWL + "annotatedTarget",
+}
+_SWRL_RULE_METADATA = {RDF + "type", SWRL + "body", SWRL + "head"}
+_SWRL_CLASS_ATOM_METADATA = {
+    RDF + "type",
+    SWRL + "classPredicate",
+    SWRL + "argument1",
+}
+_SWRL_DATA_RANGE_ATOM_METADATA = {
+    RDF + "type",
+    SWRL + "dataRange",
+    SWRL + "argument1",
+}
+_SWRL_PROPERTY_ATOM_METADATA = {
+    RDF + "type",
+    SWRL + "propertyPredicate",
+    SWRL + "argument1",
+    SWRL + "argument2",
+}
+_SWRL_BUILTIN_ATOM_METADATA = {RDF + "type", SWRL + "builtin", SWRL + "arguments"}
+_SWRL_INDIVIDUAL_ATOM_METADATA = {
+    RDF + "type",
+    SWRL + "argument1",
+    SWRL + "argument2",
 }
 _BUILTIN_ANNOTATION_PROPERTIES = {
     RDFS + "label",

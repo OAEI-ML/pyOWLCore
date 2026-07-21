@@ -39,8 +39,10 @@ from pyowl_core.cancellation import CancellationToken
 from pyowl_core.exceptions import SnapshotInUseError, UnsupportedSyntaxError
 from pyowl_core.index import AxiomTypeIndex, OntologyIdentityIndex
 from pyowl_core.io.formats.detection import detect_format
+from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.io.source import acquire_source
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
+from tests.native.formats.test_rdfxml_ingestion_slice import SWRL_SOURCE
 from tests.native.foundation._support import NativeTestExtension, load_extension
 
 SOURCE = b"""\
@@ -434,6 +436,24 @@ def test_private_production_seam_publishes_exact_lazy_rdf_report(
     selected.close()
     assert selected.closed
     assert decode_root_canonical_bytes(direct.buffers) == expected_roots
+
+
+def test_retained_swrl_extension_matches_python_canonical_bytes() -> None:
+    reference = parse_rdfxml(
+        SWRL_SOURCE,
+        limits=ParseLimits(),
+        document_iri=None,
+        allow_swrl=True,
+    )
+    selected = cast(Any, _retained_snapshot(SWRL_SOURCE, document_iri=None))
+
+    expected = tuple(canonical_bytes(value) for value in reference.extensions)
+    assert not selected.root.axioms
+    assert tuple(canonical_bytes(value) for value in selected.root.extension_components) == expected
+    direct = selected.view(EncodedStructuralView)
+    assert decode_root_canonical_bytes(direct.buffers) == tuple((3, value) for value in expected)
+    selected.close()
+    assert decode_root_canonical_bytes(direct.buffers) == tuple((3, value) for value in expected)
 
 
 def test_parse_type_resource_publishes_from_the_retained_parser_owner(

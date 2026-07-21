@@ -526,6 +526,7 @@ def _parse_payload(
                     document_iri=document_iri,
                     cancellation_token=cancellation_token,
                     allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+                    allow_swrl=allow_swrl,
                 )
             )
         if format is DocumentFormat.RDF_XML:
@@ -536,6 +537,7 @@ def _parse_payload(
                     document_iri=document_iri,
                     cancellation_token=cancellation_token,
                     allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+                    allow_swrl=allow_swrl,
                 )
             )
     except PyOWLCoreError:

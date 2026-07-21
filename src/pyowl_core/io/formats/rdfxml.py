@@ -59,6 +59,7 @@ def parse_rdfxml(
     document_iri: IRI | None,
     cancellation_token: CancellationToken | None = None,
     allow_partial_rdf_mapping: bool = False,
+    allow_swrl: bool = False,
 ) -> ParsedOntology:
     text, source_encoding = _decode_xml_source(data)
     _validate_xml_envelope(text, source_encoding)
@@ -111,6 +112,7 @@ def parse_rdfxml(
         limits=limits,
         document_iri=document_iri,
         cancellation_token=cancellation_token,
+        allow_swrl=allow_swrl,
     ).map(allow_partial=allow_partial_rdf_mapping)
     return ParsedOntology(
         mapped.ontology_id,

@@ -53,6 +53,7 @@ def parse_turtle(
     document_iri: IRI | None,
     cancellation_token: CancellationToken | None = None,
     allow_partial_rdf_mapping: bool = False,
+    allow_swrl: bool = False,
 ) -> ParsedOntology:
     try:
         text = data.decode("utf-8-sig", errors="strict")
@@ -67,6 +68,7 @@ def parse_turtle(
         limits=limits,
         document_iri=document_iri,
         cancellation_token=cancellation_token,
+        allow_swrl=allow_swrl,
     ).map(allow_partial=allow_partial_rdf_mapping)
     return ParsedOntology(
         mapped.ontology_id,

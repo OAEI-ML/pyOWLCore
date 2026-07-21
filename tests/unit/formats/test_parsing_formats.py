@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+import pyowl_core.extensions.swrl as swrl
 import pyowl_core.model as m
 from pyowl_core import (
     BackendPreference,
@@ -46,6 +47,60 @@ RDF_XML = f"""\
          xmlns:owl="http://www.w3.org/2002/07/owl#">
   <owl:Ontology rdf:about="{ONTOLOGY}"/>
   <owl:Class rdf:about="{CLASS}"/>
+</rdf:RDF>
+""".encode()
+SWRL_RDF_XML = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:swrl="http://www.w3.org/2003/11/swrl#"
+         xmlns:e="urn:">
+  <swrl:Variable rdf:about="urn:x"/>
+  <swrl:Variable rdf:about="urn:y"/>
+  <swrl:Imp rdf:nodeID="rule">
+    <swrl:body rdf:parseType="Collection">
+      <swrl:ClassAtom>
+        <swrl:classPredicate rdf:resource="urn:C"/>
+        <swrl:argument1 rdf:resource="urn:x"/>
+      </swrl:ClassAtom>
+      <swrl:DataRangeAtom>
+        <swrl:dataRange rdf:resource="urn:D"/>
+        <swrl:argument1 rdf:resource="urn:y"/>
+      </swrl:DataRangeAtom>
+      <swrl:IndividualPropertyAtom>
+        <swrl:propertyPredicate>
+          <rdf:Description>
+            <owl:inverseOf rdf:resource="urn:p"/>
+          </rdf:Description>
+        </swrl:propertyPredicate>
+        <swrl:argument1 rdf:resource="urn:x"/>
+        <swrl:argument2 rdf:resource="urn:i"/>
+      </swrl:IndividualPropertyAtom>
+      <swrl:DatavaluedPropertyAtom>
+        <swrl:propertyPredicate rdf:resource="urn:d"/>
+        <swrl:argument1 rdf:resource="urn:x"/>
+        <swrl:argument2
+          rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">007</swrl:argument2>
+      </swrl:DatavaluedPropertyAtom>
+      <swrl:BuiltinAtom>
+        <swrl:builtin rdf:resource="urn:lessThan"/>
+        <swrl:arguments rdf:parseType="Collection">
+          <rdf:Description rdf:about="urn:x"/>
+          <rdf:Description rdf:about="urn:y"/>
+        </swrl:arguments>
+      </swrl:BuiltinAtom>
+      <swrl:SameIndividualAtom>
+        <swrl:argument1 rdf:resource="urn:x"/>
+        <swrl:argument2 rdf:resource="urn:i"/>
+      </swrl:SameIndividualAtom>
+    </swrl:body>
+    <swrl:head rdf:parseType="Collection">
+      <swrl:DifferentIndividualsAtom>
+        <swrl:argument1 rdf:resource="urn:x"/>
+        <swrl:argument2 rdf:resource="urn:j"/>
+      </swrl:DifferentIndividualsAtom>
+    </swrl:head>
+    <e:note rdf:resource="urn:value"/>
+  </swrl:Imp>
 </rdf:RDF>
 """.encode()
 
@@ -1243,6 +1298,143 @@ def test_rdf_mapping_rejects_malformed_or_unclaimed_reifications(body: str) -> N
     with pytest.raises(OntologySyntaxError) as raised:
         parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
     assert raised.value.code == "RDF_AXIOM_REIFICATION"
+
+
+def test_rdf_mapping_maps_explicitly_enabled_swrl_rule_extensions() -> None:
+    with pytest.raises(UnsupportedSyntaxError) as disabled:
+        PythonParser().parse(SWRL_RDF_XML, format="rdfxml", options=PYTHON_OPTIONS)
+    assert disabled.value.code == "RDF_EXTENSION_DISABLED"
+
+    document = PythonParser().parse(
+        SWRL_RDF_XML,
+        format="rdfxml",
+        options=PYTHON_OPTIONS,
+        allow_swrl=True,
+    )
+    rule = next(iter(document.extension_components))
+    assert isinstance(rule, swrl.SWRLRule)
+    assert {type(atom) for atom in rule.body} == {
+        swrl.ClassAtom,
+        swrl.DataRangeAtom,
+        swrl.ObjectPropertyAtom,
+        swrl.DataPropertyAtom,
+        swrl.BuiltInAtom,
+        swrl.SameIndividualAtom,
+    }
+    assert {type(atom) for atom in rule.head} == {swrl.DifferentIndividualsAtom}
+    assert len(rule.annotations) == 1
+    assert not document.axioms
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+
+
+def test_turtle_rdf_mapping_uses_the_same_explicit_swrl_gate() -> None:
+    source = b"""\
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix swrl: <http://www.w3.org/2003/11/swrl#> .
+[] a swrl:Imp ; swrl:body rdf:nil ; swrl:head rdf:nil .
+"""
+
+    with pytest.raises(UnsupportedSyntaxError) as disabled:
+        PythonParser().parse(source, format="turtle", options=PYTHON_OPTIONS)
+    assert disabled.value.code == "RDF_EXTENSION_DISABLED"
+
+    document = PythonParser().parse(
+        source,
+        format="turtle",
+        options=PYTHON_OPTIONS,
+        allow_swrl=True,
+    )
+    rule = next(iter(document.extension_components))
+    assert isinstance(rule, swrl.SWRLRule)
+    assert not rule.body
+    assert not rule.head
+
+
+@pytest.mark.parametrize(
+    ("body", "code"),
+    (
+        (
+            """
+  <swrl:Imp>
+    <swrl:body rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+  </swrl:Imp>
+""",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            """
+  <swrl:Imp>
+    <swrl:body rdf:parseType="Collection">
+      <swrl:ClassAtom>
+        <swrl:classPredicate rdf:resource="urn:C"/>
+        <swrl:argument1 rdf:resource="urn:i"/>
+        <e:extra rdf:resource="urn:value"/>
+      </swrl:ClassAtom>
+    </swrl:body>
+    <swrl:head rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+  </swrl:Imp>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <swrl:Variable rdf:nodeID="x"/>
+  <swrl:Imp>
+    <swrl:body rdf:parseType="Collection">
+      <swrl:ClassAtom>
+        <swrl:classPredicate rdf:resource="urn:C"/>
+        <swrl:argument1 rdf:nodeID="x"/>
+      </swrl:ClassAtom>
+    </swrl:body>
+    <swrl:head rdf:resource="http://www.w3.org/1999/02/22-rdf-syntax-ns#nil"/>
+  </swrl:Imp>
+""",
+            "RDF_MAPPING_TYPE",
+        ),
+    ),
+)
+def test_rdf_mapping_rejects_malformed_swrl_rules(body: str, code: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:swrl="http://www.w3.org/2003/11/swrl#"
+         xmlns:e="urn:">
+{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises((OntologySyntaxError, UnsupportedSyntaxError)) as raised:
+        PythonParser().parse(
+            source,
+            format="rdfxml",
+            options=PYTHON_OPTIONS,
+            allow_swrl=True,
+        )
+    assert raised.value.code == code
+
+
+def test_rdf_mapping_enforces_canonical_swrl_atom_limit() -> None:
+    document = PythonParser().parse(
+        SWRL_RDF_XML,
+        format="rdfxml",
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            limits=ParseLimits(max_rule_atoms=6),
+        ),
+        allow_swrl=True,
+    )
+    assert len(next(iter(document.extension_components)).body) == 6
+
+    with pytest.raises(ResourceLimitError) as raised:
+        PythonParser().parse(
+            SWRL_RDF_XML,
+            format="rdfxml",
+            options=LoadOptions(
+                backend=BackendPreference.PYTHON,
+                limits=ParseLimits(max_rule_atoms=5),
+            ),
+            allow_swrl=True,
+        )
+    assert raised.value.limit == "max_rule_atoms"
 
 
 @pytest.mark.parametrize(
