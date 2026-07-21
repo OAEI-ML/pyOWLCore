@@ -83,6 +83,7 @@ def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
         "pytest==9.1.1",
         "--features test-hooks",
         "test_runtime_policy_lifecycle.py",
+        "test_process_lifecycle.py",
         "test_rust_process_lifecycle.py",
         "PYOWL_CORE_TEST_HOOKS_REQUIRED",
         "-k free_threaded",
