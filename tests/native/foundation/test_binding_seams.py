@@ -16,13 +16,14 @@ from ._support import load_extension
 
 def _metadata_extension(
     *,
+    abi_version: int = 2,
     ingestion: object = (),
     views: object = (),
     extra_features: tuple[str, ...] = (),
 ) -> SimpleNamespace:
     features = tuple(sorted((*native._FOUNDATION_FEATURE_LEDGER, *extra_features)))
     return SimpleNamespace(
-        ABI_VERSION=1,
+        ABI_VERSION=abi_version,
         MODEL_SCHEMA_VERSION=1,
         WIRE_FORMAT_VERSION=(1, 1),
         FEATURES=features,
@@ -117,3 +118,18 @@ def test_native_metadata_accepts_exhaustive_disjoint_successor_partitions() -> N
         extra_features=("ingest-v1", "view-v1"),
     )
     assert native._validate_metadata(extension) == extension.FEATURES
+
+
+def test_stale_private_abi_fails_closed_before_native_code_runs() -> None:
+    calls: list[str] = []
+    extension = _metadata_extension(abi_version=1)
+    extension.self_test = lambda: calls.append("self-test")
+    extension.version = lambda: ("stale", 1)
+
+    with patch("pyowl_core.backends.native.importlib.import_module", return_value=extension):
+        runtime = native._load_runtime((123, 0))
+
+    assert runtime.extension is None
+    assert runtime.probe.available is False
+    assert runtime.probe.reason == "native extension metadata is incompatible"
+    assert calls == []

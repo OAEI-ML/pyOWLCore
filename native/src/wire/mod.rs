@@ -108,7 +108,7 @@ impl Validation {
             .try_reserve_exact(RECEIPT_BYTES)
             .map_err(|_| NativeError::limit("native receipt allocation failed"))?;
         result.extend_from_slice(RECEIPT_MAGIC);
-        result.extend_from_slice(&1_u32.to_le_bytes()); // private ABI
+        result.extend_from_slice(&crate::ABI_VERSION.to_le_bytes());
         result.extend_from_slice(&MODEL_SCHEMA.to_le_bytes());
         result.extend_from_slice(&WIRE_MAJOR.to_le_bytes());
         result.extend_from_slice(&self.minor.to_le_bytes());
@@ -1385,6 +1385,10 @@ mod tests {
         let receipt = validation.receipt().unwrap();
         assert_eq!(receipt.len(), RECEIPT_BYTES);
         assert_eq!(&receipt[..8], RECEIPT_MAGIC);
+        assert_eq!(
+            u32::from_le_bytes(receipt[8..12].try_into().unwrap()),
+            crate::ABI_VERSION
+        );
     }
 
     #[test]

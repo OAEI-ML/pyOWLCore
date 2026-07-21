@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from pyowl_core.io.formats.common import ParsedOntology
     from pyowl_core.model.axioms import AxiomNode
 
-_ABI_VERSION = 1
+_ABI_VERSION = 2
 _MODEL_SCHEMA_VERSION = 1
 _WIRE_FORMAT_VERSION = (1, 1)
 _CONFIG = struct.Struct("<8sHHI37Q")
@@ -1344,6 +1344,11 @@ def _load_runtime(key: tuple[int, int]) -> _CachedRuntime:
     extension = cast(_Extension, module)
     try:
         features = _validate_metadata(extension)
+    except (MemoryError, KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        return _unavailable(key, "native extension metadata is incompatible")
+    try:
         extension.self_test()
         version = extension.version()
         if (
