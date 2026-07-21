@@ -129,6 +129,7 @@ class RDFGraph:
 class RDFMapper:
     __slots__ = (
         "annotation_annotations",
+        "annotation_dependencies",
         "annotation_kinds",
         "axiom_annotations",
         "blank_roles",
@@ -141,6 +142,8 @@ class RDFMapper:
         "list_nodes",
         "object_kinds",
         "stack",
+        "unclaimed_axiom_reifications",
+        "unclaimed_nested_reifications",
     )
 
     def __init__(
@@ -160,10 +163,13 @@ class RDFMapper:
         self.data_kinds: set[str] = set()
         self.annotation_kinds: set[str] = set(_BUILTIN_ANNOTATION_PROPERTIES)
         self.annotation_annotations: dict[Triple, m.CanonicalSet[m.Annotation]] = {}
+        self.annotation_dependencies: dict[Triple, set[Triple]] = {}
         self.axiom_annotations: dict[Triple, m.CanonicalSet[m.Annotation]] = {}
         self.blank_roles: dict[str, str] = {}
         self.list_nodes: dict[RDFBlank, RDFBlank] = {}
         self.stack: set[tuple[str, RDFTerm]] = set()
+        self.unclaimed_axiom_reifications: set[Triple] = set()
+        self.unclaimed_nested_reifications: set[Triple] = set()
 
     def map(self, *, allow_partial: bool = False) -> ParsedOntology:
         self._scan_entity_kinds()
@@ -189,6 +195,11 @@ class RDFMapper:
             if simple_axiom is not None:
                 axioms.append(simple_axiom)
                 occurrences.append((simple_axiom, None))
+        if self.unclaimed_axiom_reifications or self.unclaimed_nested_reifications:
+            raise OntologySyntaxError(
+                "RDF reification targets an unsupported axiom or annotation mapping",
+                code="RDF_AXIOM_REIFICATION",
+            )
         unconsumed = tuple(item for item in self.graph.triples if item not in self.consumed)
         report = RDFMappingReport(
             conformant=not unconsumed,
@@ -305,6 +316,7 @@ class RDFMapper:
                     code="RDF_AXIOM_REIFICATION",
                 )
             annotation_nodes.setdefault(main, []).append(node)
+            self.unclaimed_nested_reifications.add(main)
 
         visiting: set[Triple] = set()
 
@@ -324,6 +336,7 @@ class RDFMapper:
                     self._consume(item)
                     if item.predicate.value not in _REIFICATION_METADATA:
                         self.context.limits.enforce("max_annotations", len(values) + 1)
+                        self.annotation_dependencies.setdefault(main, set()).add(item)
                         values.append(
                             m.Annotation(
                                 m.AnnotationProperty(m.IRI(item.predicate.value)),
@@ -342,12 +355,20 @@ class RDFMapper:
         collected_axiom_annotations: dict[Triple, list[m.Annotation]] = {}
         for type_triple in self.graph.find(predicate=RDF + "type", object=RDFIRI(OWL + "Axiom")):
             node = type_triple.subject
+            if self.graph.contains(
+                Triple(node, RDFIRI(RDF + "type"), RDFIRI(OWL + "Annotation"))
+            ):
+                raise OntologySyntaxError(
+                    "RDF reification node cannot be both owl:Axiom and owl:Annotation",
+                    code="RDF_AXIOM_REIFICATION",
+                )
             main = self._reification_main(node, "owl:Axiom")
             if not self.graph.contains(main):
                 raise OntologySyntaxError(
                     "owl:Axiom reification main triple is absent",
                     code="RDF_AXIOM_REIFICATION",
                 )
+            self.unclaimed_axiom_reifications.add(main)
             metadata = {
                 RDF + "type",
                 OWL + "annotatedSource",
@@ -359,6 +380,7 @@ class RDFMapper:
                 self._consume(item)
                 if item.predicate.value not in metadata:
                     self.context.limits.enforce("max_annotations", len(annotations) + 1)
+                    self.annotation_dependencies.setdefault(main, set()).add(item)
                     annotations.append(
                         m.Annotation(
                             m.AnnotationProperty(m.IRI(item.predicate.value)),
@@ -372,9 +394,15 @@ class RDFMapper:
         )
 
     def _reification_main(self, node: RDFResource, label: str) -> Triple:
-        source = self.graph.one(node, OWL + "annotatedSource", required=True)
-        predicate = self.graph.one(node, OWL + "annotatedProperty", required=True)
-        target = self.graph.one(node, OWL + "annotatedTarget", required=True)
+        try:
+            source = self.graph.one(node, OWL + "annotatedSource", required=True)
+            predicate = self.graph.one(node, OWL + "annotatedProperty", required=True)
+            target = self.graph.one(node, OWL + "annotatedTarget", required=True)
+        except OntologySyntaxError as error:
+            raise OntologySyntaxError(
+                f"{label} reification metadata is incomplete or ambiguous",
+                code="RDF_AXIOM_REIFICATION",
+            ) from error
         if not isinstance(source, (RDFIRI, RDFBlank)) or not isinstance(predicate, RDFIRI):
             raise OntologySyntaxError(
                 f"{label} reification has invalid source/property",
@@ -465,6 +493,7 @@ class RDFMapper:
             values.append(m.Declaration(constructor(m.IRI(triple.subject.value)), annotations))
             if not is_inferred:
                 self._consume(triple)
+                self._claim_axiom_reifications(triple)
         return tuple(values)
 
     def _special_axioms(self) -> tuple[m.AxiomNode, ...]:
@@ -589,6 +618,7 @@ class RDFMapper:
             )
             for edge in edges:
                 self._consume(edge)
+                self._claim_axiom_reifications(edge)
             ordered = tuple(sorted(component, key=_term_key))
             if kind == "class":
                 output.append(
@@ -829,6 +859,7 @@ class RDFMapper:
             )
         if value is not None:
             self._consume(triple)
+            self._claim_axiom_reifications(triple)
         return value
 
     def _class_expression(self, term: RDFTerm) -> m.ClassExpression:
@@ -1175,11 +1206,24 @@ class RDFMapper:
         )
 
     def _annotation_from_triple(self, triple: Triple) -> m.Annotation:
+        self._claim_nested_reifications(triple)
         return m.Annotation(
             m.AnnotationProperty(m.IRI(triple.predicate.value)),
             self._annotation_value(triple.object),
             self.annotation_annotations.get(triple, m.CanonicalSet()),
         )
+
+    def _claim_axiom_reifications(self, main: Triple) -> None:
+        self.unclaimed_axiom_reifications.discard(main)
+        for annotation in self.annotation_dependencies.get(main, set()):
+            self._claim_nested_reifications(annotation)
+
+    def _claim_nested_reifications(self, main: Triple) -> None:
+        if main not in self.unclaimed_nested_reifications:
+            return
+        self.unclaimed_nested_reifications.remove(main)
+        for annotation in self.annotation_dependencies.get(main, set()):
+            self._claim_nested_reifications(annotation)
 
     def _annotation_value(self, value: RDFTerm) -> m.AnnotationValue:
         if isinstance(value, RDFIRI):

@@ -1098,6 +1098,30 @@ def test_axiom_annotation_reification_limit_matches_python(
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_claimed_declaration_reification_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'/>
+ <owl:Axiom>
+  <owl:annotatedSource rdf:resource='urn:C'/>
+  <owl:annotatedProperty
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#type'/>
+  <owl:annotatedTarget rdf:resource='http://www.w3.org/2002/07/owl#Class'/>
+  <rdfs:comment>declared</rdfs:comment>
+ </owl:Axiom>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert len(python.axioms) == 1
+    assert len(python.axioms[0].annotations) == 1
+
+
 def test_structural_node_annotation_limit_matches_python(
     extension: NativeTestExtension,
 ) -> None:
@@ -1170,6 +1194,72 @@ def test_nested_annotation_reification_limit_matches_python(
     with pytest.raises(extension._NativeError) as native_error:
         _ingest(extension, source, limits=limited)
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        """
+ <owl:Class rdf:about='urn:C'><rdfs:subClassOf rdf:resource='urn:D'/></owl:Class>
+ <owl:Axiom>
+  <owl:annotatedSource rdf:resource='urn:C'/>
+  <owl:annotatedSource rdf:resource='urn:Other'/>
+  <owl:annotatedProperty
+   rdf:resource='http://www.w3.org/2000/01/rdf-schema#subClassOf'/>
+  <owl:annotatedTarget rdf:resource='urn:D'/>
+ </owl:Axiom>
+""",
+        """
+ <owl:Class rdf:about='urn:C'>
+  <rdf:type rdf:resource='http://www.w3.org/2000/01/rdf-schema#Class'/>
+ </owl:Class>
+ <owl:Axiom>
+  <owl:annotatedSource rdf:resource='urn:C'/>
+  <owl:annotatedProperty
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#type'/>
+  <owl:annotatedTarget rdf:resource='http://www.w3.org/2000/01/rdf-schema#Class'/>
+  <e:note rdf:resource='urn:value'/>
+ </owl:Axiom>
+""",
+        """
+ <rdf:Description rdf:about='urn:s'><e:p rdf:resource='urn:o'/></rdf:Description>
+ <owl:Annotation>
+  <owl:annotatedSource rdf:resource='urn:s'/>
+  <owl:annotatedProperty rdf:resource='urn:p'/>
+  <owl:annotatedTarget rdf:resource='urn:o'/>
+  <e:q rdf:resource='urn:value'/>
+ </owl:Annotation>
+""",
+        """
+ <rdf:Description rdf:about='urn:s'><e:p rdf:resource='urn:o'/></rdf:Description>
+ <rdf:Description rdf:nodeID='reification'>
+  <rdf:type rdf:resource='http://www.w3.org/2002/07/owl#Axiom'/>
+  <rdf:type rdf:resource='http://www.w3.org/2002/07/owl#Annotation'/>
+  <owl:annotatedSource rdf:resource='urn:s'/>
+  <owl:annotatedProperty rdf:resource='urn:p'/>
+  <owl:annotatedTarget rdf:resource='urn:o'/>
+  <e:q rdf:resource='urn:value'/>
+ </rdf:Description>
+""",
+    ),
+)
+def test_malformed_or_unclaimed_reification_rejection_matches_python(
+    extension: NativeTestExtension,
+    body: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xmlns:e='urn:'>
+{body}</rdf:RDF>""".encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_AXIOM_REIFICATION"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_AXIOM_REIFICATION"
 
 
 @pytest.mark.parametrize(

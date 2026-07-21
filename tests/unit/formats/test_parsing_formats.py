@@ -1079,6 +1079,26 @@ def test_rdf_mapping_combines_and_limits_axiom_annotation_reifications() -> None
     assert raised.value.limit == "max_annotations"
 
 
+def test_rdf_mapping_claims_annotated_declaration_reification() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C"/>
+  <owl:Axiom>
+    <owl:annotatedSource rdf:resource="urn:C"/>
+    <owl:annotatedProperty rdf:resource="{RDF_NAMESPACE}type"/>
+    <owl:annotatedTarget rdf:resource="http://www.w3.org/2002/07/owl#Class"/>
+    <rdfs:comment>declared</rdfs:comment>
+  </owl:Axiom>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    declaration = next(document.iter_axioms(m.Declaration))
+    assert len(declaration.annotations) == 1
+
+
 def test_rdf_mapping_limits_structural_node_annotations() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
@@ -1163,6 +1183,66 @@ def test_rdf_mapping_limits_nested_annotation_reifications() -> None:
             ),
         )
     assert raised.value.limit == "max_annotations"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        """
+  <owl:Class rdf:about="urn:C"><rdfs:subClassOf rdf:resource="urn:D"/></owl:Class>
+  <owl:Axiom>
+    <owl:annotatedSource rdf:resource="urn:C"/>
+    <owl:annotatedSource rdf:resource="urn:Other"/>
+    <owl:annotatedProperty
+      rdf:resource="http://www.w3.org/2000/01/rdf-schema#subClassOf"/>
+    <owl:annotatedTarget rdf:resource="urn:D"/>
+  </owl:Axiom>
+""",
+        f"""
+  <owl:Class rdf:about="urn:C">
+    <rdf:type rdf:resource="http://www.w3.org/2000/01/rdf-schema#Class"/>
+  </owl:Class>
+  <owl:Axiom>
+    <owl:annotatedSource rdf:resource="urn:C"/>
+    <owl:annotatedProperty rdf:resource="{RDF_NAMESPACE}type"/>
+    <owl:annotatedTarget rdf:resource="http://www.w3.org/2000/01/rdf-schema#Class"/>
+    <e:note rdf:resource="urn:value"/>
+  </owl:Axiom>
+""",
+        """
+  <rdf:Description rdf:about="urn:s"><e:p rdf:resource="urn:o"/></rdf:Description>
+  <owl:Annotation>
+    <owl:annotatedSource rdf:resource="urn:s"/>
+    <owl:annotatedProperty rdf:resource="urn:p"/>
+    <owl:annotatedTarget rdf:resource="urn:o"/>
+    <e:q rdf:resource="urn:value"/>
+  </owl:Annotation>
+""",
+        """
+  <rdf:Description rdf:about="urn:s"><e:p rdf:resource="urn:o"/></rdf:Description>
+  <rdf:Description rdf:nodeID="reification">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#Axiom"/>
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#Annotation"/>
+    <owl:annotatedSource rdf:resource="urn:s"/>
+    <owl:annotatedProperty rdf:resource="urn:p"/>
+    <owl:annotatedTarget rdf:resource="urn:o"/>
+    <e:q rdf:resource="urn:value"/>
+  </rdf:Description>
+""",
+    ),
+)
+def test_rdf_mapping_rejects_malformed_or_unclaimed_reifications(body: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:e="urn:">
+{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_AXIOM_REIFICATION"
 
 
 @pytest.mark.parametrize(
