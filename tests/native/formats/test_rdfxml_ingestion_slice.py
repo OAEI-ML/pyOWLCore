@@ -995,6 +995,31 @@ def test_invalid_rfc3986_references_fail_in_both_backends(
 
 
 @pytest.mark.parametrize(
+    "node",
+    (
+        "<e:Class rdf:about='urn:C'/>",
+        "<owl:Class rdf:about='urn:C' e:label='value'/>",
+    ),
+)
+def test_expanded_names_require_absolute_iris_in_both_backends(
+    extension: NativeTestExtension,
+    node: str,
+) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' xmlns:e='relative'>"
+        f"{node}</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
+@pytest.mark.parametrize(
     ("source", "code"),
     (
         (

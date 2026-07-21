@@ -181,11 +181,11 @@ class RDFXMLGraphParser:
             namespace = _namespace(element.tag)
             if not namespace:
                 self._syntax("typed RDF node element requires a namespace")
-            self._add(subject, RDF + "type", RDFIRI(_expanded(element.tag)))
+            self._add(subject, RDF + "type", RDFIRI(self._expanded(element.tag)))
         self._node_property_attributes(element, subject, base, language)
         li_index = 0
         for child in element:
-            predicate = _expanded(child.tag)
+            predicate = self._expanded(child.tag)
             if predicate == RDF + "li":
                 li_index += 1
                 predicate = RDF + "_" + str(li_index)
@@ -209,7 +209,7 @@ class RDFXMLGraphParser:
         for name, value in element.attrib.items():
             if name in ignored:
                 continue
-            predicate = _expanded(name)
+            predicate = self._expanded(name)
             if predicate == RDF + "type":
                 self._add(subject, predicate, RDFIRI(self._resolve(value, base)))
             else:
@@ -250,7 +250,7 @@ class RDFXMLGraphParser:
                 triple = self._add(subject, predicate, resource_object)
                 li_index = 0
                 for child in element:
-                    child_predicate = _expanded(child.tag)
+                    child_predicate = self._expanded(child.tag)
                     if child_predicate == RDF + "li":
                         li_index += 1
                         child_predicate = RDF + "_" + str(li_index)
@@ -318,7 +318,7 @@ class RDFXMLGraphParser:
         language: str | None,
     ) -> None:
         for name, value in self._non_syntax_attributes(element).items():
-            predicate = _expanded(name)
+            predicate = self._expanded(name)
             if predicate == RDF + "type":
                 self._add(subject, predicate, RDFIRI(self._resolve(value, base)))
             else:
@@ -419,15 +419,24 @@ class RDFXMLGraphParser:
             query,
             reference.fragment,
         )
-        self._enforce_iri_size(result)
+        self._validate_iri(result)
+
+        return result
+
+    def _expanded(self, tag: str) -> str:
+        result = _expanded(tag)
+        self._validate_iri(result)
+        return result
+
+    def _validate_iri(self, value: str) -> None:
+        self._enforce_iri_size(value)
         try:
-            IRI(result)
+            IRI(value)
         except InvalidIRIError as error:
             raise OntologySyntaxError(
                 "RDF/XML contains a relative or invalid IRI",
                 code="RDFXML_SYNTAX",
             ) from error
-        return result
 
     def _enforce_iri_size(self, value: str) -> None:
         self.context.limits.enforce("max_iri_bytes", len(value.encode("utf-8")))

@@ -450,6 +450,25 @@ def test_rdfxml_invalid_iri_references_fail_as_syntax(
     assert raised.value.code == code
 
 
+@pytest.mark.parametrize(
+    "node",
+    (
+        "<e:Class rdf:about='urn:C'/>",
+        "<owl:Class rdf:about='urn:C' e:label='value'/>",
+    ),
+)
+def test_rdfxml_expanded_names_require_absolute_iris(node: str) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' xmlns:e='relative'>"
+        f"{node}</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
+
+
 def test_disabled_provenance_omits_document_and_snapshot_origins() -> None:
     options = LoadOptions(
         format=DocumentFormat.FUNCTIONAL,
