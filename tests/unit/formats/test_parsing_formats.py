@@ -550,6 +550,62 @@ def test_rdfxml_namespace_declarations_enforce_the_prefix_limit() -> None:
 
 
 @pytest.mark.parametrize(
+    ("document", "literal_bytes"),
+    (
+        (
+            "<rdf:RDF {namespaces}>"
+            "<owl:Class rdf:about='urn:C' rdfs:label='é'/>"
+            "</rdf:RDF>",
+            2,
+        ),
+        (
+            "<rdf:RDF {namespaces}>"
+            "<owl:AnnotationProperty rdf:about='urn:e:p'/>"
+            "<owl:Class rdf:about='urn:C'>"
+            "<e:p rdf:resource='urn:o' rdfs:label='é'/>"
+            "</owl:Class></rdf:RDF>",
+            2,
+        ),
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<rdfs:comment rdf:parseType='Literal'><e:x/></rdfs:comment>"
+            "</owl:Class></rdf:RDF>",
+            28,
+        ),
+    ),
+)
+def test_rdfxml_all_literal_forms_enforce_utf8_byte_limits(
+    document: str,
+    literal_bytes: int,
+) -> None:
+    namespaces = (
+        "xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' xmlns:e='urn:e:'"
+    )
+    source = document.format(namespaces=namespaces).encode()
+
+    parse_document(
+        source,
+        format="rdfxml",
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            limits=ParseLimits(max_literal_bytes=literal_bytes),
+        ),
+    )
+    with pytest.raises(ResourceLimitError) as raised:
+        parse_document(
+            source,
+            format="rdfxml",
+            options=LoadOptions(
+                backend=BackendPreference.PYTHON,
+                limits=ParseLimits(max_literal_bytes=literal_bytes - 1),
+            ),
+        )
+    assert raised.value.limit == "max_literal_bytes"
+
+
+@pytest.mark.parametrize(
     "property_element",
     (
         "<rdfs:subClassOf rdf:resource='urn:D' rdf:datatype='urn:type'/>",

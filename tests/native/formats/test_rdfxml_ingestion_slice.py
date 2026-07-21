@@ -584,6 +584,57 @@ def test_namespace_declaration_limit_matches_python(
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+@pytest.mark.parametrize(
+    ("document", "literal_bytes"),
+    (
+        (
+            "<rdf:RDF {namespaces}>"
+            "<owl:Class rdf:about='urn:C' rdfs:label='é'/>"
+            "</rdf:RDF>",
+            2,
+        ),
+        (
+            "<rdf:RDF {namespaces}>"
+            "<owl:AnnotationProperty rdf:about='urn:e:p'/>"
+            "<owl:Class rdf:about='urn:C'>"
+            "<e:p rdf:resource='urn:o' rdfs:label='é'/>"
+            "</owl:Class></rdf:RDF>",
+            2,
+        ),
+        (
+            "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
+            "<rdfs:comment rdf:parseType='Literal'><e:x/></rdfs:comment>"
+            "</owl:Class></rdf:RDF>",
+            28,
+        ),
+    ),
+)
+def test_all_literal_forms_match_python_utf8_byte_limits(
+    extension: NativeTestExtension,
+    document: str,
+    literal_bytes: int,
+) -> None:
+    namespaces = (
+        "xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' xmlns:e='urn:e:'"
+    )
+    source = document.format(namespaces=namespaces).encode()
+    boundary = ParseLimits(max_literal_bytes=literal_bytes)
+
+    _owner, observed = _ingest(extension, source, limits=boundary)
+    python = parse_rdfxml(source, limits=boundary, document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+
+    limited = ParseLimits(max_literal_bytes=literal_bytes - 1)
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(source, limits=limited, document_iri=None)
+    assert python_error.value.limit == "max_literal_bytes"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 def test_processing_instructions_map_to_no_rdf_events(
     extension: NativeTestExtension,
 ) -> None:

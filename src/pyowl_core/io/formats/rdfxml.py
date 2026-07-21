@@ -233,6 +233,7 @@ class RDFXMLGraphParser:
             if predicate == RDF + "type":
                 self._add(subject, predicate, RDFIRI(self._resolve(value, base)))
             else:
+                self._enforce_literal_size(value)
                 self._add(
                     subject,
                     predicate,
@@ -290,6 +291,7 @@ class RDFXMLGraphParser:
                 lexical = (element.text or "") + "".join(
                     ET.tostring(child, encoding="unicode") for child in element
                 )
+                self._enforce_literal_size(lexical)
                 triple = self._add(subject, predicate, RDFLiteral(lexical, RDF + "XMLLiteral"))
         elif resource is not None or node_id is not None:
             if len(element) or _has_non_whitespace_content(element):
@@ -320,7 +322,7 @@ class RDFXMLGraphParser:
                 self._property_attributes(element, empty_object, base, language)
             else:
                 lexical = element.text or ""
-                self.context.limits.enforce("max_literal_bytes", len(lexical.encode("utf-8")))
+                self._enforce_literal_size(lexical)
                 if datatype is not None:
                     literal = RDFLiteral(lexical, self._resolve(datatype, base))
                 elif language:
@@ -346,6 +348,7 @@ class RDFXMLGraphParser:
             if predicate == RDF + "type":
                 self._add(subject, predicate, RDFIRI(self._resolve(value, base)))
             else:
+                self._enforce_literal_size(value)
                 literal = (
                     RDFLiteral(value, language=language)
                     if language
@@ -464,6 +467,9 @@ class RDFXMLGraphParser:
 
     def _enforce_iri_size(self, value: str) -> None:
         self.context.limits.enforce("max_iri_bytes", len(value.encode("utf-8")))
+
+    def _enforce_literal_size(self, value: str) -> None:
+        self.context.limits.enforce("max_literal_bytes", len(value.encode("utf-8")))
 
     def _node_id(self, value: str) -> RDFBlank:
         if not _is_xml_ncname(value):
