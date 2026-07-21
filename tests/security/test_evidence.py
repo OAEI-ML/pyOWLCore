@@ -232,6 +232,22 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert wire["allocation_checkpoints"] == len(wire["boundaries"]) == 5
     assert wire["injected_failures"] == wire["allocation_checkpoints"]
     assert wire["boundary_successes"] == 1
+    publication = sweep["publication_facade"]
+    assert publication["allocation_checkpoints"] == 57
+    assert publication["injected_failures"] == publication["allocation_checkpoints"]
+    assert publication["boundary_successes"] == 1
+    assert publication["scope"]
+    assert sweep["covered_allocation_checkpoints"] == (
+        sweep["total_allocation_checkpoints"]
+        + wire["allocation_checkpoints"]
+        + publication["allocation_checkpoints"]
+    )
+    assert sweep["covered_injected_failures"] == sweep["covered_allocation_checkpoints"]
+    assert sweep["covered_boundary_successes"] == (
+        sweep["total_boundary_successes"]
+        + wire["boundary_successes"]
+        + publication["boundary_successes"]
+    )
 
     assert {run["id"]: run["status"] for run in checkpoint["runs"]} == {
         "cpython-3.12-retained-allocation-boundary": "pass",
@@ -246,6 +262,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     release = checkpoint["release_effect"]
     assert release["retained_component_allocation_failures"] == "local-pass"
     assert release["native_wire_validation_allocation_failures"] == "local-pass"
+    assert release["retained_publication_allocation_failures"] == "local-pass"
     assert release["end_to_end_allocation_failure_matrix"] == "not-run"
     assert release["security_resource_determinism"] == "not-run"
     assert release["core_release_eligible"] is False

@@ -25,9 +25,10 @@ platform lifecycle evidence remain open and the capability stays hidden.
 `native-allocation-checkpoint.json` records an exact, dynamic failpoint sweep
 through retained-component build, freeze, and encode for all 76 model
 constructors, plus the five explicit native wire validation/receipt allocation
-boundaries. It covers 20,673 component checkpoints and five wire checkpoints
-locally; the remaining parser/publication/encoded-view/bridge and hosted-
-platform matrix stays open.
+boundaries and 57 positive retained/temporary claims in the validated V2
+publication builder. It covers 20,735 checkpoints locally; the remaining
+parser/encoded-view/bridge/process-allocator and hosted-platform matrix stays
+open.
 
 Run the ordinary bounded security lanes with:
 
