@@ -1013,6 +1013,7 @@ class RDFMapper:
         values: list[m.Annotation] = []
         for triple in self.graph.find(subject=node):
             if triple.predicate.value not in metadata:
+                self.context.limits.enforce("max_annotations", len(values) + 1)
                 values.append(self._annotation_from_triple(triple))
         return m.CanonicalSet(values)
 

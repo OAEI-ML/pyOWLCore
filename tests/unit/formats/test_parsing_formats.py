@@ -757,6 +757,44 @@ def test_rdf_mapping_combines_and_limits_axiom_annotation_reifications() -> None
     assert raised.value.limit == "max_annotations"
 
 
+def test_rdf_mapping_limits_structural_node_annotations() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:NegativePropertyAssertion>
+    <owl:sourceIndividual rdf:resource="urn:i"/>
+    <owl:assertionProperty rdf:resource="urn:p"/>
+    <owl:targetIndividual rdf:resource="urn:j"/>
+    <rdfs:label>label</rdfs:label>
+    <rdfs:comment>comment</rdfs:comment>
+  </owl:NegativePropertyAssertion>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(
+        source,
+        format="rdfxml",
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            limits=ParseLimits(max_annotations=2),
+        ),
+    )
+    assertion = next(document.iter_axioms(m.NegativeObjectPropertyAssertion))
+    assert len(assertion.annotations) == 2
+
+    with pytest.raises(ResourceLimitError) as raised:
+        parse_document(
+            source,
+            format="rdfxml",
+            options=LoadOptions(
+                backend=BackendPreference.PYTHON,
+                limits=ParseLimits(max_annotations=1),
+            ),
+        )
+    assert raised.value.limit == "max_annotations"
+
+
 @pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (
