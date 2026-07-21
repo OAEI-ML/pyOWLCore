@@ -738,6 +738,65 @@ def test_raw_rdf_list_sequence_arity_limit_matches_python(
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+@pytest.mark.parametrize(
+    ("operator", "members"),
+    (
+        ("intersectionOf", ""),
+        ("unionOf", ""),
+        ("oneOf", ""),
+        ("intersectionOf", "<owl:Class rdf:about='urn:B'/>"),
+        ("unionOf", "<owl:Class rdf:about='urn:B'/>"),
+    ),
+)
+def test_owl1_class_list_compatibility_matches_python(
+    extension: NativeTestExtension,
+    operator: str,
+    members: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:A'>
+  <rdfs:subClassOf>
+   <owl:Class><owl:{operator} rdf:parseType='Collection'>
+    {members}
+   </owl:{operator}></owl:Class>
+  </rdfs:subClassOf>
+ </owl:Class>
+</rdf:RDF>""".encode()
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples
+
+
+def test_unmarked_empty_class_list_rejection_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:A'>
+  <rdfs:subClassOf>
+   <rdf:Description>
+    <owl:intersectionOf
+     rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+   </rdf:Description>
+  </rdfs:subClassOf>
+ </owl:Class>
+</rdf:RDF>"""
+
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_UNSUPPORTED"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_UNSUPPORTED"
+
+
 def test_distinct_ontology_annotation_limit_matches_python(
     extension: NativeTestExtension,
 ) -> None:

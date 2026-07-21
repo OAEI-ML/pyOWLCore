@@ -723,6 +723,59 @@ def test_rdf_mapping_enforces_raw_rdf_list_sequence_arity() -> None:
     assert raised.value.limit == "max_sequence_arity"
 
 
+@pytest.mark.parametrize(
+    ("operator", "members", "expected"),
+    (
+        ("intersectionOf", "", m.OWL_THING),
+        ("unionOf", "", m.OWL_NOTHING),
+        ("oneOf", "", m.OWL_NOTHING),
+        ("intersectionOf", '<owl:Class rdf:about="urn:B"/>', m.Class(m.IRI("urn:B"))),
+        ("unionOf", '<owl:Class rdf:about="urn:B"/>', m.Class(m.IRI("urn:B"))),
+    ),
+)
+def test_rdf_mapping_handles_owl1_class_list_compatibility(
+    operator: str,
+    members: str,
+    expected: m.Class,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:A">
+    <rdfs:subClassOf>
+      <owl:Class><owl:{operator} rdf:parseType="Collection">
+        {members}
+      </owl:{operator}></owl:Class>
+    </rdfs:subClassOf>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert m.SubClassOf(m.Class(m.IRI("urn:A")), expected) in document.axioms
+
+
+def test_rdf_mapping_rejects_unmarked_empty_class_list() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:A">
+    <rdfs:subClassOf>
+      <rdf:Description>
+        <owl:intersectionOf rdf:resource="{RDF_NAMESPACE}nil"/>
+      </rdf:Description>
+    </rdfs:subClassOf>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
 def test_rdf_mapping_enforces_the_distinct_ontology_annotation_limit() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"

@@ -749,10 +749,22 @@ class RDFMapper:
                 head = self.graph.one(term, predicate)
                 if head is not None:
                     self._consume_only(term, predicate, head)
-                    self._consume_marker(term, OWL + "Class")
+                    compatibility = self._consume_marker(term, OWL + "Class")
                     items = self._list(head)
+                    if not items:
+                        if not compatibility:
+                            self._mapping_error(
+                                "boolean or enumeration class expression has no operands"
+                            )
+                        return m.OWL_THING if predicate == OWL + "intersectionOf" else m.OWL_NOTHING
                     if predicate == OWL + "oneOf":
                         return m.ObjectOneOf(m.CanonicalSet(map(self._individual_resource, items)))
+                    if len(items) == 1:
+                        if not compatibility:
+                            self._mapping_error(
+                                "boolean class expression has fewer than two operands"
+                            )
+                        return self._class_expression(items[0])
                     expressions = m.CanonicalSet(map(self._class_expression, items))
                     if len(items) >= 2 and len(expressions) == 1:
                         return next(iter(expressions))
@@ -1119,10 +1131,12 @@ class RDFMapper:
             self._mapping_error("mapping attempted to consume an absent triple")
         self._consume(triple)
 
-    def _consume_marker(self, subject: RDFResource, object_iri: str) -> None:
+    def _consume_marker(self, subject: RDFResource, object_iri: str) -> bool:
         triple = Triple(subject, RDFIRI(RDF + "type"), RDFIRI(object_iri))
         if self.graph.contains(triple):
             self._consume(triple)
+            return True
+        return False
 
     def _consume_subject(self, subject: RDFResource) -> None:
         for triple in self.graph.find(subject=subject):
