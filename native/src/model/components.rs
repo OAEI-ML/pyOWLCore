@@ -144,9 +144,9 @@ struct ComponentWork {
     max_nesting_depth: u32,
     external_bytes: u64,
     auxiliary_bytes: u64,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     allocation_fail_after: Option<u64>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     allocations: u64,
 }
 
@@ -184,9 +184,9 @@ impl ComponentWork {
             max_nesting_depth: limits.max_nesting_depth,
             external_bytes,
             auxiliary_bytes: 0,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-hooks"))]
             allocation_fail_after: None,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-hooks"))]
             allocations: 0,
         })
     }
@@ -211,7 +211,7 @@ impl ComponentWork {
     }
 
     fn allocation_checkpoint(&mut self) -> NativeResult<()> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-hooks"))]
         {
             if self
                 .allocation_fail_after
@@ -229,10 +229,20 @@ impl ComponentWork {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn configure_allocation_failure(&mut self, successful: Option<u64>) {
+        self.allocation_fail_after = successful;
+        self.allocations = 0;
+    }
+
+    #[cfg(any(test, feature = "test-hooks"))]
+    const fn allocation_count(&self) -> u64 {
+        self.allocations
+    }
+
     #[cfg(test)]
     fn fail_allocations_after(&mut self, successful: u64) {
-        self.allocation_fail_after = Some(successful);
-        self.allocations = 0;
+        self.configure_allocation_failure(Some(successful));
     }
 }
 
@@ -1191,6 +1201,16 @@ impl FrozenComponentBuild {
     pub(crate) fn encode(&mut self, identifier: ComponentId) -> NativeResult<Vec<u8>> {
         self.arena.encode_with_work(identifier, &mut self.work)
     }
+
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn configure_allocation_failure(&mut self, successful: Option<u64>) {
+        self.work.configure_allocation_failure(successful);
+    }
+
+    #[cfg(feature = "test-hooks")]
+    pub(crate) const fn allocation_count(&self) -> u64 {
+        self.work.allocation_count()
+    }
 }
 
 type BucketTransform = fn(u64) -> u64;
@@ -1345,6 +1365,23 @@ impl NativeComponentBuilder {
         self.work_mut()?.external_bytes = external_bytes;
         self.counters.peak_builder_bytes = self.counters.peak_builder_bytes.max(peak);
         Ok(())
+    }
+
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn configure_allocation_failure(
+        &mut self,
+        successful: Option<u64>,
+    ) -> NativeResult<()> {
+        self.work_mut()?.configure_allocation_failure(successful);
+        Ok(())
+    }
+
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn allocation_count(&self) -> NativeResult<u64> {
+        self.work
+            .as_ref()
+            .map(ComponentWork::allocation_count)
+            .ok_or_else(|| NativeError::protocol("native component work state is unavailable"))
     }
 
     pub(crate) fn freeze(mut self) -> NativeResult<FrozenComponentBuild> {

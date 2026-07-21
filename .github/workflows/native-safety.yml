@@ -107,6 +107,7 @@ jobs:
         run: >-
           python -m pytest -q
           tests/native/foundation/test_native_boundary.py
+          tests/native/foundation/test_allocation_failure.py
           tests/native/foundation/test_runtime_policy_lifecycle.py
           tests/native/encoded_views/test_process_lifecycle.py
           tests/native/retained_facade/test_rust_process_lifecycle.py

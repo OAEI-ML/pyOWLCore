@@ -30,6 +30,8 @@ use limits::Limits;
 use model::NativeComponentBuilder;
 use model::{scan_canonical, CanonicalRow, ModelArena, ScanBudget};
 use pyo3::create_exception;
+#[cfg(feature = "test-hooks")]
+use pyo3::exceptions::PyValueError;
 use pyo3::exceptions::{PyException, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyModule, PyTuple};
@@ -522,6 +524,138 @@ fn _component_roundtrip_v1<'py>(
     })
 }
 
+#[cfg(feature = "test-hooks")]
+#[derive(Clone, Copy)]
+enum ComponentAllocationPhase {
+    Build,
+    Freeze,
+    Encode,
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (canonical, config, phase, fail_after=None))]
+fn _component_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    canonical: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    phase: &str,
+    fail_after: Option<u64>,
+) -> PyResult<(Bound<'py, PyBytes>, u64)> {
+    let phase = match phase {
+        "build" => ComponentAllocationPhase::Build,
+        "freeze" => ComponentAllocationPhase::Freeze,
+        "encode" => ComponentAllocationPhase::Encode,
+        _ => {
+            return Err(PyValueError::new_err(
+                "component allocation phase must be build, freeze, or encode",
+            ));
+        }
+    };
+    let limits = limits_from_python(config)?;
+    let owned = owned_buffer(py, canonical, Some(&limits), false)?;
+    let input_size = owned.len();
+    contain(|| limits.check_output_size(input_size, input_size)).map_err(python_error)?;
+    let (output, allocations) = run_detached(py, move |interrupt| {
+        let mut builder = NativeComponentBuilder::with_control(
+            &limits,
+            Cancellation::with_duration(None),
+            Some(interrupt),
+            input_size,
+        )?;
+
+        let (pending, build_allocations) = if matches!(phase, ComponentAllocationPhase::Build) {
+            builder.configure_allocation_failure(fail_after)?;
+            match builder.intern_canonical(&owned) {
+                Ok(identifier) => {
+                    let allocations = builder.allocation_count()?;
+                    builder.configure_allocation_failure(None)?;
+                    (identifier, allocations)
+                }
+                Err(injected) => {
+                    builder.configure_allocation_failure(None)?;
+                    let following = match builder.intern_canonical(&owned) {
+                        Err(error) => error,
+                        Ok(_) => {
+                            return Err(NativeError::protocol(
+                                "component allocation failure allowed later mutation",
+                            ));
+                        }
+                    };
+                    if following.code != "NATIVE_PROTOCOL" {
+                        return Err(NativeError::protocol(
+                            "component allocation failure did not poison later mutation",
+                        ));
+                    }
+                    let freeze = match builder.freeze() {
+                        Err(error) => error,
+                        Ok(_) => {
+                            return Err(NativeError::protocol(
+                                "component allocation failure allowed freeze",
+                            ));
+                        }
+                    };
+                    if freeze.code != "NATIVE_PROTOCOL" {
+                        return Err(NativeError::protocol(
+                            "component allocation failure did not poison freeze",
+                        ));
+                    }
+                    return Err(injected);
+                }
+            }
+        } else {
+            (builder.intern_canonical(&owned)?, 0)
+        };
+
+        let (mut frozen, freeze_allocations) = if matches!(phase, ComponentAllocationPhase::Freeze)
+        {
+            builder.configure_allocation_failure(fail_after)?;
+            let mut frozen = builder.freeze()?;
+            let allocations = frozen.allocation_count();
+            frozen.configure_allocation_failure(None);
+            (frozen, allocations)
+        } else {
+            (builder.freeze()?, 0)
+        };
+        let identifier = frozen.resolve(pending)?;
+
+        let (output, encode_allocations) = if matches!(phase, ComponentAllocationPhase::Encode) {
+            frozen.configure_allocation_failure(fail_after);
+            match frozen.encode(identifier) {
+                Ok(output) => {
+                    let allocations = frozen.allocation_count();
+                    frozen.configure_allocation_failure(None);
+                    (output, allocations)
+                }
+                Err(injected) => {
+                    frozen.configure_allocation_failure(None);
+                    let recovered = frozen.encode(identifier)?;
+                    if recovered != owned {
+                        return Err(NativeError::protocol(
+                            "component allocation failure changed the retained arena",
+                        ));
+                    }
+                    return Err(injected);
+                }
+            }
+        } else {
+            (frozen.encode(identifier)?, 0)
+        };
+
+        let allocations = match phase {
+            ComponentAllocationPhase::Build => build_allocations,
+            ComponentAllocationPhase::Freeze => freeze_allocations,
+            ComponentAllocationPhase::Encode => encode_allocations,
+        };
+        Ok((output, allocations))
+    })?;
+    let output = PyBytes::new_with(py, output.len(), |buffer| {
+        buffer.copy_from_slice(&output);
+        Ok(())
+    })?;
+    Ok((output, allocations))
+}
+
 #[pyfunction]
 #[pyo3(signature = (source, config, cancel=None))]
 fn parse_document<'py>(
@@ -634,6 +768,8 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     #[cfg(feature = "test-hooks")]
     module.add_function(wrap_pyfunction!(_component_roundtrip_v1, module)?)?;
+    #[cfg(feature = "test-hooks")]
+    module.add_function(wrap_pyfunction!(_component_allocation_probe_v1, module)?)?;
     module.add_function(wrap_pyfunction!(parse_document, module)?)?;
     module.add_function(wrap_pyfunction!(build_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(build_index, module)?)?;

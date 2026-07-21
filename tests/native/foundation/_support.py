@@ -38,6 +38,14 @@ class NativeTestExtension(Protocol):
         self, canonical: object, config: object, cancel: object | None = None
     ) -> bytes: ...
 
+    def _component_allocation_probe_v1(
+        self,
+        canonical: object,
+        config: object,
+        phase: str,
+        fail_after: int | None = None,
+    ) -> tuple[bytes, int]: ...
+
 
 def load_extension() -> NativeTestExtension:
     """Load an installed extension or an explicitly supplied developer build."""
