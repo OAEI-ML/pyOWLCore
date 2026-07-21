@@ -396,3 +396,82 @@ def test_foundation_bridge_probe_rejects_an_unknown_operation(
             b"",
             None,
         )
+
+
+@pytest.fixture(scope="module")
+def rdfxml_bridge_extension(extension: NativeTestExtension) -> NativeTestExtension:
+    if not hasattr(extension, "_rdfxml_retained_bridge_allocation_probe_v2"):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail(
+                "selected native test-hooks artifact lacks "
+                "_rdfxml_retained_bridge_allocation_probe_v2"
+            )
+        pytest.skip("native retained RDF/XML bridge allocation hook is unavailable")
+    return extension
+
+
+def test_rdfxml_retained_bridge_allocations_fail_before_publication(
+    rdfxml_bridge_extension: NativeTestExtension,
+) -> None:
+    source = bytearray(
+        b"<rdf:RDF "
+        b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        b"xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        b"xmlns:owl='http://www.w3.org/2002/07/owl#'>"
+        b"<owl:Ontology rdf:about='urn:allocation:rdfxml'/>"
+        b"<owl:Class rdf:about='urn:allocation:C'>"
+        b"<rdfs:subClassOf rdf:resource='urn:allocation:D'/>"
+        b"</owl:Class><owl:Class rdf:about='urn:allocation:D'/></rdf:RDF>"
+    )
+    original_source = bytes(source)
+    config = bytearray(native._encode_config(ParseLimits(), None, verify=False))
+    original_config = bytes(config)
+
+    output, allocations = (
+        rdfxml_bridge_extension._rdfxml_retained_bridge_allocation_probe_v2(
+            memoryview(source),
+            "urn:allocation:document",
+            memoryview(config),
+            True,
+            False,
+            False,
+            None,
+        )
+    )
+    assert output[:8] == b"PYNRRS2\0"
+    assert allocations == 9
+    assert source == original_source
+    assert config == original_config
+
+    for fail_after in range(allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native RDF/XML retained bridge allocation failure$",
+        ):
+            rdfxml_bridge_extension._rdfxml_retained_bridge_allocation_probe_v2(
+                memoryview(source),
+                "urn:allocation:document",
+                memoryview(config),
+                True,
+                False,
+                False,
+                fail_after,
+            )
+        assert source == original_source
+        assert config == original_config
+
+    boundary_output, boundary_allocations = (
+        rdfxml_bridge_extension._rdfxml_retained_bridge_allocation_probe_v2(
+            memoryview(source),
+            "urn:allocation:document",
+            memoryview(config),
+            True,
+            False,
+            False,
+            allocations,
+        )
+    )
+    assert boundary_output == output
+    assert boundary_allocations == allocations
+    assert source == original_source
+    assert config == original_config

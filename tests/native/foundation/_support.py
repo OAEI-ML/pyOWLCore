@@ -67,6 +67,17 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...
 
+    def _rdfxml_retained_bridge_allocation_probe_v2(
+        self,
+        source: object,
+        document_iri: object | None,
+        config: object,
+        collect_provenance: bool,
+        allow_partial_rdf_mapping: bool,
+        require_empty_imports: bool,
+        fail_after: int | None = None,
+    ) -> tuple[bytes, int]: ...
+
     def _index_bridge_allocation_probe_v1(
         self,
         snapshot_wire: object,

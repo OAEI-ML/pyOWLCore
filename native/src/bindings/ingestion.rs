@@ -53,6 +53,11 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     _module.add_function(wrap_pyfunction!(_retain_structural_snapshot_v2, _module)?)?;
     _module.add_function(wrap_pyfunction!(_parse_functional_retained_v2, _module)?)?;
     _module.add_function(wrap_pyfunction!(_parse_rdfxml_retained_v2, _module)?)?;
+    #[cfg(feature = "test-hooks")]
+    _module.add_function(wrap_pyfunction!(
+        _rdfxml_retained_bridge_allocation_probe_v2,
+        _module
+    )?)?;
     _module.add_function(wrap_pyfunction!(
         _prepare_parsed_structural_snapshot_v2,
         _module
@@ -91,17 +96,90 @@ fn _parse_rdfxml_retained_v2<'py>(
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<RetainedRdfXmlParseBindingResult> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    parse_rdfxml_retained_v2_with_allocations(
+        py,
+        source,
+        document_iri,
+        config,
+        collect_provenance,
+        allow_partial_rdf_mapping,
+        require_empty_imports,
+        cancel,
+        &mut allocations,
+    )
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    source,
+    document_iri,
+    config,
+    collect_provenance,
+    allow_partial_rdf_mapping,
+    require_empty_imports,
+    fail_after=None
+))]
+fn _rdfxml_retained_bridge_allocation_probe_v2<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    document_iri: Option<&Bound<'py, PyAny>>,
+    config: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    require_empty_imports: bool,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyBytes>, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native RDF/XML retained bridge allocation failure",
+    );
+    let (encoded, _storage, _phases) = parse_rdfxml_retained_v2_with_allocations(
+        py,
+        source,
+        document_iri,
+        config,
+        collect_provenance,
+        allow_partial_rdf_mapping,
+        require_empty_imports,
+        None,
+        &mut allocations,
+    )?;
+    Ok((encoded, allocations.count()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_rdfxml_retained_v2_with_allocations<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    document_iri: Option<&Bound<'py, PyAny>>,
+    config: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    require_empty_imports: bool,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<RetainedRdfXmlParseBindingResult> {
     if allow_partial_rdf_mapping {
         return Err(crate::python_error(NativeError::new(
             "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
             "native retained RDF/XML publication does not support partial mapping",
         )));
     }
-    let limits = crate::limits_from_python(config)?;
+    let limits = crate::limits_from_python_with_allocations(config, allocations)?;
     let cancellation = crate::cancellation_or_default(cancel);
-    let document_iri = owned_document_iri(py, document_iri, &limits)?;
+    let document_iri = owned_document_iri_with_allocations(py, document_iri, &limits, allocations)?;
     let document_iri_size = document_iri.as_ref().map_or(0, String::len);
-    let owned = owned_source(py, source, document_iri_size, &limits, &cancellation)?;
+    let owned = owned_source_with_allocations(
+        py,
+        source,
+        document_iri_size,
+        &limits,
+        &cancellation,
+        allocations,
+    )?;
     let input_size = owned.len();
     let accounted_input =
         accounted_input_bytes(input_size, document_iri_size).map_err(crate::python_error)?;
@@ -137,6 +215,7 @@ fn _parse_rdfxml_retained_v2<'py>(
         outcome.phases.arena_construction_ns,
         outcome.phases.freeze_ns,
     );
+    allocations.checkpoint()?;
     let encoded = PyBytes::new_with(py, outcome.encoded.len(), |buffer| {
         buffer.copy_from_slice(&outcome.encoded);
         Ok(())
@@ -821,12 +900,32 @@ fn _ingest_rdfxml_slice_v1<'py>(
     Ok((outcome.publication.into_handle(), observation))
 }
 
+#[cfg(feature = "test-hooks")]
 fn owned_source(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
     document_iri_bytes: usize,
     limits: &crate::limits::Limits,
     cancellation: &crate::cancel::Cancellation,
+) -> PyResult<Vec<u8>> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    owned_source_with_allocations(
+        py,
+        value,
+        document_iri_bytes,
+        limits,
+        cancellation,
+        &mut allocations,
+    )
+}
+
+fn owned_source_with_allocations(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    document_iri_bytes: usize,
+    limits: &crate::limits::Limits,
+    cancellation: &crate::cancel::Cancellation,
+    allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<Vec<u8>> {
     cancellation.checkpoint().map_err(crate::python_error)?;
     let view = PyBuffer::<u8>::get(value).map_err(|error| {
@@ -848,6 +947,7 @@ fn owned_source(
         )
     })?;
     let mut result = Vec::new();
+    allocations.checkpoint()?;
     result.try_reserve_exact(size).map_err(|_| {
         crate::python_error(NativeError::limit(
             "native RDF/XML owned-source allocation failed",
@@ -862,10 +962,21 @@ fn owned_source(
     Ok(result)
 }
 
+#[cfg(feature = "test-hooks")]
 fn owned_document_iri(
     py: Python<'_>,
     value: Option<&Bound<'_, PyAny>>,
     limits: &crate::limits::Limits,
+) -> PyResult<Option<String>> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    owned_document_iri_with_allocations(py, value, limits, &mut allocations)
+}
+
+fn owned_document_iri_with_allocations(
+    py: Python<'_>,
+    value: Option<&Bound<'_, PyAny>>,
+    limits: &crate::limits::Limits,
+    allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
@@ -905,6 +1016,7 @@ fn owned_document_iri(
         )));
     }
     let mut result = String::new();
+    allocations.checkpoint()?;
     result.try_reserve_exact(size).map_err(|_| {
         crate::python_error(NativeError::limit(
             "native RDF/XML document IRI allocation failed",
