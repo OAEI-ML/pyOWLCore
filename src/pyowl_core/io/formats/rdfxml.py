@@ -143,6 +143,8 @@ class RDFXMLGraphParser:
         base = self._base(self.root, self.base)
         language = self.root.get(f"{{{XML_NS}}}lang")
         if self.root.tag == _tag(RDF, "RDF"):
+            if _has_non_whitespace_content(self.root):
+                self._syntax("rdf:RDF cannot contain direct character data")
             for child in self.root:
                 self._node(child, base, language)
         else:
@@ -156,6 +158,8 @@ class RDFXMLGraphParser:
         parent_language: str | None,
     ) -> RDFResource:
         self.context.check()
+        if _has_non_whitespace_content(element):
+            self._syntax("RDF node elements cannot contain direct character data")
         base = self._base(element, parent_base)
         language = element.get(f"{{{XML_NS}}}lang", parent_language)
         identities = [
