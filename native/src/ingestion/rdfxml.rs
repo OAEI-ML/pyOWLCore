@@ -1006,13 +1006,14 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                         next_li: 1,
                     })
                 }
-                "Literal" => Ok(FrameRole::XmlLiteralProperty {
+                // RDF/XML treats every other parseType value exactly like
+                // parseType="Literal" and emits no value-specific triples.
+                _ => Ok(FrameRole::XmlLiteralProperty {
                     subject,
                     predicate: owned_text(predicate, self.session)?,
                     text: String::new(),
                     reification,
                 }),
-                _ => Err(mapping_incomplete()),
             };
         }
         let has_property_attributes = self.has_empty_property_attributes(attributes)?;
@@ -6725,13 +6726,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_type_literal_rejects_unsupported_values() {
+    fn parse_type_other_uses_xml_literal_semantics() {
         let source = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Other\">value</e:p></rdf:Description></rdf:RDF>"
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\" xmlns:x=\"urn:x:\" xml:base=\"http://example.test/doc\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Other\" rdf:ID=\"statement\">root<x:value a=\"1\">text</x:value>tail</e:p></rdf:Description></rdf:RDF>"
         );
-        assert_eq!(
-            graph(&source).unwrap_err().code,
-            "NATIVE_RDF_MAPPING_INCOMPLETE"
+        let parsed = graph(&source).expect("parseType Other XML literal");
+        assert_eq!(parsed.len(), 5);
+        assert_statement_reification(
+            &parsed,
+            "http://example.test/doc#statement",
+            iri_resource("urn:s"),
+            "urn:e:p",
+            Term::Literal {
+                lexical: "root<ns0:value xmlns:ns0=\"urn:x:\" a=\"1\">text</ns0:value>tail"
+                    .to_owned(),
+                datatype: Some(RDF_XML_LITERAL.to_owned()),
+                language: None,
+            },
         );
     }
 
@@ -7300,13 +7311,6 @@ mod tests {
         ] {
             assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
         }
-        let unsupported = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Other\"/></rdf:Description></rdf:RDF>"
-        );
-        assert_eq!(
-            graph(&unsupported).unwrap_err().code,
-            "NATIVE_RDF_MAPPING_INCOMPLETE"
-        );
         let limits = Limits::default();
         let maximum = limits.value(LimitKey::MaxRdfListLength);
         let mut guard = Guard::new(

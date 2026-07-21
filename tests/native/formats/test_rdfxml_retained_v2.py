@@ -183,6 +183,17 @@ NESTED_XML_LITERAL_SOURCE = b"""\
   </owl:Class>
 </rdf:RDF>
 """
+PARSE_TYPE_OTHER_SOURCE = b"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#"
+  xmlns:x="urn:x:" xml:lang="EN">
+  <owl:Class rdf:about="urn:C">
+    <rdfs:comment rdf:parseType="Other">root<x:value a="1">text</x:value>tail</rdfs:comment>
+  </owl:Class>
+</rdf:RDF>
+"""
 DOCUMENT_IRI = IRI("urn:rdfxml:document")
 
 
@@ -553,17 +564,26 @@ def test_markup_free_parse_type_literal_publishes_from_the_retained_parser_owner
     assert counters.publication_structural_bytes_copied == 0
 
 
-def test_nested_xml_literal_publishes_from_the_retained_parser_owner(
+@pytest.mark.parametrize(
+    ("source", "unexpected_message"),
+    (
+        (NESTED_XML_LITERAL_SOURCE, "nested XML literal crossed the Python RDF/XML parser"),
+        (PARSE_TYPE_OTHER_SOURCE, "parseType Other crossed the Python RDF/XML parser"),
+    ),
+)
+def test_xml_literal_forms_publish_from_the_retained_parser_owner(
     extension: NativeTestExtension,
+    source: bytes,
+    unexpected_message: str,
 ) -> None:
     reference = load_snapshot(
-        NESTED_XML_LITERAL_SOURCE,
+        source,
         document_iri=DOCUMENT_IRI,
         options=_options(BackendPreference.PYTHON),
     )
-    unexpected = AssertionError("nested XML literal crossed the Python RDF/XML parser")
+    unexpected = AssertionError(unexpected_message)
     with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
-        selected = cast(Any, _retained_snapshot(NESTED_XML_LITERAL_SOURCE))
+        selected = cast(Any, _retained_snapshot(source))
 
     owner = selected._native_snapshot_state.owner.handle._owner_v2
     counters = owner._publication_counters_v2()
@@ -575,7 +595,7 @@ def test_nested_xml_literal_publishes_from_the_retained_parser_owner(
     assert selected.signature_fingerprint == reference.signature_fingerprint
     assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
     assert encode_snapshot(selected) == encode_snapshot(reference)
-    assert counters.parser_bytes == len(NESTED_XML_LITERAL_SOURCE)
+    assert counters.parser_bytes == len(source)
     assert counters.publication_structural_rows_copied == 0
     assert counters.publication_structural_bytes_copied == 0
 

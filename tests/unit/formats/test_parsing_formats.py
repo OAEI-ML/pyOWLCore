@@ -23,6 +23,7 @@ from pyowl_core.backends.native import NativeProbe
 PYTHON_OPTIONS = LoadOptions(backend=BackendPreference.PYTHON)
 ONTOLOGY = "https://example.org/w3c-derived"
 CLASS = ONTOLOGY + "#C"
+RDF_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 
 FUNCTIONAL = f"Ontology(<{ONTOLOGY}> Declaration(Class(<{CLASS}>)))".encode()
 OWL_XML = f"""\
@@ -66,6 +67,30 @@ def test_w3c_derived_minimal_documents_have_one_structure(
     )
     assert document.ontology_id.ontology_iri == m.IRI(ONTOLOGY)
     assert document.axioms == m.CanonicalSet((m.Declaration(m.Class(m.IRI(CLASS))),))
+
+
+def test_rdfxml_parse_type_other_has_xml_literal_semantics() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:x="urn:parse-other:">
+  <owl:Class rdf:about="{CLASS}">
+    <rdfs:comment rdf:parseType="Other">root<x:value>text</x:value>tail</rdfs:comment>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assertion = next(document.iter_axioms(m.AnnotationAssertion))
+    assert isinstance(assertion.value, m.Literal)
+    assert assertion.value.lexical_form == (
+        'root<ns0:value xmlns:ns0="urn:parse-other:">text</ns0:value>tail'
+    )
+    assert assertion.value.datatype.iri.value == RDF_NAMESPACE + "XMLLiteral"
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.total_triples == 2
+    assert document.rdf_mapping_report.consumed_triples == 2
 
 
 def test_disabled_provenance_omits_document_and_snapshot_origins() -> None:

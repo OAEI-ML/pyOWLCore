@@ -227,13 +227,13 @@ class RDFXMLGraphParser:
             elif parse_type == "Collection":
                 members = [self._node(child, base, language) for child in element]
                 triple = self._add(subject, predicate, self._collection(members))
-            elif parse_type == "Literal":
+            else:
+                # RDF/XML 1.1 parseTypeOther is defined to behave exactly like
+                # parseType="Literal" without emitting value-specific triples.
                 lexical = (element.text or "") + "".join(
                     ET.tostring(child, encoding="unicode") for child in element
                 )
                 triple = self._add(subject, predicate, RDFLiteral(lexical, RDF + "XMLLiteral"))
-            else:
-                self._syntax("unsupported rdf:parseType value")
         elif resource is not None or node_id is not None:
             if len(element):
                 self._syntax("resource-valued RDF property cannot contain child nodes")
