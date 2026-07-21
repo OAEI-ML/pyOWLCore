@@ -260,6 +260,14 @@ def encode_snapshot(
         raise TypeError("limits must be ParseLimits or None")
     guard = Guard(selected_limits, cancellation_token)
     guard.check(force=True)
+    mapped_wire = _mapped_wire_copy_v1(
+        snapshot,
+        selected_limits,
+        guard,
+        cancellation_token,
+    )
+    if mapped_wire is not None:
+        return mapped_wire
     source_identity = _identity_metadata_for_view(snapshot, cancellation_token)
     concrete = _materialize_for_wire(snapshot, selected_limits)
     native_source = _native_wire_source_v1(
@@ -303,6 +311,47 @@ def encode_snapshot(
     result = _assemble(sections, flags, selected_limits, guard, minor=minor)
     guard.check(force=True)
     return result
+
+
+def _mapped_wire_copy_v1(
+    snapshot: OntologyView,
+    limits: ParseLimits,
+    guard: Guard,
+    cancellation_token: CancellationToken | None,
+) -> bytes | None:
+    acquire = getattr(snapshot, "_mapped_wire_source_v1", None)
+    if not callable(acquire):
+        return None
+    borrowed = acquire()
+    if borrowed is None:
+        return None
+    if type(borrowed) is not tuple or len(borrowed) != 2:
+        raise TypeError("mapped wire source must return one buffer and owner")
+    data, owner = borrowed
+    release = getattr(owner, "release", None)
+    if not callable(release):
+        raise TypeError("mapped wire source returned an invalid buffer owner")
+    inspected: InspectedWire | None = None
+    try:
+        if not isinstance(data, memoryview):
+            raise TypeError("mapped wire source returned an invalid buffer owner")
+        guard.check(force=True)
+        limits.enforce("max_wire_bytes", len(data))
+        limits.enforce("max_temporary_bytes", len(data))
+        inspected = validate_bytes(
+            data,
+            limits=limits,
+            verify=True,
+            cancellation_token=cancellation_token,
+            lazy_model_validation=True,
+        )
+        result = bytes(data)
+        guard.check(force=True)
+        return result
+    finally:
+        if inspected is not None:
+            inspected.image.release()
+        release()
 
 
 def decode_snapshot(

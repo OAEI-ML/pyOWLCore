@@ -69,6 +69,7 @@ class _MappedState:
         "options",
         "path",
         "pid",
+        "verified",
     )
 
     def __init__(
@@ -79,6 +80,7 @@ class _MappedState:
         inspected: InspectedWire,
         limits: ParseLimits,
         identity: tuple[int, int, int, int],
+        verified: bool,
     ) -> None:
         self.path = path
         self.fd = fd
@@ -86,6 +88,7 @@ class _MappedState:
         self.inspected = inspected
         self.limits = limits
         self.identity = identity
+        self.verified = verified
         self.pid = os.getpid()
         self.lock = threading.RLock()
         self.decoded: OntologySnapshot | None = None
@@ -109,10 +112,11 @@ class _MappedState:
             "structural-indexes",
             "ontology-identity-index",
             "wire-v1",
-            "wire-verified",
             "mmap-snapshot",
             "lazy-model",
         }
+        if verified:
+            features.add("wire-verified")
         if summary.structural_context is not None:
             features.add("materialized-view")
         self.capabilities = CoreCapabilities(
@@ -335,6 +339,14 @@ class MappedOntologySnapshot(OntologySnapshot):
         if buffers is None:
             return None
         return buffers, self._mapped_state.retain()
+
+    def _mapped_wire_source_v1(self) -> tuple[memoryview, object] | None:
+        """Borrow the exact verified wire image without model materialization."""
+
+        self._check_open()
+        if not self._mapped_state.verified:
+            return None
+        return self._mapped_state.inspected.image.data, self._mapped_state.retain()
 
     def _on_close(self, callback: Callable[[], None]) -> None:
         self._mapped_state.add_close_callback(callback)
@@ -605,6 +617,7 @@ def open_snapshot(
             inspected,
             selected_limits,
             identity,
+            verify,
         )
         mapping = None
         fd = -1
