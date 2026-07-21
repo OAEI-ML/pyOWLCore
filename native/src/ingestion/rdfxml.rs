@@ -23,6 +23,7 @@ use super::{CanonicalDocument, MappingEvidence};
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const OWL: &str = "http://www.w3.org/2002/07/owl#";
 const XML: &str = "http://www.w3.org/XML/1998/namespace";
+const XMLNS: &str = "http://www.w3.org/2000/xmlns/";
 const XML_BASE: &str = "http://www.w3.org/XML/1998/namespacebase";
 const XML_LANG: &str = "http://www.w3.org/XML/1998/namespacelang";
 const XINCLUDE: &str = "http://www.w3.org/2001/XInclude";
@@ -248,13 +249,10 @@ impl<'a> XmlStream<'a> {
                 let target_end =
                     bounded_find_xml_space(body.as_bytes(), session)?.unwrap_or(body.len());
                 let target = &body[..target_end];
-                if target != "xml"
-                    || start != 0
-                    || self.xml_declaration_seen
-                    || declaration_has_unsupported_encoding(body, session)?
-                {
+                if target != "xml" || start != 0 || self.xml_declaration_seen {
                     return Err(xml_forbidden());
                 }
+                validate_xml_declaration(body)?;
                 self.xml_declaration_seen = true;
                 self.advance(end, session)?;
                 continue;
@@ -602,6 +600,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 if prefix.contains(':')
                     || prefix == "xmlns"
                     || (prefix == "xml" && attribute.value != XML)
+                    || (!prefix.is_empty() && attribute.value.is_empty())
+                    || attribute.value == XMLNS
+                    || (attribute.value == XML && prefix != "xml")
                 {
                     return Err(xml_syntax());
                 }
@@ -5911,57 +5912,6 @@ fn bounded_find(
     Ok(None)
 }
 
-fn bounded_find_ascii_case(
-    bytes: &[u8],
-    start: usize,
-    end: usize,
-    marker: &[u8],
-    session: &mut Session<'_>,
-) -> NativeResult<Option<usize>> {
-    if marker.is_empty() || start > end || end > bytes.len() {
-        return Err(xml_syntax());
-    }
-    session.finish()?;
-    let Some(last_start) = end.checked_sub(marker.len()) else {
-        return Ok(None);
-    };
-    let mut cursor = start;
-    while cursor <= last_start {
-        let batch_end = cursor.saturating_add(64 * 1024).min(last_start + 1);
-        for position in cursor..batch_end {
-            if bytes[position..position + marker.len()].eq_ignore_ascii_case(marker) {
-                return Ok(Some(position));
-            }
-        }
-        cursor = batch_end;
-        session.finish()?;
-    }
-    Ok(None)
-}
-
-fn bounded_skip_xml_space(
-    bytes: &[u8],
-    start: usize,
-    session: &mut Session<'_>,
-) -> NativeResult<usize> {
-    if start > bytes.len() {
-        return Err(xml_syntax());
-    }
-    session.finish()?;
-    let mut cursor = start;
-    while cursor < bytes.len() {
-        let batch_end = cursor.saturating_add(64 * 1024).min(bytes.len());
-        while cursor < batch_end && matches!(bytes[cursor], b' ' | b'\t' | b'\r' | b'\n') {
-            cursor += 1;
-        }
-        if cursor < batch_end {
-            return Ok(cursor);
-        }
-        session.finish()?;
-    }
-    Ok(cursor)
-}
-
 fn bounded_find_xml_space(bytes: &[u8], session: &mut Session<'_>) -> NativeResult<Option<usize>> {
     session.finish()?;
     for (batch, chunk) in bytes.chunks(64 * 1024).enumerate() {
@@ -5989,33 +5939,92 @@ fn skip_space(bytes: &[u8], cursor: &mut usize) {
     }
 }
 
-fn declaration_has_unsupported_encoding(
-    declaration: &str,
-    session: &mut Session<'_>,
-) -> NativeResult<bool> {
+fn validate_xml_declaration(declaration: &str) -> NativeResult<()> {
+    validate_xml_characters(declaration)?;
     let bytes = declaration.as_bytes();
-    let Some(position) = bounded_find_ascii_case(bytes, 0, bytes.len(), b"encoding", session)?
-    else {
-        return Ok(false);
-    };
-    let suffix_start = position + "encoding".len();
-    let Some(equal) = bounded_find(bytes, suffix_start, bytes.len(), b"=", session)? else {
-        return Ok(true);
-    };
-    let value_start = bounded_skip_xml_space(bytes, equal + 1, session)?;
-    let Some(quote) = bytes.get(value_start).copied() else {
-        return Ok(true);
-    };
-    if !matches!(quote, b'\'' | b'"') {
-        return Ok(true);
+    if !declaration.starts_with("xml") || !bytes.get(3).is_some_and(|value| is_xml_space(*value)) {
+        return Err(xml_syntax());
     }
-    let Some(end) = bounded_find(bytes, value_start + 1, bytes.len(), &[quote], session)? else {
-        return Ok(true);
-    };
-    let value = &declaration[value_start + 1..end];
-    Ok(!["utf-8", "utf8", "us-ascii"]
-        .iter()
-        .any(|encoding| value.eq_ignore_ascii_case(encoding)))
+    let mut cursor = 3;
+    skip_space(bytes, &mut cursor);
+    let (name, _version) = xml_declaration_attribute(declaration, &mut cursor)?;
+    if name != "version" {
+        return Err(xml_syntax());
+    }
+    let mut encoding_seen = false;
+    let mut standalone_seen = false;
+    while cursor < bytes.len() {
+        if !is_xml_space(bytes[cursor]) {
+            return Err(xml_syntax());
+        }
+        skip_space(bytes, &mut cursor);
+        if cursor == bytes.len() {
+            break;
+        }
+        let (name, value) = xml_declaration_attribute(declaration, &mut cursor)?;
+        match name {
+            "encoding" if !encoding_seen && !standalone_seen => {
+                encoding_seen = true;
+                if !["utf-8", "utf8", "us-ascii"]
+                    .iter()
+                    .any(|encoding| value.eq_ignore_ascii_case(encoding))
+                {
+                    return Err(xml_forbidden());
+                }
+            }
+            "standalone" if !standalone_seen => {
+                standalone_seen = true;
+                if !matches!(value, "yes" | "no") {
+                    return Err(xml_syntax());
+                }
+            }
+            _ => return Err(xml_syntax()),
+        }
+    }
+    Ok(())
+}
+
+fn xml_declaration_attribute<'a>(
+    declaration: &'a str,
+    cursor: &mut usize,
+) -> NativeResult<(&'a str, &'a str)> {
+    let bytes = declaration.as_bytes();
+    let name_start = *cursor;
+    while bytes.get(*cursor).is_some_and(u8::is_ascii_alphabetic) {
+        *cursor += 1;
+    }
+    if *cursor == name_start {
+        return Err(xml_syntax());
+    }
+    let name = &declaration[name_start..*cursor];
+    skip_space(bytes, cursor);
+    if bytes.get(*cursor) != Some(&b'=') {
+        return Err(xml_syntax());
+    }
+    *cursor += 1;
+    skip_space(bytes, cursor);
+    let quote = *bytes.get(*cursor).ok_or_else(xml_syntax)?;
+    if !matches!(quote, b'\'' | b'"') {
+        return Err(xml_syntax());
+    }
+    *cursor += 1;
+    let value_start = *cursor;
+    while bytes.get(*cursor).is_some_and(|value| *value != quote) {
+        if matches!(bytes[*cursor], b'<' | b'&') {
+            return Err(xml_syntax());
+        }
+        *cursor += 1;
+    }
+    if bytes.get(*cursor) != Some(&quote) {
+        return Err(xml_syntax());
+    }
+    let value = &declaration[value_start..*cursor];
+    *cursor += 1;
+    Ok((name, value))
+}
+
+fn is_xml_space(value: u8) -> bool {
+    matches!(value, b' ' | b'\t' | b'\r' | b'\n')
 }
 
 fn clone_resource(value: &Resource, session: &mut Session<'_>) -> NativeResult<Resource> {
@@ -9922,6 +9931,42 @@ mod tests {
             mapped(typed, None).expect("description").axioms,
             mapped(direct, None).expect("typed node").axioms,
         );
+    }
+
+    #[test]
+    fn xml_declarations_and_reserved_namespace_bindings_are_validated() {
+        let valid = format!(
+            "<?xml version = '1.0' encoding='UTF-8' standalone = \"yes\"?><rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:xml=\"{XML}\" xmlns=\"\"/>"
+        );
+        assert!(graph(&valid).expect("valid XML declaration").is_empty());
+
+        for declaration in [
+            "<?xml encoding='UTF-8'?>",
+            "<?xml garbage?>",
+            "<?xml version='1.0' unknown='value'?>",
+            "<?xml version='1.0' standalone='true'?>",
+            "<?xml version='1.0' standalone='yes' encoding='UTF-8'?>",
+        ] {
+            let source = format!("{declaration}<rdf:RDF xmlns:rdf=\"{RDF}\"/>");
+            assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
+        let unsupported_encoding =
+            format!("<?xml version='1.0' encoding='UTF-16'?><rdf:RDF xmlns:rdf=\"{RDF}\"/>");
+        assert_eq!(
+            graph(&unsupported_encoding).unwrap_err().code,
+            "NATIVE_XML_FORBIDDEN_CONSTRUCT",
+        );
+
+        for declaration in [
+            format!("xmlns:p=\"{XML}\""),
+            format!("xmlns:p=\"{XMLNS}\""),
+            format!("xmlns=\"{XML}\""),
+            "xmlns:p=\"\"".to_owned(),
+            "xmlns:xmlns=\"urn:invalid\"".to_owned(),
+        ] {
+            let source = format!("<rdf:RDF xmlns:rdf=\"{RDF}\" {declaration}/>");
+            assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
     }
 
     #[test]

@@ -147,6 +147,28 @@ def test_supported_slice_matches_python_mapping_and_crosses_v1_freeze(
     assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
+def test_valid_xml_declaration_and_explicit_xml_binding_match_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<?xml version = '1.0' encoding='UTF-8' standalone = "yes"?>
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xmlns:xml='http://www.w3.org/XML/1998/namespace' xmlns=''>
+ <owl:Class rdf:about='urn:C'>
+  <rdfs:label xml:lang='EN'>Class</rdfs:label>
+ </owl:Class>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 2
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+
 def test_named_node_axiom_slice_matches_python_canonical_bytes(
     extension: NativeTestExtension,
 ) -> None:
@@ -525,6 +547,21 @@ def test_rfc3986_document_and_nested_xml_bases_match_python(
             b"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
             b"xmlns:e='urn:e:'><rdf:Description rdf:about='urn:s'>"
             b"<e:p>bad]]></e:p></rdf:Description></rdf:RDF>",
+            "NATIVE_RDFXML_SYNTAX",
+        ),
+        (
+            b"<?xml encoding='UTF-8'?><rdf:RDF "
+            b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+            "NATIVE_RDFXML_SYNTAX",
+        ),
+        (
+            b"<?xml version='1.0' encoding='UTF-16'?><rdf:RDF "
+            b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+            "NATIVE_XML_FORBIDDEN_CONSTRUCT",
+        ),
+        (
+            b"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+            b"xmlns:bad='http://www.w3.org/XML/1998/namespace'/>",
             "NATIVE_RDFXML_SYNTAX",
         ),
     ),
