@@ -32,8 +32,9 @@ capacity-growth/owner checkpoints in its retained Rust encoded-column
 workspace, plus 38 positive Functional parser session allocation-budget
 claims and 13 explicit Functional parser configuration/source/result Python-
 bridge checkpoints, plus 13 native index request/source/result Python-bridge
-checkpoints. It covers 20,863 checkpoints locally; the remaining bridge,
-process-allocator, and hosted-platform matrix stays open.
+checkpoints and 39 canonical validation, wire validation, and wire roundtrip
+Python-bridge checkpoints. It covers 20,902 checkpoints locally; the remaining
+bridge, process-allocator, and hosted-platform matrix stays open.
 
 Run the ordinary bounded security lanes with:
 
