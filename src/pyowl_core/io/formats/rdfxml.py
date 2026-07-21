@@ -6,12 +6,12 @@ import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import NoReturn, cast
-from urllib.parse import urljoin
 
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.document import OntologyDocument
-from pyowl_core.exceptions import OntologySyntaxError
+from pyowl_core.exceptions import InvalidIRIError, OntologySyntaxError
 from pyowl_core.limits import ParseLimits
 from pyowl_core.model import IRI
 
@@ -35,6 +35,16 @@ from .rdf import (
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 _FORBIDDEN_XML_TEXT = re.compile(r"(?is)<!\s*(?:DOCTYPE|ENTITY)")
 _XML_SPACE = frozenset(" \t\r\n")
+_IRI_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
+
+
+@dataclass(frozen=True, slots=True)
+class _IRIReference:
+    scheme: str | None
+    authority: str | None
+    path: str
+    query: str | None
+    fragment: str | None
 
 
 def parse_rdfxml(
@@ -340,19 +350,77 @@ class RDFXMLGraphParser:
         local = element.get(f"{{{XML_NS}}}base")
         if local is None:
             return parent
-        if parent is None and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", local):
-            self._syntax("relative xml:base requires a document IRI")
-        return local if parent is None else urljoin(parent, local)
+        return self._resolve(local, parent)
 
     def _resolve(self, value: str, base: str | None) -> str:
-        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", value):
-            result = value
+        self._enforce_iri_size(value)
+        reference = _parse_iri_reference(value)
+        if reference.scheme is not None:
+            scheme = reference.scheme
+            authority = reference.authority
+            path = _remove_dot_segments(reference.path)
+            query = reference.query
         elif base is not None:
-            result = urljoin(base, value)
+            try:
+                parsed_base = _parse_iri_reference(base)
+            except OntologySyntaxError as error:
+                raise OntologySyntaxError(
+                    "RDF/XML base IRI is not an absolute RFC 3986 IRI",
+                    code="RDFXML_INVALID_BASE_IRI",
+                ) from error
+            if parsed_base.scheme is None:
+                raise OntologySyntaxError(
+                    "RDF/XML base IRI is not an absolute RFC 3986 IRI",
+                    code="RDFXML_INVALID_BASE_IRI",
+                )
+            scheme = parsed_base.scheme
+            if reference.authority is not None:
+                authority = reference.authority
+                path = _remove_dot_segments(reference.path)
+                query = reference.query
+            elif not reference.path:
+                authority = parsed_base.authority
+                path = parsed_base.path
+                query = reference.query if reference.query is not None else parsed_base.query
+            elif reference.path.startswith("/"):
+                authority = parsed_base.authority
+                path = _remove_dot_segments(reference.path)
+                query = reference.query
+            else:
+                authority = parsed_base.authority
+                prefix = (
+                    "/"
+                    if parsed_base.authority is not None and not parsed_base.path
+                    else parsed_base.path[: parsed_base.path.rfind("/") + 1]
+                )
+                merged = prefix + reference.path
+                self._enforce_iri_size(merged)
+                path = _remove_dot_segments(merged)
+                query = reference.query
         else:
-            self._syntax("relative RDF/XML IRI requires a base")
-        self.context.limits.enforce("max_iri_bytes", len(result.encode("utf-8")))
+            raise OntologySyntaxError(
+                "relative RDF/XML IRI requires an absolute base",
+                code="RDFXML_RELATIVE_IRI_NO_BASE",
+            )
+        result = _serialize_iri(
+            scheme,
+            authority,
+            path,
+            query,
+            reference.fragment,
+        )
+        self._enforce_iri_size(result)
+        try:
+            IRI(result)
+        except InvalidIRIError as error:
+            raise OntologySyntaxError(
+                "RDF/XML contains a relative or invalid IRI",
+                code="RDFXML_SYNTAX",
+            ) from error
         return result
+
+    def _enforce_iri_size(self, value: str) -> None:
+        self.context.limits.enforce("max_iri_bytes", len(value.encode("utf-8")))
 
     def _node_id(self, value: str) -> RDFBlank:
         if not _is_xml_ncname(value):
@@ -522,6 +590,85 @@ def _expanded(tag: str) -> str:
         )
     namespace, local = tag[1:].split("}", 1)
     return namespace + local
+
+
+def _parse_iri_reference(value: str) -> _IRIReference:
+    without_fragment, separator, fragment = value.partition("#")
+    selected_fragment = fragment if separator else None
+    hierarchical, separator, query = without_fragment.partition("?")
+    selected_query = query if separator else None
+    first_slash = hierarchical.find("/")
+    first_slash = len(hierarchical) if first_slash < 0 else first_slash
+    colon = hierarchical.find(":")
+    if 0 <= colon < first_slash:
+        scheme = hierarchical[:colon]
+        if _IRI_SCHEME.fullmatch(scheme) is None:
+            raise OntologySyntaxError(
+                "RDF/XML IRI reference has an invalid scheme",
+                code="RDFXML_IRI_REFERENCE",
+            )
+        remainder = hierarchical[colon + 1 :]
+    else:
+        scheme = None
+        remainder = hierarchical
+    if remainder.startswith("//"):
+        authority_and_path = remainder[2:]
+        slash = authority_and_path.find("/")
+        if slash < 0:
+            authority, path = authority_and_path, ""
+        else:
+            authority = authority_and_path[:slash]
+            path = authority_and_path[slash:]
+    else:
+        authority, path = None, remainder
+    return _IRIReference(scheme, authority, path, selected_query, selected_fragment)
+
+
+def _remove_dot_segments(path: str) -> str:
+    output = ""
+    remaining = path
+    while remaining:
+        if remaining.startswith("../"):
+            remaining = remaining[3:]
+        elif remaining.startswith(("./", "/./")):
+            remaining = remaining[2:]
+        elif remaining == "/.":
+            remaining = "/"
+        elif remaining.startswith("/../"):
+            remaining = remaining[3:]
+            output = output[: max(output.rfind("/"), 0)]
+        elif remaining == "/..":
+            remaining = "/"
+            output = output[: max(output.rfind("/"), 0)]
+        elif remaining in {".", ".."}:
+            remaining = ""
+        else:
+            if remaining.startswith("/"):
+                next_slash = remaining.find("/", 1)
+            else:
+                next_slash = remaining.find("/")
+            end = len(remaining) if next_slash < 0 else next_slash
+            output += remaining[:end]
+            remaining = remaining[end:]
+    return output
+
+
+def _serialize_iri(
+    scheme: str,
+    authority: str | None,
+    path: str,
+    query: str | None,
+    fragment: str | None,
+) -> str:
+    result = scheme + ":"
+    if authority is not None:
+        result += "//" + authority
+    result += path
+    if query is not None:
+        result += "?" + query
+    if fragment is not None:
+        result += "#" + fragment
+    return result
 
 
 def _decode_xml_source(data: bytes) -> tuple[str, str]:

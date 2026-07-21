@@ -843,6 +843,7 @@ def test_rfc3986_document_and_nested_xml_bases_match_python(
   <owl:imports rdf:resource='../imports/a.owl'/>
  </owl:Ontology>
  <owl:Class rdf:about='./C#c'/>
+ <owl:Class rdf:about='http://example.test/absolute/a/../E'/>
  <owl:Class rdf:about='nested/../D'>
   <rdfs:subClassOf rdf:resource='./C#c'/>
  </owl:Class>
@@ -860,6 +861,37 @@ def test_rfc3986_document_and_nested_xml_bases_match_python(
     assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
     assert observed.total_triples == python.rdf_mapping_report.total_triples
     assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples
+
+
+@pytest.mark.parametrize(
+    ("reference", "document_iri", "code"),
+    (
+        ("1:invalid", "http://example.test/doc", "RDFXML_IRI_REFERENCE"),
+        (" .", "http://example.test/doc", "RDFXML_SYNTAX"),
+        ("g h", "http://example.test/doc", "RDFXML_SYNTAX"),
+        ("%zz", "http://example.test/doc", "RDFXML_SYNTAX"),
+        ("relative", None, "RDFXML_RELATIVE_IRI_NO_BASE"),
+    ),
+)
+def test_invalid_rfc3986_references_fail_in_both_backends(
+    extension: NativeTestExtension,
+    reference: str,
+    document_iri: str | None,
+    code: str,
+) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#'>"
+        f"<owl:Class rdf:about='{reference}'/></rdf:RDF>"
+    ).encode()
+    python_document_iri = None if document_iri is None else IRI(document_iri)
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=python_document_iri)
+    assert python_error.value.code == code
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, document_iri=document_iri)
+    assert native_error.value.args[0] == "NATIVE_" + code
 
 
 @pytest.mark.parametrize(

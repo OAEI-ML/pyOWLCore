@@ -309,6 +309,61 @@ def test_rdfxml_resource_properties_allow_inter_element_whitespace() -> None:
     )
 
 
+def test_rdfxml_rfc3986_resolution_normalizes_absolute_and_relative_paths() -> None:
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="http://example.test/a/../C"/>
+  <owl:Class rdf:about="../D"/>
+</rdf:RDF>
+"""
+
+    document = parse_document(
+        source,
+        format="rdfxml",
+        document_iri="http://example.test/root/doc.owl",
+        options=PYTHON_OPTIONS,
+    )
+
+    assert document.axioms == m.CanonicalSet(
+        (
+            m.Declaration(m.Class(m.IRI("http://example.test/C"))),
+            m.Declaration(m.Class(m.IRI("http://example.test/D"))),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("reference", "document_iri", "code"),
+    (
+        ("1:invalid", "http://example.test/doc", "RDFXML_IRI_REFERENCE"),
+        (" .", "http://example.test/doc", "RDFXML_SYNTAX"),
+        ("g h", "http://example.test/doc", "RDFXML_SYNTAX"),
+        ("%zz", "http://example.test/doc", "RDFXML_SYNTAX"),
+        ("relative", None, "RDFXML_RELATIVE_IRI_NO_BASE"),
+    ),
+)
+def test_rdfxml_invalid_iri_references_fail_as_syntax(
+    reference: str,
+    document_iri: str | None,
+    code: str,
+) -> None:
+    source = (
+        '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+        'xmlns:owl="http://www.w3.org/2002/07/owl#">'
+        f'<owl:Class rdf:about="{reference}"/></rdf:RDF>'
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(
+            source,
+            format="rdfxml",
+            document_iri=document_iri,
+            options=PYTHON_OPTIONS,
+        )
+    assert raised.value.code == code
+
+
 def test_disabled_provenance_omits_document_and_snapshot_origins() -> None:
     options = LoadOptions(
         format=DocumentFormat.FUNCTIONAL,
