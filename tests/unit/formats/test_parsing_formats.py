@@ -273,6 +273,7 @@ def test_rdfxml_invalid_or_unsupported_source_encoding_is_rejected(source: bytes
     "class_element",
     (
         "<owl:Class rdf:about='urn:C' rdfs:label='&external;'/>",
+        "<owl:Class rdf:about='urn:C' rdfs:label='&entité;'/>",
         (
             "<owl:Class rdf:about='urn:C'>"
             "<rdfs:label>&external;</rdfs:label>"
@@ -291,6 +292,29 @@ def test_rdfxml_unknown_entity_references_are_forbidden(class_element: str) -> N
     with pytest.raises(OntologySyntaxError) as raised:
         parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
     assert raised.value.code == "XML_FORBIDDEN_CONSTRUCT"
+
+
+@pytest.mark.parametrize(
+    "class_element",
+    (
+        "<owl:Class rdf:about='urn:C' rdfs:label='&external'/>",
+        "<owl:Class rdf:about='urn:C'><rdfs:label>&amp</rdfs:label></owl:Class>",
+        "<owl:Class rdf:about='urn:C'><rdfs:label>&1bad;</rdfs:label></owl:Class>",
+        "<owl:Class rdf:about='urn:C'><rdfs:label>&bad name;</rdfs:label></owl:Class>",
+        "<owl:Class rdf:about='urn:C'><rdfs:label>&;</rdfs:label></owl:Class>",
+    ),
+)
+def test_rdfxml_malformed_entity_references_are_syntax_errors(class_element: str) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#'>"
+        f"{class_element}</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
 
 
 def test_rdfxml_forbidden_keywords_are_inert_inside_xml_data_regions() -> None:

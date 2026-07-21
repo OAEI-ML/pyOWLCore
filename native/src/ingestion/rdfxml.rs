@@ -6044,7 +6044,7 @@ fn decode_xml_value(
         let end = value[start + 1..]
             .find(';')
             .map(|offset| start + 1 + offset)
-            .ok_or_else(xml_forbidden)?;
+            .ok_or_else(xml_syntax)?;
         let reference = &value[start + 1..end];
         match reference {
             "amp" => output.push('&'),
@@ -6060,7 +6060,8 @@ fn decode_xml_value(
                 let value = reference[1..].parse::<u32>().map_err(|_| xml_syntax())?;
                 output.push(xml_character(value)?);
             }
-            _ => return Err(xml_forbidden()),
+            _ if is_xml_name(reference) => return Err(xml_forbidden()),
+            _ => return Err(xml_syntax()),
         }
         cursor = end + 1;
     }
@@ -6181,6 +6182,11 @@ fn is_xml_name_character(value: char) -> bool {
             value,
             '-' | '.' | '0'..='9' | '\u{00b7}' | '\u{0300}'..='\u{036f}' | '\u{203f}'..='\u{2040}'
         )
+}
+
+fn is_xml_name(value: &str) -> bool {
+    let mut characters = value.chars();
+    characters.next().is_some_and(is_xml_name_start) && characters.all(is_xml_name_character)
 }
 
 fn is_xml_ncname(value: &str) -> bool {
@@ -10662,6 +10668,26 @@ mod tests {
         ];
         for (source, code) in cases {
             assert_eq!(mapped(source, None).unwrap_err().code, *code);
+        }
+    }
+
+    #[test]
+    fn malformed_and_undefined_references_have_distinct_codes() {
+        for reference in ["&external", "&amp", "&1bad;", "&bad name;", "&;"] {
+            let source = format!("<rdf:RDF xmlns:rdf=\"{RDF}\">{reference}</rdf:RDF>");
+            assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
+        let malformed_attribute = format!("<rdf:RDF xmlns:rdf=\"{RDF}\" xml:lang=\"&external\"/>");
+        assert_eq!(
+            graph(&malformed_attribute).unwrap_err().code,
+            "NATIVE_RDFXML_SYNTAX",
+        );
+        for reference in ["&external;", "&entité;"] {
+            let source = format!("<rdf:RDF xmlns:rdf=\"{RDF}\">{reference}</rdf:RDF>");
+            assert_eq!(
+                graph(&source).unwrap_err().code,
+                "NATIVE_XML_FORBIDDEN_CONSTRUCT",
+            );
         }
     }
 
