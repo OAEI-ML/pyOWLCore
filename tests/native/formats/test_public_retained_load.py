@@ -400,15 +400,10 @@ def test_anonymous_re_scope_retains_distinct_raw_and_effective_native_owners(
 ) -> None:
     source = b"Ontology(<urn:retained-anonymous> ClassAssertion(<urn:C> _:person))"
     reference = load_snapshot(source, options=_options(BackendPreference.PYTHON))
-    decode = native._decode_parsed_functional
-    calls = 0
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("anonymous retained load crossed the complete model decoder")
 
-    def counted(data: bytes, limits: object) -> object:
-        nonlocal calls
-        calls += 1
-        return decode(data, cast(Any, limits))
-
-    monkeypatch.setattr(native, "_decode_parsed_functional", counted)
+    monkeypatch.setattr(native, "_decode_parsed_functional", unexpected)
     selected = load_snapshot(source, options=_options(BackendPreference.NATIVE))
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
     owner = object.__getattribute__(handle, "_owner_v2")
@@ -417,7 +412,6 @@ def test_anonymous_re_scope_retains_distinct_raw_and_effective_native_owners(
 
     assert selected.capabilities.backend == "native"
     assert type(selected).__name__ == "_NativeOntologySnapshot"
-    assert calls == 1
     assert before_native.retained_axiom_rows == 3
     assert before_native.retained_origin_rows == 3
     assert before_native.page_requests == 0
@@ -441,6 +435,77 @@ def test_anonymous_re_scope_retains_distinct_raw_and_effective_native_owners(
     assert after_native.origin_rows_emitted > before_native.origin_rows_emitted
     assert after_python.model_rows_materialized > before_python.model_rows_materialized
     assert after_python.auxiliary_rows_decoded > before_python.auxiliary_rows_decoded
+
+
+def test_anonymous_retained_occurrences_preserve_source_maps_and_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    source = (
+        b"Prefix(ex:=<urn:retained-anonymous-source:>) "
+        b"Ontology(<urn:retained-anonymous-source> "
+        b"ClassAssertion(ex:C _:left) ClassAssertion(ex:C _:left) "
+        b"ObjectPropertyAssertion(ex:p _:left _:right))"
+    )
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            collect_provenance=True,
+            preserve_source_map=True,
+        )
+
+    reference = load_snapshot(source, options=options(BackendPreference.PYTHON))
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("anonymous retained load crossed the complete model decoder")
+
+    monkeypatch.setattr(native, "_decode_parsed_functional", unexpected)
+    selected = load_snapshot(source, options=options(BackendPreference.NATIVE))
+    ingestion = cast(Any, selected)._native_ingestion_counters_v2()
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert tuple(selected.root.origin_index.entries) == tuple(reference.root.origin_index.entries)
+    assert tuple(
+        (item.occurrence, item.span)
+        for occurrences in selected.root.origin_index.entries.values()
+        for item in occurrences
+    ) == tuple(
+        (item.occurrence, item.span)
+        for occurrences in reference.root.origin_index.entries.values()
+        for item in occurrences
+    )
+    assert selected.origin_index == reference.origin_index
+    assert selected.root.source_map == reference.root.source_map
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert ingestion.parser_result_bytes_scanned == 0
+    assert ingestion.eager_structural_objects_materialized == 0
+    assert ingestion.structural_occurrence_rows_scanned == 3
+    assert ingestion.structural_root_rows_published == 2
+    assert sum(len(rows) for rows in selected.root.origin_index.entries.values()) == 3
+
+
+def test_functional_anonymous_scoping_accounts_temporary_workspace() -> None:
+    source = b"Ontology(<urn:retained-anonymous> ClassAssertion(<urn:C> _:person))"
+    with pytest.raises(ResourceLimitError, match="max_temporary_bytes"):
+        load_snapshot(
+            source,
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.NATIVE,
+                collect_provenance=False,
+                limits=replace(
+                    ParseLimits(),
+                    max_temporary_bytes=len(source),
+                ),
+            ),
+        )
 
 
 def test_functional_source_map_stays_in_parser_owned_storage_until_access(

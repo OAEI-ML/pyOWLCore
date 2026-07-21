@@ -133,6 +133,7 @@ pub(crate) fn parse_rdfxml_retained_v2(
             raw: [annotations, axioms, extensions],
             effective,
             effective_occurrence_digests: digests,
+            source_occurrence_digests: _,
         } = scoped;
         document.ontology_annotations = annotations;
         document.axioms = axioms;

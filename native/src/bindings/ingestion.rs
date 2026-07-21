@@ -159,10 +159,10 @@ fn _parse_rdfxml_retained_v2<'py>(
 /// Parse one Functional document and construct its typed structural arena in
 /// the same detached native operation.
 ///
-/// Anonymous documents retain the complete fallback framing required for
-/// authoritative re-scoping. Eligible documents instead return only bounded
-/// metadata and fingerprint evidence; canonical ontology rows remain solely
-/// in the native component owner.
+/// Eligible documents, including single-document anonymous-node scopes,
+/// return only bounded metadata and fingerprint evidence; canonical ontology
+/// rows remain solely in the native component owner. Explicit diagnostic and
+/// resolver-backed closure fallbacks retain the complete framing.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (

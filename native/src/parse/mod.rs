@@ -240,36 +240,54 @@ pub(crate) fn parse_retained(
         && u64::try_from(parsed.imports.len()).map_or(true, |count| {
             count > limits.value(LimitKey::MaxDiagnostics) / 2
         });
-    let requires_full_result = retained::contains_anonymous(&parsed, &limits)?
-        || import_diagnostics_exceed_publication_limit
+    let contains_anonymous = retained::contains_anonymous(&parsed, &limits)?;
+    let requires_full_result = import_diagnostics_exceed_publication_limit
         || (require_empty_imports && !parsed.imports.is_empty());
     let encode_started = Instant::now();
-    let (encoded, metadata, rows) = if requires_full_result {
+    let (encoded, metadata, rows, effective_rows) = if requires_full_result {
         let encoded = parsed.encode(session)?;
         let rows = parsed.into_structural_rows();
-        (encoded, None, rows)
+        (encoded, None, rows, None)
     } else {
         parsed.validate(session)?;
-        let (encoded, metadata, rows) = retained::build_seed(
+        let (encoded, metadata, rows, effective_rows) = retained::build_seed(
             parsed,
             collect_provenance,
             preserve_source_map,
             &limits,
             &cancellation,
+            session,
+            contains_anonymous,
         )?;
         session.finish()?;
-        (encoded, Some(metadata), rows)
+        (encoded, Some(metadata), rows, effective_rows)
     };
     let result_encode_ns = elapsed_ns(encode_started)?;
     let metadata_bytes = metadata
         .as_ref()
         .map_or(Ok(0), RetainedParseMetadataV2::retained_bytes)?;
-    let external_bytes =
-        retained_parse_external_bytes(input_bytes, encoded.capacity(), metadata_bytes, &rows)?;
+    let external_bytes = retained_parse_external_bytes(
+        input_bytes,
+        encoded.capacity(),
+        metadata_bytes,
+        &rows,
+        effective_rows.as_ref(),
+    )?;
 
     let arena_started = Instant::now();
     let mut builder = TypedFacadeBuilderV2::new(limits, cancellation, interrupt, external_bytes)?;
-    builder.add_document(&rows[0], &rows[1], &rows[2])?;
+    if let Some(effective) = &effective_rows {
+        builder.add_scoped_document(
+            &rows[0],
+            &rows[1],
+            &rows[2],
+            &effective[0],
+            &effective[1],
+            &effective[2],
+        )?;
+    } else {
+        builder.add_document(&rows[0], &rows[1], &rows[2])?;
+    }
     let arena_construction_ns = elapsed_ns(arena_started)?;
 
     let freeze_started = Instant::now();
@@ -346,10 +364,11 @@ fn retained_parse_external_bytes(
     encoded_capacity: usize,
     metadata_bytes: usize,
     rows: &[Vec<Vec<u8>>; 3],
+    effective_rows: Option<&[Vec<Vec<u8>>; 3]>,
 ) -> NativeResult<usize> {
     let mut total = checked_add(input_bytes, encoded_capacity)?;
     total = checked_add(total, metadata_bytes)?;
-    for collection in rows {
+    for collection in rows.iter().chain(effective_rows.into_iter().flatten()) {
         total = checked_add(
             total,
             collection

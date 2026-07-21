@@ -87,7 +87,12 @@ pub(crate) struct RetainedParseMetadataV2 {
     scoped_roots: bool,
 }
 
-type RetainedSeedV2 = (Vec<u8>, RetainedParseMetadataV2, [Vec<Vec<u8>>; 3]);
+type RetainedSeedV2 = (
+    Vec<u8>,
+    RetainedParseMetadataV2,
+    [Vec<Vec<u8>>; 3],
+    Option<[Vec<Vec<u8>>; 3]>,
+);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RetainedContentDigestsV2 {
@@ -411,10 +416,12 @@ pub(crate) fn build_seed(
     preserve_source_map: bool,
     limits: &Limits,
     cancellation: &Cancellation,
+    session: &mut crate::session::Session<'_>,
+    scope_anonymous: bool,
 ) -> NativeResult<RetainedSeedV2> {
     let occurrence_count = total_occurrences(&parsed)?;
     let language_spellings = std::mem::take(&mut parsed.language_spellings);
-    let occurrences = retained_occurrences(
+    let mut occurrences = retained_occurrences(
         &parsed,
         occurrence_count,
         collect_provenance || preserve_source_map,
@@ -437,11 +444,33 @@ pub(crate) fn build_seed(
     let raw_import_count = imports.len();
     imports.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
     imports.dedup_by(|left, right| left.as_bytes() == right.as_bytes());
-    let rows = [
-        canonical_root_rows(annotations),
-        canonical_root_rows(axioms),
-        canonical_root_rows(extensions),
+    let occurrence_rows = [
+        occurrence_root_rows(annotations),
+        occurrence_root_rows(axioms),
+        occurrence_root_rows(extensions),
     ];
+    let (rows, effective_rows, scoped_roots) = if scope_anonymous {
+        let scoped = super::anonymous::scope_functional_anonymous_rows_v2(
+            &ontology_iri,
+            &version_iri,
+            &imports,
+            [
+                occurrence_rows[0].as_slice(),
+                occurrence_rows[1].as_slice(),
+                occurrence_rows[2].as_slice(),
+            ],
+            session,
+            cancellation,
+        )?;
+        apply_scoped_occurrence_digests(
+            &mut occurrences,
+            occurrence_count,
+            &scoped.source_occurrence_digests,
+        )?;
+        (scoped.raw, Some(scoped.effective), true)
+    } else {
+        (occurrence_rows.map(canonicalize_root_rows), None, false)
+    };
     let ontology = ontology_iri
         .as_ref()
         .map(|value| iri_text(value.as_bytes()))
@@ -506,9 +535,10 @@ pub(crate) fn build_seed(
             occurrences,
             source_prefixes: preserve_source_map.then_some(prefixes),
             rdf_total_triples: None,
-            scoped_roots: false,
+            scoped_roots,
         },
         rows,
+        effective_rows,
     ))
 }
 
@@ -1050,6 +1080,15 @@ fn document_fingerprint_slices(
     Ok(hasher.finish())
 }
 
+pub(super) fn functional_document_fingerprint(
+    ontology_iri: &Option<Node>,
+    version_iri: &Option<Node>,
+    imports: &[Node],
+    rows: [&[Vec<u8>]; 3],
+) -> NativeResult<FingerprintEvidenceV2> {
+    document_fingerprint_slices(ontology_iri, version_iri, imports, rows)
+}
+
 pub(super) fn rdfxml_document_fingerprint(
     ontology_iri: Option<&str>,
     version_iri: Option<&str>,
@@ -1438,14 +1477,39 @@ fn total_occurrences(parsed: &ParsedDocument) -> NativeResult<u64> {
         .ok_or_else(|| NativeError::limit("native occurrence count overflow"))
 }
 
-fn canonical_root_rows(values: Vec<SpannedNode>) -> Vec<Vec<u8>> {
-    let mut rows: Vec<Vec<u8>> = values
+fn occurrence_root_rows(values: Vec<SpannedNode>) -> Vec<Vec<u8>> {
+    values
         .into_iter()
         .map(|value| value.node.into_bytes())
-        .collect();
+        .collect()
+}
+
+fn canonicalize_root_rows(mut rows: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     rows.sort_unstable();
     rows.dedup();
     rows
+}
+
+fn apply_scoped_occurrence_digests(
+    occurrences: &mut [RetainedOccurrenceV2],
+    occurrence_count: u64,
+    digests: &[([u8; 32], [u8; 32])],
+) -> NativeResult<()> {
+    if u64::try_from(digests.len()).ok() != Some(occurrence_count) {
+        return Err(NativeError::protocol(
+            "native Functional anonymous occurrence digests are incomplete",
+        ));
+    }
+    for occurrence in occurrences {
+        let source_order = usize::try_from(occurrence.source_order)
+            .map_err(|_| NativeError::limit("native occurrence ordinal exceeds usize"))?;
+        let (raw, effective) = digests.get(source_order).ok_or_else(|| {
+            NativeError::protocol("native Functional anonymous occurrence order is invalid")
+        })?;
+        occurrence.digest = *raw;
+        occurrence.effective_digest = *effective;
+    }
+    Ok(())
 }
 
 fn encode_origin_rows(

@@ -1,6 +1,6 @@
 //! Native document and snapshot scoping for parser-produced anonymous values.
 //!
-//! RDF/XML mapping initially uses lexical blank labels under the provisional
+//! Syntax parsers initially use lexical blank labels under the provisional
 //! parser scope. This module reproduces the Python model's structural alpha
 //! canonicalization before those rows enter retained storage, then derives the
 //! distinct one-document snapshot scope used by effective facade owners.
@@ -10,14 +10,14 @@ use std::mem::size_of;
 use crate::cancel::Cancellation;
 #[cfg(test)]
 use crate::canonical::iri;
-use crate::canonical::{LEXICAL_KEY, PROVISIONAL_SCOPE};
+use crate::canonical::{Node, LEXICAL_KEY, PROVISIONAL_SCOPE};
 use crate::error::{NativeError, NativeResult};
 use crate::hash::{sha256, Sha256};
 use crate::limits::Limits;
 use crate::model::{canonical_field_count, scan_canonical, ScanBudget};
 use crate::session::Session;
 
-use super::retained::rdfxml_document_fingerprint;
+use super::retained::{functional_document_fingerprint, rdfxml_document_fingerprint};
 
 const DOCUMENT_SCOPE_DOMAIN: &[u8] = b"pyowl-core:document-scope:v1\0";
 const SNAPSHOT_SCOPE_DOMAIN: &[u8] = b"pyowl-core:snapshot-document-scope:v1\0";
@@ -29,9 +29,14 @@ const BLANK_COLOR_DOMAIN: &[u8] = b"pyowl-core:blank-color:v1\0";
 pub(crate) struct ScopedAnonymousRowsV2 {
     pub(crate) raw: [Vec<Vec<u8>>; 3],
     pub(crate) effective: [Vec<Vec<u8>>; 3],
-    /// Effective digests in raw collection/row order, matching retained
-    /// parser occurrence metadata rather than effective canonical ordering.
+    /// Effective digests in canonical raw collection/row order. RDF/XML has
+    /// no lexical occurrence table, so its retained provenance follows these
+    /// canonical roots.
     pub(crate) effective_occurrence_digests: Vec<[u8; 32]>,
+    /// Raw/effective digest pairs in parser occurrence order. Functional
+    /// source maps and provenance retain this order even when canonical root
+    /// sets sort or deduplicate the corresponding values.
+    pub(crate) source_occurrence_digests: Vec<([u8; 32], [u8; 32])>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -84,6 +89,38 @@ pub(crate) fn scope_rdfxml_anonymous_rows_v2(
     session: &mut Session<'_>,
     cancellation: &Cancellation,
 ) -> NativeResult<ScopedAnonymousRowsV2> {
+    let ontology_key = ontology_key_text(ontology_iri, version_iri, session)?;
+    scope_anonymous_rows_v2(rows, ontology_key, session, cancellation, |rows| {
+        rdfxml_document_fingerprint(ontology_iri, version_iri, imports, rows)
+    })
+}
+
+/// Freeze Functional Syntax provisional blank labels while retaining digest
+/// pairs in the parser's lexical occurrence order.
+pub(crate) fn scope_functional_anonymous_rows_v2(
+    ontology_iri: &Option<Node>,
+    version_iri: &Option<Node>,
+    imports: &[Node],
+    rows: [&[Vec<u8>]; 3],
+    session: &mut Session<'_>,
+    cancellation: &Cancellation,
+) -> NativeResult<ScopedAnonymousRowsV2> {
+    let ontology_key = ontology_key_nodes(ontology_iri, version_iri, session)?;
+    scope_anonymous_rows_v2(rows, ontology_key, session, cancellation, |rows| {
+        functional_document_fingerprint(ontology_iri, version_iri, imports, rows)
+    })
+}
+
+fn scope_anonymous_rows_v2<F>(
+    rows: [&[Vec<u8>]; 3],
+    ontology_key: Vec<u8>,
+    session: &mut Session<'_>,
+    cancellation: &Cancellation,
+    document_fingerprint: F,
+) -> NativeResult<ScopedAnonymousRowsV2>
+where
+    F: FnOnce([&[Vec<u8>]; 3]) -> NativeResult<super::retained::FingerprintEvidenceV2>,
+{
     let limits = *session.limits();
     let mut parsed = [Vec::new(), Vec::new(), Vec::new()];
     for (target, source) in parsed.iter_mut().zip(rows) {
@@ -120,7 +157,6 @@ pub(crate) fn scope_rdfxml_anonymous_rows_v2(
         session,
     )?;
 
-    let ontology_key = ontology_key(ontology_iri, version_iri, session)?;
     let document_scope =
         framed_digest(DOCUMENT_SCOPE_DOMAIN, &ontology_key, &alpha.graph, session)?;
     let graph_digest = sha256(&alpha.graph);
@@ -146,39 +182,72 @@ pub(crate) fn scope_rdfxml_anonymous_rows_v2(
         },
         session,
     )?;
-    canonicalize_collections(&mut raw);
-
-    let raw_slices = [raw[0].as_slice(), raw[1].as_slice(), raw[2].as_slice()];
-    let document = rdfxml_document_fingerprint(ontology_iri, version_iri, imports, raw_slices)?;
-    let snapshot_scope = snapshot_scope(document.digest);
-    let mut effective_occurrence_digests = Vec::new();
     let occurrence_count = raw.iter().try_fold(0_usize, |total, values| {
         total
             .checked_add(values.len())
             .ok_or_else(|| NativeError::limit("native anonymous occurrence count overflow"))
     })?;
     reserve_items::<[u8; 32]>(session, occurrence_count)?;
-    effective_occurrence_digests
+    let mut raw_source_digests = Vec::new();
+    raw_source_digests
+        .try_reserve_exact(occurrence_count)
+        .map_err(|_| NativeError::limit("native anonymous digest allocation failed"))?;
+    raw_source_digests.extend(raw.iter().flatten().map(|row| structural_digest(row)));
+    let canonical_occurrence_order = canonical_occurrence_order(&raw, session)?;
+    reserve_items::<([u8; 32], [u8; 32])>(session, occurrence_count)?;
+    let mut source_occurrence_digests = Vec::new();
+    source_occurrence_digests
         .try_reserve_exact(occurrence_count)
         .map_err(|_| NativeError::limit("native anonymous digest allocation failed"))?;
 
-    let mut effective = [Vec::new(), Vec::new(), Vec::new()];
-    for (target, source) in effective.iter_mut().zip(&raw) {
-        reserve_items::<Vec<u8>>(session, source.len())?;
-        target
-            .try_reserve_exact(source.len())
-            .map_err(|_| NativeError::limit("native effective root allocation failed"))?;
-        for row in source {
-            cancellation.checkpoint()?;
-            let node = parse_root(row, &limits, cancellation, session)?;
-            let encoded = encode_replaced(
-                &node,
-                &|identity| Ok(Some(rescope_identity(identity, snapshot_scope))),
-                session,
-            )?;
-            effective_occurrence_digests.push(structural_digest(&encoded));
-            target.push(encoded);
-        }
+    canonicalize_collections(&mut raw);
+    let raw_slices = [raw[0].as_slice(), raw[1].as_slice(), raw[2].as_slice()];
+    let document = document_fingerprint(raw_slices)?;
+    let snapshot_scope = snapshot_scope(document.digest);
+    let mut effective = encode_collections(
+        &parsed,
+        |identity| {
+            let raw = if let Some(label) = provisional_label(identity)? {
+                labels
+                    .binary_search(&label)
+                    .ok()
+                    .and_then(|index| raw_identities.get(index))
+                    .map(|value| Identity {
+                        scope: &value.scope,
+                        key: &value.key,
+                    })
+            } else {
+                Some(identity)
+            };
+            Ok(raw.map(|value| rescope_identity(value, snapshot_scope)))
+        },
+        session,
+    )?;
+    for (raw_digest, effective_row) in raw_source_digests
+        .into_iter()
+        .zip(effective.iter().flatten())
+    {
+        source_occurrence_digests.push((raw_digest, structural_digest(effective_row)));
+    }
+    if source_occurrence_digests.len() != occurrence_count {
+        return Err(NativeError::protocol(
+            "native anonymous occurrence digest count diverged",
+        ));
+    }
+    reserve_items::<[u8; 32]>(session, canonical_occurrence_order.len())?;
+    let mut effective_occurrence_digests = Vec::new();
+    effective_occurrence_digests
+        .try_reserve_exact(canonical_occurrence_order.len())
+        .map_err(|_| NativeError::limit("native anonymous digest allocation failed"))?;
+    for index in canonical_occurrence_order {
+        effective_occurrence_digests.push(
+            source_occurrence_digests
+                .get(index)
+                .ok_or_else(|| {
+                    NativeError::protocol("native anonymous root order is out of bounds")
+                })?
+                .1,
+        );
     }
     canonicalize_collections(&mut effective);
     for (raw_values, effective_values) in raw.iter().zip(&effective) {
@@ -192,6 +261,7 @@ pub(crate) fn scope_rdfxml_anonymous_rows_v2(
         raw,
         effective,
         effective_occurrence_digests,
+        source_occurrence_digests,
     })
 }
 
@@ -1299,7 +1369,7 @@ fn rescope_identity(identity: Identity<'_>, scope: [u8; 32]) -> OwnedIdentity {
     }
 }
 
-fn ontology_key(
+fn ontology_key_text(
     ontology_iri: Option<&str>,
     version_iri: Option<&str>,
     session: &mut Session<'_>,
@@ -1316,6 +1386,26 @@ fn ontology_key(
     if let Some(version_iri) = version_iri {
         let version = encode_iri_bytes(version_iri, session)?;
         append_bytes(&mut result, &version, session)?;
+    }
+    Ok(result)
+}
+
+fn ontology_key_nodes(
+    ontology_iri: &Option<Node>,
+    version_iri: &Option<Node>,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<u8>> {
+    let Some(ontology_iri) = ontology_iri else {
+        if version_iri.is_some() {
+            return Err(NativeError::protocol(
+                "native anonymous scope has a version IRI without an ontology IRI",
+            ));
+        }
+        return copy_bytes(b"anonymous-ontology", session);
+    };
+    let mut result = copy_bytes(ontology_iri.as_bytes(), session)?;
+    if let Some(version_iri) = version_iri {
+        append_bytes(&mut result, version_iri.as_bytes(), session)?;
     }
     Ok(result)
 }
@@ -1382,6 +1472,47 @@ fn canonicalize_collections(rows: &mut [Vec<Vec<u8>>; 3]) {
         values.sort_unstable();
         values.dedup();
     }
+}
+
+fn canonical_occurrence_order(
+    rows: &[Vec<Vec<u8>>; 3],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<usize>> {
+    let occurrence_count = rows.iter().try_fold(0_usize, |total, values| {
+        total
+            .checked_add(values.len())
+            .ok_or_else(|| NativeError::limit("native anonymous occurrence count overflow"))
+    })?;
+    reserve_items::<usize>(session, occurrence_count)?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(occurrence_count)
+        .map_err(|_| NativeError::limit("native anonymous root order allocation failed"))?;
+    let mut base = 0_usize;
+    for values in rows {
+        reserve_items::<usize>(session, values.len())?;
+        let mut indices = Vec::new();
+        indices
+            .try_reserve_exact(values.len())
+            .map_err(|_| NativeError::limit("native anonymous root order allocation failed"))?;
+        indices.extend(0..values.len());
+        indices.sort_unstable_by(|left, right| values[*left].cmp(&values[*right]));
+        let mut previous = None;
+        for index in indices {
+            if previous.is_some_and(|prior| values[prior] == values[index]) {
+                continue;
+            }
+            result.push(
+                base.checked_add(index)
+                    .ok_or_else(|| NativeError::limit("native anonymous root order overflow"))?,
+            );
+            previous = Some(index);
+        }
+        base = base
+            .checked_add(values.len())
+            .ok_or_else(|| NativeError::limit("native anonymous root order overflow"))?;
+    }
+    Ok(result)
 }
 
 fn constructor_ledger(tag: u64) -> NativeResult<(&'static str, &'static [&'static str])> {
@@ -1828,6 +1959,38 @@ mod tests {
         assert_eq!(result.effective[1].len(), 1);
         assert_ne!(result.raw[1], result.effective[1]);
         assert_eq!(result.effective_occurrence_digests.len(), 1);
+        assert_eq!(result.source_occurrence_digests.len(), 1);
+        assert_eq!(
+            result.source_occurrence_digests[0].0,
+            structural_digest(&result.raw[1][0]),
+        );
+        assert_eq!(
+            result.source_occurrence_digests[0].1,
+            structural_digest(&result.effective[1][0]),
+        );
+    }
+
+    #[test]
+    fn duplicate_occurrences_retain_digests_while_root_tables_deduplicate() {
+        let axiom = Node::build(
+            112,
+            vec![
+                Field::Node(entity("class", iri("urn:C".to_owned()).unwrap()).unwrap()),
+                Field::Node(anonymous("person").unwrap()),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .unwrap()
+        .into_bytes();
+        let result = scope(Some("urn:o"), [&[], &[axiom.clone(), axiom], &[]]).unwrap();
+        assert_eq!(result.raw[1].len(), 1);
+        assert_eq!(result.effective[1].len(), 1);
+        assert_eq!(result.effective_occurrence_digests.len(), 1);
+        assert_eq!(result.source_occurrence_digests.len(), 2);
+        assert_eq!(
+            result.source_occurrence_digests[0],
+            result.source_occurrence_digests[1],
+        );
     }
 
     #[test]
