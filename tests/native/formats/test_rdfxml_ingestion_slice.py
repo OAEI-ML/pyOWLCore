@@ -358,6 +358,28 @@ def test_node_property_attributes_match_python_types_and_language_literals(
     assert limited.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_empty_xml_language_resets_inherited_literal_language(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xml:lang='EN'>
+ <owl:Class rdf:about='urn:reset:C' xml:lang='' rdfs:label='attribute'>
+  <rdfs:comment>element</rdfs:comment>
+ </owl:Class>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 3
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+
 def test_unicode_xml_qnames_match_python_mapping(
     extension: NativeTestExtension,
 ) -> None:

@@ -260,7 +260,7 @@ class RDFXMLGraphParser:
                 self.context.limits.enforce("max_literal_bytes", len(lexical.encode("utf-8")))
                 if datatype is not None:
                     literal = RDFLiteral(lexical, self._resolve(datatype, base))
-                elif language is not None:
+                elif language:
                     literal = RDFLiteral(lexical, language=language)
                 else:
                     literal = RDFLiteral(lexical, XSD + "string")

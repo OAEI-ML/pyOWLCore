@@ -93,6 +93,26 @@ def test_rdfxml_parse_type_other_has_xml_literal_semantics() -> None:
     assert document.rdf_mapping_report.consumed_triples == 2
 
 
+def test_rdfxml_empty_language_resets_inherited_literal_language() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xml:lang="EN">
+  <owl:Class rdf:about="{CLASS}" xml:lang="" rdfs:label="attribute">
+    <rdfs:comment>element</rdfs:comment>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assertions = tuple(document.iter_axioms(m.AnnotationAssertion))
+
+    assert {value.value.lexical_form for value in assertions} == {"attribute", "element"}
+    assert all(value.value.language is None for value in assertions)
+    assert all(value.value.datatype == m.XSD_STRING for value in assertions)
+
+
 def test_disabled_provenance_omits_document_and_snapshot_origins() -> None:
     options = LoadOptions(
         format=DocumentFormat.FUNCTIONAL,
