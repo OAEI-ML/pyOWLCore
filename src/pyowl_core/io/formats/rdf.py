@@ -297,6 +297,7 @@ class RDFMapper:
         for main in annotation_nodes:
             nested(main)
 
+        collected_axiom_annotations: dict[Triple, list[m.Annotation]] = {}
         for type_triple in self.graph.find(predicate=RDF + "type", object=RDFIRI(OWL + "Axiom")):
             node = type_triple.subject
             main = self._reification_main(node, "owl:Axiom")
@@ -311,10 +312,11 @@ class RDFMapper:
                 OWL + "annotatedProperty",
                 OWL + "annotatedTarget",
             }
-            annotations: list[m.Annotation] = []
+            annotations = collected_axiom_annotations.setdefault(main, [])
             for item in self.graph.find(subject=node):
                 self._consume(item)
                 if item.predicate.value not in metadata:
+                    self.context.limits.enforce("max_annotations", len(annotations) + 1)
                     annotations.append(
                         m.Annotation(
                             m.AnnotationProperty(m.IRI(item.predicate.value)),
@@ -322,7 +324,10 @@ class RDFMapper:
                             nested(item),
                         )
                     )
-            self.axiom_annotations[main] = m.CanonicalSet(annotations)
+        self.axiom_annotations.update(
+            (main, m.CanonicalSet(annotations))
+            for main, annotations in collected_axiom_annotations.items()
+        )
 
     def _reification_main(self, node: RDFResource, label: str) -> Triple:
         source = self.graph.one(node, OWL + "annotatedSource", required=True)

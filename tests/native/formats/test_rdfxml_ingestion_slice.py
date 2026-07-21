@@ -734,6 +734,47 @@ def test_distinct_ontology_annotation_limit_matches_python(
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_axiom_annotation_reification_limit_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'><rdfs:subClassOf rdf:resource='urn:D'/></owl:Class>
+ <owl:Class rdf:about='urn:D'/>
+ <owl:Axiom>
+  <owl:annotatedSource rdf:resource='urn:C'/>
+  <owl:annotatedProperty
+   rdf:resource='http://www.w3.org/2000/01/rdf-schema#subClassOf'/>
+  <owl:annotatedTarget rdf:resource='urn:D'/>
+  <rdfs:label>label</rdfs:label>
+ </owl:Axiom>
+ <owl:Axiom>
+  <owl:annotatedSource rdf:resource='urn:C'/>
+  <owl:annotatedProperty
+   rdf:resource='http://www.w3.org/2000/01/rdf-schema#subClassOf'/>
+  <owl:annotatedTarget rdf:resource='urn:D'/>
+  <rdfs:comment>comment</rdfs:comment>
+ </owl:Axiom>
+</rdf:RDF>"""
+    boundary = ParseLimits(max_annotations=2)
+
+    _owner, observed = _ingest(extension, source, limits=boundary)
+    python = parse_rdfxml(source, limits=boundary, document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    annotated = next(value for value in python.axioms if len(value.annotations) == 2)
+    assert type(annotated).__name__ == "SubClassOf"
+
+    limited = ParseLimits(max_annotations=1)
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(source, limits=limited, document_iri=None)
+    assert python_error.value.limit == "max_annotations"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 @pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (
