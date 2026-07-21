@@ -574,6 +574,30 @@ class RDFMapper:
                 m.CanonicalSet(self._class_expression(item) for item in self._list(o)),
                 annotations,
             )
+        elif (
+            isinstance(s, RDFIRI)
+            and m.EntityKind.CLASS in self.kinds.get(s.value, set())
+            and p
+            in {
+                OWL + "complementOf",
+                OWL + "intersectionOf",
+                OWL + "oneOf",
+                OWL + "unionOf",
+            }
+        ):
+            expression = (
+                self._owl1_named_class_complement(o)
+                if p == OWL + "complementOf"
+                else self._class_list_expression(
+                    p,
+                    o,
+                    compatibility=True,
+                    named_individuals_only=True,
+                )
+            )
+            value = m.EquivalentClasses(
+                m.CanonicalSet((m.Class(m.IRI(s.value)), expression)), annotations
+            )
         elif p == RDFS + "subPropertyOf" and isinstance(s, RDFIRI) and isinstance(o, RDFIRI):
             if s.value in self.annotation_kinds or o.value in self.annotation_kinds:
                 value = m.SubAnnotationPropertyOf(
@@ -750,28 +774,11 @@ class RDFMapper:
                 if head is not None:
                     self._consume_only(term, predicate, head)
                     compatibility = self._consume_marker(term, OWL + "Class")
-                    items = self._list(head)
-                    if not items:
-                        if not compatibility:
-                            self._mapping_error(
-                                "boolean or enumeration class expression has no operands"
-                            )
-                        return m.OWL_THING if predicate == OWL + "intersectionOf" else m.OWL_NOTHING
-                    if predicate == OWL + "oneOf":
-                        return m.ObjectOneOf(m.CanonicalSet(map(self._individual_resource, items)))
-                    if len(items) == 1:
-                        if not compatibility:
-                            self._mapping_error(
-                                "boolean class expression has fewer than two operands"
-                            )
-                        return self._class_expression(items[0])
-                    expressions = m.CanonicalSet(map(self._class_expression, items))
-                    if len(items) >= 2 and len(expressions) == 1:
-                        return next(iter(expressions))
-                    return (
-                        m.ObjectIntersectionOf(expressions)
-                        if predicate == OWL + "intersectionOf"
-                        else m.ObjectUnionOf(expressions)
+                    return self._class_list_expression(
+                        predicate,
+                        head,
+                        compatibility=compatibility,
+                        named_individuals_only=False,
                     )
             complement = self.graph.one(term, OWL + "complementOf")
             if complement is not None:
@@ -787,6 +794,41 @@ class RDFMapper:
             self._mapping_error("blank node is not a recognized class expression")
         finally:
             self._leave(key)
+
+    def _class_list_expression(
+        self,
+        predicate: str,
+        head: RDFTerm,
+        *,
+        compatibility: bool,
+        named_individuals_only: bool,
+    ) -> m.ClassExpression:
+        items = self._list(head)
+        if not items:
+            if not compatibility:
+                self._mapping_error("boolean or enumeration class expression has no operands")
+            return m.OWL_THING if predicate == OWL + "intersectionOf" else m.OWL_NOTHING
+        if predicate == OWL + "oneOf":
+            if named_individuals_only and not all(isinstance(item, RDFIRI) for item in items):
+                self._mapping_error("OWL 1 named enumeration requires named individuals")
+            return m.ObjectOneOf(m.CanonicalSet(map(self._individual_resource, items)))
+        if len(items) == 1:
+            if not compatibility:
+                self._mapping_error("boolean class expression has fewer than two operands")
+            return self._class_expression(items[0])
+        expressions = m.CanonicalSet(map(self._class_expression, items))
+        if len(expressions) == 1:
+            return next(iter(expressions))
+        return (
+            m.ObjectIntersectionOf(expressions)
+            if predicate == OWL + "intersectionOf"
+            else m.ObjectUnionOf(expressions)
+        )
+
+    def _owl1_named_class_complement(self, target: RDFTerm) -> m.ClassExpression:
+        if isinstance(target, RDFLiteral):
+            self._mapping_error("owl:complementOf target cannot be a literal")
+        return m.ObjectComplementOf(self._class_expression(target))
 
     def _restriction(self, term: RDFBlank) -> m.ClassExpression:
         self._consume_marker(term, OWL + "Restriction")

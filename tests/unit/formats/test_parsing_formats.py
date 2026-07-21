@@ -776,6 +776,69 @@ def test_rdf_mapping_rejects_unmarked_empty_class_list() -> None:
     assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
 
 
+@pytest.mark.parametrize(
+    ("constructor", "expected"),
+    (
+        (
+            '<owl:complementOf rdf:resource="urn:A"/>',
+            m.ObjectComplementOf(m.Class(m.IRI("urn:A"))),
+        ),
+        (
+            f'<owl:intersectionOf rdf:resource="{RDF_NAMESPACE}nil"/>',
+            m.OWL_THING,
+        ),
+        (
+            '<owl:unionOf rdf:parseType="Collection">'
+            '<owl:Class rdf:about="urn:A"/>'
+            "</owl:unionOf>",
+            m.Class(m.IRI("urn:A")),
+        ),
+        (
+            f'<owl:oneOf rdf:resource="{RDF_NAMESPACE}nil"/>',
+            m.OWL_NOTHING,
+        ),
+        (
+            '<owl:oneOf rdf:parseType="Collection">'
+            '<owl:NamedIndividual rdf:about="urn:i"/>'
+            "</owl:oneOf>",
+            m.ObjectOneOf(m.CanonicalSet((m.NamedIndividual(m.IRI("urn:i")),))),
+        ),
+    ),
+)
+def test_rdf_mapping_maps_owl1_named_class_constructors(
+    constructor: str,
+    expected: m.ClassExpression,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C">{constructor}</owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert m.EquivalentClasses(
+        m.CanonicalSet((m.Class(m.IRI("urn:C")), expected))
+    ) in document.axioms
+
+
+def test_rdf_mapping_rejects_anonymous_owl1_named_enumeration_member() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C">
+    <owl:oneOf rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="anonymous"/>
+    </owl:oneOf>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
 def test_rdf_mapping_enforces_the_distinct_ontology_annotation_limit() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
