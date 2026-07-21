@@ -217,14 +217,14 @@ class RDFXMLGraphParser:
         datatype = element.get(_tag(RDF, "datatype"))
         statement_id = element.get(_tag(RDF, "ID"))
         reified = None if statement_id is None else RDFIRI(self._rdf_id(statement_id, base))
-        modes = sum(item is not None for item in (resource, node_id, parse_type))
+        modes = sum(item is not None for item in (resource, node_id, parse_type, datatype))
         if modes > 1:
             self._syntax("RDF property element has conflicting object attributes")
         triple: Triple
         if parse_type is not None:
-            if datatype is not None:
-                self._syntax("rdf:parseType and rdf:datatype cannot be combined")
             if parse_type == "Resource":
+                if _has_non_whitespace_content(element):
+                    self._syntax("parseType Resource cannot contain character data")
                 resource_object = self._fresh("resource")
                 triple = self._add(subject, predicate, resource_object)
                 li_index = 0
@@ -235,6 +235,8 @@ class RDFXMLGraphParser:
                         child_predicate = RDF + "_" + str(li_index)
                     self._property(child, resource_object, child_predicate, base, language)
             elif parse_type == "Collection":
+                if _has_non_whitespace_content(element):
+                    self._syntax("parseType Collection cannot contain character data")
                 members = [self._node(child, base, language) for child in element]
                 triple = self._add(subject, predicate, self._collection(members))
             else:
@@ -245,8 +247,8 @@ class RDFXMLGraphParser:
                 )
                 triple = self._add(subject, predicate, RDFLiteral(lexical, RDF + "XMLLiteral"))
         elif resource is not None or node_id is not None:
-            if len(element):
-                self._syntax("resource-valued RDF property cannot contain child nodes")
+            if len(element) or _has_non_whitespace_content(element):
+                self._syntax("resource-valued RDF property cannot contain content")
             attributed_object: RDFResource = (
                 RDFIRI(self._resolve(resource or "", base))
                 if resource is not None
@@ -257,6 +259,8 @@ class RDFXMLGraphParser:
         elif len(element):
             if len(element) != 1:
                 self._syntax("RDF property element must contain exactly one node element")
+            if _has_non_whitespace_content(element):
+                self._syntax("resource property element cannot contain character data")
             child_object = self._node(element[0], base, language)
             triple = self._add(subject, predicate, child_object)
         else:
@@ -485,6 +489,12 @@ def _is_xml_name_character(value: str) -> bool:
 def _safe_node_id(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", value)
     return cleaned if cleaned and (cleaned[0].isalpha() or cleaned[0] == "_") else "b" + cleaned
+
+
+def _has_non_whitespace_content(element: ET.Element) -> bool:
+    return bool((element.text or "").strip()) or any(
+        bool((child.tail or "").strip()) for child in element
+    )
 
 
 def _resource_sort_key(value: RDFResource) -> tuple[str, str]:

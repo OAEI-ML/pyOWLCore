@@ -690,6 +690,70 @@ def test_duplicate_rdf_id_fails_in_both_backends(
     assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
 
 
+@pytest.mark.parametrize(
+    "property_element",
+    (
+        "<rdfs:subClassOf rdf:resource='urn:D' rdf:datatype='urn:type'/>",
+        "<rdfs:subClassOf rdf:nodeID='target' rdf:datatype='urn:type'/>",
+        "<rdfs:subClassOf rdf:resource='urn:D'>text</rdfs:subClassOf>",
+        "<rdfs:subClassOf>text<owl:Class rdf:about='urn:D'/></rdfs:subClassOf>",
+        "<rdfs:subClassOf><owl:Class rdf:about='urn:D'/>text</rdfs:subClassOf>",
+        (
+            "<owl:equivalentClass><owl:Class>"
+            "<owl:unionOf rdf:parseType='Collection'>text"
+            "<rdf:Description rdf:about='urn:D'/>"
+            "</owl:unionOf></owl:Class></owl:equivalentClass>"
+        ),
+        (
+            "<rdfs:subClassOf rdf:parseType='Resource'>text"
+            "<owl:onProperty rdf:resource='urn:p'/>"
+            "<owl:someValuesFrom rdf:resource='urn:D'/>"
+            "</rdfs:subClassOf>"
+        ),
+    ),
+)
+def test_resource_property_conflicts_and_text_fail_in_both_backends(
+    extension: NativeTestExtension,
+    property_element: str,
+) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#'>"
+        f"<owl:Class rdf:about='urn:C'>{property_element}</owl:Class>"
+        "</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
+def test_resource_property_whitespace_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'>
+  <rdfs:subClassOf rdf:resource='urn:D'> \n </rdfs:subClassOf>
+  <owl:equivalentClass> \n <owl:Class rdf:about='urn:E'/> \n </owl:equivalentClass>
+ </owl:Class>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 4
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+
 def test_rfc3986_document_and_nested_xml_bases_match_python(
     extension: NativeTestExtension,
 ) -> None:

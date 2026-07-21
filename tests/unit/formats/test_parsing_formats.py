@@ -174,6 +174,70 @@ def test_rdfxml_duplicate_id_within_one_xml_base_is_rejected() -> None:
     assert raised.value.code == "RDFXML_SYNTAX"
 
 
+@pytest.mark.parametrize(
+    "property_element",
+    (
+        "<rdfs:subClassOf rdf:resource='urn:D' rdf:datatype='urn:type'/>",
+        "<rdfs:subClassOf rdf:nodeID='target' rdf:datatype='urn:type'/>",
+        "<rdfs:subClassOf rdf:resource='urn:D'>text</rdfs:subClassOf>",
+        "<rdfs:subClassOf>text<owl:Class rdf:about='urn:D'/></rdfs:subClassOf>",
+        "<rdfs:subClassOf><owl:Class rdf:about='urn:D'/>text</rdfs:subClassOf>",
+        (
+            "<owl:equivalentClass><owl:Class>"
+            "<owl:unionOf rdf:parseType='Collection'>text"
+            "<rdf:Description rdf:about='urn:D'/>"
+            "</owl:unionOf></owl:Class></owl:equivalentClass>"
+        ),
+        (
+            "<rdfs:subClassOf rdf:parseType='Resource'>text"
+            "<owl:onProperty rdf:resource='urn:p'/>"
+            "<owl:someValuesFrom rdf:resource='urn:D'/>"
+            "</rdfs:subClassOf>"
+        ),
+    ),
+)
+def test_rdfxml_resource_property_grammar_rejects_conflicts_and_text(
+    property_element: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C">{property_element}</owl:Class>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
+
+
+def test_rdfxml_resource_properties_allow_inter_element_whitespace() -> None:
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C">
+    <rdfs:subClassOf rdf:resource="urn:D"> \n </rdfs:subClassOf>
+    <owl:equivalentClass> \n <owl:Class rdf:about="urn:E"/> \n </owl:equivalentClass>
+  </owl:Class>
+</rdf:RDF>
+"""
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+
+    assert document.axioms == m.CanonicalSet(
+        (
+            m.Declaration(m.Class(m.IRI("urn:C"))),
+            m.Declaration(m.Class(m.IRI("urn:E"))),
+            m.SubClassOf(m.Class(m.IRI("urn:C")), m.Class(m.IRI("urn:D"))),
+            m.EquivalentClasses(
+                m.CanonicalSet((m.Class(m.IRI("urn:C")), m.Class(m.IRI("urn:E"))))
+            ),
+        )
+    )
+
+
 def test_disabled_provenance_omits_document_and_snapshot_origins() -> None:
     options = LoadOptions(
         format=DocumentFormat.FUNCTIONAL,
