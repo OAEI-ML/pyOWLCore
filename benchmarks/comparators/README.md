@@ -6,7 +6,7 @@ reference-machine key, and phase boundary used by the redesign scaffold. It
 deliberately distinguishes raw `horned-model-ready` from gating
 `common-contract-ready`.
 
-The checked-in evidence has five explicitly development-only artifacts.
+The checked-in evidence has six explicitly development-only artifacts.
 `shared-host-smoke.json` is the historical tiny Functional Syntax smoke of the
 core Python adapter; it predates the paired scheduler and executable ratio
 gates, so its older fields remain accurate. `shared-host-py-horned-smoke.json`
@@ -26,9 +26,14 @@ boundaries. `shared-host-direct-smoke.json` binds direct runner v1 to clean
 commit `588853e`; Functional Syntax and RDF/XML each pass resident/file and
 fresh/steady exact contracts across 24 paired assertions, while one persistent
 child serves 16 requests with 16 distinct ontology identities and clean
-shutdown. The reference machine is still unapproved and the complete paired
-matrix was not selected, so these are lifecycle and correctness evidence—not
-performance gates.
+shutdown. `shared-host-owlapi-smoke.json` binds isolated OWLAPI runner v1 to
+clean commit `c7e8b72`. Six generated corpora cover all four supported
+syntaxes, annotation/list mapping, and unresolved imports in both input and
+process modes; three paired repetitions produce 72 passing equality assertions,
+while one persistent child serves 48 requests with distinct ontology identities,
+empty stderr, and clean shutdown. The reference machine is still unapproved and
+the complete paired matrix was not selected, so these are lifecycle and
+correctness evidence—not performance gates.
 
 Validate the ledger without installing or invoking any comparator:
 
@@ -235,12 +240,12 @@ an approved versioned machine. Resident-byte and file lanes and the audited
 persistent lifecycle are implemented and contract-tested. File inputs are
 hash-checked and prepared before timing, use the same stable source-bound
 document IRI as resident bytes, and include the implementation's file open/read
-in the timer. The complete direct retained-Rust, raw/common Horned, and
-py-horned, and OWLAPI runners can exercise that lifecycle.
+in the timer. The complete direct retained-Rust, raw/common Horned, py-horned,
+and OWLAPI runners can exercise that lifecycle.
 Representative medium/large approved-machine samples, native retention/copy
 counters, and phase profiles remain open. The configured ratio gates therefore
 fail closed; no performance threshold has passed merely because its evaluator,
-lifecycle, and three external adapter lanes now exist.
+lifecycle, and all five external runner lanes now exist.
 
 `dependency-audit-shared-host.json` binds passing alias-aware source,
 payload-manifest, and packaged-Python scans plus reproducible SHA-bound sdist and
