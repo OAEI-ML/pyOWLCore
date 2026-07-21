@@ -5,14 +5,17 @@
 //! canonicalization before those rows enter retained storage, then derives the
 //! distinct one-document snapshot scope used by effective facade owners.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::mem::size_of;
 
 use crate::cancel::Cancellation;
-use crate::canonical::{iri, LEXICAL_KEY, PROVISIONAL_SCOPE};
+#[cfg(test)]
+use crate::canonical::iri;
+use crate::canonical::{LEXICAL_KEY, PROVISIONAL_SCOPE};
 use crate::error::{NativeError, NativeResult};
 use crate::hash::{sha256, Sha256};
 use crate::limits::Limits;
 use crate::model::{canonical_field_count, scan_canonical, ScanBudget};
+use crate::session::Session;
 
 use super::retained::rdfxml_document_fingerprint;
 
@@ -40,7 +43,7 @@ struct Identity<'a> {
 #[derive(Clone, Debug)]
 struct OwnedIdentity {
     scope: [u8; 32],
-    key: Vec<u8>,
+    key: [u8; 32],
 }
 
 #[derive(Debug)]
@@ -54,7 +57,9 @@ struct CanonicalNode<'a> {
 #[derive(Debug)]
 enum CanonicalField<'a> {
     None,
-    Node(Box<CanonicalNode<'a>>),
+    /// Exactly one child, stored in a fallibly reserved vector so allocation
+    /// failure can propagate instead of crossing `Box::new`'s aborting path.
+    Node(Vec<CanonicalNode<'a>>),
     Scalar(u8, &'a [u8]),
     Set(Vec<CanonicalNode<'a>>),
     Sequence(Vec<CanonicalNode<'a>>),
@@ -76,55 +81,71 @@ pub(crate) fn scope_rdfxml_anonymous_rows_v2(
     version_iri: Option<&str>,
     imports: &[String],
     rows: [&[Vec<u8>]; 3],
-    limits: &Limits,
+    session: &mut Session<'_>,
     cancellation: &Cancellation,
 ) -> NativeResult<ScopedAnonymousRowsV2> {
+    let limits = *session.limits();
     let mut parsed = [Vec::new(), Vec::new(), Vec::new()];
     for (target, source) in parsed.iter_mut().zip(rows) {
+        reserve_items::<CanonicalNode<'_>>(session, source.len())?;
         target
             .try_reserve_exact(source.len())
             .map_err(|_| NativeError::limit("native anonymous root allocation failed"))?;
         for row in source {
             cancellation.checkpoint()?;
-            let mut scan = ScanBudget::from_limits(limits);
+            let mut scan = ScanBudget::from_limits(&limits);
             scan_canonical(row, &mut scan)?;
-            target.push(parse_root(row, limits, cancellation)?);
+            target.push(parse_root(row, &limits, cancellation, session)?);
         }
     }
 
-    let mut labels = BTreeSet::new();
+    let mut labels = Vec::new();
     for node in parsed.iter().flatten() {
-        collect_labels(node, &mut labels)?;
+        collect_labels(node, &mut labels, session)?;
     }
+    labels.sort_unstable();
+    labels.dedup();
     if labels.is_empty() {
         return Err(NativeError::protocol(
             "native anonymous scoping received no provisional blank labels",
         ));
     }
-    let labels: Vec<String> = labels.into_iter().collect();
-    let label_indexes: BTreeMap<&str, usize> = labels
-        .iter()
-        .enumerate()
-        .map(|(index, label)| (label.as_str(), index))
-        .collect();
-    let (arcs, payloads) = blank_arcs(&parsed, &label_indexes, limits, cancellation)?;
-    let alpha = alpha_order(&labels, &arcs, &payloads, limits, cancellation)?;
+    let (arcs, payloads) = blank_arcs(&parsed, &labels, &limits, cancellation, session)?;
+    let alpha = alpha_order(
+        labels.len(),
+        &arcs,
+        &payloads,
+        &limits,
+        cancellation,
+        session,
+    )?;
 
-    let ontology_key = ontology_key(ontology_iri, version_iri)?;
-    let document_scope = framed_digest(DOCUMENT_SCOPE_DOMAIN, &ontology_key, &alpha.graph)?;
+    let ontology_key = ontology_key(ontology_iri, version_iri, session)?;
+    let document_scope =
+        framed_digest(DOCUMENT_SCOPE_DOMAIN, &ontology_key, &alpha.graph, session)?;
     let graph_digest = sha256(&alpha.graph);
-    let raw_identities =
-        identities_for_order(labels.len(), &alpha.order, document_scope, graph_digest)?;
+    let raw_identities = identities_for_order(
+        labels.len(),
+        &alpha.order,
+        document_scope,
+        graph_digest,
+        session,
+    )?;
 
-    let mut raw = encode_collections(&parsed, |identity| {
-        let label = provisional_label(identity)?;
-        Ok(label.and_then(|value| {
-            label_indexes
-                .get(value)
-                .and_then(|index| raw_identities.get(*index))
-                .cloned()
-        }))
-    })?;
+    let mut raw = encode_collections(
+        &parsed,
+        |identity| {
+            let label = provisional_label(identity)?;
+            Ok(label.and_then(|value| {
+                labels
+                    .binary_search(&value)
+                    .ok()
+                    .and_then(|index| raw_identities.get(index))
+                    .cloned()
+            }))
+        },
+        session,
+    )?;
     canonicalize_collections(&mut raw);
 
     let raw_slices = [raw[0].as_slice(), raw[1].as_slice(), raw[2].as_slice()];
@@ -136,21 +157,25 @@ pub(crate) fn scope_rdfxml_anonymous_rows_v2(
             .checked_add(values.len())
             .ok_or_else(|| NativeError::limit("native anonymous occurrence count overflow"))
     })?;
+    reserve_items::<[u8; 32]>(session, occurrence_count)?;
     effective_occurrence_digests
         .try_reserve_exact(occurrence_count)
         .map_err(|_| NativeError::limit("native anonymous digest allocation failed"))?;
 
     let mut effective = [Vec::new(), Vec::new(), Vec::new()];
     for (target, source) in effective.iter_mut().zip(&raw) {
+        reserve_items::<Vec<u8>>(session, source.len())?;
         target
             .try_reserve_exact(source.len())
             .map_err(|_| NativeError::limit("native effective root allocation failed"))?;
         for row in source {
             cancellation.checkpoint()?;
-            let node = parse_root(row, limits, cancellation)?;
-            let encoded = encode_replaced(&node, &|identity| {
-                Ok(Some(rescope_identity(identity, snapshot_scope)))
-            })?;
+            let node = parse_root(row, &limits, cancellation, session)?;
+            let encoded = encode_replaced(
+                &node,
+                &|identity| Ok(Some(rescope_identity(identity, snapshot_scope))),
+                session,
+            )?;
             effective_occurrence_digests.push(structural_digest(&encoded));
             target.push(encoded);
         }
@@ -177,21 +202,22 @@ struct AlphaResult {
 }
 
 fn alpha_order(
-    labels: &[String],
+    label_count: usize,
     arcs: &[BlankArc],
     payloads: &[Vec<u8>],
     limits: &Limits,
     cancellation: &Cancellation,
+    session: &mut Session<'_>,
 ) -> NativeResult<AlphaResult> {
-    let terms = checked_add_u64(labels.len(), arcs.len(), "native blank term count overflow")?;
+    let terms = checked_add_u64(label_count, arcs.len(), "native blank term count overflow")?;
     if terms > limits.max_terms {
         return Err(NativeError::limit(
             "native anonymous canonicalization exceeds max_terms",
         ));
     }
-    let label_count = usize_u64(labels.len(), "native blank label count exceeds u64")?;
+    let label_count_u64 = usize_u64(label_count, "native blank label count exceeds u64")?;
     let arc_count = usize_u64(arcs.len(), "native blank arc count exceeds u64")?;
-    let mut work = label_count
+    let mut work = label_count_u64
         .checked_add(
             arc_count
                 .checked_mul(2)
@@ -199,68 +225,78 @@ fn alpha_order(
         )
         .ok_or_else(|| NativeError::limit("native blank work overflow"))?;
     enforce_work(work, limits)?;
-    let mut colors = colors_from_signatures(neighborhoods(
-        labels.len(),
-        arcs,
-        payloads,
-        None,
-        cancellation,
-    )?)?;
+    let mut colors = colors_from_signatures(
+        neighborhoods(label_count, arcs, payloads, None, cancellation, session)?,
+        session,
+    )?;
     let mut rounds = 0_usize;
     loop {
         cancellation.checkpoint()?;
         rounds = rounds
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("native blank refinement overflow"))?;
-        let neighborhoods =
-            neighborhoods(labels.len(), arcs, payloads, Some(&colors), cancellation)?;
+        let neighborhoods = neighborhoods(
+            label_count,
+            arcs,
+            payloads,
+            Some(&colors),
+            cancellation,
+            session,
+        )?;
         let mut signatures = Vec::new();
+        reserve_items::<Vec<Vec<u8>>>(session, label_count)?;
         signatures
-            .try_reserve_exact(labels.len())
+            .try_reserve_exact(label_count)
             .map_err(|_| NativeError::limit("native blank signature allocation failed"))?;
         for (color, neighborhood) in colors.iter().zip(neighborhoods) {
             let mut signature = Vec::new();
+            reserve_items::<Vec<u8>>(session, neighborhood.len().saturating_add(1))?;
             signature
                 .try_reserve_exact(neighborhood.len().saturating_add(1))
                 .map_err(|_| NativeError::limit("native blank signature allocation failed"))?;
-            signature.push(color.to_vec());
+            signature.push(copy_bytes(color, session)?);
             signature.extend(neighborhood);
             signatures.push(signature);
         }
-        let refined = colors_from_signatures(signatures)?;
+        let refined = colors_from_signatures(signatures, session)?;
         work = work
             .checked_add(
-                label_count
+                label_count_u64
                     .checked_mul(2)
                     .and_then(|value| value.checked_add(arc_count.checked_mul(2)?))
                     .ok_or_else(|| NativeError::limit("native blank work overflow"))?,
             )
             .ok_or_else(|| NativeError::limit("native blank work overflow"))?;
         enforce_work(work, limits)?;
-        if same_partition(&colors, &refined) {
+        if same_partition(&colors, &refined, session)? {
             colors = refined;
             break;
         }
         colors = refined;
-        if rounds > labels.len().saturating_add(1) {
+        if rounds > label_count.saturating_add(1) {
             return Err(NativeError::protocol(
                 "native blank-node partition refinement did not converge",
             ));
         }
     }
 
-    let partitions = partitions(&colors);
+    let partitions = partitions(&colors, session)?;
     let candidates = permutation_count(&partitions, limits.max_canonical_work, work)?;
-    let unit = label_count.saturating_add(arc_count).max(1);
+    let unit = label_count_u64.saturating_add(arc_count).max(1);
     enforce_work(work.saturating_add(candidates.saturating_mul(unit)), limits)?;
 
-    let mut choices = partitions.clone();
+    let mut choices = clone_partitions(&partitions, session)?;
     let mut best_graph: Option<Vec<u8>> = None;
     let mut best_order: Option<Vec<usize>> = None;
     loop {
         cancellation.checkpoint()?;
-        let order: Vec<usize> = choices.iter().flatten().copied().collect();
-        let graph = serialize_graph(&order, arcs, payloads)?;
+        reserve_items::<usize>(session, label_count)?;
+        let mut order = Vec::new();
+        order
+            .try_reserve_exact(label_count)
+            .map_err(|_| NativeError::limit("native blank order allocation failed"))?;
+        order.extend(choices.iter().flatten().copied());
+        let graph = serialize_graph(&order, arcs, payloads, session)?;
         if best_graph.as_ref().is_none_or(|best| graph < *best) {
             best_graph = Some(graph);
             best_order = Some(order);
@@ -285,13 +321,27 @@ fn neighborhoods(
     payloads: &[Vec<u8>],
     colors: Option<&[[u8; 32]]>,
     cancellation: &Cancellation,
+    session: &mut Session<'_>,
 ) -> NativeResult<Vec<Vec<Vec<u8>>>> {
-    let mut gathered = vec![Vec::new(); label_count];
+    reserve_items::<Vec<Vec<u8>>>(session, label_count)?;
+    let mut gathered = Vec::new();
+    gathered
+        .try_reserve_exact(label_count)
+        .map_err(|_| NativeError::limit("native blank neighborhood allocation failed"))?;
+    gathered.resize_with(label_count, Vec::new);
     for arc in arcs {
         cancellation.checkpoint()?;
-        gathered[arc.source].push(arc_signature(arc.source, arc, payloads, colors)?);
+        reserve_items::<Vec<u8>>(session, 1)?;
+        gathered[arc.source]
+            .try_reserve(1)
+            .map_err(|_| NativeError::limit("native blank neighborhood allocation failed"))?;
+        gathered[arc.source].push(arc_signature(arc.source, arc, payloads, colors, session)?);
         if let Some(target) = arc.target.filter(|target| *target != arc.source) {
-            gathered[target].push(arc_signature(target, arc, payloads, colors)?);
+            reserve_items::<Vec<u8>>(session, 1)?;
+            gathered[target]
+                .try_reserve(1)
+                .map_err(|_| NativeError::limit("native blank neighborhood allocation failed"))?;
+            gathered[target].push(arc_signature(target, arc, payloads, colors, session)?);
         }
     }
     for values in &mut gathered {
@@ -305,18 +355,19 @@ fn arc_signature(
     arc: &BlankArc,
     payloads: &[Vec<u8>],
     colors: Option<&[[u8; 32]]>,
+    session: &mut Session<'_>,
 ) -> NativeResult<Vec<u8>> {
     let (direction, neighbor): (u8, Vec<u8>) = if arc.source == label {
         (
             b'S',
             match arc.target {
-                None => vec![b'N'],
-                Some(target) if target == label => vec![b'L'],
-                Some(target) => neighbor_color(target, colors)?,
+                None => one_byte(b'N', session)?,
+                Some(target) if target == label => one_byte(b'L', session)?,
+                Some(target) => neighbor_color(target, colors, session)?,
             },
         )
     } else if arc.target == Some(label) {
-        (b'T', neighbor_color(arc.source, colors)?)
+        (b'T', neighbor_color(arc.source, colors, session)?)
     } else {
         return Err(NativeError::protocol(
             "native blank arc does not contain its requested label",
@@ -326,57 +377,134 @@ fn arc_signature(
         .get(arc.payload)
         .ok_or_else(|| NativeError::protocol("native blank arc payload is missing"))?;
     let mut result = Vec::new();
+    reserve_bytes(session, 1)?;
     result.push(direction);
-    append_frame(&mut result, arc.role.as_bytes())?;
-    append_bytes(&mut result, &neighbor)?;
-    append_frame(&mut result, payload)?;
+    append_frame(&mut result, arc.role.as_bytes(), session)?;
+    append_bytes(&mut result, &neighbor, session)?;
+    append_frame(&mut result, payload, session)?;
     Ok(result)
 }
 
-fn neighbor_color(target: usize, colors: Option<&[[u8; 32]]>) -> NativeResult<Vec<u8>> {
+fn neighbor_color(
+    target: usize,
+    colors: Option<&[[u8; 32]]>,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<u8>> {
     let Some(colors) = colors else {
-        return Ok(vec![b'B']);
+        return one_byte(b'B', session);
     };
     let color = colors
         .get(target)
         .ok_or_else(|| NativeError::protocol("native blank neighbor color is missing"))?;
-    let mut result = Vec::with_capacity(33);
+    reserve_bytes(session, 33)?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(33)
+        .map_err(|_| NativeError::limit("native blank color allocation failed"))?;
     result.push(b'C');
     result.extend_from_slice(color);
     Ok(result)
 }
 
-fn colors_from_signatures(signatures: Vec<Vec<Vec<u8>>>) -> NativeResult<Vec<[u8; 32]>> {
-    signatures
-        .into_iter()
-        .map(|signature| {
-            let mut hasher = Sha256::new();
-            hasher.update(BLANK_COLOR_DOMAIN);
-            for item in signature {
-                let mut framed = Vec::new();
-                append_frame(&mut framed, &item)?;
-                hasher.update(&framed);
-            }
-            Ok(hasher.finish())
-        })
-        .collect()
-}
-
-fn same_partition(first: &[[u8; 32]], second: &[[u8; 32]]) -> bool {
-    let mut forward = BTreeMap::new();
-    let mut reverse = BTreeMap::new();
-    first.iter().zip(second).all(|(left, right)| {
-        forward.entry(*left).or_insert(*right) == right
-            && reverse.entry(*right).or_insert(*left) == left
-    })
-}
-
-fn partitions(colors: &[[u8; 32]]) -> Vec<Vec<usize>> {
-    let mut grouped: BTreeMap<[u8; 32], Vec<usize>> = BTreeMap::new();
-    for (index, color) in colors.iter().enumerate() {
-        grouped.entry(*color).or_default().push(index);
+fn colors_from_signatures(
+    signatures: Vec<Vec<Vec<u8>>>,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<[u8; 32]>> {
+    reserve_items::<[u8; 32]>(session, signatures.len())?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(signatures.len())
+        .map_err(|_| NativeError::limit("native blank color allocation failed"))?;
+    for signature in signatures {
+        let mut hasher = Sha256::new();
+        hasher.update(BLANK_COLOR_DOMAIN);
+        for item in signature {
+            let mut framed = Vec::new();
+            append_frame(&mut framed, &item, session)?;
+            hasher.update(&framed);
+        }
+        result.push(hasher.finish());
     }
-    grouped.into_values().collect()
+    Ok(result)
+}
+
+fn same_partition(
+    first: &[[u8; 32]],
+    second: &[[u8; 32]],
+    session: &mut Session<'_>,
+) -> NativeResult<bool> {
+    if first.len() != second.len() {
+        return Ok(false);
+    }
+    reserve_items::<([u8; 32], [u8; 32])>(session, first.len())?;
+    let mut pairs = Vec::new();
+    pairs
+        .try_reserve_exact(first.len())
+        .map_err(|_| NativeError::limit("native blank partition allocation failed"))?;
+    pairs.extend(first.iter().copied().zip(second.iter().copied()));
+    pairs.sort_unstable();
+    if pairs
+        .windows(2)
+        .any(|values| values[0].0 == values[1].0 && values[0].1 != values[1].1)
+    {
+        return Ok(false);
+    }
+    pairs.sort_unstable_by_key(|value| (value.1, value.0));
+    Ok(!pairs
+        .windows(2)
+        .any(|values| values[0].1 == values[1].1 && values[0].0 != values[1].0))
+}
+
+fn partitions(colors: &[[u8; 32]], session: &mut Session<'_>) -> NativeResult<Vec<Vec<usize>>> {
+    reserve_items::<usize>(session, colors.len())?;
+    let mut indexes = Vec::new();
+    indexes
+        .try_reserve_exact(colors.len())
+        .map_err(|_| NativeError::limit("native blank partition allocation failed"))?;
+    indexes.extend(0..colors.len());
+    indexes.sort_unstable_by_key(|index| (colors[*index], *index));
+    reserve_items::<Vec<usize>>(session, colors.len())?;
+    let mut result: Vec<Vec<usize>> = Vec::new();
+    result
+        .try_reserve_exact(colors.len())
+        .map_err(|_| NativeError::limit("native blank partition allocation failed"))?;
+    for index in indexes {
+        if result
+            .last()
+            .and_then(|values| values.first())
+            .is_none_or(|first| colors[*first] != colors[index])
+        {
+            result.push(Vec::new());
+        }
+        reserve_items::<usize>(session, 1)?;
+        let selected = result.last_mut().expect("partition was inserted");
+        selected
+            .try_reserve(1)
+            .map_err(|_| NativeError::limit("native blank partition allocation failed"))?;
+        selected.push(index);
+    }
+    Ok(result)
+}
+
+fn clone_partitions(
+    partitions: &[Vec<usize>],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<Vec<usize>>> {
+    reserve_items::<Vec<usize>>(session, partitions.len())?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(partitions.len())
+        .map_err(|_| NativeError::limit("native blank partition clone allocation failed"))?;
+    for partition in partitions {
+        reserve_items::<usize>(session, partition.len())?;
+        let mut selected = Vec::new();
+        selected
+            .try_reserve_exact(partition.len())
+            .map_err(|_| NativeError::limit("native blank partition clone allocation failed"))?;
+        selected.extend_from_slice(partition);
+        result.push(selected);
+    }
+    Ok(result)
 }
 
 fn permutation_count(partitions: &[Vec<usize>], maximum: u64, consumed: u64) -> NativeResult<u64> {
@@ -427,14 +555,24 @@ fn serialize_graph(
     order: &[usize],
     arcs: &[BlankArc],
     payloads: &[Vec<u8>],
+    session: &mut Session<'_>,
 ) -> NativeResult<Vec<u8>> {
-    let mut indexes = vec![0_usize; order.len()];
+    reserve_items::<usize>(session, order.len())?;
+    let mut indexes = Vec::new();
+    indexes
+        .try_reserve_exact(order.len())
+        .map_err(|_| NativeError::limit("native blank index allocation failed"))?;
+    indexes.resize(order.len(), 0);
     for (index, label) in order.iter().copied().enumerate() {
         *indexes
             .get_mut(label)
             .ok_or_else(|| NativeError::protocol("native blank order is invalid"))? = index;
     }
-    let mut members = BTreeSet::new();
+    reserve_items::<Vec<u8>>(session, arcs.len())?;
+    let mut members = Vec::new();
+    members
+        .try_reserve_exact(arcs.len())
+        .map_err(|_| NativeError::limit("native blank graph allocation failed"))?;
     for arc in arcs {
         let payload = payloads
             .get(arc.payload)
@@ -443,58 +581,79 @@ fn serialize_graph(
         append_varint(
             &mut member,
             usize_u64(indexes[arc.source], "blank index exceeds u64")?,
+            session,
         )?;
-        append_frame(&mut member, arc.role.as_bytes())?;
+        append_frame(&mut member, arc.role.as_bytes(), session)?;
         match arc.target {
-            None => member.push(0),
+            None => {
+                reserve_bytes(session, 1)?;
+                member.push(0);
+            }
             Some(target) => {
+                reserve_bytes(session, 1)?;
                 member.push(1);
                 append_varint(
                     &mut member,
                     usize_u64(indexes[target], "blank target index exceeds u64")?,
+                    session,
                 )?;
             }
         }
-        append_frame(&mut member, payload)?;
-        members.insert(member);
+        append_frame(&mut member, payload, session)?;
+        members.push(member);
     }
+    members.sort_unstable();
+    members.dedup();
     let mut graph = Vec::new();
-    append_bytes(&mut graph, BLANK_GRAPH_DOMAIN)?;
+    append_bytes(&mut graph, BLANK_GRAPH_DOMAIN, session)?;
     append_varint(
         &mut graph,
         usize_u64(order.len(), "blank order exceeds u64")?,
+        session,
     )?;
     append_varint(
         &mut graph,
         usize_u64(members.len(), "blank graph exceeds u64")?,
+        session,
     )?;
     for member in members {
-        append_frame(&mut graph, &member)?;
+        append_frame(&mut graph, &member, session)?;
     }
     Ok(graph)
 }
 
 fn blank_arcs(
     roots: &[Vec<CanonicalNode<'_>>; 3],
-    labels: &BTreeMap<&str, usize>,
+    labels: &[&str],
     limits: &Limits,
     cancellation: &Cancellation,
+    session: &mut Session<'_>,
 ) -> NativeResult<(Vec<BlankArc>, Vec<Vec<u8>>)> {
     let mut arcs = Vec::new();
     let mut payloads = Vec::new();
     for root in roots.iter().flatten() {
         cancellation.checkpoint()?;
-        let skeleton = skeleton_node(root)?;
+        let skeleton = skeleton_node(root, session)?;
         if usize_u64(skeleton.len(), "blank skeleton exceeds u64")? > limits.max_canonical_work {
             return Err(NativeError::limit(
                 "native blank skeleton exceeds max_canonical_work",
             ));
         }
         let payload = payloads.len();
+        reserve_items::<Vec<u8>>(session, 1)?;
+        payloads
+            .try_reserve(1)
+            .map_err(|_| NativeError::limit("native blank payload allocation failed"))?;
         payloads.push(skeleton);
         let (name, _) = constructor_ledger(root.tag)?;
         let mut occurrences = Vec::new();
-        blank_occurrences(root, name.to_owned(), &mut occurrences)?;
+        blank_occurrences(
+            root,
+            owned_text(name, session)?,
+            labels,
+            &mut occurrences,
+            session,
+        )?;
         let following = arcs
             .len()
             .checked_add(occurrences.len())
@@ -510,14 +669,13 @@ fn blank_arcs(
                 "native anonymous canonicalization exceeds max_terms",
             ));
         }
+        reserve_items::<BlankArc>(session, following.saturating_sub(arcs.len()))?;
         arcs.try_reserve(following.saturating_sub(arcs.len()))
             .map_err(|_| NativeError::limit("native blank arc allocation failed"))?;
         for (label, path) in &occurrences {
             arcs.push(BlankArc {
-                source: *labels.get(label.as_str()).ok_or_else(|| {
-                    NativeError::protocol("native blank occurrence label is missing")
-                })?,
-                role: path.clone(),
+                source: *label,
+                role: owned_text(path, session)?,
                 target: None,
                 payload,
             });
@@ -525,6 +683,13 @@ fn blank_arcs(
         for (index, (source, source_path)) in occurrences.iter().enumerate() {
             for (target, target_path) in &occurrences[index + 1..] {
                 let mut role = String::new();
+                reserve_bytes(
+                    session,
+                    source_path
+                        .len()
+                        .saturating_add(target_path.len())
+                        .saturating_add(2),
+                )?;
                 role.try_reserve(
                     source_path
                         .len()
@@ -536,9 +701,9 @@ fn blank_arcs(
                 role.push_str("->");
                 role.push_str(target_path);
                 arcs.push(BlankArc {
-                    source: labels[source.as_str()],
+                    source: *source,
                     role,
-                    target: Some(labels[target.as_str()]),
+                    target: Some(*target),
                     payload,
                 });
             }
@@ -550,11 +715,20 @@ fn blank_arcs(
 fn blank_occurrences(
     node: &CanonicalNode<'_>,
     path: String,
-    output: &mut Vec<(String, String)>,
+    labels: &[&str],
+    output: &mut Vec<(usize, String)>,
+    session: &mut Session<'_>,
 ) -> NativeResult<()> {
     if node.tag == 3 {
         if let Some(label) = provisional_label(anonymous_identity(node)?)? {
-            output.push((label.to_owned(), path));
+            let index = labels
+                .binary_search(&label)
+                .map_err(|_| NativeError::protocol("native blank occurrence label is missing"))?;
+            reserve_items::<(usize, String)>(session, 1)?;
+            output
+                .try_reserve(1)
+                .map_err(|_| NativeError::limit("native blank occurrence allocation failed"))?;
+            output.push((index, path));
         }
         return Ok(());
     }
@@ -565,21 +739,36 @@ fn blank_occurrences(
         ));
     }
     for (field, name) in node.fields.iter().zip(names.iter()) {
-        let field_path = joined_path(&path, name)?;
+        let field_path = joined_path(&path, name, session)?;
         match field {
-            CanonicalField::Node(child) => blank_occurrences(child, field_path, output)?,
+            CanonicalField::Node(children) => {
+                blank_occurrences(only_child(children)?, field_path, labels, output, session)?
+            }
             CanonicalField::Set(values) => {
-                let mut grouped = values
-                    .iter()
-                    .map(|value| Ok((skeleton_node(value)?, value)))
-                    .collect::<NativeResult<Vec<_>>>()?;
-                grouped.sort_by(|left, right| left.0.cmp(&right.0));
+                reserve_items::<(Vec<u8>, &CanonicalNode<'_>)>(session, values.len())?;
+                let mut grouped = Vec::new();
+                grouped.try_reserve_exact(values.len()).map_err(|_| {
+                    NativeError::limit("native blank set ordering allocation failed")
+                })?;
+                for value in values {
+                    grouped.push((skeleton_node(value, session)?, value));
+                }
+                // Canonical sets arrive in canonical-byte order. Use that as
+                // the explicit tie-breaker so this allocation-free unstable
+                // sort has the same result as Python's stable skeleton sort.
+                grouped.sort_unstable_by(|left, right| {
+                    left.0
+                        .cmp(&right.0)
+                        .then_with(|| left.1.original.cmp(right.1.original))
+                });
                 for (skeleton, value) in grouped {
-                    let marker = first_hex16(sha256(&skeleton));
+                    let marker = first_hex16(sha256(&skeleton), session)?;
                     blank_occurrences(
                         value,
-                        joined_path(&field_path, &format!("set:{marker}"))?,
+                        joined_path(&field_path, &set_marker(&marker, session)?, session)?,
+                        labels,
                         output,
+                        session,
                     )?;
                 }
             }
@@ -587,8 +776,10 @@ fn blank_occurrences(
                 for (index, value) in values.iter().enumerate() {
                     blank_occurrences(
                         value,
-                        joined_path(&field_path, &index.to_string())?,
+                        joined_path(&field_path, &decimal_index(index, session)?, session)?,
+                        labels,
                         output,
+                        session,
                     )?;
                 }
             }
@@ -598,90 +789,110 @@ fn blank_occurrences(
     Ok(())
 }
 
-fn skeleton_node(node: &CanonicalNode<'_>) -> NativeResult<Vec<u8>> {
+fn skeleton_node(node: &CanonicalNode<'_>, session: &mut Session<'_>) -> NativeResult<Vec<u8>> {
     if node.tag == 3 {
-        return Ok(vec![b'B']);
+        return one_byte(b'B', session);
     }
     if !node.contains_anonymous {
         let mut result = Vec::new();
+        reserve_bytes(session, 1)?;
         result.push(b'C');
-        append_frame(&mut result, node.original)?;
+        append_frame(&mut result, node.original, session)?;
         return Ok(result);
     }
     let mut result = Vec::new();
+    reserve_bytes(session, 1)?;
     result.push(b'N');
-    append_varint(&mut result, node.tag)?;
+    append_varint(&mut result, node.tag, session)?;
     for field in &node.fields {
-        let member = skeleton_field(field)?;
-        append_frame(&mut result, &member)?;
+        let member = skeleton_field(field, session)?;
+        append_frame(&mut result, &member, session)?;
     }
     Ok(result)
 }
 
-fn skeleton_field(field: &CanonicalField<'_>) -> NativeResult<Vec<u8>> {
+fn skeleton_field(field: &CanonicalField<'_>, session: &mut Session<'_>) -> NativeResult<Vec<u8>> {
     match field {
-        CanonicalField::None => Ok(vec![b'0']),
-        CanonicalField::Node(value) => skeleton_node(value),
+        CanonicalField::None => one_byte(b'0', session),
+        CanonicalField::Node(values) => skeleton_node(only_child(values)?, session),
         CanonicalField::Scalar(4, value) => {
             let mut result = Vec::new();
+            reserve_bytes(session, 1)?;
             result.push(b'I');
-            append_bytes(&mut result, value)?;
+            append_bytes(&mut result, value, session)?;
             Ok(result)
         }
         CanonicalField::Scalar(2 | 5, value) => {
             let mut result = Vec::new();
+            reserve_bytes(session, 1)?;
             result.push(b'T');
-            append_frame(&mut result, value)?;
+            append_frame(&mut result, value, session)?;
             Ok(result)
         }
         CanonicalField::Scalar(_, _) => Err(NativeError::protocol(
             "native blank skeleton contains an unsupported scalar field",
         )),
         CanonicalField::Set(values) => {
-            let mut members = values
-                .iter()
-                .map(skeleton_node)
-                .collect::<NativeResult<Vec<_>>>()?;
+            reserve_items::<Vec<u8>>(session, values.len())?;
+            let mut members = Vec::new();
+            members
+                .try_reserve_exact(values.len())
+                .map_err(|_| NativeError::limit("native blank skeleton allocation failed"))?;
+            for value in values {
+                members.push(skeleton_node(value, session)?);
+            }
             members.sort_unstable();
             let mut result = Vec::new();
+            reserve_bytes(session, 1)?;
             result.push(b'S');
             append_varint(
                 &mut result,
                 usize_u64(members.len(), "set size exceeds u64")?,
+                session,
             )?;
             for member in members {
-                append_frame(&mut result, &member)?;
+                append_frame(&mut result, &member, session)?;
             }
             Ok(result)
         }
         CanonicalField::Sequence(values) => {
             let mut result = Vec::new();
+            reserve_bytes(session, 1)?;
             result.push(b'Q');
             append_varint(
                 &mut result,
                 usize_u64(values.len(), "sequence size exceeds u64")?,
+                session,
             )?;
             for value in values {
-                append_frame(&mut result, &skeleton_node(value)?)?;
+                append_frame(&mut result, &skeleton_node(value, session)?, session)?;
             }
             Ok(result)
         }
     }
 }
 
-fn collect_labels(node: &CanonicalNode<'_>, labels: &mut BTreeSet<String>) -> NativeResult<()> {
+fn collect_labels<'a>(
+    node: &CanonicalNode<'a>,
+    labels: &mut Vec<&'a str>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
     if node.tag == 3 {
         if let Some(label) = provisional_label(anonymous_identity(node)?)? {
-            labels.insert(label.to_owned());
+            reserve_items::<&str>(session, 1)?;
+            labels
+                .try_reserve(1)
+                .map_err(|_| NativeError::limit("native blank label allocation failed"))?;
+            labels.push(label);
         }
         return Ok(());
     }
     for field in &node.fields {
         match field {
-            CanonicalField::Node(value) => collect_labels(value, labels)?,
+            CanonicalField::Node(values) => collect_labels(only_child(values)?, labels, session)?,
             CanonicalField::Set(values) | CanonicalField::Sequence(values) => {
                 for value in values {
-                    collect_labels(value, labels)?;
+                    collect_labels(value, labels, session)?;
                 }
             }
             CanonicalField::None | CanonicalField::Scalar(_, _) => {}
@@ -693,78 +904,103 @@ fn collect_labels(node: &CanonicalNode<'_>, labels: &mut BTreeSet<String>) -> Na
 fn encode_collections<F>(
     parsed: &[Vec<CanonicalNode<'_>>; 3],
     replacement: F,
+    session: &mut Session<'_>,
 ) -> NativeResult<[Vec<Vec<u8>>; 3]>
 where
     F: Fn(Identity<'_>) -> NativeResult<Option<OwnedIdentity>>,
 {
     let mut result = [Vec::new(), Vec::new(), Vec::new()];
     for (target, source) in result.iter_mut().zip(parsed) {
+        reserve_items::<Vec<u8>>(session, source.len())?;
         target
             .try_reserve_exact(source.len())
             .map_err(|_| NativeError::limit("native scoped row allocation failed"))?;
         for node in source {
-            target.push(encode_replaced(node, &replacement)?);
+            target.push(encode_replaced(node, &replacement, session)?);
         }
     }
     Ok(result)
 }
 
-fn encode_replaced<F>(node: &CanonicalNode<'_>, replacement: &F) -> NativeResult<Vec<u8>>
+fn encode_replaced<F>(
+    node: &CanonicalNode<'_>,
+    replacement: &F,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<u8>>
 where
     F: Fn(Identity<'_>) -> NativeResult<Option<OwnedIdentity>>,
 {
     if node.tag == 3 {
         let identity = anonymous_identity(node)?;
         return match replacement(identity)? {
-            Some(value) => encode_anonymous(&value.scope, &value.key),
-            None => Ok(node.original.to_vec()),
+            Some(value) => encode_anonymous(&value.scope, &value.key, session),
+            None => copy_bytes(node.original, session),
         };
     }
     if !node.contains_anonymous {
-        return Ok(node.original.to_vec());
+        return copy_bytes(node.original, session);
     }
     let mut output = Vec::new();
-    append_varint(&mut output, node.tag)?;
+    append_varint(&mut output, node.tag, session)?;
     for field in &node.fields {
         match field {
-            CanonicalField::None => output.push(0),
-            CanonicalField::Node(value) => {
+            CanonicalField::None => {
+                reserve_bytes(session, 1)?;
+                output.push(0);
+            }
+            CanonicalField::Node(values) => {
+                reserve_bytes(session, 1)?;
                 output.push(1);
-                append_frame(&mut output, &encode_replaced(value, replacement)?)?;
+                let encoded = encode_replaced(only_child(values)?, replacement, session)?;
+                append_frame(&mut output, &encoded, session)?;
             }
             CanonicalField::Scalar(marker, value) => {
+                reserve_bytes(session, 1)?;
                 output.push(*marker);
                 if *marker == 4 {
-                    append_bytes(&mut output, value)?;
+                    append_bytes(&mut output, value, session)?;
                 } else {
-                    append_frame(&mut output, value)?;
+                    append_frame(&mut output, value, session)?;
                 }
             }
             CanonicalField::Set(values) => {
+                reserve_bytes(session, 1)?;
                 output.push(6);
-                let mut members = values
-                    .iter()
-                    .map(|value| encode_replaced(value, replacement))
-                    .collect::<NativeResult<Vec<_>>>()?;
+                reserve_items::<Vec<u8>>(session, values.len())?;
+                let mut members = Vec::new();
+                members
+                    .try_reserve_exact(values.len())
+                    .map_err(|_| NativeError::limit("native scoped set allocation failed"))?;
+                for value in values {
+                    members.push(encode_replaced(value, replacement, session)?);
+                }
                 members.sort_unstable();
                 members.dedup();
                 append_varint(
                     &mut output,
                     usize_u64(members.len(), "set size exceeds u64")?,
+                    session,
                 )?;
                 for member in members {
-                    append_frame(&mut output, &member)?;
+                    append_frame(&mut output, &member, session)?;
                 }
             }
             CanonicalField::Sequence(values) => {
+                reserve_bytes(session, 1)?;
                 output.push(7);
                 append_varint(
                     &mut output,
                     usize_u64(values.len(), "sequence size exceeds u64")?,
+                    session,
                 )?;
                 for value in values {
+                    reserve_bytes(session, 1)?;
                     output.push(1);
-                    append_frame(&mut output, &encode_replaced(value, replacement)?)?;
+                    append_frame(
+                        &mut output,
+                        &encode_replaced(value, replacement, session)?,
+                        session,
+                    )?;
                 }
             }
         }
@@ -776,9 +1012,19 @@ fn parse_root<'a>(
     row: &'a [u8],
     limits: &Limits,
     cancellation: &Cancellation,
+    session: &mut Session<'_>,
 ) -> NativeResult<CanonicalNode<'a>> {
     let mut terms = 0_u64;
-    let (node, consumed) = parse_node(row, 0, row.len(), 0, &mut terms, limits, cancellation)?;
+    let (node, consumed) = parse_node(
+        row,
+        0,
+        row.len(),
+        0,
+        &mut terms,
+        limits,
+        cancellation,
+        session,
+    )?;
     if consumed != row.len() {
         return Err(NativeError::protocol(
             "native anonymous canonical row has trailing bytes",
@@ -796,6 +1042,7 @@ fn parse_node<'a>(
     terms: &mut u64,
     limits: &Limits,
     cancellation: &Cancellation,
+    session: &mut Session<'_>,
 ) -> NativeResult<(CanonicalNode<'a>, usize)> {
     cancellation.checkpoint()?;
     *terms = terms
@@ -812,6 +1059,7 @@ fn parse_node<'a>(
     )
     .ok_or_else(|| NativeError::protocol("native anonymous canonical tag is unknown"))?;
     let mut fields = Vec::new();
+    reserve_items::<CanonicalField<'_>>(session, usize::from(field_count))?;
     fields
         .try_reserve_exact(usize::from(field_count))
         .map_err(|_| NativeError::limit("native anonymous field allocation failed"))?;
@@ -834,6 +1082,7 @@ fn parse_node<'a>(
                     terms,
                     limits,
                     cancellation,
+                    session,
                 )?;
                 if consumed != frame_end {
                     return Err(NativeError::protocol(
@@ -842,7 +1091,13 @@ fn parse_node<'a>(
                 }
                 contains_anonymous |= child.contains_anonymous;
                 offset = frame_end;
-                CanonicalField::Node(Box::new(child))
+                reserve_items::<CanonicalNode<'_>>(session, 1)?;
+                let mut children = Vec::new();
+                children
+                    .try_reserve_exact(1)
+                    .map_err(|_| NativeError::limit("native anonymous child allocation failed"))?;
+                children.push(child);
+                CanonicalField::Node(children)
             }
             2 | 3 | 5 => {
                 let (frame_start, frame_end) = read_frame(data, offset, bound)?;
@@ -861,6 +1116,7 @@ fn parse_node<'a>(
                 let count = usize::try_from(count)
                     .map_err(|_| NativeError::limit("native anonymous set exceeds usize"))?;
                 let mut values = Vec::new();
+                reserve_items::<CanonicalNode<'_>>(session, count)?;
                 values
                     .try_reserve_exact(count)
                     .map_err(|_| NativeError::limit("native anonymous set allocation failed"))?;
@@ -874,6 +1130,7 @@ fn parse_node<'a>(
                         terms,
                         limits,
                         cancellation,
+                        session,
                     )?;
                     if consumed != frame_end {
                         return Err(NativeError::protocol(
@@ -892,6 +1149,7 @@ fn parse_node<'a>(
                 let count = usize::try_from(count)
                     .map_err(|_| NativeError::limit("native anonymous sequence exceeds usize"))?;
                 let mut values = Vec::new();
+                reserve_items::<CanonicalNode<'_>>(session, count)?;
                 values.try_reserve_exact(count).map_err(|_| {
                     NativeError::limit("native anonymous sequence allocation failed")
                 })?;
@@ -911,6 +1169,7 @@ fn parse_node<'a>(
                         terms,
                         limits,
                         cancellation,
+                        session,
                     )?;
                     if consumed != frame_end {
                         return Err(NativeError::protocol(
@@ -957,6 +1216,17 @@ fn anonymous_identity<'a>(node: &CanonicalNode<'a>) -> NativeResult<Identity<'a>
     }
 }
 
+fn only_child<'a, 'row>(
+    values: &'a [CanonicalNode<'row>],
+) -> NativeResult<&'a CanonicalNode<'row>> {
+    match values {
+        [value] => Ok(value),
+        _ => Err(NativeError::protocol(
+            "native anonymous child field has invalid cardinality",
+        )),
+    }
+}
+
 fn provisional_label(identity: Identity<'_>) -> NativeResult<Option<&str>> {
     if identity.scope != PROVISIONAL_SCOPE || !identity.key.starts_with(LEXICAL_KEY) {
         return Ok(None);
@@ -979,32 +1249,42 @@ fn identities_for_order(
     order: &[usize],
     scope: [u8; 32],
     graph_digest: [u8; 32],
+    session: &mut Session<'_>,
 ) -> NativeResult<Vec<OwnedIdentity>> {
-    let mut indexes = vec![0_usize; count];
+    reserve_items::<usize>(session, count)?;
+    let mut indexes = Vec::new();
+    indexes
+        .try_reserve_exact(count)
+        .map_err(|_| NativeError::limit("native blank binding allocation failed"))?;
+    indexes.resize(count, 0);
     for (index, label) in order.iter().copied().enumerate() {
         *indexes
             .get_mut(label)
             .ok_or_else(|| NativeError::protocol("native blank binding order is invalid"))? = index;
     }
-    indexes
-        .into_iter()
-        .map(|index| {
-            let mut hasher = Sha256::new();
-            hasher.update(ANONYMOUS_KEY_DOMAIN);
-            hasher.update(&scope);
-            hasher.update(&graph_digest);
-            let mut encoded = Vec::new();
-            append_varint(
-                &mut encoded,
-                usize_u64(index, "native blank canonical index exceeds u64")?,
-            )?;
-            hasher.update(&encoded);
-            Ok(OwnedIdentity {
-                scope,
-                key: hasher.finish().to_vec(),
-            })
-        })
-        .collect()
+    reserve_items::<OwnedIdentity>(session, count)?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(count)
+        .map_err(|_| NativeError::limit("native blank identity allocation failed"))?;
+    for index in indexes {
+        let mut hasher = Sha256::new();
+        hasher.update(ANONYMOUS_KEY_DOMAIN);
+        hasher.update(&scope);
+        hasher.update(&graph_digest);
+        let mut encoded = Vec::new();
+        append_varint(
+            &mut encoded,
+            usize_u64(index, "native blank canonical index exceeds u64")?,
+            session,
+        )?;
+        hasher.update(&encoded);
+        result.push(OwnedIdentity {
+            scope,
+            key: hasher.finish(),
+        });
+    }
+    Ok(result)
 }
 
 fn rescope_identity(identity: Identity<'_>, scope: [u8; 32]) -> OwnedIdentity {
@@ -1015,32 +1295,51 @@ fn rescope_identity(identity: Identity<'_>, scope: [u8; 32]) -> OwnedIdentity {
     hasher.update(identity.key);
     OwnedIdentity {
         scope,
-        key: hasher.finish().to_vec(),
+        key: hasher.finish(),
     }
 }
 
-fn ontology_key(ontology_iri: Option<&str>, version_iri: Option<&str>) -> NativeResult<Vec<u8>> {
+fn ontology_key(
+    ontology_iri: Option<&str>,
+    version_iri: Option<&str>,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<u8>> {
     let Some(ontology_iri) = ontology_iri else {
         if version_iri.is_some() {
             return Err(NativeError::protocol(
                 "native anonymous scope has a version IRI without an ontology IRI",
             ));
         }
-        return Ok(b"anonymous-ontology".to_vec());
+        return copy_bytes(b"anonymous-ontology", session);
     };
-    let mut result = iri(ontology_iri.to_owned())?.into_bytes();
+    let mut result = encode_iri_bytes(ontology_iri, session)?;
     if let Some(version_iri) = version_iri {
-        append_bytes(&mut result, iri(version_iri.to_owned())?.as_bytes())?;
+        let version = encode_iri_bytes(version_iri, session)?;
+        append_bytes(&mut result, &version, session)?;
     }
     Ok(result)
 }
 
-fn framed_digest(domain: &[u8], first: &[u8], second: &[u8]) -> NativeResult<[u8; 32]> {
+fn encode_iri_bytes(value: &str, session: &mut Session<'_>) -> NativeResult<Vec<u8>> {
+    let mut result = Vec::new();
+    append_varint(&mut result, 1, session)?;
+    reserve_bytes(session, 1)?;
+    result.push(2);
+    append_frame(&mut result, value.as_bytes(), session)?;
+    Ok(result)
+}
+
+fn framed_digest(
+    domain: &[u8],
+    first: &[u8],
+    second: &[u8],
+    session: &mut Session<'_>,
+) -> NativeResult<[u8; 32]> {
     let mut hasher = Sha256::new();
     hasher.update(domain);
     for value in [first, second] {
         let mut frame = Vec::new();
-        append_frame(&mut frame, value)?;
+        append_frame(&mut frame, value, session)?;
         hasher.update(&frame);
     }
     Ok(hasher.finish())
@@ -1062,13 +1361,19 @@ fn structural_digest(row: &[u8]) -> [u8; 32] {
     hasher.finish()
 }
 
-fn encode_anonymous(scope: &[u8; 32], key: &[u8]) -> NativeResult<Vec<u8>> {
+fn encode_anonymous(
+    scope: &[u8; 32],
+    key: &[u8],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<u8>> {
     let mut result = Vec::new();
-    append_varint(&mut result, 3)?;
+    append_varint(&mut result, 3, session)?;
+    reserve_bytes(session, 1)?;
     result.push(3);
-    append_frame(&mut result, scope)?;
+    append_frame(&mut result, scope, session)?;
+    reserve_bytes(session, 1)?;
     result.push(3);
-    append_frame(&mut result, key)?;
+    append_frame(&mut result, key, session)?;
     Ok(result)
 }
 
@@ -1264,8 +1569,12 @@ fn constructor_ledger(tag: u64) -> NativeResult<(&'static str, &'static [&'stati
     Ok(value)
 }
 
-fn joined_path(prefix: &str, suffix: &str) -> NativeResult<String> {
+fn joined_path(prefix: &str, suffix: &str, session: &mut Session<'_>) -> NativeResult<String> {
     let mut result = String::new();
+    reserve_bytes(
+        session,
+        prefix.len().saturating_add(suffix.len()).saturating_add(1),
+    )?;
     result
         .try_reserve(prefix.len().saturating_add(suffix.len()).saturating_add(1))
         .map_err(|_| NativeError::limit("native blank path allocation failed"))?;
@@ -1275,14 +1584,17 @@ fn joined_path(prefix: &str, suffix: &str) -> NativeResult<String> {
     Ok(result)
 }
 
-fn first_hex16(digest: [u8; 32]) -> String {
+fn first_hex16(digest: [u8; 32], session: &mut Session<'_>) -> NativeResult<String> {
     use std::fmt::Write;
-    digest[..8]
-        .iter()
-        .fold(String::with_capacity(16), |mut output, byte| {
-            write!(output, "{byte:02x}").expect("writing to String cannot fail");
-            output
-        })
+    reserve_bytes(session, 16)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(16)
+        .map_err(|_| NativeError::limit("native blank marker allocation failed"))?;
+    for byte in &digest[..8] {
+        write!(output, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    Ok(output)
 }
 
 fn read_frame(data: &[u8], offset: usize, bound: usize) -> NativeResult<(usize, usize)> {
@@ -1351,15 +1663,20 @@ fn read_any_varint(data: &[u8], offset: usize, bound: usize) -> NativeResult<usi
     ))
 }
 
-fn append_frame(output: &mut Vec<u8>, value: &[u8]) -> NativeResult<()> {
+fn append_frame(output: &mut Vec<u8>, value: &[u8], session: &mut Session<'_>) -> NativeResult<()> {
     append_varint(
         output,
         usize_u64(value.len(), "native frame length exceeds u64")?,
+        session,
     )?;
-    append_bytes(output, value)
+    append_bytes(output, value, session)
 }
 
-fn append_varint(output: &mut Vec<u8>, mut value: u64) -> NativeResult<()> {
+fn append_varint(
+    output: &mut Vec<u8>,
+    mut value: u64,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
     let mut bytes = [0_u8; 10];
     let mut length = 0_usize;
     loop {
@@ -1371,17 +1688,82 @@ fn append_varint(output: &mut Vec<u8>, mut value: u64) -> NativeResult<()> {
         bytes[length] = byte;
         length += 1;
         if value == 0 {
-            return append_bytes(output, &bytes[..length]);
+            return append_bytes(output, &bytes[..length], session);
         }
     }
 }
 
-fn append_bytes(output: &mut Vec<u8>, value: &[u8]) -> NativeResult<()> {
+fn append_bytes(output: &mut Vec<u8>, value: &[u8], session: &mut Session<'_>) -> NativeResult<()> {
+    reserve_bytes(session, value.len())?;
     output
         .try_reserve(value.len())
         .map_err(|_| NativeError::limit("native anonymous byte allocation failed"))?;
     output.extend_from_slice(value);
     Ok(())
+}
+
+fn reserve_items<T>(session: &mut Session<'_>, count: usize) -> NativeResult<()> {
+    let bytes = count
+        .checked_mul(size_of::<T>())
+        .ok_or_else(|| NativeError::limit("native anonymous allocation accounting overflow"))?;
+    reserve_bytes(session, bytes)
+}
+
+fn reserve_bytes(session: &mut Session<'_>, bytes: usize) -> NativeResult<()> {
+    session.reserve_temporary_bytes(bytes)
+}
+
+fn copy_bytes(value: &[u8], session: &mut Session<'_>) -> NativeResult<Vec<u8>> {
+    reserve_bytes(session, value.len())?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(value.len())
+        .map_err(|_| NativeError::limit("native anonymous byte allocation failed"))?;
+    output.extend_from_slice(value);
+    Ok(output)
+}
+
+fn owned_text(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
+    reserve_bytes(session, value.len())?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(value.len())
+        .map_err(|_| NativeError::limit("native anonymous text allocation failed"))?;
+    output.push_str(value);
+    Ok(output)
+}
+
+fn one_byte(value: u8, session: &mut Session<'_>) -> NativeResult<Vec<u8>> {
+    reserve_bytes(session, 1)?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(1)
+        .map_err(|_| NativeError::limit("native anonymous byte allocation failed"))?;
+    output.push(value);
+    Ok(output)
+}
+
+fn set_marker(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
+    let mut output = String::new();
+    reserve_bytes(session, value.len().saturating_add(4))?;
+    output
+        .try_reserve_exact(value.len().saturating_add(4))
+        .map_err(|_| NativeError::limit("native blank set marker allocation failed"))?;
+    output.push_str("set:");
+    output.push_str(value);
+    Ok(output)
+}
+
+fn decimal_index(value: usize, session: &mut Session<'_>) -> NativeResult<String> {
+    use std::fmt::Write;
+    let capacity = usize::BITS as usize;
+    reserve_bytes(session, capacity)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(capacity)
+        .map_err(|_| NativeError::limit("native blank index allocation failed"))?;
+    write!(output, "{value}").expect("writing to String cannot fail");
+    Ok(output)
 }
 
 fn enforce_work(work: u64, limits: &Limits) -> NativeResult<()> {
@@ -1406,7 +1788,28 @@ fn checked_add_u64(left: usize, right: usize, message: &'static str) -> NativeRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cancel::Guard;
     use crate::canonical::{anonymous, entity, Field, Node};
+
+    fn scope(
+        ontology_iri: Option<&str>,
+        rows: [&[Vec<u8>]; 3],
+    ) -> NativeResult<ScopedAnonymousRowsV2> {
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let input_bytes = rows
+            .iter()
+            .flat_map(|values| values.iter())
+            .map(Vec::len)
+            .sum();
+        let mut session = Session::new(&mut guard, &limits, input_bytes)?;
+        scope_rdfxml_anonymous_rows_v2(ontology_iri, None, &[], rows, &mut session, &cancellation)
+    }
 
     #[test]
     fn scopes_one_blank_into_distinct_raw_and_effective_rows() {
@@ -1420,15 +1823,7 @@ mod tests {
         )
         .unwrap()
         .into_bytes();
-        let result = scope_rdfxml_anonymous_rows_v2(
-            Some("urn:o"),
-            None,
-            &[],
-            [&[], &[axiom], &[]],
-            &Limits::default(),
-            &Cancellation::with_duration(None),
-        )
-        .unwrap();
+        let result = scope(Some("urn:o"), [&[], &[axiom], &[]]).unwrap();
         assert_eq!(result.raw[1].len(), 1);
         assert_eq!(result.effective[1].len(), 1);
         assert_ne!(result.raw[1], result.effective[1]);
@@ -1479,15 +1874,7 @@ mod tests {
         )
         .unwrap()
         .into_bytes();
-        let result = scope_rdfxml_anonymous_rows_v2(
-            None,
-            None,
-            &[],
-            [&[], &[axiom], &[]],
-            &Limits::default(),
-            &Cancellation::with_duration(None),
-        )
-        .expect("wide integer anonymous scope");
+        let result = scope(None, [&[], &[axiom], &[]]).expect("wide integer anonymous scope");
         let mut budget = ScanBudget::from_limits(&Limits::default());
         assert_eq!(
             scan_canonical(&result.raw[1][0], &mut budget).expect("scoped row"),

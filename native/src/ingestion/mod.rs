@@ -126,7 +126,7 @@ pub(crate) fn parse_rdfxml_retained_v2(
             document.version_iri.as_deref(),
             &document.imports,
             rows,
-            &limits,
+            session,
             &cancellation,
         )?;
         let crate::parse::ScopedAnonymousRowsV2 {

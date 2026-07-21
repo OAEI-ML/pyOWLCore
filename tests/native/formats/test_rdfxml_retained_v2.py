@@ -874,6 +874,16 @@ def test_anonymous_alpha_permutations_obey_the_shared_canonical_work_limit() -> 
         )
 
 
+def test_anonymous_scoping_accounts_its_native_temporary_workspace() -> None:
+    limits = ParseLimits(max_temporary_bytes=len(ANONYMOUS_SOURCE) * 3)
+    with pytest.raises(ResourceLimitError, match="max_temporary_bytes"):
+        native._parse_rdfxml_retained_v2(
+            ANONYMOUS_SOURCE,
+            document_iri=None,
+            limits=limits,
+        )
+
+
 def test_anonymous_provenance_uses_effective_digests_without_python_rescoping() -> None:
     def options(backend: BackendPreference) -> LoadOptions:
         return LoadOptions(
