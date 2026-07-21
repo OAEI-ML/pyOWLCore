@@ -36,7 +36,6 @@ XML_NS = "http://www.w3.org/XML/1998/namespace"
 _FORBIDDEN_XML = re.compile(rb"(?is)<!\s*(?:DOCTYPE|ENTITY)")
 _FORBIDDEN_XML_TEXT = re.compile(r"(?is)<!\s*(?:DOCTYPE|ENTITY)")
 _XML_ENCODING = re.compile(rb"(?i)^\s*<\?xml[^>]*\bencoding\s*=\s*['\"]([^'\"]+)")
-_NCNAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 
 def parse_rdfxml(
@@ -97,7 +96,15 @@ def parse_rdfxml(
 
 
 class RDFXMLGraphParser:
-    __slots__ = ("base", "blank_counter", "context", "node_ids", "root", "triples")
+    __slots__ = (
+        "base",
+        "blank_counter",
+        "context",
+        "node_ids",
+        "rdf_ids",
+        "root",
+        "triples",
+    )
 
     def __init__(
         self,
@@ -111,6 +118,7 @@ class RDFXMLGraphParser:
         self.base = None if document_iri is None else document_iri.value
         self.blank_counter = 0
         self.node_ids: dict[str, RDFBlank] = {}
+        self.rdf_ids: set[tuple[str, str]] = set()
         self.triples: set[Triple] = set()
 
     def parse(self) -> RDFGraph:
@@ -145,7 +153,7 @@ class RDFXMLGraphParser:
         elif present[0][0] == "nodeID":
             subject = self._node_id(present[0][1] or "")
         elif present[0][0] == "ID":
-            subject = RDFIRI(self._resolve("#" + (present[0][1] or ""), base))
+            subject = RDFIRI(self._rdf_id(present[0][1] or "", base))
         else:
             subject = RDFIRI(self._resolve(present[0][1] or "", base))
         if element.tag != _tag(RDF, "Description"):
@@ -207,6 +215,8 @@ class RDFXMLGraphParser:
         node_id = element.get(_tag(RDF, "nodeID"))
         parse_type = element.get(_tag(RDF, "parseType"))
         datatype = element.get(_tag(RDF, "datatype"))
+        statement_id = element.get(_tag(RDF, "ID"))
+        reified = None if statement_id is None else RDFIRI(self._rdf_id(statement_id, base))
         modes = sum(item is not None for item in (resource, node_id, parse_type))
         if modes > 1:
             self._syntax("RDF property element has conflicting object attributes")
@@ -265,9 +275,7 @@ class RDFXMLGraphParser:
                 else:
                     literal = RDFLiteral(lexical, XSD + "string")
                 triple = self._add(subject, predicate, literal)
-        statement_id = element.get(_tag(RDF, "ID"))
-        if statement_id is not None:
-            reified = RDFIRI(self._resolve("#" + statement_id, base))
+        if reified is not None:
             self._add(reified, RDF + "type", RDFIRI(RDF + "Statement"))
             self._add(reified, RDF + "subject", triple.subject)
             self._add(reified, RDF + "predicate", triple.predicate)
@@ -338,9 +346,21 @@ class RDFXMLGraphParser:
         return result
 
     def _node_id(self, value: str) -> RDFBlank:
-        if not value:
-            self._syntax("rdf:nodeID must be nonempty")
+        if not _is_xml_ncname(value):
+            self._syntax("rdf:nodeID must be an XML NCName")
         return self.node_ids.setdefault(value, RDFBlank(value))
+
+    def _rdf_id(self, value: str, base: str | None) -> str:
+        if not _is_xml_ncname(value):
+            self._syntax("rdf:ID must be an XML NCName")
+        resolved = self._resolve("#" + value, base)
+        if base is None:
+            raise AssertionError("resolved rdf:ID has no base")
+        binding = (value, base)
+        if binding in self.rdf_ids:
+            self._syntax("rdf:ID must be unique within its XML base")
+        self.rdf_ids.add(binding)
+        return resolved
 
     def _fresh(self, stem: str) -> RDFBlank:
         self.blank_counter += 1
@@ -415,11 +435,50 @@ def _split_predicate(value: str) -> tuple[str, str]:
     # into a namespace ending in ``typ`` and the local name ``e``.
     for index in range(1, len(value)):
         local = value[index:]
-        if _NCNAME.fullmatch(local):
+        if _is_xml_ncname(local):
             return value[:index], local
     raise OntologySyntaxError(
         "predicate IRI cannot be represented as an RDF/XML QName",
         code="RDFXML_PREDICATE_QNAME",
+    )
+
+
+def _is_xml_ncname(value: str) -> bool:
+    if not value or not _is_xml_name_start(value[0]):
+        return False
+    return all(character != ":" and _is_xml_name_character(character) for character in value[1:])
+
+
+def _is_xml_name_start(value: str) -> bool:
+    codepoint = ord(value)
+    return (
+        value == "_"
+        or "A" <= value <= "Z"
+        or "a" <= value <= "z"
+        or 0x00C0 <= codepoint <= 0x00D6
+        or 0x00D8 <= codepoint <= 0x00F6
+        or 0x00F8 <= codepoint <= 0x02FF
+        or 0x0370 <= codepoint <= 0x037D
+        or 0x037F <= codepoint <= 0x1FFF
+        or 0x200C <= codepoint <= 0x200D
+        or 0x2070 <= codepoint <= 0x218F
+        or 0x2C00 <= codepoint <= 0x2FEF
+        or 0x3001 <= codepoint <= 0xD7FF
+        or 0xF900 <= codepoint <= 0xFDCF
+        or 0xFDF0 <= codepoint <= 0xFFFD
+        or 0x10000 <= codepoint <= 0xEFFFF
+    )
+
+
+def _is_xml_name_character(value: str) -> bool:
+    codepoint = ord(value)
+    return (
+        _is_xml_name_start(value)
+        or value in {"-", "."}
+        or "0" <= value <= "9"
+        or codepoint == 0x00B7
+        or 0x0300 <= codepoint <= 0x036F
+        or 0x203F <= codepoint <= 0x2040
     )
 
 

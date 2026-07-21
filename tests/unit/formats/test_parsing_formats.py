@@ -11,6 +11,7 @@ from pyowl_core import (
     DocumentFormat,
     ImportPolicy,
     LoadOptions,
+    OntologySyntaxError,
     OptionConflictError,
     PythonParser,
     UnsupportedSyntaxError,
@@ -111,6 +112,66 @@ def test_rdfxml_empty_language_resets_inherited_literal_language() -> None:
     assert {value.value.lexical_form for value in assertions} == {"attribute", "element"}
     assert all(value.value.language is None for value in assertions)
     assert all(value.value.datatype == m.XSD_STRING for value in assertions)
+
+
+def test_rdfxml_unicode_ids_are_unique_within_each_xml_base() -> None:
+    source = """\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xml:base="https://example.org/a/doc">
+  <owl:Class rdf:ID="classe-é"/>
+  <owl:Class xml:base="../b/doc" rdf:ID="classe-é"/>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+
+    assert document.axioms == m.CanonicalSet(
+        (
+            m.Declaration(m.Class(m.IRI("https://example.org/a/doc#classe-é"))),
+            m.Declaration(m.Class(m.IRI("https://example.org/b/doc#classe-é"))),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    (
+        ("ID", ""),
+        ("ID", "1leading-digit"),
+        ("ID", "bad:name"),
+        ("nodeID", ""),
+        ("nodeID", "1leading-digit"),
+        ("nodeID", "bad:name"),
+    ),
+)
+def test_rdfxml_identity_attributes_require_xml_ncnames(attribute: str, value: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xml:base="https://example.org/doc">
+  <owl:Class rdf:{attribute}="{value}"/>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
+
+
+def test_rdfxml_duplicate_id_within_one_xml_base_is_rejected() -> None:
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xml:base="https://example.org/doc">
+  <owl:Class rdf:ID="duplicate"/>
+  <owl:Class rdf:ID="duplicate"/>
+</rdf:RDF>
+"""
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
 
 
 def test_disabled_provenance_omits_document_and_snapshot_origins() -> None:

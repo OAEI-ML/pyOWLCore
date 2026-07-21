@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from pyowl_core import IRI, ParseLimits
+from pyowl_core import IRI, OntologySyntaxError, ParseLimits
 from pyowl_core.backends import native
 from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.model import canonical_bytes
@@ -619,6 +619,75 @@ def test_property_element_id_graph_is_complete_but_strict_mapping_stays_closed(
     with pytest.raises(extension._NativeError) as limited:
         _ingest(extension, source, limits=ParseLimits(max_triples=6))
     assert limited.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
+def test_unicode_rdf_ids_match_python_and_are_scoped_by_xml_base(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xml:base='https://example.org/a/doc'>
+ <owl:Class rdf:ID='classe-\xc3\xa9'/>
+ <owl:Class xml:base='../b/doc' rdf:ID='classe-\xc3\xa9'/>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 2
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+
+
+@pytest.mark.parametrize(
+    "identity",
+    (
+        "rdf:ID=''",
+        "rdf:ID='1leading-digit'",
+        "rdf:ID='bad:name'",
+        "rdf:nodeID=''",
+        "rdf:nodeID='1leading-digit'",
+        "rdf:nodeID='bad:name'",
+    ),
+)
+def test_invalid_rdf_identity_ncnames_fail_in_both_backends(
+    extension: NativeTestExtension,
+    identity: str,
+) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' "
+        "xml:base='https://example.org/doc'>"
+        f"<owl:Class {identity}/></rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
+def test_duplicate_rdf_id_fails_in_both_backends(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xml:base='https://example.org/doc'>
+ <owl:Class rdf:ID='duplicate'/>
+ <owl:Class rdf:ID='duplicate'/>
+</rdf:RDF>"""
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
 
 
 def test_rfc3986_document_and_nested_xml_bases_match_python(
