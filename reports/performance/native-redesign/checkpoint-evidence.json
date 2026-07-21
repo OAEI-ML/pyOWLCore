@@ -1,6 +1,6 @@
 {
   "schema": "pyowl-core.native-redesign-release-evidence/1",
-  "core_revision": "4608cc4e934c05df6d3f0c55c1fceec33e43b042",
+  "core_revision": "6750aa0d9a9fc50c0d6931f7ac8f6310623bc7cf",
   "core_gates": [
     {
       "id": "semantic-differential-conformance",
@@ -23,14 +23,14 @@
     {
       "id": "encoded-view-installed-integration",
       "status": "not-run",
-      "reason": "schema 1 is frozen but unadvertised and the complete installed-wheel consumer fence has not run",
-      "evidence": ["reports/workpackages/WP17.md", "schemas/version-decision-v1.toml"]
+      "reason": "one clean CPython 3.12 macOS Functional wheel passes the direct, decoded, mmap, overlay, composite, hostile, negative, lifetime, and zero-work checkpoint, but the every-format supported-platform external-consumer fence is incomplete",
+      "evidence": ["reports/integration/wp17-installed-view-matrix.json", "reports/workpackages/WP17.md", "schemas/version-decision-v1.toml"]
     },
     {
       "id": "direct-decoded-mmap-overlay-composite-parity",
       "status": "not-run",
       "reason": "the retained Functional source-tree and installed checkpoint matrices pass, but the required every-format and import-closure cross-product is incomplete",
-      "evidence": ["reports/workpackages/WP16.md", "reports/workpackages/WP17.md", "tests/integration/native_consumers/test_retained_view_matrix.py"]
+      "evidence": ["reports/integration/wp17-installed-view-matrix.json", "reports/workpackages/WP16.md", "reports/workpackages/WP17.md", "tests/integration/native_consumers/test_retained_view_matrix.py"]
     },
     {
       "id": "pure-and-native-artifact-matrix",

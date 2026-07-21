@@ -1,0 +1,96 @@
+{
+  "schema": "pyowl-core.wp17-installed-view-matrix/1",
+  "status": "checkpoint-pass",
+  "acceptance_complete": false,
+  "source_revision": "6750aa0d9a9fc50c0d6931f7ac8f6310623bc7cf",
+  "source_worktree_clean": true,
+  "artifact": {
+    "filename": "pyowl_core-0.1.0.dev0-cp312-cp312-macosx_14_0_x86_64.whl",
+    "sha256": "1626c42c5918358737e88904462ade927ddc09a862ac3879f843a6bba682d724",
+    "bytes": 1197343,
+    "member_count": 104,
+    "uncompressed_bytes": 3783704,
+    "structural_inspection_ok": true,
+    "variant": "native",
+    "version": "0.1.0.dev0",
+    "release_ready": false,
+    "deferred_platform_checks": [
+      "native dynamic dependencies/rpaths/symbols require the target-platform audit job"
+    ]
+  },
+  "environment": {
+    "operating_system": "macOS 26.5.2 (25F84)",
+    "architecture": "x86_64",
+    "python": "CPython 3.12.3",
+    "wheel_tag": "cp312-cp312-macosx_14_0_x86_64"
+  },
+  "isolation": {
+    "wheel_installed_without_dependencies": true,
+    "package_loaded_from_isolated_site_packages": true,
+    "source_package_shadowing": false,
+    "native_extension_loaded_from_isolated_site_packages": true
+  },
+  "matrix": {
+    "forced_native": true,
+    "owners": [
+      "direct",
+      "decoded",
+      "mmap",
+      "overlay",
+      "composite"
+    ],
+    "root_parity": {
+      "direct": true,
+      "decoded": true,
+      "mmap": true,
+      "overlay": true,
+      "composite": true
+    },
+    "owner_identity": {
+      "direct": true,
+      "mmap": true,
+      "overlay": true,
+      "composite": true
+    },
+    "zero_forbidden_work": {
+      "overlay_scalar_traversal_calls": 0,
+      "overlay_referenced_buffer_copy_bytes": 0,
+      "composite_scalar_traversal_calls": 0,
+      "composite_referenced_buffer_copy_bytes": 0,
+      "left_model_rows_materialized": 0,
+      "left_page_requests": 0,
+      "left_rows_emitted": 0,
+      "right_model_rows_materialized": 0,
+      "right_page_requests": 0,
+      "right_rows_emitted": 0
+    },
+    "negative": {
+      "hostile_descriptor_error": "ENCODED_VIEW_DESCRIPTOR",
+      "malformed_forced_native_error": "FORMAT_SYNTAX"
+    },
+    "lifetime": {
+      "mmap_close_blocked_while_exported": true,
+      "mmap_closed_after_export_release": true,
+      "direct_buffers_survive_snapshot_close": true,
+      "native_members_close_after_segment_release": true
+    },
+    "wire": {
+      "python_parity": true,
+      "sha256": "dd92dee2b78189486e928569257e0fae7115726209373486513adc6be1402ec4",
+      "model_rows_materialized": 0,
+      "encoded_view_requests": 1
+    }
+  },
+  "verification": {
+    "runner": "tests/native/formats/_retained_load_runner.py",
+    "outer_test": "tests/native/formats/test_public_retained_load.py::test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners",
+    "result": "pass"
+  },
+  "remaining_scope": [
+    "every WP16 format and import/option cross-product",
+    "external public consumer operations with advertised negotiation",
+    "supported Python and platform wheel matrix",
+    "sanitizer, fuzz, fork, concurrency, and allocation-failure release lanes",
+    "representative corpus and repair-composite performance evidence"
+  ]
+}
