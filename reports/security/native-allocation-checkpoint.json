@@ -1,6 +1,6 @@
 {
   "schema": "pyowl-core.native-allocation-checkpoint/1",
-  "subject_revision": "c1f7d4e95e1897fa4e816b2ea4b2d733271e177d",
+  "subject_revision": "c9532e80c362e321e81326cef02d48f0f6b2df7b",
   "recorded_date": "2026-07-21",
   "claim": "checkpoint-only",
   "capability_advertised": false,
@@ -16,8 +16,8 @@
     "kind": "local test-hook extension",
     "profile": "dev",
     "features": ["extension-module", "test-hooks"],
-    "path": "/private/tmp/pyowlcore-foundation-bridge-target-c1f7d4e/debug/lib_native.dylib",
-    "sha256": "a2140baa95f04ae5830fd8e5c357b3db7da462c1882b4a3c84bda5004698f137"
+    "path": "/private/tmp/pyowlcore-rdfxml-bridge-target-c9532e8/debug/lib_native.dylib",
+    "sha256": "0d4e2498ae669c11df45fb455824f8793de6133083770b25579b76a2d8dd9218"
   },
   "continuous_workflow": {
     "path": ".github/workflows/native-safety.yml",
@@ -98,6 +98,12 @@
       "boundary_successes": 1,
       "scope": "explicit configuration/source builtins, memoryview, copy, owned-Vec, and framed-result publication checkpoints in the Functional parser Python bridge"
     },
+    "rdfxml_retained_bridge": {
+      "allocation_checkpoints": 9,
+      "injected_failures": 9,
+      "boundary_successes": 1,
+      "scope": "explicit configuration copy, document-IRI ownership, contiguous source ownership, and framed-result publication checkpoints in the retained RDF/XML Python bridge"
+    },
     "index_bridge": {
       "allocation_checkpoints": 13,
       "injected_failures": 13,
@@ -112,9 +118,9 @@
       "boundary_successes": 3,
       "scope": "explicit configuration/input builtins, memoryview, copy, owned-Vec, and result publication checkpoints for canonical validation, wire validation, and wire roundtrip Python bridges"
     },
-    "covered_allocation_checkpoints": 20902,
-    "covered_injected_failures": 20902,
-    "covered_boundary_successes": 238,
+    "covered_allocation_checkpoints": 20911,
+    "covered_injected_failures": 20911,
+    "covered_boundary_successes": 239,
     "invariants": [
       "every injected component or wire failure is NATIVE_WIRE_LIMIT with a stable allocation-failure message",
       "a build-phase failure poisons later mutation and prevents freeze",
@@ -133,6 +139,8 @@
       "the first non-failing parser-session boundary reproduces the exact framed parse result and allocation count",
       "every injected parser-bridge failure publishes no result and leaves the caller's mutable configuration and source unchanged",
       "the first non-failing parser-bridge boundary reproduces the exact framed parse result and allocation count",
+      "every injected retained RDF/XML bridge failure publishes no result and leaves the caller's mutable configuration and source unchanged",
+      "the first non-failing retained RDF/XML bridge boundary reproduces the exact framed retained seed and allocation count",
       "every injected index-bridge failure publishes no result and leaves the caller's mutable request and source unchanged",
       "the first non-failing index-bridge boundary reproduces the exact framed index result and allocation count",
       "every injected foundation-bridge failure publishes no result and leaves the caller's mutable configuration and input unchanged",
@@ -143,26 +151,26 @@
     {
       "id": "cpython-3.12-retained-allocation-boundary",
       "status": "pass",
-      "working_directory": "/private/tmp/pyowlcore-foundation-bridge-worktree.c1f7d4e",
-      "command": "PYTHONPATH=src:. PYOWL_CORE_TEST_NATIVE_LIBRARY=/private/tmp/pyowlcore-foundation-bridge-target-c1f7d4e/debug/lib_native.dylib PYOWL_CORE_TEST_HOOKS_REQUIRED=1 python -m pytest -q tests/native/foundation/test_allocation_failure.py tests/native/foundation/test_native_boundary.py tests/native/wire/test_wire_parity.py tests/native/publication_handoff tests/native/retained_facade/test_million_unique_owner.py tests/native/encoded_views",
+      "working_directory": "/private/tmp/pyowlcore-rdfxml-bridge-worktree.c9532e8",
+      "command": "PYTHONPATH=src:. PYOWL_CORE_TEST_NATIVE_LIBRARY=/private/tmp/pyowlcore-rdfxml-bridge-target-c9532e8/debug/lib_native.dylib PYOWL_CORE_TEST_HOOKS_REQUIRED=1 /Users/pedrocotovio/Documents/Repos/OM/pyOWLCore/.venv/bin/python -m pytest -q tests/native/foundation/test_allocation_failure.py tests/native/foundation/test_native_boundary.py tests/native/wire/test_wire_parity.py tests/native/publication_handoff tests/native/retained_facade/test_million_unique_owner.py tests/native/encoded_views",
       "observations": {
-        "tests_passed": 303,
+        "tests_passed": 304,
         "tests_failed": 0,
         "tests_skipped": 1,
         "subtests_passed": 3144,
-        "seconds": 53.44
+        "seconds": 60.45
       },
-      "notes": "All 76 generated model constructors completed the dynamic build/freeze/encode sweep; all five explicit wire validation/receipt allocations, all 57 positive retained-publication budget checkpoints, all 51 direct encoded-view Python bridge checkpoints, all 13 actual retained encoded-column workspace growth checkpoints, all 38 positive Functional parser session allocation-budget claims, all 13 explicit Functional parser configuration/source/result bridge checkpoints, all 13 explicit native index request/source/result bridge checkpoints, and all 39 explicit canonical/wire foundation bridge checkpoints completed dynamic failure sweeps. The complete publication-handoff, retained-boundary, native-wire, and encoded-view suites remained green. The sole skip is the separately proved opt-in million-unique traversal."
+      "notes": "All 76 generated model constructors completed the dynamic build/freeze/encode sweep; all five explicit wire validation/receipt allocations, all 57 positive retained-publication budget checkpoints, all 51 direct encoded-view Python bridge checkpoints, all 13 actual retained encoded-column workspace growth checkpoints, all 38 positive Functional parser session allocation-budget claims, all 13 explicit Functional parser configuration/source/result bridge checkpoints, all nine retained RDF/XML configuration/document-IRI/source/result bridge checkpoints, all 13 explicit native index request/source/result bridge checkpoints, and all 39 explicit canonical/wire foundation bridge checkpoints completed dynamic failure sweeps. The complete publication-handoff, retained-boundary, native-wire, and encoded-view suites remained green. The sole skip is the separately proved opt-in million-unique traversal."
     },
     {
       "id": "rust-retained-allocation-regressions",
       "status": "pass",
-      "working_directory": "/private/tmp/pyowlcore-foundation-bridge-worktree.c1f7d4e",
-      "command": "cargo test --manifest-path native/Cargo.toml --locked --no-default-features --features test-hooks --lib --quiet",
+      "working_directory": "/private/tmp/pyowlcore-rdfxml-bridge-worktree.c9532e8",
+      "command": "CARGO_TARGET_DIR=/private/tmp/pyowlcore-rdfxml-bridge-rust-target-c9532e8 cargo test --manifest-path native/Cargo.toml --locked --no-default-features --features test-hooks --lib --quiet",
       "observations": {
         "tests_passed": 231,
         "tests_failed": 0,
-        "seconds": 1.63
+        "seconds": 2.23
       },
       "notes": "The production Rust library suite passed without the CPython extension feature; all-feature Clippy with warnings denied, rustfmt, and focused Ruff also passed at the same revision."
     }
@@ -175,18 +183,19 @@
     "encoded_view_rust_workspace_allocation_failures": "local-pass",
     "native_parser_session_allocation_failures": "local-pass",
     "native_parser_python_bridge_allocation_failures": "local-pass",
+    "native_rdfxml_retained_python_bridge_allocation_failures": "local-pass",
     "native_index_python_bridge_allocation_failures": "local-pass",
     "native_foundation_python_bridge_allocation_failures": "local-pass",
     "end_to_end_allocation_failure_matrix": "not-run",
     "security_resource_determinism": "not-run",
     "core_release_eligible": false,
-    "reason": "the retained component, validated V2 publication builder, native wire validation/receipt, direct encoded-view Python bridge, retained encoded-column workspace, Functional parser session, Functional configuration/source/result bridge, native index request/source/result bridge, and canonical/wire foundation bridge sweeps pass locally, but remaining bridge and process-allocator paths, hosted interpreters, and supported platforms remain incomplete"
+    "reason": "the retained component, validated V2 publication builder, native wire validation/receipt, direct encoded-view Python bridge, retained encoded-column workspace, Functional parser session, Functional configuration/source/result bridge, retained RDF/XML configuration/document-IRI/source/result bridge, native index request/source/result bridge, and canonical/wire foundation bridge sweeps pass locally, but remaining bridge and process-allocator paths, hosted interpreters, and supported platforms remain incomplete"
   },
   "limitations": [
     "The hook controls explicit retained-component allocation checkpoints; it does not replace a process allocator failure campaign.",
     "The artifact is a local development build, not an installed release wheel.",
     "Only macOS x86-64 with CPython 3.12 ran locally.",
-    "Remaining bridge and process-allocator failure sweeps remain open; the parser, index, canonical, and wire checkpoints cover explicit allocation-budget and object-publication boundaries rather than every process allocation.",
+    "Remaining bridge and process-allocator failure sweeps remain open; the Functional parser, retained RDF/XML, index, canonical, and wire checkpoints cover explicit allocation-budget and object-publication boundaries rather than every process allocation.",
     "No retained-load or encoded-view capability promotion follows from this checkpoint."
   ]
 }
