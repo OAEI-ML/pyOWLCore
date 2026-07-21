@@ -169,6 +169,55 @@ def test_valid_xml_declaration_and_explicit_xml_binding_match_python(
     assert observed.total_triples == python.rdf_mapping_report.total_triples
 
 
+@pytest.mark.parametrize(
+    ("little_endian", "bom", "declaration_encoding"),
+    (
+        (True, True, "UTF-16"),
+        (False, True, "UTF-16"),
+        (True, False, "UTF-16LE"),
+        (False, False, "UTF-16BE"),
+    ),
+)
+def test_utf16_endianness_and_bom_match_python(
+    extension: NativeTestExtension,
+    little_endian: bool,
+    bom: bool,
+    declaration_encoding: str,
+) -> None:
+    text = f"""<?xml version='1.0' encoding='{declaration_encoding}'?>
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'><rdfs:label>café 🙂</rdfs:label></owl:Class>
+</rdf:RDF>"""
+    byteorder = "le" if little_endian else "be"
+    prefix = (b"\xff\xfe" if little_endian else b"\xfe\xff") if bom else b""
+    source = prefix + text.encode(f"utf-16-{byteorder}")
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+
+    assert observed.decoded_codepoints == len(text)
+    assert observed.decoded_codepoints == python.decoded_codepoint_length
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 2
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.total_source_bytes == len(source)
+
+
+def test_utf16_forbidden_construct_fails_before_publication(
+    extension: NativeTestExtension,
+) -> None:
+    text = """<!DOCTYPE rdf:RDF [<!ENTITY x SYSTEM 'file:///etc/passwd'>]>
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>"""
+    source = b"\xff\xfe" + text.encode("utf-16-le")
+    with pytest.raises(extension._NativeError) as raised:
+        _ingest(extension, source)
+    assert raised.value.args[0] == "NATIVE_XML_FORBIDDEN_CONSTRUCT"
+
+
 def test_processing_instructions_map_to_no_rdf_events(
     extension: NativeTestExtension,
 ) -> None:
@@ -680,10 +729,12 @@ def test_rfc3986_document_and_nested_xml_bases_match_python(
             "NATIVE_RDFXML_SYNTAX",
         ),
         (
-            b"<?xml version='1.0' encoding='UTF-16'?><rdf:RDF "
+            b"<?xml version='1.0' encoding='ISO-8859-1'?><rdf:RDF "
             b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
             "NATIVE_XML_FORBIDDEN_CONSTRUCT",
         ),
+        (b"\xff\xfe\x00\xd8", "NATIVE_FORMAT_ENCODING"),
+        (b"\xff\xfe<\x00x", "NATIVE_FORMAT_ENCODING"),
         (
             b"<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
             b"xmlns:bad='http://www.w3.org/XML/1998/namespace'/>",

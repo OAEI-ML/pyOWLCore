@@ -1,4 +1,4 @@
-//! Forward-only UTF-8 RDF/XML tokenization and a closed OWL mapping slice.
+//! Forward-only Unicode RDF/XML tokenization and a closed OWL mapping slice.
 //!
 //! This intentionally unadvertised slice accepts ontology headers, imports,
 //! named entity declarations, named axioms, and boolean class expressions. The
@@ -158,8 +158,16 @@ enum XmlEvent {
     Text { value: String, span: Span },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XmlSourceEncoding {
+    Utf8,
+    Utf16Le,
+    Utf16Be,
+}
+
 struct XmlStream<'a> {
     text: &'a str,
+    source_encoding: XmlSourceEncoding,
     offset: usize,
     line: u64,
     column: u64,
@@ -167,9 +175,10 @@ struct XmlStream<'a> {
 }
 
 impl<'a> XmlStream<'a> {
-    fn new(text: &'a str) -> Self {
+    fn new(text: &'a str, source_encoding: XmlSourceEncoding) -> Self {
         Self {
             text,
+            source_encoding,
             offset: 0,
             line: 1,
             column: 1,
@@ -267,7 +276,7 @@ impl<'a> XmlStream<'a> {
                     if start != 0 || self.xml_declaration_seen {
                         return Err(xml_syntax());
                     }
-                    validate_xml_declaration(body)?;
+                    validate_xml_declaration(body, self.source_encoding)?;
                     self.xml_declaration_seen = true;
                 } else {
                     // RDF/XML maps no processing-instruction Infoset item to
@@ -575,6 +584,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
     fn new(
         text: &'text str,
         document_iri: Option<&str>,
+        source_encoding: XmlSourceEncoding,
         session: &'session mut Session<'guard>,
     ) -> NativeResult<Self> {
         let binding = NamespaceBinding {
@@ -588,7 +598,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         reserve_vec_item(&mut namespaces, session)?;
         namespaces.push(binding);
         Ok(Self {
-            stream: XmlStream::new(text),
+            stream: XmlStream::new(text, source_encoding),
             session,
             namespaces,
             rdf_ids: Vec::new(),
@@ -1958,16 +1968,116 @@ pub(super) fn parse_and_map_timed(
     document_iri: Option<&str>,
     session: &mut Session<'_>,
 ) -> NativeResult<(CanonicalDocument, u64)> {
-    let (text, decoded_codepoints) = decode_utf8(source, session)?;
-    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    let decoded_codepoints =
-        decoded_codepoints.saturating_sub(u64::from(source.starts_with(&[0xef, 0xbb, 0xbf])));
-    let triples = GraphParser::new(text, document_iri, session)?.parse()?;
+    let (text, decoded_codepoints, source_encoding) = decode_xml(source, session)?;
+    let utf8_bom =
+        source_encoding == XmlSourceEncoding::Utf8 && source.starts_with(&[0xef, 0xbb, 0xbf]);
+    let text = if utf8_bom {
+        text.strip_prefix('\u{feff}').ok_or_else(xml_syntax)?
+    } else {
+        &text
+    };
+    let decoded_codepoints = decoded_codepoints.saturating_sub(u64::from(utf8_bom));
+    let triples = GraphParser::new(text, document_iri, source_encoding, session)?.parse()?;
     let mapping_started = Instant::now();
     let document = map_graph(triples, decoded_codepoints, session)?;
     let mapping_ns = u64::try_from(mapping_started.elapsed().as_nanos())
         .map_err(|_| NativeError::limit("native RDF mapping phase time exceeds u64"))?;
     Ok((document, mapping_ns))
+}
+
+fn decode_xml(
+    source: &[u8],
+    session: &mut Session<'_>,
+) -> NativeResult<(String, u64, XmlSourceEncoding)> {
+    if source.starts_with(&[0xff, 0xfe, 0x00, 0x00])
+        || source.starts_with(&[0x00, 0x00, 0xfe, 0xff])
+        || source.starts_with(&[0x00, 0x00, 0x00, b'<'])
+        || source.starts_with(&[b'<', 0x00, 0x00, 0x00])
+    {
+        return Err(NativeError::new(
+            "NATIVE_FORMAT_ENCODING",
+            "native RDF/XML source uses unsupported UTF-32 encoding",
+        ));
+    }
+    if let Some(content) = source.strip_prefix(&[0xff, 0xfe]) {
+        let (text, decoded_codepoints) = decode_utf16(content, true, session)?;
+        return Ok((text, decoded_codepoints, XmlSourceEncoding::Utf16Le));
+    }
+    if let Some(content) = source.strip_prefix(&[0xfe, 0xff]) {
+        let (text, decoded_codepoints) = decode_utf16(content, false, session)?;
+        return Ok((text, decoded_codepoints, XmlSourceEncoding::Utf16Be));
+    }
+    if source.starts_with(&[b'<', 0x00]) {
+        let (text, decoded_codepoints) = decode_utf16(source, true, session)?;
+        return Ok((text, decoded_codepoints, XmlSourceEncoding::Utf16Le));
+    }
+    if source.starts_with(&[0x00, b'<']) {
+        let (text, decoded_codepoints) = decode_utf16(source, false, session)?;
+        return Ok((text, decoded_codepoints, XmlSourceEncoding::Utf16Be));
+    }
+    let (text, decoded_codepoints) = decode_utf8(source, session)?;
+    Ok((text, decoded_codepoints, XmlSourceEncoding::Utf8))
+}
+
+fn decode_utf16(
+    source: &[u8],
+    little_endian: bool,
+    session: &mut Session<'_>,
+) -> NativeResult<(String, u64)> {
+    session.finish()?;
+    if source.len() % 2 != 0 {
+        return Err(NativeError::new(
+            "NATIVE_FORMAT_ENCODING",
+            "native RDF/XML source has a truncated UTF-16 code unit",
+        ));
+    }
+
+    let code_units = || {
+        source.chunks_exact(2).map(|bytes| {
+            if little_endian {
+                u16::from_le_bytes([bytes[0], bytes[1]])
+            } else {
+                u16::from_be_bytes([bytes[0], bytes[1]])
+            }
+        })
+    };
+    let mut output_bytes = 0_usize;
+    let mut codepoints = 0_u64;
+    for decoded in char::decode_utf16(code_units()) {
+        let character = decoded.map_err(|_| {
+            NativeError::new(
+                "NATIVE_FORMAT_ENCODING",
+                "native RDF/XML source contains an invalid UTF-16 surrogate",
+            )
+        })?;
+        output_bytes = output_bytes
+            .checked_add(character.len_utf8())
+            .ok_or_else(|| NativeError::limit("native UTF-16 decode allocation overflow"))?;
+        codepoints = codepoints
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native decoded XML length overflow"))?;
+        session.step(1)?;
+    }
+
+    session.reserve_bytes(output_bytes)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(output_bytes)
+        .map_err(|_| NativeError::limit("native UTF-16 decode allocation failed"))?;
+    for (index, decoded) in char::decode_utf16(code_units()).enumerate() {
+        if index % (32 * 1024) == 0 {
+            session.finish()?;
+        }
+        let character = decoded.map_err(|_| {
+            NativeError::new(
+                "NATIVE_FORMAT_ENCODING",
+                "native RDF/XML source contains an invalid UTF-16 surrogate",
+            )
+        })?;
+        output.push(character);
+    }
+    session.finish()?;
+    Ok((output, codepoints))
 }
 
 fn decode_utf8(source: &[u8], session: &mut Session<'_>) -> NativeResult<(String, u64)> {
@@ -6118,7 +6228,10 @@ fn skip_space(bytes: &[u8], cursor: &mut usize) {
     }
 }
 
-fn validate_xml_declaration(declaration: &str) -> NativeResult<()> {
+fn validate_xml_declaration(
+    declaration: &str,
+    source_encoding: XmlSourceEncoding,
+) -> NativeResult<()> {
     validate_xml_characters(declaration)?;
     let bytes = declaration.as_bytes();
     if !declaration.starts_with("xml") || !bytes.get(3).is_some_and(|value| is_xml_space(*value)) {
@@ -6144,10 +6257,18 @@ fn validate_xml_declaration(declaration: &str) -> NativeResult<()> {
         match name {
             "encoding" if !encoding_seen && !standalone_seen => {
                 encoding_seen = true;
-                if !["utf-8", "utf8", "us-ascii"]
-                    .iter()
-                    .any(|encoding| value.eq_ignore_ascii_case(encoding))
-                {
+                let compatible = match source_encoding {
+                    XmlSourceEncoding::Utf8 => ["utf-8", "utf8", "us-ascii"]
+                        .iter()
+                        .any(|encoding| value.eq_ignore_ascii_case(encoding)),
+                    XmlSourceEncoding::Utf16Le => ["utf-16", "utf-16le"]
+                        .iter()
+                        .any(|encoding| value.eq_ignore_ascii_case(encoding)),
+                    XmlSourceEncoding::Utf16Be => ["utf-16", "utf-16be"]
+                        .iter()
+                        .any(|encoding| value.eq_ignore_ascii_case(encoding)),
+                };
+                if !compatible {
                     return Err(xml_forbidden());
                 }
             }
@@ -6491,11 +6612,31 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, limits, source.len())?;
-        GraphParser::new(source, None, &mut session)?.parse()
+        GraphParser::new(source, None, XmlSourceEncoding::Utf8, &mut session)?.parse()
     }
 
     fn graph(source: &str) -> NativeResult<Vec<Triple>> {
         graph_with_limits(source, &Limits::default())
+    }
+
+    fn utf16_bytes(source: &str, little_endian: bool, bom: bool) -> Vec<u8> {
+        let mut output = Vec::with_capacity(source.len().saturating_mul(2).saturating_add(2));
+        if bom {
+            output.extend_from_slice(if little_endian {
+                &[0xff, 0xfe]
+            } else {
+                &[0xfe, 0xff]
+            });
+        }
+        for code_unit in source.encode_utf16() {
+            let bytes = if little_endian {
+                code_unit.to_le_bytes()
+            } else {
+                code_unit.to_be_bytes()
+            };
+            output.extend_from_slice(&bytes);
+        }
+        output
     }
 
     fn limits_with(key: LimitKey, value: u64) -> Limits {
@@ -7288,7 +7429,8 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut parser = GraphParser::new("", None, &mut session).expect("parser");
+        let mut parser =
+            GraphParser::new("", None, XmlSourceEncoding::Utf8, &mut session).expect("parser");
         parser.frames.push(Frame {
             raw_name: "rdf:Description".to_owned(),
             namespace_start: parser.namespaces.len(),
@@ -7334,7 +7476,8 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut parser = GraphParser::new("", None, &mut session).expect("parser");
+        let mut parser =
+            GraphParser::new("", None, XmlSourceEncoding::Utf8, &mut session).expect("parser");
         parser.frames.push(Frame {
             raw_name: "e:p".to_owned(),
             namespace_start: parser.namespaces.len(),
@@ -10387,7 +10530,7 @@ mod tests {
             assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
         }
         let unsupported_encoding =
-            format!("<?xml version='1.0' encoding='UTF-16'?><rdf:RDF xmlns:rdf=\"{RDF}\"/>");
+            format!("<?xml version='1.0' encoding='ISO-8859-1'?><rdf:RDF xmlns:rdf=\"{RDF}\"/>");
         assert_eq!(
             graph(&unsupported_encoding).unwrap_err().code,
             "NATIVE_XML_FORBIDDEN_CONSTRUCT",
@@ -10402,6 +10545,68 @@ mod tests {
         ] {
             let source = format!("<rdf:RDF xmlns:rdf=\"{RDF}\" {declaration}/>");
             assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
+    }
+
+    #[test]
+    fn utf16_sources_decode_with_bom_signature_and_declaration_parity() {
+        let body = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:Class rdf:about=\"urn:C\"><rdfs:label>café 🙂</rdfs:label></owl:Class></rdf:RDF>"
+        );
+        let baseline = mapped(body.as_bytes(), None).expect("UTF-8 baseline");
+        for (little_endian, bom) in [(true, true), (false, true), (true, false), (false, false)] {
+            let encoded = utf16_bytes(&body, little_endian, bom);
+            let observed = mapped(&encoded, None).expect("UTF-16 RDF/XML without declaration");
+            assert_eq!(observed.axioms, baseline.axioms);
+            assert_eq!(observed.mapping, baseline.mapping);
+            assert_eq!(
+                observed.decoded_codepoints,
+                u64::try_from(body.chars().count()).expect("decoded length"),
+            );
+        }
+        for (little_endian, bom, declaration_encoding) in [
+            (true, true, "UTF-16"),
+            (false, true, "UTF-16"),
+            (true, false, "UTF-16LE"),
+            (false, false, "UTF-16BE"),
+        ] {
+            let source = format!("<?xml version='1.0' encoding='{declaration_encoding}'?>{body}");
+            let encoded = utf16_bytes(&source, little_endian, bom);
+            let observed = mapped(&encoded, None).expect("UTF-16 RDF/XML");
+            assert_eq!(observed.axioms, baseline.axioms);
+            assert_eq!(observed.mapping, baseline.mapping);
+            assert_eq!(
+                observed.decoded_codepoints,
+                u64::try_from(source.chars().count()).expect("decoded length"),
+            );
+        }
+
+        let mismatch =
+            format!("<?xml version='1.0' encoding='UTF-16BE'?><rdf:RDF xmlns:rdf=\"{RDF}\"/>");
+        assert_eq!(
+            mapped(&utf16_bytes(&mismatch, true, true), None)
+                .unwrap_err()
+                .code,
+            "NATIVE_XML_FORBIDDEN_CONSTRUCT",
+        );
+        let hostile = format!(
+            "<!DOCTYPE rdf:RDF [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><rdf:RDF xmlns:rdf=\"{RDF}\"/>"
+        );
+        assert_eq!(
+            mapped(&utf16_bytes(&hostile, true, true), None)
+                .unwrap_err()
+                .code,
+            "NATIVE_XML_FORBIDDEN_CONSTRUCT",
+        );
+        for invalid in [
+            vec![0xff, 0xfe, b'<', 0x00, b'x'],
+            vec![0xff, 0xfe, 0x00, 0xd8],
+            vec![0xff, 0xfe, 0x00, 0x00],
+        ] {
+            assert_eq!(
+                mapped(&invalid, None).unwrap_err().code,
+                "NATIVE_FORMAT_ENCODING",
+            );
         }
     }
 
@@ -10569,7 +10774,10 @@ mod tests {
             let mut session =
                 Session::new(&mut guard, &limits, source.len()).expect("bounded session");
             assert_eq!(
-                XmlStream::new(&source).next(&mut session).unwrap_err().code,
+                XmlStream::new(&source, XmlSourceEncoding::Utf8)
+                    .next(&mut session)
+                    .unwrap_err()
+                    .code,
                 "NATIVE_DEADLINE",
             );
         }
@@ -10614,7 +10822,8 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("bounded session");
-        let mut parser = GraphParser::new("", None, &mut session).expect("parser prefix table");
+        let mut parser = GraphParser::new("", None, XmlSourceEncoding::Utf8, &mut session)
+            .expect("parser prefix table");
         assert_eq!(
             parser.expand("xml:base", true).unwrap_err().code,
             "NATIVE_WIRE_LIMIT",
