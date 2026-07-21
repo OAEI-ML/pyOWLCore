@@ -683,6 +683,40 @@ def test_rdf_mapping_enforces_the_distinct_axiom_limit() -> None:
     assert raised.value.limit == "max_axioms"
 
 
+def test_rdf_mapping_enforces_the_distinct_ontology_annotation_limit() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Ontology rdf:about="urn:o">
+    <rdfs:label>label</rdfs:label>
+    <rdfs:comment>comment</rdfs:comment>
+  </owl:Ontology>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(
+        source,
+        format="rdfxml",
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            limits=ParseLimits(max_annotations=2),
+        ),
+    )
+    assert len(document.ontology_annotations) == 2
+
+    with pytest.raises(ResourceLimitError) as raised:
+        parse_document(
+            source,
+            format="rdfxml",
+            options=LoadOptions(
+                backend=BackendPreference.PYTHON,
+                limits=ParseLimits(max_annotations=1),
+            ),
+        )
+    assert raised.value.limit == "max_annotations"
+
+
 @pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (

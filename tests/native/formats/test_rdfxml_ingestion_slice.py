@@ -705,6 +705,35 @@ def test_distinct_axiom_limit_matches_python(
     assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_distinct_ontology_annotation_limit_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Ontology rdf:about='urn:o'>
+  <rdfs:label>label</rdfs:label>
+  <rdfs:comment>comment</rdfs:comment>
+ </owl:Ontology>
+</rdf:RDF>"""
+    boundary = ParseLimits(max_annotations=2)
+
+    _owner, observed = _ingest(extension, source, limits=boundary)
+    python = parse_rdfxml(source, limits=boundary, document_iri=None)
+    assert len(python.annotations) == 2
+    assert observed.ontology_iri == "urn:o"
+    assert observed.total_triples == observed.consumed_triples == 3
+
+    limited = ParseLimits(max_annotations=1)
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(source, limits=limited, document_iri=None)
+    assert python_error.value.limit == "max_annotations"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
 @pytest.mark.parametrize(
     ("document", "literal_bytes"),
     (

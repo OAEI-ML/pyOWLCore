@@ -220,7 +220,11 @@ class RDFMapper:
             m.canonical_bytes(root, limits=self.context.limits) for root in parsed.axioms
         }
         self.context.limits.enforce("max_axioms", len(axiom_rows))
-        for root in (*parsed.annotations, *parsed.extensions):
+        annotation_rows = {
+            m.canonical_bytes(root, limits=self.context.limits) for root in parsed.annotations
+        }
+        self.context.limits.enforce("max_annotations", len(annotation_rows))
+        for root in parsed.extensions:
             m.canonical_bytes(root, limits=self.context.limits)
         return parsed
 
