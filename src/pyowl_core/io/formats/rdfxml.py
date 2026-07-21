@@ -68,15 +68,23 @@ def parse_rdfxml(
             code="XML_FORBIDDEN_CONSTRUCT",
         )
     context = ParseContext(limits, cancellation_token)
-    pull: ET.XMLPullParser[ET.Element[str]] = ET.XMLPullParser(events=("start", "end"))
+    pull: ET.XMLPullParser[ET.Element[str]] = ET.XMLPullParser(
+        events=("start", "end", "start-ns")
+    )
     depth = 0
+    prefix_count = 0
     root: ET.Element | None = None
     try:
         for offset in range(0, len(text), 64 * 1024):
             context.check()
             pull.feed(text[offset : offset + 64 * 1024])
             for raw_event in pull.read_events():
-                event, element = cast(tuple[str, ET.Element], raw_event)
+                event, payload = cast(tuple[str, object], raw_event)
+                if event == "start-ns":
+                    prefix_count += 1
+                    context.limits.enforce("max_prefixes", prefix_count)
+                    continue
+                element = cast(ET.Element, payload)
                 if event == "start":
                     depth += 1
                     context.depth(depth)

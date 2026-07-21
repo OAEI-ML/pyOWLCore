@@ -13,7 +13,9 @@ from pyowl_core import (
     LoadOptions,
     OntologySyntaxError,
     OptionConflictError,
+    ParseLimits,
     PythonParser,
+    ResourceLimitError,
     UnsupportedSyntaxError,
     load_snapshot,
     parse_document,
@@ -514,6 +516,37 @@ def test_rdfxml_namespace_and_qname_errors_are_syntax_errors(document: str) -> N
     with pytest.raises(OntologySyntaxError) as raised:
         parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
     assert raised.value.code == "RDFXML_SYNTAX"
+
+
+def test_rdfxml_namespace_declarations_enforce_the_prefix_limit() -> None:
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:e="urn:first:">
+  <owl:Class xmlns:e="urn:second:" rdf:about="urn:C"/>
+</rdf:RDF>
+"""
+
+    document = parse_document(
+        source,
+        format="rdfxml",
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            limits=ParseLimits(max_prefixes=4),
+        ),
+    )
+    assert document.axioms == m.CanonicalSet((m.Declaration(m.Class(m.IRI("urn:C"))),))
+
+    with pytest.raises(ResourceLimitError) as raised:
+        parse_document(
+            source,
+            format="rdfxml",
+            options=LoadOptions(
+                backend=BackendPreference.PYTHON,
+                limits=ParseLimits(max_prefixes=3),
+            ),
+        )
+    assert raised.value.limit == "max_prefixes"
 
 
 @pytest.mark.parametrize(

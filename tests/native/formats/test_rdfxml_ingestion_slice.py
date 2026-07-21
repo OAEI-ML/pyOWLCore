@@ -6,7 +6,13 @@ from typing import Any, cast
 
 import pytest
 
-from pyowl_core import IRI, OntologySyntaxError, ParseLimits, UnsupportedSyntaxError
+from pyowl_core import (
+    IRI,
+    OntologySyntaxError,
+    ParseLimits,
+    ResourceLimitError,
+    UnsupportedSyntaxError,
+)
 from pyowl_core.backends import native
 from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.model import canonical_bytes
@@ -551,6 +557,31 @@ def test_namespace_and_qname_errors_fail_as_syntax_in_both_backends(
     with pytest.raises(extension._NativeError) as native_error:
         _ingest(extension, source)
     assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
+def test_namespace_declaration_limit_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xmlns:e='urn:first:'>
+ <owl:Class xmlns:e='urn:second:' rdf:about='urn:C'/>
+</rdf:RDF>"""
+    boundary = ParseLimits(max_prefixes=4)
+
+    _owner, observed = _ingest(extension, source, limits=boundary)
+    python = parse_rdfxml(source, limits=boundary, document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 1
+
+    limited = ParseLimits(max_prefixes=3)
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(source, limits=limited, document_iri=None)
+    assert python_error.value.limit == "max_prefixes"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
 def test_processing_instructions_map_to_no_rdf_events(
