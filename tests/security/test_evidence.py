@@ -311,6 +311,8 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert release["encoded_view_rust_workspace_allocation_failures"] == "local-pass"
     assert release["native_parser_session_allocation_failures"] == "local-pass"
     assert release["native_parser_python_bridge_allocation_failures"] == "local-pass"
+    assert release["native_index_python_bridge_allocation_failures"] == "local-pass"
+    assert release["native_foundation_python_bridge_allocation_failures"] == "local-pass"
     assert release["end_to_end_allocation_failure_matrix"] == "not-run"
     assert release["security_resource_determinism"] == "not-run"
     assert release["core_release_eligible"] is False
