@@ -244,3 +244,70 @@ def test_parser_bridge_allocation_checkpoints_fail_before_publication(
     assert boundary_allocations == allocations
     assert request == original
     assert config == original_config
+
+
+@pytest.fixture(scope="module")
+def index_bridge_extension(extension: NativeTestExtension) -> NativeTestExtension:
+    if not hasattr(extension, "_index_bridge_allocation_probe_v1"):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail(
+                "selected native test-hooks artifact lacks "
+                "_index_bridge_allocation_probe_v1"
+            )
+        pytest.skip("native index bridge allocation hook is unavailable")
+    return extension
+
+
+def _index_bridge_inputs() -> tuple[bytearray, bytearray]:
+    axiom = next(snapshot("IndexBridge").iter_axioms())
+    encoded = canonical_bytes(axiom)
+    source = bytearray(struct.pack("<8sHHQ", b"PYNIDXS1", 1, 0, 1))
+    source.extend(struct.pack("<Q", len(encoded)))
+    source.extend(encoded)
+    request = bytearray(
+        b"PYNIDXQ1" + native._encode_config(ParseLimits(), None, verify=False)
+    )
+    return source, request
+
+
+def test_index_bridge_allocation_checkpoints_fail_before_publication(
+    index_bridge_extension: NativeTestExtension,
+) -> None:
+    source, request = _index_bridge_inputs()
+    original_source = bytes(source)
+    original_request = bytes(request)
+
+    output, allocations = index_bridge_extension._index_bridge_allocation_probe_v1(
+        memoryview(source),
+        memoryview(request),
+        None,
+    )
+    assert output[:8] == b"PYNIDXR1"
+    assert allocations == 13
+    assert source == original_source
+    assert request == original_request
+
+    for fail_after in range(allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native index bridge allocation failure$",
+        ):
+            index_bridge_extension._index_bridge_allocation_probe_v1(
+                memoryview(source),
+                memoryview(request),
+                fail_after,
+            )
+        assert source == original_source
+        assert request == original_request
+
+    boundary_output, boundary_allocations = (
+        index_bridge_extension._index_bridge_allocation_probe_v1(
+            memoryview(source),
+            memoryview(request),
+            allocations,
+        )
+    )
+    assert boundary_output == output
+    assert boundary_allocations == allocations
+    assert source == original_source
+    assert request == original_request

@@ -55,29 +55,34 @@ const FOUNDATION_FEATURES: [&str; 10] = [
 
 create_exception!(_native, _NativeError, PyException);
 
-#[derive(Debug, Default)]
-struct ParserBridgeAllocationProbe {
+#[derive(Debug)]
+struct BridgeAllocationProbe {
     #[cfg(feature = "test-hooks")]
     fail_after: Option<u64>,
     #[cfg(feature = "test-hooks")]
     allocations: u64,
+    #[cfg(feature = "test-hooks")]
+    failure_message: &'static str,
 }
 
-impl ParserBridgeAllocationProbe {
+impl BridgeAllocationProbe {
     const fn disabled() -> Self {
         Self {
             #[cfg(feature = "test-hooks")]
             fail_after: None,
             #[cfg(feature = "test-hooks")]
             allocations: 0,
+            #[cfg(feature = "test-hooks")]
+            failure_message: "",
         }
     }
 
     #[cfg(feature = "test-hooks")]
-    const fn configured(fail_after: Option<u64>) -> Self {
+    const fn configured(fail_after: Option<u64>, failure_message: &'static str) -> Self {
         Self {
             fail_after,
             allocations: 0,
+            failure_message,
         }
     }
 
@@ -88,12 +93,10 @@ impl ParserBridgeAllocationProbe {
                 .fail_after
                 .is_some_and(|maximum| self.allocations >= maximum)
             {
-                return Err(PyMemoryError::new_err(
-                    "injected native parser bridge allocation failure",
-                ));
+                return Err(PyMemoryError::new_err(self.failure_message));
             }
             self.allocations = self.allocations.checked_add(1).ok_or_else(|| {
-                PyMemoryError::new_err("native parser bridge allocation counter overflow")
+                PyMemoryError::new_err("native bridge allocation counter overflow")
             })?;
         }
         Ok(())
@@ -127,13 +130,13 @@ fn python_error(error: NativeError) -> PyErr {
 }
 
 fn limits_from_python(config: &Bound<'_, PyAny>) -> PyResult<Limits> {
-    let mut allocations = ParserBridgeAllocationProbe::disabled();
+    let mut allocations = BridgeAllocationProbe::disabled();
     limits_from_python_with_allocations(config, &mut allocations)
 }
 
 fn limits_from_python_with_allocations(
     config: &Bound<'_, PyAny>,
-    allocations: &mut ParserBridgeAllocationProbe,
+    allocations: &mut BridgeAllocationProbe,
 ) -> PyResult<Limits> {
     let bytes = owned_buffer_with_allocations(config.py(), config, None, true, allocations)?;
     contain(|| Limits::decode(&bytes)).map_err(python_error)
@@ -149,7 +152,7 @@ fn owned_buffer(
     limits: Option<&Limits>,
     configuration: bool,
 ) -> PyResult<Vec<u8>> {
-    let mut allocations = ParserBridgeAllocationProbe::disabled();
+    let mut allocations = BridgeAllocationProbe::disabled();
     owned_buffer_with_allocations(py, value, limits, configuration, &mut allocations)
 }
 
@@ -158,7 +161,7 @@ fn owned_buffer_with_allocations(
     value: &Bound<'_, PyAny>,
     limits: Option<&Limits>,
     configuration: bool,
-    allocations: &mut ParserBridgeAllocationProbe,
+    allocations: &mut BridgeAllocationProbe,
 ) -> PyResult<Vec<u8>> {
     allocations.checkpoint()?;
     let builtins = py.import("builtins")?;
@@ -205,7 +208,7 @@ fn owned_source_request(
     value: &Bound<'_, PyAny>,
     limits: &Limits,
 ) -> PyResult<Vec<u8>> {
-    let mut allocations = ParserBridgeAllocationProbe::disabled();
+    let mut allocations = BridgeAllocationProbe::disabled();
     owned_source_request_with_allocations(py, value, limits, &mut allocations)
 }
 
@@ -213,7 +216,7 @@ fn owned_source_request_with_allocations(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
     limits: &Limits,
-    allocations: &mut ParserBridgeAllocationProbe,
+    allocations: &mut BridgeAllocationProbe,
 ) -> PyResult<Vec<u8>> {
     allocations.checkpoint()?;
     let builtins = py.import("builtins")?;
@@ -256,25 +259,46 @@ fn owned_source_request_with_allocations(
 }
 
 fn owned_index_request(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    let mut allocations = BridgeAllocationProbe::disabled();
+    owned_index_request_with_allocations(py, value, &mut allocations)
+}
+
+fn owned_index_request_with_allocations(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    allocations: &mut BridgeAllocationProbe,
+) -> PyResult<Vec<u8>> {
+    allocations.checkpoint()?;
     let builtins = py.import("builtins")?;
-    let view = builtins
-        .getattr("memoryview")?
-        .call1((value,))
-        .map_err(|error| {
-            if error.is_instance_of::<PyTypeError>(py) {
-                PyTypeError::new_err("native index request must expose a byte buffer")
-            } else {
-                error
-            }
-        })?;
+    allocations.checkpoint()?;
+    let memoryview = builtins.getattr("memoryview")?;
+    allocations.checkpoint()?;
+    let view = memoryview.call1((value,)).map_err(|error| {
+        if error.is_instance_of::<PyTypeError>(py) {
+            PyTypeError::new_err("native index request must expose a byte buffer")
+        } else {
+            error
+        }
+    })?;
+    allocations.checkpoint()?;
     let nbytes: usize = view.getattr("nbytes")?.extract()?;
     if nbytes != 8 + limits::CONFIG_BYTES {
         return Err(python_error(NativeError::protocol(
             "invalid native index request framing",
         )));
     }
+    allocations.checkpoint()?;
     let owned = view.call_method0("tobytes")?;
-    Ok(owned.cast::<PyBytes>()?.as_bytes().to_vec())
+    let bytes = owned.cast::<PyBytes>()?.as_bytes();
+    let mut result = Vec::new();
+    if !bytes.is_empty() {
+        allocations.checkpoint()?;
+    }
+    result
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| python_error(NativeError::limit("native owned-buffer allocation failed")))?;
+    result.extend_from_slice(bytes);
+    Ok(result)
 }
 
 fn owned_index_source(
@@ -282,17 +306,29 @@ fn owned_index_source(
     value: &Bound<'_, PyAny>,
     limits: &Limits,
 ) -> PyResult<Vec<u8>> {
+    let mut allocations = BridgeAllocationProbe::disabled();
+    owned_index_source_with_allocations(py, value, limits, &mut allocations)
+}
+
+fn owned_index_source_with_allocations(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    limits: &Limits,
+    allocations: &mut BridgeAllocationProbe,
+) -> PyResult<Vec<u8>> {
+    allocations.checkpoint()?;
     let builtins = py.import("builtins")?;
-    let view = builtins
-        .getattr("memoryview")?
-        .call1((value,))
-        .map_err(|error| {
-            if error.is_instance_of::<PyTypeError>(py) {
-                PyTypeError::new_err("native index source must expose a byte buffer")
-            } else {
-                error
-            }
-        })?;
+    allocations.checkpoint()?;
+    let memoryview = builtins.getattr("memoryview")?;
+    allocations.checkpoint()?;
+    let view = memoryview.call1((value,)).map_err(|error| {
+        if error.is_instance_of::<PyTypeError>(py) {
+            PyTypeError::new_err("native index source must expose a byte buffer")
+        } else {
+            error
+        }
+    })?;
+    allocations.checkpoint()?;
     let nbytes: usize = view.getattr("nbytes")?.extract()?;
     if u64::try_from(nbytes).map_or(true, |size| {
         size > limits.value(limits::LimitKey::MaxIndexBytes)
@@ -304,9 +340,13 @@ fn owned_index_source(
             "native index source exceeds configured resource limits",
         )));
     }
+    allocations.checkpoint()?;
     let owned = view.call_method0("tobytes")?;
     let bytes = owned.cast::<PyBytes>()?.as_bytes();
     let mut result = Vec::new();
+    if !bytes.is_empty() {
+        allocations.checkpoint()?;
+    }
     result
         .try_reserve_exact(bytes.len())
         .map_err(|_| python_error(NativeError::limit("native owned-buffer allocation failed")))?;
@@ -888,7 +928,10 @@ fn _parser_bridge_allocation_probe_v1<'py>(
     config: &Bound<'py, PyAny>,
     fail_after: Option<u64>,
 ) -> PyResult<(Bound<'py, PyBytes>, u64)> {
-    let mut allocations = ParserBridgeAllocationProbe::configured(fail_after);
+    let mut allocations = BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native parser bridge allocation failure",
+    );
     let limits = limits_from_python_with_allocations(config, &mut allocations)?;
     let owned = owned_source_request_with_allocations(py, source, &limits, &mut allocations)?;
     let input_size = owned.len();
@@ -904,6 +947,42 @@ fn _parser_bridge_allocation_probe_v1<'py>(
         parse::parse(request, &mut session)
     })?;
     contain(|| limits.check_output_size(input_size, output.len())).map_err(python_error)?;
+    allocations.checkpoint()?;
+    let output = PyBytes::new_with(py, output.len(), |buffer| {
+        buffer.copy_from_slice(&output);
+        Ok(())
+    })?;
+    Ok((output, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (snapshot_wire, request, fail_after=None))]
+fn _index_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    snapshot_wire: &Bound<'py, PyAny>,
+    request: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Bound<'py, PyBytes>, u64)> {
+    let mut allocations = BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native index bridge allocation failure",
+    );
+    let owned_request = owned_index_request_with_allocations(py, request, &mut allocations)?;
+    let limits = contain(|| index::decode_limits(&owned_request)).map_err(python_error)?;
+    let owned_source =
+        owned_index_source_with_allocations(py, snapshot_wire, &limits, &mut allocations)?;
+    let input_size = owned_source.len();
+    let output = run_detached(py, move |interrupt| {
+        let mut guard = Guard::with_interrupt(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+            interrupt,
+        );
+        let mut session = session::Session::new(&mut guard, &limits, input_size)?;
+        index::build(&owned_source, &mut session)
+    })?;
     allocations.checkpoint()?;
     let output = PyBytes::new_with(py, output.len(), |buffer| {
         buffer.copy_from_slice(&output);
@@ -1037,6 +1116,8 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         _parser_bridge_allocation_probe_v1,
         module
     )?)?;
+    #[cfg(feature = "test-hooks")]
+    module.add_function(wrap_pyfunction!(_index_bridge_allocation_probe_v1, module)?)?;
     module.add_function(wrap_pyfunction!(parse_document, module)?)?;
     module.add_function(wrap_pyfunction!(build_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(build_index, module)?)?;

@@ -156,6 +156,11 @@ def _parser_bridge_allocation_probe_v1(
     config: object,
     fail_after: int | None = None,
 ) -> tuple[bytes, int]: ...
+def _index_bridge_allocation_probe_v1(
+    snapshot_wire: object,
+    request: object,
+    fail_after: int | None = None,
+) -> tuple[bytes, int]: ...
 def _encoded_structural_document_columns_v1(
     handle: _NativeDocumentHandle,
     config: object,
