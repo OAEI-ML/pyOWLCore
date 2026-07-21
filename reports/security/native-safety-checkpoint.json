@@ -1,0 +1,135 @@
+{
+  "schema": "pyowl-core.native-safety-checkpoint/1",
+  "subject_revision": "43e478591dc7bc3e3d66c22c5a36fec595975422",
+  "recorded_date": "2026-07-21",
+  "claim": "checkpoint-only",
+  "capability_advertised": false,
+  "environment": {
+    "working_tree": "clean detached worktree at subject_revision",
+    "operating_system": "macOS 26.5.2 (25F84)",
+    "kernel": "Darwin 25.5.0",
+    "architecture": "x86_64",
+    "rustc": "1.99.0-nightly (daf2e5e18 2026-07-13)",
+    "cargo": "1.99.0-nightly (59800466c 2026-07-07)",
+    "llvm": "22.1.8",
+    "cargo_fuzz": "0.12.0"
+  },
+  "continuous_workflow": {
+    "path": ".github/workflows/native-safety.yml",
+    "status": "configured-not-run",
+    "reason": "the SHA-pinned hosted workflow is committed, but no GitHub Actions run is evidence for this local checkpoint",
+    "runner": "ubuntu-24.04",
+    "nightly": "nightly-2026-07-14",
+    "lanes": [
+      "address-sanitizer",
+      "thread-sanitizer",
+      "miri-pure-ownership",
+      "functional-libfuzzer-address",
+      "wire-libfuzzer-address"
+    ]
+  },
+  "runs": [
+    {
+      "id": "address-sanitizer-native-library",
+      "status": "pass",
+      "working_directory": "/private/tmp/pyowlcore-safety-evidence",
+      "environment": {
+        "CARGO_TARGET_DIR": "/private/tmp/pyowlcore-asan-43e4785",
+        "RUSTFLAGS": "-Zsanitizer=address",
+        "RUSTDOCFLAGS": "-Zsanitizer=address"
+      },
+      "command": "cargo +nightly-2026-07-14 test --manifest-path native/Cargo.toml --locked --no-default-features --lib --target x86_64-apple-darwin",
+      "observations": {
+        "tests_passed": 211,
+        "tests_failed": 0,
+        "test_seconds": 7.78,
+        "sanitizer_findings": 0
+      },
+      "notes": "The pinned nightly emitted two standard-library API deprecation warnings; it emitted no AddressSanitizer finding."
+    },
+    {
+      "id": "thread-sanitizer-native-library",
+      "status": "pass",
+      "working_directory": "/private/tmp/pyowlcore-safety-evidence",
+      "environment": {
+        "CARGO_TARGET_DIR": "/private/tmp/pyowlcore-tsan-43e4785",
+        "RUSTFLAGS": "-Zsanitizer=thread",
+        "RUSTDOCFLAGS": "-Zsanitizer=thread"
+      },
+      "command": "cargo +nightly-2026-07-14 test -Zbuild-std --manifest-path native/Cargo.toml --locked --no-default-features --lib --target x86_64-apple-darwin",
+      "observations": {
+        "tests_passed": 211,
+        "tests_failed": 0,
+        "test_seconds": 33.88,
+        "sanitizer_findings": 0
+      },
+      "notes": "The standard library and native library were rebuilt together with ThreadSanitizer. The pinned nightly emitted two standard-library API deprecation warnings and no race finding."
+    },
+    {
+      "id": "miri-pure-ownership",
+      "status": "pass",
+      "working_directory": "/private/tmp/pyowlcore-safety-evidence",
+      "environment": {
+        "CARGO_TARGET_DIR": "/private/tmp/pyowlcore-miri-43e4785"
+      },
+      "command": "cargo +nightly-2026-07-14 miri test --manifest-path tests/miri/native/Cargo.toml --locked",
+      "observations": {
+        "tests_passed": 13,
+        "tests_failed": 0,
+        "test_seconds": 2.53,
+        "miri_findings": 0
+      },
+      "notes": "This dependency-free harness exercises the production canonical, hash, limits, retained arena, typed identifier, and immutable-table modules without crossing the CPython FFI boundary."
+    },
+    {
+      "id": "functional-libfuzzer-address",
+      "status": "pass",
+      "working_directory": "/private/tmp/pyowlcore-safety-evidence/native",
+      "environment": {
+        "CARGO_TARGET_DIR": "/private/tmp/pyowlcore-fuzz-43e4785"
+      },
+      "command": "cargo +nightly-2026-07-14 fuzz run --fuzz-dir ../tests/fuzz/native --sanitizer address functional /private/tmp/pyowlcore-safety-corpus-43e4785/functional -- -runs=10000 -max_len=1048576 -timeout=10 -rss_limit_mb=2048",
+      "observations": {
+        "runs": 10000,
+        "coverage": 1230,
+        "features": 3082,
+        "final_corpus_files": 231,
+        "maximum_rss_mb": 85,
+        "crashes": 0,
+        "sanitizer_findings": 0
+      },
+      "notes": "Seeds were copied to a disposable corpus before execution; the checked-in corpus was not mutated."
+    },
+    {
+      "id": "wire-libfuzzer-address",
+      "status": "pass",
+      "working_directory": "/private/tmp/pyowlcore-safety-evidence/native",
+      "environment": {
+        "CARGO_TARGET_DIR": "/private/tmp/pyowlcore-fuzz-43e4785"
+      },
+      "command": "cargo +nightly-2026-07-14 fuzz run --fuzz-dir ../tests/fuzz/native --sanitizer address wire /private/tmp/pyowlcore-safety-corpus-43e4785/wire -- -runs=10000 -max_len=4194304 -timeout=10 -rss_limit_mb=2048",
+      "observations": {
+        "runs": 10000,
+        "coverage": 41,
+        "features": 41,
+        "final_corpus_files": 2,
+        "maximum_rss_mb": 38,
+        "crashes": 0,
+        "sanitizer_findings": 0
+      },
+      "notes": "The seed was copied to a disposable corpus before execution; the checked-in corpus was not mutated."
+    }
+  ],
+  "release_effect": {
+    "security_resource_determinism": "not-run",
+    "core_release_eligible": false,
+    "reason": "these exact-commit local lanes do not complete the allocation-failure, panic, cancellation, interpreter lifecycle, supported-platform, complete-format, or hosted continuous matrices"
+  },
+  "limitations": [
+    "The sanitizer runs cover the Rust library unit-test binary, not every Python/PyO3 interpreter lifecycle.",
+    "The local fuzz campaigns are bounded 10,000-run checkpoints, not the scheduled 60-second hosted campaigns or a completeness proof.",
+    "Miri covers only the dependency-free pure ownership slice where CPython FFI is inapplicable.",
+    "Only one local macOS x86_64 environment is represented.",
+    "No release or retained-load capability follows from this checkpoint."
+  ]
+}

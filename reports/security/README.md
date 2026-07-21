@@ -6,6 +6,12 @@ The native fuzz targets and sanitizer procedure are documented in
 `tests/fuzz/native/README.md`; retained hostile inputs are hash-pinned by the
 conformance corpus lock.
 
+`native-safety-checkpoint.json` records the exact local AddressSanitizer,
+ThreadSanitizer, Miri, and bounded libFuzzer results for safety commit
+`43e478591dc7bc3e3d66c22c5a36fec595975422`. It deliberately distinguishes
+those passing local runs from the committed-but-not-run hosted workflow and
+keeps the aggregate release gate at `not-run`.
+
 Run the ordinary bounded security lanes with:
 
 ```console
