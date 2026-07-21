@@ -74,6 +74,14 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...
 
+    def _foundation_bridge_allocation_probe_v1(
+        self,
+        operation: str,
+        source: object,
+        config: object,
+        fail_after: int | None = None,
+    ) -> tuple[bytes, int]: ...
+
 
 def load_extension() -> NativeTestExtension:
     """Load an installed extension or an explicitly supplied developer build."""

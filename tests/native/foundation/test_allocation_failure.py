@@ -311,3 +311,88 @@ def test_index_bridge_allocation_checkpoints_fail_before_publication(
     assert boundary_allocations == allocations
     assert source == original_source
     assert request == original_request
+
+
+@pytest.fixture(scope="module")
+def foundation_bridge_extension(extension: NativeTestExtension) -> NativeTestExtension:
+    if not hasattr(extension, "_foundation_bridge_allocation_probe_v1"):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail(
+                "selected native test-hooks artifact lacks "
+                "_foundation_bridge_allocation_probe_v1"
+            )
+        pytest.skip("native foundation bridge allocation hook is unavailable")
+    return extension
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ("validate-canonical", "validate-wire", "roundtrip-wire"),
+)
+def test_foundation_bridge_allocation_checkpoints_fail_before_publication(
+    foundation_bridge_extension: NativeTestExtension,
+    operation: str,
+) -> None:
+    fixture = snapshot("FoundationBridge")
+    if operation == "validate-canonical":
+        source = bytearray(canonical_bytes(next(fixture.iter_axioms())))
+    else:
+        source = bytearray(encode_snapshot(fixture))
+    original_source = bytes(source)
+    config = bytearray(native._encode_config(ParseLimits(), None, verify=True))
+    original_config = bytes(config)
+
+    output, allocations = (
+        foundation_bridge_extension._foundation_bridge_allocation_probe_v1(
+            operation,
+            memoryview(source),
+            memoryview(config),
+            None,
+        )
+    )
+    if operation == "validate-wire":
+        assert output[:8] == b"PYNVAL1\0"
+    else:
+        assert output == original_source
+    assert allocations == 13
+    assert source == original_source
+    assert config == original_config
+
+    for fail_after in range(allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native foundation bridge allocation failure$",
+        ):
+            foundation_bridge_extension._foundation_bridge_allocation_probe_v1(
+                operation,
+                memoryview(source),
+                memoryview(config),
+                fail_after,
+            )
+        assert source == original_source
+        assert config == original_config
+
+    boundary_output, boundary_allocations = (
+        foundation_bridge_extension._foundation_bridge_allocation_probe_v1(
+            operation,
+            memoryview(source),
+            memoryview(config),
+            allocations,
+        )
+    )
+    assert boundary_output == output
+    assert boundary_allocations == allocations
+    assert source == original_source
+    assert config == original_config
+
+
+def test_foundation_bridge_probe_rejects_an_unknown_operation(
+    foundation_bridge_extension: NativeTestExtension,
+) -> None:
+    with pytest.raises(ValueError, match="must be validate-canonical"):
+        foundation_bridge_extension._foundation_bridge_allocation_probe_v1(
+            "publish",
+            b"",
+            b"",
+            None,
+        )

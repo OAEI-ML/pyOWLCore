@@ -991,6 +991,94 @@ fn _index_bridge_allocation_probe_v1<'py>(
     Ok((output, allocations.count()))
 }
 
+#[cfg(feature = "test-hooks")]
+#[derive(Clone, Copy)]
+enum FoundationBridgeOperation {
+    ValidateCanonical,
+    ValidateWire,
+    RoundtripWire,
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (operation, source, config, fail_after=None))]
+fn _foundation_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    operation: &str,
+    source: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Bound<'py, PyBytes>, u64)> {
+    let operation = match operation {
+        "validate-canonical" => FoundationBridgeOperation::ValidateCanonical,
+        "validate-wire" => FoundationBridgeOperation::ValidateWire,
+        "roundtrip-wire" => FoundationBridgeOperation::RoundtripWire,
+        _ => {
+            return Err(PyValueError::new_err(
+                "foundation bridge operation must be validate-canonical, validate-wire, or roundtrip-wire",
+            ));
+        }
+    };
+    let mut allocations = BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native foundation bridge allocation failure",
+    );
+    let limits = limits_from_python_with_allocations(config, &mut allocations)?;
+    let owned = owned_buffer_with_allocations(py, source, Some(&limits), false, &mut allocations)?;
+    let input_size = owned.len();
+    let output = match operation {
+        FoundationBridgeOperation::ValidateCanonical => {
+            contain(|| limits.check_output_size(input_size, input_size)).map_err(python_error)?;
+            run_detached(py, move |interrupt| {
+                let mut guard = Guard::with_interrupt(
+                    Cancellation::with_duration(None),
+                    limits.deadline,
+                    limits.cancellation_stride,
+                    interrupt,
+                );
+                guard.check(0, true)?;
+                let mut budget = ScanBudget::from_limits(&limits);
+                scan_canonical(&owned, &mut budget)?;
+                guard.check(1, true)?;
+                Ok(owned)
+            })?
+        }
+        FoundationBridgeOperation::ValidateWire => {
+            contain(|| limits.check_output_size(input_size, wire::RECEIPT_BYTES))
+                .map_err(python_error)?;
+            run_detached(py, move |interrupt| {
+                let mut guard = Guard::with_interrupt(
+                    Cancellation::with_duration(None),
+                    limits.deadline,
+                    limits.cancellation_stride,
+                    interrupt,
+                );
+                WireArena::decode(owned, &limits, &mut guard)?
+                    .validation
+                    .receipt()
+            })?
+        }
+        FoundationBridgeOperation::RoundtripWire => {
+            contain(|| limits.check_output_size(input_size, input_size)).map_err(python_error)?;
+            run_detached(py, move |interrupt| {
+                let mut guard = Guard::with_interrupt(
+                    Cancellation::with_duration(None),
+                    limits.deadline,
+                    limits.cancellation_stride,
+                    interrupt,
+                );
+                Ok(WireArena::decode(owned, &limits, &mut guard)?.encode())
+            })?
+        }
+    };
+    allocations.checkpoint()?;
+    let output = PyBytes::new_with(py, output.len(), |buffer| {
+        buffer.copy_from_slice(&output);
+        Ok(())
+    })?;
+    Ok((output, allocations.count()))
+}
+
 #[pyfunction]
 #[pyo3(signature = (source, config, cancel=None))]
 fn parse_document<'py>(
@@ -1118,6 +1206,11 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     #[cfg(feature = "test-hooks")]
     module.add_function(wrap_pyfunction!(_index_bridge_allocation_probe_v1, module)?)?;
+    #[cfg(feature = "test-hooks")]
+    module.add_function(wrap_pyfunction!(
+        _foundation_bridge_allocation_probe_v1,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(parse_document, module)?)?;
     module.add_function(wrap_pyfunction!(build_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(build_index, module)?)?;
