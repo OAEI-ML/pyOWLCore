@@ -41,9 +41,10 @@ workspace, plus 38 positive Functional parser session allocation-budget
 claims and 13 explicit Functional parser configuration/source/result Python-
 bridge checkpoints, 13 exact production retained Functional bridge checkpoints,
 plus nine retained RDF/XML configuration/document-IRI/source/result Python-
-bridge checkpoints, 13 native index request/source/result Python-bridge
+bridge checkpoints and two retained structural preparation manifest/result
+Python-bridge checkpoints, 13 native index request/source/result Python-bridge
 checkpoints, and 39 canonical validation, wire validation, and wire roundtrip
-Python-bridge checkpoints. It covers 20,924 checkpoints locally; the remaining
+Python-bridge checkpoints. It covers 20,926 checkpoints locally; the remaining
 bridge, process-allocator, and hosted-platform matrix stays open.
 
 Run the ordinary bounded security lanes with:

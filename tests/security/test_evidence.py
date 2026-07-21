@@ -327,6 +327,14 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert rdfxml_bridge["injected_failures"] == rdfxml_bridge["allocation_checkpoints"]
     assert rdfxml_bridge["boundary_successes"] == 1
     assert rdfxml_bridge["scope"]
+    preparation_bridge = sweep["retained_preparation_bridge"]
+    assert preparation_bridge["allocation_checkpoints"] == 2
+    assert (
+        preparation_bridge["injected_failures"]
+        == preparation_bridge["allocation_checkpoints"]
+    )
+    assert preparation_bridge["boundary_successes"] == 1
+    assert preparation_bridge["scope"]
     index_bridge = sweep["index_bridge"]
     assert index_bridge["allocation_checkpoints"] == 13
     assert index_bridge["injected_failures"] == index_bridge["allocation_checkpoints"]
@@ -349,6 +357,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + parser_bridge["allocation_checkpoints"]
         + functional_retained_bridge["allocation_checkpoints"]
         + rdfxml_bridge["allocation_checkpoints"]
+        + preparation_bridge["allocation_checkpoints"]
         + index_bridge["allocation_checkpoints"]
         + foundation_bridge["allocation_checkpoints"]
     )
@@ -363,6 +372,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + parser_bridge["boundary_successes"]
         + functional_retained_bridge["boundary_successes"]
         + rdfxml_bridge["boundary_successes"]
+        + preparation_bridge["boundary_successes"]
         + index_bridge["boundary_successes"]
         + foundation_bridge["boundary_successes"]
     )
@@ -391,6 +401,10 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     )
     assert (
         release["native_rdfxml_retained_python_bridge_allocation_failures"]
+        == "local-pass"
+    )
+    assert (
+        release["native_retained_preparation_python_bridge_allocation_failures"]
         == "local-pass"
     )
     assert release["native_index_python_bridge_allocation_failures"] == "local-pass"
