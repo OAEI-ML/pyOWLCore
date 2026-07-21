@@ -507,6 +507,8 @@ struct AllocationBudget {
     temporary: u64,
     peak: u64,
     maximum: u64,
+    fail_after: Option<u64>,
+    allocations: u64,
 }
 
 #[cfg(feature = "test-hooks")]
@@ -539,6 +541,10 @@ impl TemporaryBudget {
 
 impl AllocationBudget {
     fn new(maximum: u64) -> NativeResult<Self> {
+        Self::with_allocation_failure(maximum, None)
+    }
+
+    fn with_allocation_failure(maximum: u64, fail_after: Option<u64>) -> NativeResult<Self> {
         if maximum == 0 {
             return Err(NativeError::limit(
                 "native V2 retained allocation budget must be positive",
@@ -549,7 +555,25 @@ impl AllocationBudget {
             temporary: 0,
             peak: 0,
             maximum,
+            fail_after,
+            allocations: 0,
         })
+    }
+
+    fn allocation_checkpoint(&mut self) -> NativeResult<()> {
+        if self
+            .fail_after
+            .is_some_and(|maximum| self.allocations >= maximum)
+        {
+            return Err(NativeError::limit(
+                "injected native publication allocation failure",
+            ));
+        }
+        self.allocations = self
+            .allocations
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native publication allocation counter overflow"))?;
+        Ok(())
     }
 
     fn claim(&mut self, amount: usize) -> NativeResult<()> {
@@ -566,6 +590,9 @@ impl AllocationBudget {
             return Err(NativeError::limit(
                 "native V2 retained allocation exceeds its explicit budget",
             ));
+        }
+        if amount != 0 {
+            self.allocation_checkpoint()?;
         }
         self.retained = following_retained;
         self.peak = self.peak.max(following_live);
@@ -592,6 +619,9 @@ impl AllocationBudget {
                 "native V2 temporary allocation exceeds its explicit budget",
             ));
         }
+        if amount != 0 {
+            self.allocation_checkpoint()?;
+        }
         self.temporary = following_temporary;
         self.peak = self.peak.max(following_live);
         Ok(())
@@ -606,6 +636,10 @@ impl AllocationBudget {
 
     const fn retained(&self) -> u64 {
         self.retained
+    }
+
+    const fn allocation_count(&self) -> u64 {
+        self.allocations
     }
 }
 
@@ -1561,6 +1595,45 @@ impl PublicationStorageV2 {
         raw_document_collections: Option<&Bound<'_, PyAny>>,
         max_retained_bytes: u64,
     ) -> PyResult<Arc<Self>> {
+        Self::from_validated_python_with_allocation_probe(
+            py,
+            attestation,
+            collections,
+            documents,
+            report,
+            root_document_key,
+            load_options,
+            capability_bits,
+            fingerprint_evidence,
+            fingerprint_preimages,
+            facade_cardinality_summary,
+            owl2_dl_report_summary,
+            raw_document_collections,
+            max_retained_bytes,
+            None,
+        )
+        .map(|(storage, _allocations)| storage)
+    }
+
+    #[cfg(feature = "test-hooks")]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn from_validated_python_with_allocation_probe(
+        py: Python<'_>,
+        attestation: &Bound<'_, PyAny>,
+        collections: &Bound<'_, PyAny>,
+        documents: &Bound<'_, PyAny>,
+        report: &Bound<'_, PyAny>,
+        root_document_key: &Bound<'_, PyAny>,
+        load_options: &Bound<'_, PyAny>,
+        capability_bits: &Bound<'_, PyAny>,
+        fingerprint_evidence: &Bound<'_, PyAny>,
+        fingerprint_preimages: &Bound<'_, PyAny>,
+        facade_cardinality_summary: &Bound<'_, PyAny>,
+        owl2_dl_report_summary: Option<&Bound<'_, PyAny>>,
+        raw_document_collections: Option<&Bound<'_, PyAny>>,
+        max_retained_bytes: u64,
+        fail_after: Option<u64>,
+    ) -> PyResult<(Arc<Self>, u64)> {
         let handoff = py.import(HANDOFF_MODULE)?;
         require_exact_type(&handoff, "NativeSnapshotAttestationV2", attestation)?;
         let validated_attestation = reconstruct_attestation(&handoff, attestation)?;
@@ -1569,8 +1642,8 @@ impl PublicationStorageV2 {
             .getattr("_validate_exact_load_options_v2")?
             .call1((load_options,))?;
         let limits = load_options.getattr("limits")?;
-        let mut builder =
-            StorageBuilderV2::new(max_retained_bytes).map_err(native_error_to_python)?;
+        let mut builder = StorageBuilderV2::with_allocation_failure(max_retained_bytes, fail_after)
+            .map_err(native_error_to_python)?;
         let (effective, effective_largest) = validate_fixture_mapping(
             &handoff,
             &validated_attestation,
@@ -1625,7 +1698,7 @@ impl PublicationStorageV2 {
             owl2_dl_report_summary,
         )?;
         builder
-            .finish(attestation_value)
+            .finish_with_allocation_count(attestation_value)
             .map_err(native_error_to_python)
     }
 }
@@ -2397,8 +2470,12 @@ struct StorageBuilderV2 {
 
 impl StorageBuilderV2 {
     fn new(maximum: u64) -> NativeResult<Self> {
+        Self::with_allocation_failure(maximum, None)
+    }
+
+    fn with_allocation_failure(maximum: u64, fail_after: Option<u64>) -> NativeResult<Self> {
         Ok(Self {
-            budget: AllocationBudget::new(maximum)?,
+            budget: AllocationBudget::with_allocation_failure(maximum, fail_after)?,
             interner: HashMap::new(),
             interner_temporary_bytes: 0,
             effective_tables: Vec::new(),
@@ -2770,9 +2847,17 @@ impl StorageBuilderV2 {
     }
 
     fn finish(
-        mut self,
+        self,
         attestation: NativeSnapshotAttestationV2,
     ) -> NativeResult<Arc<PublicationStorageV2>> {
+        self.finish_with_allocation_count(attestation)
+            .map(|(storage, _allocations)| storage)
+    }
+
+    fn finish_with_allocation_count(
+        mut self,
+        attestation: NativeSnapshotAttestationV2,
+    ) -> NativeResult<(Arc<PublicationStorageV2>, u64)> {
         let attestation_bytes = attestation
             .backend
             .len()
@@ -2859,13 +2944,17 @@ impl StorageBuilderV2 {
             .and_then(|value| value.checked_add(attestation.import_edge_count))
             .ok_or_else(|| NativeError::limit("native V2 publication record count overflow"))?;
         validate_retained_total(&initial)?;
-        Ok(Arc::new(PublicationStorageV2 {
-            attestation,
-            effective_tables,
-            raw_document_tables,
-            typed_structural: None,
-            counters: CounterStateV2::new(initial),
-        }))
+        let allocations = self.budget.allocation_count();
+        Ok((
+            Arc::new(PublicationStorageV2 {
+                attestation,
+                effective_tables,
+                raw_document_tables,
+                typed_structural: None,
+                counters: CounterStateV2::new(initial),
+            }),
+            allocations,
+        ))
     }
 }
 
@@ -4557,6 +4646,25 @@ mod tests {
         assert_eq!(budget.retained(), 8);
         assert_eq!(budget.temporary, 0);
         assert!(AllocationBudget::new(0).is_err());
+    }
+
+    #[test]
+    fn injected_publication_allocation_failure_precedes_budget_mutation() {
+        let mut budget = AllocationBudget::with_allocation_failure(16, Some(1)).expect("budget");
+        budget.claim(4).expect("first allocation checkpoint");
+        assert_eq!(budget.retained(), 4);
+        assert_eq!(budget.allocation_count(), 1);
+
+        let error = budget.claim_temporary(4).expect_err("injected failure");
+
+        assert_eq!(error.code, "NATIVE_WIRE_LIMIT");
+        assert_eq!(
+            error.message,
+            "injected native publication allocation failure"
+        );
+        assert_eq!(budget.retained(), 4);
+        assert_eq!(budget.temporary, 0);
+        assert_eq!(budget.allocation_count(), 1);
     }
 
     #[test]

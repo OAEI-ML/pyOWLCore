@@ -78,6 +78,57 @@ def _page_request(value: NativeSnapshotPublicationV2) -> NativeFacadePageRequest
     )
 
 
+def test_publication_allocation_checkpoints_fail_without_publishing_an_owner() -> None:
+    extension = load_extension()
+    probe = getattr(extension, "_publication_allocation_probe_v2", None)
+    if not callable(probe):
+        pytest.skip("selected native artifact lacks the V2 publication allocation hook")
+    invoke_probe = cast(Callable[..., tuple[object, int]], probe)
+    base_values = publication_fields()
+    collections = fixture_collections()
+    original_collections = dict(collections)
+    preimages = fingerprint_preimages(base_values)
+    evidence = fingerprint_evidence(base_values, preimages)
+    expected = publication(collections, values=base_values, preimages=preimages)
+
+    def invoke(fail_after: int | None) -> tuple[object, int]:
+        return invoke_probe(
+            expected.handle.attestation,
+            collections,
+            documents=expected.documents,
+            report=expected.report,
+            root_document_key=expected.root_document_key,
+            load_options=expected.load_options,
+            capability_bits=expected.capability_bits,
+            fingerprint_evidence=evidence,
+            fingerprint_preimages=preimages,
+            facade_cardinality_summary=expected.facade_cardinality_summary,
+            owl2_dl_report_summary=expected.owl2_dl_report_summary,
+            fail_after=fail_after,
+        )
+
+    owner, allocations = invoke(None)
+    assert allocations > 0
+    assert owner._publication_attestation_v2() == expected.handle.attestation  # type: ignore[attr-defined]
+    owner._publication_close_v2()  # type: ignore[attr-defined]
+
+    for fail_after in range(allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native publication allocation failure$",
+        ):
+            invoke(fail_after)
+        assert collections == original_collections
+
+    boundary_owner, boundary_allocations = invoke(allocations)
+    assert boundary_allocations == allocations
+    assert (
+        boundary_owner._publication_attestation_v2()  # type: ignore[attr-defined]
+        == expected.handle.attestation
+    )
+    boundary_owner._publication_close_v2()  # type: ignore[attr-defined]
+
+
 def test_rebuilt_extension_owner_matches_attestation_pages_lifecycle_and_facade() -> None:
     value, _owner = _rust_publication()
     expected_axiom = Declaration(Class(IRI("urn:handoff:Class")))

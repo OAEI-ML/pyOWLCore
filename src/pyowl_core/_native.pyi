@@ -215,6 +215,23 @@ def _publication_fixture_v2(
     raw_document_collections: Mapping[tuple[object, ...], Sequence[bytes]] | None = None,
     max_retained_bytes: int = 67_108_864,
 ) -> _NativeSnapshotHandle: ...
+def _publication_allocation_probe_v2(
+    attestation: NativeSnapshotAttestationV2,
+    collections: Mapping[tuple[object, ...], Sequence[bytes]],
+    *,
+    documents: tuple[object, ...],
+    report: object,
+    root_document_key: str,
+    load_options: LoadOptions,
+    capability_bits: int,
+    fingerprint_evidence: tuple[NativeFingerprintEvidenceV2, ...],
+    fingerprint_preimages: tuple[bytes, ...],
+    facade_cardinality_summary: NativeFacadeCardinalitySummaryV2,
+    owl2_dl_report_summary: NativeOWL2DLReportSummaryV2 | None = None,
+    raw_document_collections: Mapping[tuple[object, ...], Sequence[bytes]] | None = None,
+    max_retained_bytes: int = 67_108_864,
+    fail_after: int | None = None,
+) -> tuple[_NativeSnapshotHandle, int]: ...
 def _unique_axiom_publication_fixture_v2(
     attestation: NativeSnapshotAttestationV2,
     row_count: int,

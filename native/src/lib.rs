@@ -463,6 +463,75 @@ fn _publication_fixture_v2(
 
 #[cfg(feature = "test-hooks")]
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    attestation,
+    collections,
+    *,
+    documents,
+    report,
+    root_document_key,
+    load_options,
+    capability_bits,
+    fingerprint_evidence,
+    fingerprint_preimages,
+    facade_cardinality_summary,
+    owl2_dl_report_summary=None,
+    raw_document_collections=None,
+    max_retained_bytes=None,
+    fail_after=None
+))]
+fn _publication_allocation_probe_v2(
+    py: Python<'_>,
+    attestation: &Bound<'_, PyAny>,
+    collections: &Bound<'_, PyAny>,
+    documents: &Bound<'_, PyAny>,
+    report: &Bound<'_, PyAny>,
+    root_document_key: &Bound<'_, PyAny>,
+    load_options: &Bound<'_, PyAny>,
+    capability_bits: &Bound<'_, PyAny>,
+    fingerprint_evidence: &Bound<'_, PyAny>,
+    fingerprint_preimages: &Bound<'_, PyAny>,
+    facade_cardinality_summary: &Bound<'_, PyAny>,
+    owl2_dl_report_summary: Option<&Bound<'_, PyAny>>,
+    raw_document_collections: Option<&Bound<'_, PyAny>>,
+    max_retained_bytes: Option<&Bound<'_, PyAny>>,
+    fail_after: Option<u64>,
+) -> PyResult<(publication::NativeSnapshotHandle, u64)> {
+    let max_retained_bytes = if let Some(value) = max_retained_bytes {
+        if !value
+            .get_type()
+            .is(value.py().get_type::<pyo3::types::PyInt>())
+        {
+            return Err(PyTypeError::new_err(
+                "max_retained_bytes must be an exact int",
+            ));
+        }
+        value.extract()?
+    } else {
+        67_108_864
+    };
+    publication::fixture_allocation_probe_v2(
+        py,
+        attestation,
+        collections,
+        documents,
+        report,
+        root_document_key,
+        load_options,
+        capability_bits,
+        fingerprint_evidence,
+        fingerprint_preimages,
+        facade_cardinality_summary,
+        owl2_dl_report_summary,
+        raw_document_collections,
+        max_retained_bytes,
+        fail_after,
+    )
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
 #[pyo3(signature = (attestation, row_count, *, max_retained_bytes=None))]
 fn _unique_axiom_publication_fixture_v2(
     attestation: &Bound<'_, PyAny>,
@@ -790,6 +859,8 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(_publication_fixture_v1, module)?)?;
     #[cfg(feature = "test-hooks")]
     module.add_function(wrap_pyfunction!(_publication_fixture_v2, module)?)?;
+    #[cfg(feature = "test-hooks")]
+    module.add_function(wrap_pyfunction!(_publication_allocation_probe_v2, module)?)?;
     #[cfg(feature = "test-hooks")]
     module.add_function(wrap_pyfunction!(
         _unique_axiom_publication_fixture_v2,

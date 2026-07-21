@@ -114,6 +114,46 @@ pub(crate) fn fixture_handle_v2(
 }
 
 #[cfg(feature = "test-hooks")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fixture_allocation_probe_v2(
+    py: pyo3::Python<'_>,
+    attestation: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    collections: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    documents: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    report: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    root_document_key: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    load_options: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    capability_bits: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    fingerprint_evidence: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    fingerprint_preimages: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    facade_cardinality_summary: &pyo3::Bound<'_, pyo3::types::PyAny>,
+    owl2_dl_report_summary: Option<&pyo3::Bound<'_, pyo3::types::PyAny>>,
+    raw_document_collections: Option<&pyo3::Bound<'_, pyo3::types::PyAny>>,
+    max_retained_bytes: u64,
+    fail_after: Option<u64>,
+) -> pyo3::PyResult<(NativeSnapshotHandle, u64)> {
+    let (storage, allocations) =
+        facade_v2::PublicationStorageV2::from_validated_python_with_allocation_probe(
+            py,
+            attestation,
+            collections,
+            documents,
+            report,
+            root_document_key,
+            load_options,
+            capability_bits,
+            fingerprint_evidence,
+            fingerprint_preimages,
+            facade_cardinality_summary,
+            owl2_dl_report_summary,
+            raw_document_collections,
+            max_retained_bytes,
+            fail_after,
+        )?;
+    Ok((NativeSnapshotHandle::from_storage_v2(storage), allocations))
+}
+
+#[cfg(feature = "test-hooks")]
 pub(crate) fn unique_axiom_fixture_handle_v2(
     attestation: &pyo3::Bound<'_, pyo3::types::PyAny>,
     row_count: u64,
