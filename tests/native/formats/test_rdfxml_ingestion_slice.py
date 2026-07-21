@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -12,6 +13,7 @@ from pyowl_core import (
     DocumentFormat,
     OntologySyntaxError,
     ParseLimits,
+    PyOWLCoreError,
     ResourceLimitError,
     UnsupportedSyntaxError,
     render_document,
@@ -21,6 +23,11 @@ from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.model import canonical_bytes
 from tests.conformance._support import every_constructor_document
 from tests.native.foundation._support import NativeTestExtension, load_extension
+from tools.security.mutations import mutations
+
+W3C_RDFXML_SOURCE = (
+    Path(__file__).parents[2] / "data" / "corpus" / "w3c" / "rdfxml" / "minimal.rdf"
+).read_bytes()
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,6 +245,72 @@ def test_generated_every_constructor_corpus_matches_python_mapping(
     assert attestation.stored_axiom_count == len(python.axioms)
     assert attestation.total_source_bytes == len(source)
     assert attestation.rdf_mapping_report_count == 1
+
+
+def test_locked_w3c_rdfxml_corpus_matches_python_mapping(
+    extension: NativeTestExtension,
+) -> None:
+    owner, observed = _ingest(extension, W3C_RDFXML_SOURCE)
+    python = parse_rdfxml(
+        W3C_RDFXML_SOURCE,
+        limits=ParseLimits(),
+        document_iri=None,
+    )
+    assert python.rdf_mapping_report is not None
+    assert python.ontology_id.ontology_iri is not None
+
+    assert observed.ontology_iri == python.ontology_id.ontology_iri.value
+    assert observed.imports == tuple(value.value for value in python.imports)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 6
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.decoded_codepoints == python.decoded_codepoint_length
+
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.ontology_annotation_count == len(python.annotations)
+    assert attestation.stored_axiom_count == len(python.axioms)
+    assert attestation.total_source_bytes == len(W3C_RDFXML_SOURCE) == 628
+    assert attestation.rdf_mapping_report_count == 1
+
+
+def test_mutated_w3c_rdfxml_seed_has_exact_python_native_outcomes(
+    extension: NativeTestExtension,
+) -> None:
+    cases = mutations(W3C_RDFXML_SOURCE, maximum=96)
+    accepted = 0
+    for mutation in cases:
+        try:
+            python = parse_rdfxml(
+                mutation.data,
+                limits=ParseLimits(),
+                document_iri=None,
+            )
+        except PyOWLCoreError as python_error:
+            with pytest.raises(extension._NativeError) as native_error:
+                _ingest(extension, mutation.data)
+            assert native_error.value.args[0] == f"NATIVE_{python_error.code}", mutation.id
+            continue
+
+        owner, observed = _ingest(extension, mutation.data)
+        assert python.rdf_mapping_report is not None
+        assert observed.ontology_iri == (
+            None
+            if python.ontology_id.ontology_iri is None
+            else python.ontology_id.ontology_iri.value
+        ), mutation.id
+        assert observed.imports == tuple(value.value for value in python.imports), mutation.id
+        assert observed.axioms == tuple(
+            sorted(canonical_bytes(value) for value in python.axioms)
+        ), mutation.id
+        assert observed.total_triples == python.rdf_mapping_report.total_triples, mutation.id
+        assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples, mutation.id
+        assert observed.decoded_codepoints == python.decoded_codepoint_length, mutation.id
+        attestation = cast(Any, owner)._publication_attestation_v1()
+        assert attestation.ontology_annotation_count == len(python.annotations), mutation.id
+        accepted += 1
+
+    assert len(cases) == 96
+    assert accepted == 11
 
 
 def test_valid_xml_declaration_and_explicit_xml_binding_match_python(

@@ -45,7 +45,7 @@ from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.io.source import acquire_source
 from tests.conformance._support import every_constructor_document
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
-from tests.native.formats.test_rdfxml_ingestion_slice import SWRL_SOURCE
+from tests.native.formats.test_rdfxml_ingestion_slice import SWRL_SOURCE, W3C_RDFXML_SOURCE
 from tests.native.foundation._support import NativeTestExtension, load_extension
 
 SOURCE = b"""\
@@ -497,6 +497,59 @@ def test_generated_every_constructor_corpus_publishes_from_retained_owner(
             (1, reference.root.ontology_annotations),
             (2, tuple(reference.iter_axioms())),
             (3, tuple(reference.iter_extensions())),
+        )
+        for value in values
+    )
+    direct = selected.view(EncodedStructuralView)
+    assert decode_root_canonical_bytes(direct.buffers) == expected_roots
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+    after = raw_owner._publication_counters_v2()
+    after_python = selected._native_python_counters()
+    assert after.publication_structural_rows_copied == 0
+    assert after.publication_structural_bytes_copied == 0
+    assert after_python.model_rows_materialized == before_python.model_rows_materialized
+    selected.close()
+    assert decode_root_canonical_bytes(direct.buffers) == expected_roots
+
+
+def test_locked_w3c_rdfxml_corpus_publishes_from_retained_owner(
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(
+        W3C_RDFXML_SOURCE,
+        document_iri=None,
+        options=_options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("W3C RDF/XML corpus crossed the Python parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(
+            Any,
+            _retained_snapshot(W3C_RDFXML_SOURCE, document_iri=None),
+        )
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.root.document_fingerprint == reference.root.document_fingerprint
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    before = raw_owner._publication_counters_v2()
+    before_python = selected._native_python_counters()
+    assert before.parser_bytes == len(W3C_RDFXML_SOURCE) == 628
+    assert before.retained_rdf_header_rows == 1
+    assert before.publication_structural_rows_copied == 0
+    assert before.publication_structural_bytes_copied == 0
+
+    expected_roots = tuple(
+        (kind, canonical_bytes(value))
+        for kind, values in (
+            (1, reference.root.ontology_annotations),
+            (2, reference.root.axioms),
+            (3, reference.root.extension_components),
         )
         for value in values
     )
