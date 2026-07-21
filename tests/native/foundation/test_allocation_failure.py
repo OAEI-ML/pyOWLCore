@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import struct
 
 import pytest
 
@@ -129,3 +130,58 @@ def test_wire_validation_allocation_checkpoints_fail_closed(
     )
     assert boundary_receipt == receipt
     assert boundary_allocations == allocations
+
+
+@pytest.fixture(scope="module")
+def parser_extension(extension: NativeTestExtension) -> NativeTestExtension:
+    if not hasattr(extension, "_parser_allocation_probe_v1"):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail("selected native test-hooks artifact lacks _parser_allocation_probe_v1")
+        pytest.skip("native parser allocation hook is unavailable")
+    return extension
+
+
+def test_parser_allocation_budget_checkpoints_fail_closed(
+    parser_extension: NativeTestExtension,
+) -> None:
+    source = (
+        b"Prefix(:=<urn:allocation:>) Ontology(<urn:ontology> "
+        b"Import(<urn:import>) Annotation(:label \"hello\"@EN) "
+        b"Declaration(Class(:C)) "
+        b"SubClassOf(:C ObjectSomeValuesFrom(:property :D)))"
+    )
+    request = bytearray(
+        struct.pack("<8sHHQ", b"PYNFSS1\0", 1, 0, len(source)) + source
+    )
+    original = bytes(request)
+    config = native._encode_config(ParseLimits(), None, verify=True)
+
+    output, allocations = parser_extension._parser_allocation_probe_v1(
+        memoryview(request),
+        config,
+        None,
+    )
+    assert output[:8] == b"PYNFSSR1"
+    assert allocations == 38
+
+    for fail_after in range(allocations):
+        with pytest.raises(parser_extension._NativeError) as raised:
+            parser_extension._parser_allocation_probe_v1(
+                memoryview(request),
+                config,
+                fail_after,
+            )
+        assert raised.value.args == (
+            "NATIVE_WIRE_LIMIT",
+            "injected native parser allocation failure",
+        )
+        assert request == original
+
+    boundary_output, boundary_allocations = parser_extension._parser_allocation_probe_v1(
+        memoryview(request),
+        config,
+        allocations,
+    )
+    assert boundary_output == output
+    assert boundary_allocations == allocations
+    assert request == original

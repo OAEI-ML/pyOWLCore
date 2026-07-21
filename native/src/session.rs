@@ -10,6 +10,14 @@ pub(crate) struct Session<'a> {
     memory: MemoryBudget,
     temporary_bytes: u64,
     work: u64,
+    #[cfg(feature = "test-hooks")]
+    allocation_probe: Option<SessionAllocationProbe>,
+}
+
+#[cfg(feature = "test-hooks")]
+struct SessionAllocationProbe {
+    fail_after: Option<u64>,
+    allocations: u64,
 }
 
 impl<'a> Session<'a> {
@@ -24,7 +32,55 @@ impl<'a> Session<'a> {
             memory: MemoryBudget::new(limits, input_bytes)?,
             temporary_bytes: 0,
             work: 0,
+            #[cfg(feature = "test-hooks")]
+            allocation_probe: None,
         })
+    }
+
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn with_allocation_failure(
+        guard: &'a mut Guard,
+        limits: &'a Limits,
+        input_bytes: usize,
+        fail_after: Option<u64>,
+    ) -> NativeResult<Self> {
+        let mut session = Self::new(guard, limits, input_bytes)?;
+        session.allocation_probe = Some(SessionAllocationProbe {
+            fail_after,
+            allocations: 0,
+        });
+        Ok(session)
+    }
+
+    #[cfg(feature = "test-hooks")]
+    pub(crate) fn allocation_count(&self) -> u64 {
+        self.allocation_probe
+            .as_ref()
+            .map_or(0, |probe| probe.allocations)
+    }
+
+    fn allocation_checkpoint(&mut self, bytes: usize) -> NativeResult<()> {
+        #[cfg(feature = "test-hooks")]
+        if bytes > 0 {
+            let Some(probe) = self.allocation_probe.as_mut() else {
+                return Ok(());
+            };
+            if probe
+                .fail_after
+                .is_some_and(|maximum| probe.allocations >= maximum)
+            {
+                return Err(NativeError::limit(
+                    "injected native parser allocation failure",
+                ));
+            }
+            probe.allocations = probe
+                .allocations
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native parser allocation counter overflow"))?;
+        }
+        #[cfg(not(feature = "test-hooks"))]
+        let _ = bytes;
+        Ok(())
     }
 
     pub(crate) fn limits(&self) -> &Limits {
@@ -45,6 +101,7 @@ impl<'a> Session<'a> {
     }
 
     pub(crate) fn reserve_bytes(&mut self, bytes: usize) -> NativeResult<()> {
+        self.allocation_checkpoint(bytes)?;
         self.memory.reserve::<u8>(bytes)
     }
 
@@ -65,10 +122,10 @@ impl<'a> Session<'a> {
                 "native operation exceeds max_temporary_bytes",
             ));
         }
-        self.memory.reserve::<u8>(
-            usize::try_from(bytes)
-                .map_err(|_| NativeError::limit("native temporary allocation exceeds usize"))?,
-        )?;
+        let bytes = usize::try_from(bytes)
+            .map_err(|_| NativeError::limit("native temporary allocation exceeds usize"))?;
+        self.allocation_checkpoint(bytes)?;
+        self.memory.reserve::<u8>(bytes)?;
         self.temporary_bytes = following;
         Ok(())
     }

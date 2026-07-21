@@ -754,6 +754,40 @@ fn _wire_allocation_probe_v1<'py>(
     Ok((receipt, allocations))
 }
 
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (source, config, fail_after=None))]
+fn _parser_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Bound<'py, PyBytes>, u64)> {
+    let limits = limits_from_python(config)?;
+    let owned = owned_source_request(py, source, &limits)?;
+    let input_size = owned.len();
+    let (output, allocations) = run_detached(py, move |interrupt| {
+        let mut guard = Guard::with_interrupt(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+            interrupt,
+        );
+        let request = source::SourceRequest::decode(&owned, &limits)?;
+        let mut session =
+            session::Session::with_allocation_failure(&mut guard, &limits, input_size, fail_after)?;
+        let output = parse::parse(request, &mut session)?;
+        let allocations = session.allocation_count();
+        Ok((output, allocations))
+    })?;
+    contain(|| limits.check_output_size(input_size, output.len())).map_err(python_error)?;
+    let output = PyBytes::new_with(py, output.len(), |buffer| {
+        buffer.copy_from_slice(&output);
+        Ok(())
+    })?;
+    Ok((output, allocations))
+}
+
 #[pyfunction]
 #[pyo3(signature = (source, config, cancel=None))]
 fn parse_document<'py>(
@@ -872,6 +906,8 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(_component_allocation_probe_v1, module)?)?;
     #[cfg(feature = "test-hooks")]
     module.add_function(wrap_pyfunction!(_wire_allocation_probe_v1, module)?)?;
+    #[cfg(feature = "test-hooks")]
+    module.add_function(wrap_pyfunction!(_parser_allocation_probe_v1, module)?)?;
     module.add_function(wrap_pyfunction!(parse_document, module)?)?;
     module.add_function(wrap_pyfunction!(build_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(build_index, module)?)?;
