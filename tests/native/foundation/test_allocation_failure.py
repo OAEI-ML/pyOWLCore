@@ -437,6 +437,7 @@ def retained_view_layout_bridge_extension(
         "_retained_document_page_bridge_allocation_probe_v1",
         "_retained_snapshot_contains_bridge_allocation_probe_v1",
         "_retained_document_contains_bridge_allocation_probe_v1",
+        "_retained_document_handle_bridge_allocation_probe_v1",
         "_retained_signature_layout_bridge_allocation_probe_v1",
         "_retained_identity_layout_bridge_allocation_probe_v1",
         "_retained_axiom_type_layout_bridge_allocation_probe_v1",
@@ -1024,6 +1025,104 @@ def test_retained_contains_bridge_failures_publish_no_partial_counters(
     retained_document._publication_close_v2()
     retained_snapshot._publication_close_v2()
     typed_document._publication_close_v2()
+    selected.close()
+    assert selected.closed
+
+
+def test_retained_document_handle_bridge_failures_publish_no_partial_owner(
+    retained_view_layout_bridge_extension: NativeTestExtension,
+) -> None:
+    extension = cast(Any, retained_view_layout_bridge_extension)
+    selected = cast(
+        Any,
+        load_snapshot(
+            b"Ontology(<urn:allocation:document-handle> "
+            b"Declaration(Class(<urn:allocation:document-handle:A>)))",
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.NATIVE,
+            ),
+        ),
+    )
+    typed_snapshot = object.__getattribute__(
+        selected._native_snapshot_state.owner.handle,
+        "_owner_v2",
+    )
+
+    values, collections, summary = _validated_fixture()
+    preimages = fingerprint_preimages(values)
+    evidence = fingerprint_evidence(values, preimages)
+    published = publication(collections, values=values, preimages=preimages)
+    retained_snapshot = extension._publication_fixture_v2(
+        published.handle.attestation,
+        collections,
+        documents=published.documents,
+        report=published.report,
+        root_document_key=published.root_document_key,
+        load_options=published.load_options,
+        capability_bits=published.capability_bits,
+        fingerprint_evidence=evidence,
+        fingerprint_preimages=preimages,
+        facade_cardinality_summary=published.facade_cardinality_summary,
+        owl2_dl_report_summary=summary,
+    )
+
+    created: list[Any] = []
+    for snapshot_owner in (typed_snapshot, retained_snapshot):
+        before = snapshot_owner._publication_counters_v2()
+        document, allocations = (
+            extension._retained_document_handle_bridge_allocation_probe_v1(
+                snapshot_owner,
+                0,
+                None,
+            )
+        )
+        created.append(document)
+        assert allocations == 2
+        assert document._publication_closed_v2() is False
+        assert snapshot_owner._publication_counters_v2() == before
+        assert document._publication_counters_v2() == before
+        assert (
+            document._publication_attestation_v2()
+            == snapshot_owner._publication_attestation_v2()
+        )
+
+        for fail_after in range(allocations):
+            with pytest.raises(
+                MemoryError,
+                match=(
+                    r"^injected native retained-document-handle bridge "
+                    r"allocation failure$"
+                ),
+            ):
+                extension._retained_document_handle_bridge_allocation_probe_v1(
+                    snapshot_owner,
+                    0,
+                    fail_after,
+                )
+            assert snapshot_owner._publication_counters_v2() == before
+            assert snapshot_owner._publication_closed_v2() is False
+            assert document._publication_counters_v2() == before
+            assert document._publication_closed_v2() is False
+
+        boundary, boundary_allocations = (
+            extension._retained_document_handle_bridge_allocation_probe_v1(
+                snapshot_owner,
+                0,
+                allocations,
+            )
+        )
+        created.append(boundary)
+        assert boundary_allocations == allocations
+        assert boundary._publication_closed_v2() is False
+        assert boundary._publication_counters_v2() == before
+        assert snapshot_owner._publication_counters_v2() == before
+
+    for document in created:
+        document._publication_close_v2()
+        assert document._publication_closed_v2()
+    retained_snapshot._publication_close_v2()
     selected.close()
     assert selected.closed
 

@@ -180,6 +180,11 @@ def _retained_document_contains_bridge_allocation_probe_v1(
     request: NativeFacadeContainsRequestV2,
     fail_after: int | None = None,
 ) -> tuple[bool, int]: ...
+def _retained_document_handle_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    document_ordinal: int,
+    fail_after: int | None = None,
+) -> tuple[_NativeDocumentHandle, int]: ...
 def _encoded_structural_workspace_allocation_probe_v1(
     handle: _NativeSnapshotHandle,
     scope: object,

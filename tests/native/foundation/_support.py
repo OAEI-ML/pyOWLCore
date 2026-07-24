@@ -211,6 +211,13 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[bool, int]: ...
 
+    def _retained_document_handle_bridge_allocation_probe_v1(
+        self,
+        handle: object,
+        document_ordinal: int,
+        fail_after: int | None = None,
+    ) -> tuple[object, int]: ...
+
     def _retained_signature_layout_bridge_allocation_probe_v1(
         self,
         handle: object,

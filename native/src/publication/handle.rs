@@ -325,6 +325,26 @@ impl NativeSnapshotHandle {
         self.require_open_v2(py, "native V2 snapshot handle is closed")?;
         storage.contains_with_allocations(py, request, false, None, allocations)
     }
+
+    pub(crate) fn document_to_python_with_allocations(
+        &self,
+        py: Python<'_>,
+        document_ordinal: &Bound<'_, PyAny>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<Py<NativeDocumentHandle>> {
+        if !document_ordinal
+            .get_type()
+            .is(document_ordinal.py().get_type::<PyInt>())
+        {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native V2 document ordinal must be an exact int",
+            ));
+        }
+        let document_ordinal: u64 = document_ordinal.extract()?;
+        let document = self.document_v2_with_allocations(py, document_ordinal, allocations)?;
+        allocations.checkpoint()?;
+        Py::new(py, document)
+    }
 }
 
 #[pymethods]
@@ -386,22 +406,25 @@ impl NativeSnapshotHandle {
         &self,
         py: Python<'_>,
         document_ordinal: &Bound<'_, PyAny>,
-    ) -> PyResult<NativeDocumentHandle> {
-        if !document_ordinal
-            .get_type()
-            .is(document_ordinal.py().get_type::<PyInt>())
-        {
-            return Err(pyo3::exceptions::PyTypeError::new_err(
-                "native V2 document ordinal must be an exact int",
-            ));
-        }
-        let document_ordinal: u64 = document_ordinal.extract()?;
-        self.document_v2(py, document_ordinal)
+    ) -> PyResult<Py<NativeDocumentHandle>> {
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.document_to_python_with_allocations(py, document_ordinal, &mut allocations)
     }
 }
 
 impl NativeSnapshotHandle {
+    #[cfg(test)]
     fn document_v2(&self, py: Python<'_>, document_ordinal: u64) -> PyResult<NativeDocumentHandle> {
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.document_v2_with_allocations(py, document_ordinal, &mut allocations)
+    }
+
+    fn document_v2_with_allocations(
+        &self,
+        py: Python<'_>,
+        document_ordinal: u64,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<NativeDocumentHandle> {
         let storage = self.require_v2()?;
         self.require_open_v2(py, "native V2 snapshot handle is closed")?;
         if document_ordinal >= storage.document_count() {
@@ -409,6 +432,7 @@ impl NativeSnapshotHandle {
                 "native V2 document ordinal is out of bounds",
             ));
         }
+        allocations.checkpoint()?;
         Ok(NativeDocumentHandle::from_storage_v2(
             Arc::clone(
                 self.storage_v2
