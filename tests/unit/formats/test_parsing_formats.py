@@ -440,6 +440,36 @@ def test_rdfxml_forbidden_node_property_attributes_fail_at_syntax_boundary(
 
 
 @pytest.mark.parametrize(
+    "local",
+    (
+        "RDF",
+        "about",
+        "Description",
+        "li",
+        "aboutEach",
+        "aboutEachPrefix",
+        "bagID",
+    ),
+)
+@pytest.mark.parametrize("object_attribute", ("", 'rdf:resource="urn:o" '))
+def test_rdfxml_forbidden_property_element_attributes_fail_at_syntax_boundary(
+    local: str,
+    object_attribute: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}" xmlns:e="urn:e:">
+  <rdf:Description rdf:about="urn:s">
+    <e:p {object_attribute}rdf:{local}="value"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
+
+
+@pytest.mark.parametrize(
     "document",
     (
         (

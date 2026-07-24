@@ -1029,6 +1029,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 continue;
             }
             if !is_property_attribute_iri(&expanded) {
+                if is_forbidden_rdf_property_attribute_iri(&expanded) {
+                    return Err(xml_syntax());
+                }
                 return Err(mapping_incomplete());
             }
             found = true;
@@ -1142,7 +1145,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     base,
                     language,
                     &[RDF_ID, RDF_RESOURCE, RDF_NODE_ID, XML_BASE, XML_LANG],
-                    false,
+                    true,
                 )?;
             }
             let triple_subject = clone_resource(&subject, self.session)?;
@@ -7691,6 +7694,26 @@ mod tests {
     }
 
     #[test]
+    fn property_element_attributes_reject_reserved_syntax_terms() {
+        for local in [
+            "RDF",
+            "about",
+            "Description",
+            "li",
+            "aboutEach",
+            "aboutEachPrefix",
+            "bagID",
+        ] {
+            for object_attribute in ["", "rdf:resource=\"urn:o\" "] {
+                let source = format!(
+                    "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p {object_attribute}rdf:{local}=\"value\"/></rdf:Description></rdf:RDF>"
+                );
+                assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+            }
+        }
+    }
+
+    #[test]
     fn unicode_qnames_expand_in_elements_and_attributes() {
         let source = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:π=\"urn:unicode:\"><rdf:Description rdf:about=\"urn:s\" π:qualité=\"élevée\"><π:étiquette xml:lang=\"FR\">café</π:étiquette></rdf:Description></rdf:RDF>"
@@ -7892,13 +7915,13 @@ mod tests {
                 format!(
                     "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:resource=\"urn:o\" rdf:about=\"urn:invalid\"/></rdf:Description></rdf:RDF>"
                 ),
-                "NATIVE_RDF_MAPPING_INCOMPLETE",
+                "NATIVE_RDFXML_SYNTAX",
             ),
             (
                 format!(
                     "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:resource=\"urn:o\" rdf:RDF=\"invalid\"/></rdf:Description></rdf:RDF>"
                 ),
-                "NATIVE_RDF_MAPPING_INCOMPLETE",
+                "NATIVE_RDFXML_SYNTAX",
             ),
         ] {
             assert_eq!(graph(&source).unwrap_err().code, expected);

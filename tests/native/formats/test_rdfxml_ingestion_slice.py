@@ -620,6 +620,39 @@ def test_forbidden_node_property_attributes_fail_at_syntax_boundary(
 
 
 @pytest.mark.parametrize(
+    "local",
+    (
+        "RDF",
+        "about",
+        "Description",
+        "li",
+        "aboutEach",
+        "aboutEachPrefix",
+        "bagID",
+    ),
+)
+@pytest.mark.parametrize("object_attribute", ("", "rdf:resource='urn:o' "))
+def test_forbidden_property_element_attributes_fail_at_syntax_boundary(
+    extension: NativeTestExtension,
+    local: str,
+    object_attribute: str,
+) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:e='urn:e:'><rdf:Description rdf:about='urn:s'>"
+        f"<e:p {object_attribute}rdf:{local}='value'/>"
+        "</rdf:Description></rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
+@pytest.mark.parametrize(
     "document",
     (
         "<rdf:RDF {namespaces} e:ignored='value'/>",

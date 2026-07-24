@@ -1763,3 +1763,35 @@ def test_forbidden_node_property_attributes_publish_no_retained_owner(
     with pytest.raises(OntologySyntaxError) as native_error:
         native._parse_rdfxml_retained_v2(source, document_iri=None)
     assert native_error.value.code == "RDFXML_SYNTAX"
+
+
+@pytest.mark.parametrize(
+    "local",
+    (
+        "RDF",
+        "about",
+        "Description",
+        "li",
+        "aboutEach",
+        "aboutEachPrefix",
+        "bagID",
+    ),
+)
+@pytest.mark.parametrize("object_attribute", ("", "rdf:resource='urn:o' "))
+def test_forbidden_property_element_attributes_publish_no_retained_owner(
+    local: str,
+    object_attribute: str,
+) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:e='urn:e:'><rdf:Description rdf:about='urn:s'>"
+        f"<e:p {object_attribute}rdf:{local}='value'/>"
+        "</rdf:Description></rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(OntologySyntaxError) as native_error:
+        native._parse_rdfxml_retained_v2(source, document_iri=None)
+    assert native_error.value.code == "RDFXML_SYNTAX"

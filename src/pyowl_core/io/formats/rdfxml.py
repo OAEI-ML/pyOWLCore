@@ -407,11 +407,18 @@ class RDFXMLGraphParser:
             f"{{{XML_NS}}}base",
             f"{{{XML_NS}}}lang",
         }
-        return {
+        selected = {
             key: value
             for key, value in element.attrib.items()
             if key not in syntax and not self._is_reserved_xml_attribute(element, key)
         }
+        if any(
+            _namespace(name) == RDF
+            and _is_forbidden_rdf_property_attribute_iri(self._expanded(name))
+            for name in selected
+        ):
+            self._syntax("RDF property element uses a reserved property attribute")
+        return selected
 
     def _is_reserved_xml_attribute(self, element: ET.Element, name: str) -> bool:
         namespace = _namespace(name)
