@@ -214,7 +214,78 @@ impl ComponentEncodingFixture {
         Ok(TypedFacadeReadFixture {
             storage,
             coordinate,
+            raw_document_owner: false,
             cancellation: self.cancellation.clone(),
+        })
+    }
+
+    /// Prepare byte-distinct effective and raw typed V2 tables and initialize
+    /// the infallible platform mutex control block before allocation injection
+    /// is armed, retaining only identifiers into the shared component arena.
+    pub fn prepare_typed_facade_raw_reads(
+        raw_canonical: &[u8],
+        effective_canonical: &[u8],
+    ) -> Result<TypedFacadeReadFixture, Failure> {
+        let limits = Limits::default();
+        let estimated_bytes = raw_canonical
+            .len()
+            .checked_add(effective_canonical.len())
+            .ok_or_else(|| NativeError::limit("native allocator scoped fixture bytes overflow"))?;
+        let cancellation = Cancellation::with_duration(None);
+        let mut builder = NativeComponentBuilder::with_control(
+            &limits,
+            cancellation.clone(),
+            None,
+            estimated_bytes,
+        )?;
+        let raw_pending = builder.intern_canonical(raw_canonical)?;
+        let effective_pending = builder.intern_canonical(effective_canonical)?;
+        let frozen = builder.freeze()?;
+        let raw_root = frozen.resolve(raw_pending)?;
+        let effective_root = frozen.resolve(effective_pending)?;
+        if raw_root == effective_root {
+            return Err(
+                NativeError::protocol("native allocator scoped roots must be distinct").into(),
+            );
+        }
+        let coordinate = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+        let mut effective_roots = Vec::new();
+        effective_roots.try_reserve_exact(1).map_err(|_| {
+            NativeError::limit("native allocator effective typed root allocation failed")
+        })?;
+        effective_roots.push(effective_root);
+        let mut raw_roots = Vec::new();
+        raw_roots
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator raw typed root allocation failed"))?;
+        raw_roots.push(raw_root);
+        let mut tables = Vec::new();
+        tables.try_reserve_exact(1).map_err(|_| {
+            NativeError::limit("native allocator effective typed table allocation failed")
+        })?;
+        tables.push(TypedFacadeTableV2::new(coordinate, effective_roots));
+        let mut raw_document_tables = Vec::new();
+        raw_document_tables.try_reserve_exact(1).map_err(|_| {
+            NativeError::limit("native allocator raw typed table allocation failed")
+        })?;
+        raw_document_tables.push(TypedFacadeTableV2::new(coordinate, raw_roots));
+        let storage = TypedFacadeStorageV2::freeze(
+            frozen.arena().clone(),
+            tables,
+            raw_document_tables,
+            1,
+            limits,
+            cancellation.clone(),
+            None,
+        )?;
+        // Keep the same mutex-control preparation boundary as the effective
+        // owner fixture so the sweep isolates only production read buffers.
+        storage.counters()?;
+        Ok(TypedFacadeReadFixture {
+            storage,
+            coordinate,
+            raw_document_owner: true,
+            cancellation,
         })
     }
 
@@ -371,6 +442,7 @@ impl AxiomTypePageFixture {
 pub struct TypedFacadeReadFixture {
     storage: TypedFacadeStorageV2,
     coordinate: TypedFacadeCoordinateV2,
+    raw_document_owner: bool,
     cancellation: Cancellation,
 }
 
@@ -483,7 +555,13 @@ impl TypedFacadeReadFixture {
     /// correctness and counter summary.
     pub fn page(&self) -> Result<[u64; 10], Failure> {
         let page = self.storage.page(
-            TypedFacadePageRequestV2::new(self.coordinate, false, 0, 64, 8 * 1024 * 1024),
+            TypedFacadePageRequestV2::new(
+                self.coordinate,
+                self.raw_document_owner,
+                0,
+                64,
+                8 * 1024 * 1024,
+            ),
             self.cancellation.clone(),
             None,
         )?;
@@ -512,7 +590,7 @@ impl TypedFacadeReadFixture {
     pub fn contains(&self, canonical: &[u8]) -> Result<[u64; 4], Failure> {
         let found = self.storage.contains_axiom(
             self.coordinate,
-            false,
+            self.raw_document_owner,
             canonical,
             self.cancellation.clone(),
             None,

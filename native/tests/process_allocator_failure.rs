@@ -431,6 +431,73 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
     .expect("first non-failing typed facade contains boundary must match");
     assert_eq!(boundary_typed_contains, baseline_typed_contains);
 
+    let typed_raw_page =
+        ComponentEncodingFixture::prepare_typed_facade_raw_reads(&canonical, &effective_canonical)
+            .expect("typed raw facade page fixture must prepare");
+    let (baseline_typed_raw_page, typed_raw_page_allocations) =
+        count_allocations(|| typed_raw_page.page());
+    let baseline_typed_raw_page =
+        baseline_typed_raw_page.expect("typed raw facade page baseline must encode");
+    assert_eq!(baseline_typed_raw_page[0], 1);
+    assert_eq!(baseline_typed_raw_page[1], u64::MAX);
+    assert_eq!(baseline_typed_raw_page[2], 1);
+    assert_eq!(baseline_typed_raw_page[3], canonical.len() as u64);
+    assert!(baseline_typed_raw_page[4] > 0);
+    assert_eq!(
+        baseline_typed_raw_page[5..],
+        [1, 1, 1, canonical.len() as u64, 1]
+    );
+    assert_eq!(baseline_typed_raw_page, baseline_typed_page);
+    assert!(typed_raw_page_allocations > 1);
+
+    for fail_after in 0..typed_raw_page_allocations {
+        let typed_raw_page = ComponentEncodingFixture::prepare_typed_facade_raw_reads(
+            &canonical,
+            &effective_canonical,
+        )
+        .expect("typed raw facade page fixture must prepare for every rejection");
+        let failure =
+            typed_allocation_failure(fail_allocation(fail_after, || typed_raw_page.page()));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let typed_raw_page =
+        ComponentEncodingFixture::prepare_typed_facade_raw_reads(&canonical, &effective_canonical)
+            .expect("typed raw facade page boundary fixture must prepare");
+    let boundary_typed_raw_page =
+        fail_allocation(typed_raw_page_allocations, || typed_raw_page.page())
+            .expect("first non-failing typed raw facade page boundary must encode");
+    assert_eq!(boundary_typed_raw_page, baseline_typed_raw_page);
+
+    let typed_raw_contains =
+        ComponentEncodingFixture::prepare_typed_facade_raw_reads(&canonical, &effective_canonical)
+            .expect("typed raw facade contains fixture must prepare");
+    let (baseline_typed_raw_contains, typed_raw_contains_allocations) =
+        count_allocations(|| typed_raw_contains.contains(&canonical));
+    let baseline_typed_raw_contains =
+        baseline_typed_raw_contains.expect("typed raw facade contains baseline must match");
+    assert_eq!(baseline_typed_raw_contains, [1, 1, 1, 1]);
+    assert!(typed_raw_contains_allocations > 0);
+
+    for fail_after in 0..typed_raw_contains_allocations {
+        let typed_raw_contains = ComponentEncodingFixture::prepare_typed_facade_raw_reads(
+            &canonical,
+            &effective_canonical,
+        )
+        .expect("typed raw facade contains fixture must prepare for every rejection");
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+            typed_raw_contains.contains(&canonical)
+        }));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let typed_raw_contains =
+        ComponentEncodingFixture::prepare_typed_facade_raw_reads(&canonical, &effective_canonical)
+            .expect("typed raw facade contains boundary fixture must prepare");
+    let boundary_typed_raw_contains = fail_allocation(typed_raw_contains_allocations, || {
+        typed_raw_contains.contains(&canonical)
+    })
+    .expect("first non-failing typed raw facade contains boundary must match");
+    assert_eq!(boundary_typed_raw_contains, baseline_typed_raw_contains);
+
     let (baseline_prepared, preparation_allocations) =
         count_allocations(|| component.prepare_encoded_columns());
     let baseline_prepared = baseline_prepared.expect("encoded columns must prepare");
