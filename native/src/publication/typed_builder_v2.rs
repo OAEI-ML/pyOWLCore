@@ -48,7 +48,7 @@ struct PendingDocumentV2 {
 #[derive(Debug, Default)]
 struct ResolvedDocumentV2 {
     roots: [Vec<ComponentId>; 3],
-    effective_roots: Option<[Vec<ComponentId>; 3]>,
+    effective_roots: [Option<Vec<ComponentId>>; 3],
 }
 
 #[derive(Debug)]
@@ -268,58 +268,57 @@ impl TypedFacadeBuilderV2 {
             .map_err(|_| NativeError::limit("typed V2 resolved document allocation failed"))?;
         for document in self.documents.drain(..) {
             self.cancellation.checkpoint()?;
-            let effective_roots = document
-                .effective_roots
-                .map(|roots| {
-                    Ok::<[Vec<ComponentId>; 3], NativeError>([
-                        resolve_roots(
-                            &frozen,
-                            roots[0].as_slice(),
-                            &mut resolve_guard,
-                            &mut resolve_work,
-                            &self.limits,
-                        )?,
-                        resolve_roots(
-                            &frozen,
-                            roots[1].as_slice(),
-                            &mut resolve_guard,
-                            &mut resolve_work,
-                            &self.limits,
-                        )?,
-                        resolve_roots(
-                            &frozen,
-                            roots[2].as_slice(),
-                            &mut resolve_guard,
-                            &mut resolve_work,
-                            &self.limits,
-                        )?,
-                    ])
-                })
-                .transpose()?;
-            resolved.push(ResolvedDocumentV2 {
-                roots: [
-                    resolve_roots(
+            let roots = [
+                resolve_roots(
+                    &frozen,
+                    document.roots[0].as_slice(),
+                    &mut resolve_guard,
+                    &mut resolve_work,
+                    &self.limits,
+                )?,
+                resolve_roots(
+                    &frozen,
+                    document.roots[1].as_slice(),
+                    &mut resolve_guard,
+                    &mut resolve_work,
+                    &self.limits,
+                )?,
+                resolve_roots(
+                    &frozen,
+                    document.roots[2].as_slice(),
+                    &mut resolve_guard,
+                    &mut resolve_work,
+                    &self.limits,
+                )?,
+            ];
+            let effective_roots = match document.effective_roots {
+                Some(values) => [
+                    Some(resolve_roots(
                         &frozen,
-                        document.roots[0].as_slice(),
+                        values[0].as_slice(),
                         &mut resolve_guard,
                         &mut resolve_work,
                         &self.limits,
-                    )?,
-                    resolve_roots(
+                    )?),
+                    Some(resolve_roots(
                         &frozen,
-                        document.roots[1].as_slice(),
+                        values[1].as_slice(),
                         &mut resolve_guard,
                         &mut resolve_work,
                         &self.limits,
-                    )?,
-                    resolve_roots(
+                    )?),
+                    Some(resolve_roots(
                         &frozen,
-                        document.roots[2].as_slice(),
+                        values[2].as_slice(),
                         &mut resolve_guard,
                         &mut resolve_work,
                         &self.limits,
-                    )?,
+                    )?),
                 ],
+                None => Default::default(),
+            };
+            resolved.push(ResolvedDocumentV2 {
+                roots,
                 effective_roots,
             });
         }
@@ -466,6 +465,24 @@ impl TypedFacadeBuilderV2 {
                 limits.max_axioms,
                 "native closure document exceeds max_axioms",
             )?;
+            for (index, roots) in flat.2.iter().enumerate() {
+                let Some(roots) = roots else {
+                    continue;
+                };
+                check_input_count(
+                    roots.len(),
+                    if index == 0 {
+                        limits.max_annotations
+                    } else {
+                        limits.max_axioms
+                    },
+                    if index == 0 {
+                        "native closure effective document exceeds max_annotations"
+                    } else {
+                        "native closure effective document exceeds max_axioms"
+                    },
+                )?;
+            }
             flat_documents.push(flat);
         }
 
@@ -481,10 +498,10 @@ impl TypedFacadeBuilderV2 {
         resolved
             .try_reserve_exact(flat_documents.len())
             .map_err(|_| NativeError::limit("native closure root allocation failed"))?;
-        for (_source_arena, roots) in flat_documents {
+        for (_source_arena, roots, effective_roots) in flat_documents {
             resolved.push(ResolvedDocumentV2 {
                 roots,
-                effective_roots: None,
+                effective_roots,
             });
         }
 
@@ -705,9 +722,11 @@ fn union_document_roots(
                     NativeError::protocol("typed V2 reachability ordinal exceeds usize")
                 })?)
                 .ok_or_else(|| NativeError::protocol("typed V2 reachability ordinal is invalid"))?;
-            let roots = selected.effective_roots.as_ref().unwrap_or(&selected.roots);
+            let roots = selected.effective_roots[index]
+                .as_ref()
+                .unwrap_or(&selected.roots[index]);
             total
-                .checked_add(roots[index].len())
+                .checked_add(roots.len())
                 .ok_or_else(|| NativeError::limit("typed V2 effective root count overflow"))
         })?;
         if u64::try_from(count).map_or(true, |value| value > limits.value(LimitKey::MaxIndexRows)) {
@@ -722,8 +741,10 @@ fn union_document_roots(
             let selected = &documents[usize::try_from(*ordinal).map_err(|_| {
                 NativeError::protocol("typed V2 reachability ordinal exceeds usize")
             })?];
-            let roots = selected.effective_roots.as_ref().unwrap_or(&selected.roots);
-            result[index].extend_from_slice(&roots[index]);
+            let roots = selected.effective_roots[index]
+                .as_ref()
+                .unwrap_or(&selected.roots[index]);
+            result[index].extend_from_slice(roots);
         }
         arena.sort_deduplicate_ids(
             &mut result[index],
@@ -1195,6 +1216,29 @@ mod tests {
             ],
         )
         .expect("declaration")
+        .as_bytes()
+        .to_vec()
+    }
+
+    fn subclass(sub_class: &str, super_class: &str) -> Vec<u8> {
+        Node::build(
+            61,
+            vec![
+                Field::Node(
+                    entity("class", iri(sub_class.to_owned()).expect("subclass IRI"))
+                        .expect("subclass"),
+                ),
+                Field::Node(
+                    entity(
+                        "class",
+                        iri(super_class.to_owned()).expect("superclass IRI"),
+                    )
+                    .expect("superclass"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("SubClassOf")
         .as_bytes()
         .to_vec()
     }
@@ -1720,6 +1764,105 @@ mod tests {
         assert!(source_arenas
             .iter()
             .all(|source| merged.arena().shares_storage_with(source)));
+    }
+
+    #[test]
+    fn builder_composes_scoped_native_owners_without_reinterning() {
+        let raw_documents = [
+            sorted(vec![subclass("urn:builder:raw-root", "urn:builder:shared")]),
+            sorted(vec![subclass(
+                "urn:builder:raw-child",
+                "urn:builder:shared",
+            )]),
+        ];
+        let effective_documents = [
+            sorted(vec![subclass(
+                "urn:builder:effective-root",
+                "urn:builder:shared",
+            )]),
+            sorted(vec![subclass(
+                "urn:builder:effective-child",
+                "urn:builder:shared",
+            )]),
+        ];
+        let limits = Limits::default();
+        let mut sources = Vec::new();
+        for (raw, effective) in raw_documents.iter().zip(&effective_documents) {
+            let mut builder =
+                TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                    .expect("source builder");
+            builder
+                .add_scoped_document(&[], raw, &[], &[], effective, &[])
+                .expect("scoped source document");
+            sources.push(builder.freeze(&[vec![0]], &[0]).expect("source storage"));
+        }
+        let source_arenas = sources
+            .iter()
+            .map(|source| source.arena().clone())
+            .collect::<Vec<_>>();
+        let source_unique_nodes = sources
+            .iter()
+            .map(|source| {
+                source
+                    .counters()
+                    .expect("source counters")
+                    .component
+                    .unique_nodes
+            })
+            .sum::<u64>();
+
+        let merged = TypedFacadeBuilderV2::compose_native_documents(
+            sources,
+            &[vec![0], vec![1]],
+            &[0, 1],
+            limits,
+            Cancellation::with_duration(None),
+            None,
+            0,
+        )
+        .expect("scoped composite closure");
+        for ordinal in 0..2 {
+            let coordinate =
+                TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, ordinal);
+            assert_eq!(
+                page(&merged, coordinate, true),
+                raw_documents[ordinal as usize]
+            );
+            assert_eq!(
+                page(&merged, coordinate, false),
+                effective_documents[ordinal as usize]
+            );
+        }
+        assert_eq!(
+            page(
+                &merged,
+                TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms),
+                false,
+            ),
+            sorted_unique(effective_documents.iter().flatten().cloned().collect()),
+        );
+        let counters = merged.counters().expect("merged counters");
+        assert_eq!(counters.canonical_input_rows, 2);
+        assert_eq!(counters.component.unique_nodes, source_unique_nodes);
+        assert_eq!(counters.publication_structural_rows_copied, 0);
+        assert_eq!(counters.publication_structural_bytes_copied, 0);
+        assert_eq!(merged.arena().partition_count(), 2);
+        assert!(source_arenas
+            .iter()
+            .all(|source| merged.arena().shares_storage_with(source)));
+        let columns = merged
+            .encoded_structural_columns(
+                TypedFacadeScopeV2::Closure,
+                None,
+                false,
+                &limits,
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("composite columns deduplicate shared child nodes");
+        assert_eq!(columns.counters().root_rows, 2);
+        assert_eq!(columns.counters().node_rows, 8);
+        assert_eq!(encoded_root_kinds(&columns), [2, 2]);
     }
 
     #[test]

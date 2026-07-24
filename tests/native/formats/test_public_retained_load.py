@@ -1732,22 +1732,22 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
         options=options(BackendPreference.PYTHON),
         resolver=MappingResolver(sources),
     )
-    retained = cast(Any, extension)._retain_structural_snapshot_v2
+    merge_retained = cast(Any, extension)._merge_parsed_structural_snapshot_v2
     captured: dict[str, object] = {}
 
     def capture(
-        documents: object,
+        parsed_documents: object,
         origins: object,
         attestation: object,
         config: object,
         cancel: object,
         **keywords: object,
     ) -> object:
-        captured["documents"] = documents
+        captured["parsed_documents"] = parsed_documents
         captured["origins"] = origins
         captured.update(keywords)
-        return retained(
-            documents,
+        return merge_retained(
+            parsed_documents,
             origins,
             attestation,
             config,
@@ -1755,10 +1755,18 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
             **keywords,
         )
 
+    def unexpected_structural(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("anonymous parser owners crossed Python structural retention")
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_merge_parsed_structural_snapshot_v2",
+        capture,
+    )
     monkeypatch.setattr(
         cast(Any, extension),
         "_retain_structural_snapshot_v2",
-        capture,
+        unexpected_structural,
     )
     selected = load_snapshot(
         root,
@@ -1776,7 +1784,12 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     assert selected.signature_fingerprint == reference.signature_fingerprint
     assert selected.origin_index == reference.origin_index
     assert encode_snapshot(selected) == encode_snapshot(reference)
-    assert captured["effective_documents"] is not None
+    parsed_documents = cast(tuple[object, ...], captured["parsed_documents"])
+    assert len(parsed_documents) == 2
+    assert all(
+        type(value) is cast(Any, extension)._NativeParsedStructuralStorageV2
+        for value in parsed_documents
+    )
     assert captured["effective_document_ordinals"] == ((0,), (1,))
     assert captured["closure_document_ordinals"] == (0, 1)
     if preserve_source_map:
@@ -1793,7 +1806,6 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
         for document in selected.documents
     )
     assert raw_rows[0] != raw_rows[1]
-    assert captured["effective_documents"] != captured["documents"]
     if collect_provenance:
         raw_origins = cast(tuple[tuple[bytes, ...], ...], captured["origins"])
         effective_origins = cast(
@@ -1817,6 +1829,9 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
     raw_owner = object.__getattribute__(handle, "_owner_v2")
     before_source_maps = cast(Any, raw_owner)._publication_counters_v2()
+    assert before_source_maps.canonical_input_rows == 2
+    assert before_source_maps.publication_structural_rows_copied == 0
+    assert before_source_maps.publication_structural_bytes_copied == 0
     expected_source_rows = (
         sum(
             len(occurrences)

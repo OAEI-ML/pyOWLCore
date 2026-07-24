@@ -710,22 +710,22 @@ fn prepare_encoded_structural_columns_from_source_with_work_v1<'arena>(
         &mut work,
         &mut comparison_bytes,
     )?;
+    let (deduplicated, node_ids, deduplication_workspace) = deduplicate_canonical_nodes(
+        arena,
+        nodes,
+        &lengths,
+        limits,
+        &mut work,
+        &mut comparison_bytes,
+    )?;
+    nodes = deduplicated;
+    workspace_bytes = workspace_bytes.max(
+        root_source_workspace
+            .checked_add(deduplication_workspace)
+            .ok_or_else(|| NativeError::limit("native encoded-column workspace size overflow"))?,
+    );
+    check_workspace_memory(arena, workspace_bytes, caller_external_bytes, limits)?;
     drop(lengths);
-
-    let mut node_ids = HashMap::new();
-    work.allocation_checkpoint_for_growth(node_ids.len(), node_ids.capacity(), nodes.len())?;
-    node_ids
-        .try_reserve(nodes.len())
-        .map_err(|_| NativeError::limit("native encoded-column ID map allocation failed"))?;
-    for (index, row) in nodes.iter().enumerate() {
-        let identifier = u32::try_from(index + 1)
-            .map_err(|_| NativeError::limit("native encoded-column node ID exceeds u32"))?;
-        if node_ids.insert(row.component, identifier).is_some() {
-            return Err(NativeError::protocol(
-                "native encoded-column arena contains duplicate node IDs",
-            ));
-        }
-    }
     workspace_bytes = workspace_bytes.max(
         root_source_workspace
             .checked_add(id_workspace_bytes(&node_ids, &nodes)?)
@@ -1605,10 +1605,10 @@ fn canonical_node_order(
             &mut right_cursor,
             work,
             comparison_bytes,
-        )? != Ordering::Less
+        )? == Ordering::Greater
         {
             return Err(NativeError::protocol(
-                "native encoded-column arena contains non-unique canonical nodes",
+                "native encoded-column canonical node order is inconsistent",
             ));
         }
     }
@@ -1643,6 +1643,66 @@ fn canonical_node_order(
         .and_then(|value| value.checked_add(map_bytes))
         .ok_or_else(|| NativeError::limit("native canonical sort workspace overflow"))?;
     Ok((ordered, workspace))
+}
+
+fn deduplicate_canonical_nodes(
+    arena: &NativeComponentArena,
+    mut nodes: Vec<NodeRow>,
+    lengths: &HashMap<ComponentId, usize>,
+    limits: &Limits,
+    work: &mut ColumnWork,
+    comparison_bytes: &mut u64,
+) -> NativeResult<(Vec<NodeRow>, HashMap<ComponentId, u32>, usize)> {
+    let source_capacity = nodes.capacity();
+    let mut node_ids = HashMap::new();
+    work.allocation_checkpoint_for_growth(node_ids.len(), node_ids.capacity(), nodes.len())?;
+    node_ids
+        .try_reserve(nodes.len())
+        .map_err(|_| NativeError::limit("native encoded-column ID map allocation failed"))?;
+    let mut left_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth, work)?;
+    let mut right_cursor = CanonicalCursor::new(arena, lengths, limits.max_nesting_depth, work)?;
+    let mut retained = 0_usize;
+    for read in 0..nodes.len() {
+        let row = nodes[read];
+        let distinct = retained == 0
+            || compare_canonical_nodes(
+                nodes[retained - 1].component,
+                row.component,
+                &mut left_cursor,
+                &mut right_cursor,
+                work,
+                comparison_bytes,
+            )? != Ordering::Equal;
+        if distinct {
+            nodes[retained] = row;
+            retained = retained
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native encoded-column node count overflow"))?;
+        }
+        let identifier = u32::try_from(retained)
+            .map_err(|_| NativeError::limit("native encoded-column node ID exceeds u32"))?;
+        if node_ids.insert(row.component, identifier).is_some() {
+            return Err(NativeError::protocol(
+                "native encoded-column arena contains duplicate node IDs",
+            ));
+        }
+    }
+    nodes.truncate(retained);
+    let row_bytes = source_capacity
+        .checked_mul(size_of::<NodeRow>())
+        .ok_or_else(|| NativeError::limit("native canonical deduplication workspace overflow"))?;
+    let cursor_bytes = left_cursor
+        .allocated_bytes()?
+        .checked_add(right_cursor.allocated_bytes()?)
+        .ok_or_else(|| NativeError::limit("native cursor workspace overflow"))?;
+    let node_id_bytes = map_workspace_bytes::<u32>(node_ids.capacity())?;
+    let length_bytes = map_workspace_bytes::<usize>(lengths.capacity())?;
+    let workspace = row_bytes
+        .checked_add(node_id_bytes)
+        .and_then(|value| value.checked_add(length_bytes))
+        .and_then(|value| value.checked_add(cursor_bytes))
+        .ok_or_else(|| NativeError::limit("native canonical deduplication workspace overflow"))?;
+    Ok((nodes, node_ids, workspace))
 }
 
 fn validate_root_order(

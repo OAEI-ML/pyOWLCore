@@ -28,6 +28,12 @@ const MAX_TYPED_FACADE_TABLES_V2: usize = 100_000;
 const MAX_FACADE_PAGE_ROWS_V2: u32 = 64;
 const MAX_FACADE_PAGE_BYTES_V2: u64 = 8 * 1024 * 1024;
 
+type FlatDocumentV2 = (
+    NativeComponentArena,
+    [Vec<ComponentId>; 3],
+    [Option<Vec<ComponentId>>; 3],
+);
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct TableValidationV2 {
     maximum_row_bytes: u64,
@@ -444,18 +450,16 @@ impl TypedFacadeStorageV2 {
         !self.raw_document_tables.is_empty()
     }
 
-    /// Consume one unscoped parser owner into its arena and raw structural
-    /// root manifests. Signature, closure, and axiom-index metadata are
-    /// dropped; the document root vectors themselves are moved without copy.
-    pub(crate) fn into_flat_document(
-        mut self,
-    ) -> NativeResult<(NativeComponentArena, [Vec<ComponentId>; 3])> {
-        if self.document_count != 1 || self.has_raw_document_overrides() {
+    /// Consume one parser owner into its arena plus raw and optional effective
+    /// structural root manifests. Signature, closure, and axiom-index metadata
+    /// are dropped; every retained root vector is moved without copy.
+    pub(crate) fn into_flat_document(mut self) -> NativeResult<FlatDocumentV2> {
+        if self.document_count != 1 {
             return Err(NativeError::protocol(
-                "native closure composition requires one unscoped parser document per owner",
+                "native closure composition requires one parser document per owner",
             ));
         }
-        let mut roots: [Vec<ComponentId>; 3] = Default::default();
+        let mut effective_roots: [Vec<ComponentId>; 3] = Default::default();
         for (index, collection) in [
             TypedFacadeCollectionV2::OntologyAnnotations,
             TypedFacadeCollectionV2::Axioms,
@@ -469,10 +473,35 @@ impl TypedFacadeStorageV2 {
                 .effective_tables
                 .binary_search_by_key(&coordinate, |table| table.coordinate)
             {
-                roots[index] = std::mem::take(&mut self.effective_tables[table_index].roots);
+                effective_roots[index] =
+                    std::mem::take(&mut self.effective_tables[table_index].roots);
             }
         }
-        Ok((self.arena, roots))
+        if !self.has_raw_document_overrides() {
+            return Ok((self.arena, effective_roots, Default::default()));
+        }
+        let mut roots: [Vec<ComponentId>; 3] = Default::default();
+        let mut effective_overrides: [Option<Vec<ComponentId>>; 3] = Default::default();
+        for (index, collection) in [
+            TypedFacadeCollectionV2::OntologyAnnotations,
+            TypedFacadeCollectionV2::Axioms,
+            TypedFacadeCollectionV2::Extensions,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let coordinate = TypedFacadeCoordinateV2::document(collection, 0);
+            if let Ok(table_index) = self
+                .raw_document_tables
+                .binary_search_by_key(&coordinate, |table| table.coordinate)
+            {
+                roots[index] = std::mem::take(&mut self.raw_document_tables[table_index].roots);
+                effective_overrides[index] = Some(std::mem::take(&mut effective_roots[index]));
+            } else {
+                roots[index] = std::mem::take(&mut effective_roots[index]);
+            }
+        }
+        Ok((self.arena, roots, effective_overrides))
     }
 
     pub(crate) const fn maximum_row_bytes(&self) -> u64 {

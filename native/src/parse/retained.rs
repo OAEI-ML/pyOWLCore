@@ -95,11 +95,13 @@ struct RetainedRdfMappingEvidenceV2 {
     unconsumed: Vec<crate::bindings::ingestion::engine::RdfTripleEvidence>,
 }
 
+type StructuralRowsV2 = [Vec<Vec<u8>>; 3];
+type MaterializedStructuralRowsV2 = (StructuralRowsV2, Option<StructuralRowsV2>);
 type RetainedSeedV2 = (
     Vec<u8>,
     RetainedParseMetadataV2,
-    [Vec<Vec<u8>>; 3],
-    Option<[Vec<Vec<u8>>; 3]>,
+    StructuralRowsV2,
+    Option<StructuralRowsV2>,
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -503,6 +505,41 @@ pub(crate) fn contains_anonymous(parsed: &ParsedDocument, limits: &Limits) -> Na
         }
     }
     Ok(false)
+}
+
+pub(crate) fn materialized_structural_rows(
+    mut parsed: ParsedDocument,
+    scope_anonymous: bool,
+    cancellation: &Cancellation,
+    session: &mut crate::session::Session<'_>,
+) -> NativeResult<MaterializedStructuralRowsV2> {
+    let occurrence_rows = [
+        occurrence_root_rows(parsed.annotations),
+        occurrence_root_rows(parsed.axioms),
+        occurrence_root_rows(parsed.extensions),
+    ];
+    if !scope_anonymous {
+        return Ok((occurrence_rows.map(canonicalize_root_rows), None));
+    }
+    parsed
+        .imports
+        .sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    parsed
+        .imports
+        .dedup_by(|left, right| left.as_bytes() == right.as_bytes());
+    let scoped = super::anonymous::scope_functional_anonymous_rows_v2(
+        &parsed.ontology_iri,
+        &parsed.version_iri,
+        &parsed.imports,
+        [
+            occurrence_rows[0].as_slice(),
+            occurrence_rows[1].as_slice(),
+            occurrence_rows[2].as_slice(),
+        ],
+        session,
+        cancellation,
+    )?;
+    Ok((scoped.raw, Some(scoped.effective)))
 }
 
 pub(crate) fn build_seed(

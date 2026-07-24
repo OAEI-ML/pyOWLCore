@@ -124,15 +124,6 @@ impl ParsedDocument {
         Ok(output)
     }
 
-    #[cfg(not(fuzzing))]
-    fn into_structural_rows(self) -> [Vec<Vec<u8>>; 3] {
-        [
-            canonical_root_rows(self.annotations),
-            canonical_root_rows(self.axioms),
-            canonical_root_rows(self.extensions),
-        ]
-    }
-
     fn validate(&self, session: &mut Session<'_>) -> NativeResult<()> {
         let mut budget = ScanBudget::from_limits(session.limits());
         for value in [self.ontology_iri.as_ref(), self.version_iri.as_ref()]
@@ -248,8 +239,14 @@ pub(crate) fn parse_retained(
     let encode_started = Instant::now();
     let (encoded, metadata, rows, effective_rows) = if requires_full_result {
         let encoded = parsed.encode(session)?;
-        let rows = parsed.into_structural_rows();
-        (encoded, None, rows, None)
+        let (rows, effective_rows) = retained::materialized_structural_rows(
+            parsed,
+            contains_anonymous,
+            &cancellation,
+            session,
+        )?;
+        session.finish()?;
+        (encoded, None, rows, effective_rows)
     } else {
         parsed.validate(session)?;
         let (encoded, metadata, rows, effective_rows) = retained::build_seed(
@@ -347,17 +344,6 @@ fn encode_spanned(values: &[SpannedNode], output: &mut Vec<u8>) -> NativeResult<
         encode_frame(value.node.as_bytes(), output)?;
     }
     Ok(())
-}
-
-#[cfg(not(fuzzing))]
-fn canonical_root_rows(values: Vec<SpannedNode>) -> Vec<Vec<u8>> {
-    let mut rows: Vec<Vec<u8>> = values
-        .into_iter()
-        .map(|value| value.node.into_bytes())
-        .collect();
-    rows.sort_unstable();
-    rows.dedup();
-    rows
 }
 
 #[cfg(not(fuzzing))]

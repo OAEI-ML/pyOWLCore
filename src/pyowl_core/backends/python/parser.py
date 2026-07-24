@@ -392,13 +392,14 @@ class PythonParser:
             origin_index,
             parsed.rdf_mapping_report,
         )
-        native_storage = parsed_result.native_storage
-        if native_storage is not None and _has_provisional_anonymous(parsed):
-            native_storage = None
         return _ParsedDocumentResult(
             document,
-            native_storage,
-            parsed_result.phase_timings if native_storage is not None else (),
+            parsed_result.native_storage,
+            (
+                parsed_result.phase_timings
+                if parsed_result.native_storage is not None
+                else ()
+            ),
         )
 
 
@@ -575,14 +576,6 @@ def _parse_payload(
             code="ONTOLOGY_STRUCTURE_INVALID",
         ) from error
     raise AssertionError((format, backend))
-
-
-def _has_provisional_anonymous(parsed: ParsedOntology) -> bool:
-    for root in (*parsed.annotations, *parsed.axioms, *parsed.extensions):
-        for value in walk(root):
-            if isinstance(value, AnonymousIndividual) and provisional_label(value) is not None:
-                return True
-    return False
 
 
 def _coerce_iri(value: IRI | str | None) -> IRI | None:

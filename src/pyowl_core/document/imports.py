@@ -630,7 +630,11 @@ class SnapshotLoader:
             from pyowl_core.backends.native_ingestion import retain_native_snapshot_v2
 
             parsed_native_storage: object | None = native_storage
-            if len(ordered_documents) > 1 and len(native_storages) == len(ordered_documents):
+            if (
+                len(ordered_documents) > 1
+                and len(native_storages) == len(ordered_documents)
+                and _parser_owner_snapshot_scopes_are_exact(ordered_documents)
+            ):
                 parsed_native_storage = tuple(
                     native_storages[_source_identity(document)] for document in ordered_documents
                 )
@@ -859,6 +863,21 @@ def _identity_claim(document: OntologyDocument) -> tuple[str, ...] | None:
 
 def _source_identity(document: OntologyDocument) -> tuple[bytes, bytes]:
     return document.provenance.source_sha256, document.document_fingerprint.digest
+
+
+def _parser_owner_snapshot_scopes_are_exact(
+    documents: tuple[OntologyDocument, ...],
+) -> bool:
+    """Require singleton fingerprint groups for parser-scoped anonymous owners.
+
+    A parser can derive the ordinal-zero effective scope from one document.
+    Snapshot assembly assigns higher ordinals when semantically equal anonymous
+    documents came from distinct byte sources, so that uncommon case stays on
+    the general scoped-publication path until native composition can rescope it.
+    """
+
+    fingerprints = tuple(document.document_fingerprint.digest for document in documents)
+    return len(set(fingerprints)) == len(fingerprints)
 
 
 def _register_identity(
