@@ -214,6 +214,37 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
     .expect("first non-failing retained axiom-type boundary must build");
     assert_eq!(boundary_axiom_type, baseline_axiom_type);
 
+    let axiom_type_page = component
+        .prepare_axiom_type_page()
+        .expect("retained axiom-type page fixture must prepare");
+    let (baseline_axiom_type_page, axiom_type_page_allocations) =
+        count_allocations(|| axiom_type_page.page());
+    let baseline_axiom_type_page =
+        baseline_axiom_type_page.expect("retained axiom-type page baseline must encode");
+    assert_eq!(baseline_axiom_type_page[0], 1);
+    assert_eq!(baseline_axiom_type_page[1], u64::MAX);
+    assert_eq!(baseline_axiom_type_page[2], 1);
+    assert_eq!(baseline_axiom_type_page[3], canonical.len() as u64);
+    assert!(baseline_axiom_type_page[4] > 0);
+    assert_eq!(baseline_axiom_type_page[5], 1);
+    assert!(axiom_type_page_allocations > 1);
+
+    for fail_after in 0..axiom_type_page_allocations {
+        let axiom_type_page = component
+            .prepare_axiom_type_page()
+            .expect("retained axiom-type page fixture must prepare for every rejection");
+        let failure =
+            typed_allocation_failure(fail_allocation(fail_after, || axiom_type_page.page()));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let axiom_type_page = component
+        .prepare_axiom_type_page()
+        .expect("retained axiom-type page boundary fixture must prepare");
+    let boundary_axiom_type_page =
+        fail_allocation(axiom_type_page_allocations, || axiom_type_page.page())
+            .expect("first non-failing retained axiom-type page boundary must encode");
+    assert_eq!(boundary_axiom_type_page, baseline_axiom_type_page);
+
     let (baseline_prepared, preparation_allocations) =
         count_allocations(|| component.prepare_encoded_columns());
     let baseline_prepared = baseline_prepared.expect("encoded columns must prepare");

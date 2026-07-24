@@ -4,7 +4,9 @@
 use crate::cancel::{Cancellation, Guard};
 use crate::error::NativeError;
 use crate::hash::crc32c;
-use crate::index::{build_retained_axiom_type_index_v1, build_retained_signature_index_v1};
+use crate::index::{
+    build_retained_axiom_type_index_v1, build_retained_signature_index_v1, RetainedAxiomTypeIndexV1,
+};
 use crate::limits::Limits;
 use crate::model::{
     prepare_encoded_structural_columns_from_tables_v1, Category, ComponentFieldRef, ComponentId,
@@ -158,6 +160,25 @@ impl ComponentEncodingFixture {
         ])
     }
 
+    /// Prepare a production retained axiom-type index before allocation
+    /// injection is armed.
+    pub fn prepare_axiom_type_page(&self) -> Result<AxiomTypePageFixture, Failure> {
+        let tag = self.frozen.arena().tag(self.identifiers[0])?;
+        let index = build_retained_axiom_type_index_v1(
+            self.frozen.arena(),
+            &self.identifiers,
+            &Limits::default(),
+            self.cancellation.clone(),
+            None,
+            0,
+        )?;
+        Ok(AxiomTypePageFixture {
+            index,
+            tag,
+            cancellation: self.cancellation.clone(),
+        })
+    }
+
     /// Prepare retained encoded-column metadata before allocation injection.
     ///
     /// The returned one-shot fixture isolates the production publication
@@ -176,6 +197,45 @@ impl ComponentEncodingFixture {
             0,
         )?;
         Ok(EncodedColumnPublicationFixture { prepared })
+    }
+}
+
+/// One retained axiom-type index whose bounded page buffers have not yet been
+/// allocated.
+pub struct AxiomTypePageFixture {
+    index: RetainedAxiomTypeIndexV1,
+    tag: u16,
+    cancellation: Cancellation,
+}
+
+impl AxiomTypePageFixture {
+    /// Allocate and encode one exact constructor page, then return an
+    /// allocation-free correctness summary after the page is dropped.
+    pub fn page(&self) -> Result<[u64; 6], Failure> {
+        let page = self.index.constructor_page(
+            self.tag,
+            0,
+            64,
+            8 * 1024 * 1024,
+            &Limits::default(),
+            self.cancellation.clone(),
+            None,
+        )?;
+        let row = page.rows.first().ok_or_else(|| {
+            NativeError::protocol("native allocator axiom-type page fixture emitted no row")
+        })?;
+        let row_count = u64::try_from(page.rows.len())
+            .map_err(|_| NativeError::limit("native allocator page row count exceeds u64"))?;
+        let row_bytes = u64::try_from(row.len())
+            .map_err(|_| NativeError::limit("native allocator page bytes exceed u64"))?;
+        Ok([
+            page.total_count,
+            page.next_cursor.unwrap_or(u64::MAX),
+            row_count,
+            row_bytes,
+            u64::from(crc32c(row)),
+            self.index.complete_root_encode_calls(),
+        ])
     }
 }
 
