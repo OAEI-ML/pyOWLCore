@@ -135,6 +135,30 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...
 
+    def _retained_signature_index_bridge_allocation_probe_v1(
+        self,
+        handle: object,
+        scope: str,
+        document_ordinal: int | None,
+        config: object,
+        fail_after: int | None = None,
+    ) -> tuple[object, int]: ...
+
+    def _retained_identity_index_bridge_allocation_probe_v1(
+        self,
+        handle: object,
+        fail_after: int | None = None,
+    ) -> tuple[object, int]: ...
+
+    def _retained_axiom_type_index_bridge_allocation_probe_v1(
+        self,
+        handle: object,
+        scope: str,
+        document_ordinal: int | None,
+        config: object,
+        fail_after: int | None = None,
+    ) -> tuple[object, int]: ...
+
     def _retained_signature_layout_bridge_allocation_probe_v1(
         self,
         handle: object,

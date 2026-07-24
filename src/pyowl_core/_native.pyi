@@ -208,6 +208,24 @@ def _retained_signature_index_v1(
 def _retained_ontology_identity_index_v1(
     handle: _NativeSnapshotHandle,
 ) -> _NativeRetainedOntologyIdentityIndexV1: ...
+def _retained_signature_index_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    fail_after: int | None = None,
+) -> tuple[_NativeRetainedSignatureIndexV1, int]: ...
+def _retained_identity_index_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    fail_after: int | None = None,
+) -> tuple[_NativeRetainedOntologyIdentityIndexV1, int]: ...
+def _retained_axiom_type_index_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    fail_after: int | None = None,
+) -> tuple[_NativeRetainedAxiomTypeIndexV1, int]: ...
 def _retained_signature_layout_bridge_allocation_probe_v1(
     handle: _NativeSnapshotHandle,
     scope: object,

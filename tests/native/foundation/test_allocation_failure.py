@@ -414,6 +414,9 @@ def retained_view_layout_bridge_extension(
     extension: NativeTestExtension,
 ) -> NativeTestExtension:
     required = (
+        "_retained_signature_index_bridge_allocation_probe_v1",
+        "_retained_identity_index_bridge_allocation_probe_v1",
+        "_retained_axiom_type_index_bridge_allocation_probe_v1",
         "_retained_signature_layout_bridge_allocation_probe_v1",
         "_retained_identity_layout_bridge_allocation_probe_v1",
         "_retained_axiom_type_layout_bridge_allocation_probe_v1",
@@ -432,7 +435,7 @@ def retained_view_layout_bridge_extension(
     return extension
 
 
-def test_retained_view_layout_bridge_failures_publish_no_layout(
+def test_retained_index_and_layout_bridge_failures_publish_no_partial_result(
     retained_view_layout_bridge_extension: NativeTestExtension,
 ) -> None:
     extension = cast(Any, retained_view_layout_bridge_extension)
@@ -455,6 +458,55 @@ def test_retained_view_layout_bridge_failures_publish_no_layout(
     )
     config = bytearray(native._encode_config(ParseLimits(), None, verify=False))
     original_config = bytes(config)
+    construction_cases: tuple[
+        tuple[str, Any, tuple[object, ...], int, str], ...
+    ] = (
+        (
+            "signature",
+            extension._retained_signature_index_bridge_allocation_probe_v1,
+            (owner, "closure", None, memoryview(config)),
+            2,
+            "_NativeRetainedSignatureIndexV1",
+        ),
+        (
+            "identity",
+            extension._retained_identity_index_bridge_allocation_probe_v1,
+            (owner,),
+            1,
+            "_NativeRetainedOntologyIdentityIndexV1",
+        ),
+        (
+            "axiom-type",
+            extension._retained_axiom_type_index_bridge_allocation_probe_v1,
+            (owner, "closure", None, memoryview(config)),
+            2,
+            "_NativeRetainedAxiomTypeIndexV1",
+        ),
+    )
+    for _name, probe, arguments, expected_allocations, expected_type in construction_cases:
+        index, allocations = probe(*arguments, None)
+        layout = index._layout_v1()
+        assert type(index).__name__ == expected_type
+        assert allocations == expected_allocations
+        assert owner._publication_closed_v2() is False
+        assert config == original_config
+
+        for fail_after in range(allocations):
+            with pytest.raises(
+                MemoryError,
+                match=r"^injected native retained-index bridge allocation failure$",
+            ):
+                probe(*arguments, fail_after)
+            assert owner._publication_closed_v2() is False
+            assert config == original_config
+
+        boundary_index, boundary_allocations = probe(*arguments, allocations)
+        assert type(boundary_index).__name__ == expected_type
+        assert boundary_index._layout_v1() == layout
+        assert boundary_allocations == allocations
+        assert owner._publication_closed_v2() is False
+        assert config == original_config
+
     axiom_layout, _axiom_allocations = (
         extension._retained_axiom_type_layout_bridge_allocation_probe_v1(
             owner,

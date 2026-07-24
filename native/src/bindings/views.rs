@@ -152,6 +152,18 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
             _retained_axiom_type_page_bridge_allocation_probe_v1,
             _module
         )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_signature_index_bridge_allocation_probe_v1,
+            _module
+        )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_identity_index_bridge_allocation_probe_v1,
+            _module
+        )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_axiom_type_index_bridge_allocation_probe_v1,
+            _module
+        )?)?;
     }
     Ok(())
 }
@@ -246,11 +258,34 @@ fn _retained_signature_index_v1<'py>(
     config: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<NativeRetainedSignatureIndexV1> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    retained_signature_index_with_allocations(
+        py,
+        handle,
+        scope,
+        document_ordinal,
+        config,
+        cancel,
+        &mut allocations,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retained_signature_index_with_allocations<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<NativeRetainedSignatureIndexV1> {
     if !scope.get_type().is(py.get_type::<PyString>()) {
         return Err(pyo3::exceptions::PyTypeError::new_err(
             "retained signature scope must be an exact str",
         ));
     }
+    allocations.checkpoint()?;
     let scope: String = scope.extract()?;
     let selected_scope = encoded_selection(&scope, document_ordinal)
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -268,6 +303,7 @@ fn _retained_signature_index_v1<'py>(
             Some(interrupt),
         )
     })?;
+    allocations.checkpoint()?;
     Ok(NativeRetainedSignatureIndexV1 {
         storage: owner,
         index,
@@ -346,8 +382,18 @@ fn _retained_ontology_identity_index_v1(
     py: Python<'_>,
     handle: PyRef<'_, NativeSnapshotHandle>,
 ) -> PyResult<NativeRetainedOntologyIdentityIndexV1> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    retained_identity_index_with_allocations(py, handle, &mut allocations)
+}
+
+fn retained_identity_index_with_allocations(
+    py: Python<'_>,
+    handle: PyRef<'_, NativeSnapshotHandle>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<NativeRetainedOntologyIdentityIndexV1> {
     let storage = handle.encoded_storage_v2(py)?;
     drop(handle);
+    allocations.checkpoint()?;
     Ok(NativeRetainedOntologyIdentityIndexV1 { storage })
 }
 
@@ -521,11 +567,34 @@ fn _retained_axiom_type_index_v1<'py>(
     config: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
 ) -> PyResult<NativeRetainedAxiomTypeIndexV1> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    retained_axiom_type_index_with_allocations(
+        py,
+        handle,
+        scope,
+        document_ordinal,
+        config,
+        cancel,
+        &mut allocations,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retained_axiom_type_index_with_allocations<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<NativeRetainedAxiomTypeIndexV1> {
     if !scope.get_type().is(py.get_type::<PyString>()) {
         return Err(pyo3::exceptions::PyTypeError::new_err(
             "retained axiom-type scope must be an exact str",
         ));
     }
+    allocations.checkpoint()?;
     let scope: String = scope.extract()?;
     let selected_scope = encoded_selection(&scope, document_ordinal)
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
@@ -544,10 +613,81 @@ fn _retained_axiom_type_index_v1<'py>(
             Some(interrupt),
         )
     })?;
+    allocations.checkpoint()?;
     Ok(NativeRetainedAxiomTypeIndexV1 {
         storage: owner,
         index: Arc::new(index),
     })
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, fail_after=None))]
+fn _retained_signature_index_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(NativeRetainedSignatureIndexV1, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-index bridge allocation failure",
+    );
+    let owner = retained_signature_index_with_allocations(
+        py,
+        handle,
+        scope,
+        document_ordinal,
+        config,
+        None,
+        &mut allocations,
+    )?;
+    Ok((owner, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, fail_after=None))]
+fn _retained_identity_index_bridge_allocation_probe_v1(
+    py: Python<'_>,
+    handle: PyRef<'_, NativeSnapshotHandle>,
+    fail_after: Option<u64>,
+) -> PyResult<(NativeRetainedOntologyIdentityIndexV1, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-index bridge allocation failure",
+    );
+    let owner = retained_identity_index_with_allocations(py, handle, &mut allocations)?;
+    Ok((owner, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, fail_after=None))]
+fn _retained_axiom_type_index_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(NativeRetainedAxiomTypeIndexV1, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-index bridge allocation failure",
+    );
+    let owner = retained_axiom_type_index_with_allocations(
+        py,
+        handle,
+        scope,
+        document_ordinal,
+        config,
+        None,
+        &mut allocations,
+    )?;
+    Ok((owner, allocations.count()))
 }
 
 #[cfg(feature = "test-hooks")]
