@@ -417,6 +417,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         name: operation["allocation_checkpoints"]
         for name, operation in retained_attestation_operations.items()
     } == {
+        "legacy V1 snapshot": 33,
         "snapshot without OWL2-DL summary": 42,
         "document without OWL2-DL summary": 42,
         "snapshot with OWL2-DL summary": 55,
@@ -646,6 +647,10 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     )
     assert (
         release["native_retained_counter_publication_allocation_failures"]
+        == "local-pass"
+    )
+    assert (
+        release["native_retained_attestation_publication_allocation_failures"]
         == "local-pass"
     )
     assert (
