@@ -768,6 +768,54 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
         baseline_typed_closure_signature
     );
 
+    let mut signature_page_baseline = None;
+    for operation in [
+        TypedFacadeIndexFixture::page_signature
+            as fn(&TypedFacadeIndexFixture) -> Result<[u64; 10], Failure>,
+        TypedFacadeIndexFixture::page_closure_signature,
+    ] {
+        let typed_signature_page = component
+            .prepare_typed_facade_indexes()
+            .expect("typed signature page fixture must prepare");
+        let (baseline_typed_signature_page, typed_signature_page_allocations) =
+            count_allocations(|| operation(&typed_signature_page));
+        let baseline_typed_signature_page =
+            baseline_typed_signature_page.expect("typed signature page baseline must encode");
+        assert_eq!(baseline_typed_signature_page[0], 1);
+        assert_eq!(baseline_typed_signature_page[1], u64::MAX);
+        assert_eq!(baseline_typed_signature_page[2], 1);
+        assert!(baseline_typed_signature_page[3] > 0);
+        assert_eq!(
+            baseline_typed_signature_page[5..],
+            [1, 1, 1, baseline_typed_signature_page[3], 1]
+        );
+        if let Some(expected) = signature_page_baseline {
+            assert_eq!(baseline_typed_signature_page, expected);
+        } else {
+            signature_page_baseline = Some(baseline_typed_signature_page);
+        }
+        assert!(typed_signature_page_allocations > 1);
+
+        for fail_after in 0..typed_signature_page_allocations {
+            let typed_signature_page = component
+                .prepare_typed_facade_indexes()
+                .expect("typed signature page fixture must prepare for rejection");
+            let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+                operation(&typed_signature_page)
+            }));
+            assert!(failure.message.contains("allocation failed"));
+        }
+        let typed_signature_page = component
+            .prepare_typed_facade_indexes()
+            .expect("typed signature page boundary fixture must prepare");
+        let boundary_typed_signature_page =
+            fail_allocation(typed_signature_page_allocations, || {
+                operation(&typed_signature_page)
+            })
+            .expect("first non-failing typed signature page boundary must encode");
+        assert_eq!(boundary_typed_signature_page, baseline_typed_signature_page);
+    }
+
     let (baseline_prepared, preparation_allocations) =
         count_allocations(|| component.prepare_encoded_columns());
     let baseline_prepared = baseline_prepared.expect("encoded columns must prepare");
