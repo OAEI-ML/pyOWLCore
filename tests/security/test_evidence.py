@@ -434,6 +434,32 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         retained_attestation_operations
     )
     assert retained_attestation_bridge["scope"]
+    retained_page_bridge = sweep["retained_page_publication_bridge"]
+    retained_page_operations = {
+        operation["name"]: operation
+        for operation in retained_page_bridge["operations"]
+    }
+    assert {
+        name: operation["allocation_checkpoints"]
+        for name, operation in retained_page_operations.items()
+    } == {
+        "snapshot typed structural page": 11,
+        "document typed structural page": 11,
+        "snapshot auxiliary retained page": 13,
+        "document auxiliary retained page": 13,
+    }
+    assert retained_page_bridge["allocation_checkpoints"] == sum(
+        operation["allocation_checkpoints"]
+        for operation in retained_page_operations.values()
+    )
+    assert (
+        retained_page_bridge["injected_failures"]
+        == retained_page_bridge["allocation_checkpoints"]
+    )
+    assert retained_page_bridge["boundary_successes"] == len(
+        retained_page_operations
+    )
+    assert retained_page_bridge["scope"]
     retained_view_bridge = sweep["retained_view_layout_bridge"]
     view_operations = {
         operation["name"]: operation for operation in retained_view_bridge["operations"]
@@ -487,6 +513,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + retained_index_bridge["allocation_checkpoints"]
         + retained_counter_bridge["allocation_checkpoints"]
         + retained_attestation_bridge["allocation_checkpoints"]
+        + retained_page_bridge["allocation_checkpoints"]
         + retained_view_bridge["allocation_checkpoints"]
         + index_bridge["allocation_checkpoints"]
         + foundation_bridge["allocation_checkpoints"]
@@ -509,6 +536,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + retained_index_bridge["boundary_successes"]
         + retained_counter_bridge["boundary_successes"]
         + retained_attestation_bridge["boundary_successes"]
+        + retained_page_bridge["boundary_successes"]
         + retained_view_bridge["boundary_successes"]
         + index_bridge["boundary_successes"]
         + foundation_bridge["boundary_successes"]
