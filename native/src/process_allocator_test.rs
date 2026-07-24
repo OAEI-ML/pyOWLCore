@@ -34,6 +34,7 @@ impl From<NativeError> for Failure {
 pub struct ComponentEncodingFixture {
     frozen: FrozenComponentBuild,
     identifiers: [ComponentId; 1],
+    cancellation: Cancellation,
 }
 
 impl ComponentEncodingFixture {
@@ -53,6 +54,7 @@ impl ComponentEncodingFixture {
         Ok(Self {
             frozen,
             identifiers: [identifier],
+            cancellation: Cancellation::with_duration(None),
         })
     }
 
@@ -77,7 +79,7 @@ impl ComponentEncodingFixture {
             self.frozen.arena(),
             &tables,
             &Limits::default(),
-            Cancellation::with_duration(None),
+            self.cancellation.clone(),
             None,
             0,
         )?;

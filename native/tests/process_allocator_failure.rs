@@ -106,16 +106,16 @@ fn fail_allocation<T>(fail_after: usize, operation: impl FnOnce() -> T) -> T {
 }
 
 fn assert_typed_allocation_failure<T>(result: Result<T, Failure>, message: &'static str) {
-    match result {
+    assert_eq!(typed_allocation_failure(result).message, message);
+}
+
+fn typed_allocation_failure<T>(result: Result<T, Failure>) -> Failure {
+    let failure = match result {
         Ok(_) => panic!("allocation rejection unexpectedly succeeded"),
-        Err(failure) => assert_eq!(
-            failure,
-            Failure {
-                code: "NATIVE_WIRE_LIMIT",
-                message,
-            }
-        ),
-    }
+        Err(failure) => failure,
+    };
+    assert_eq!(failure.code, "NATIVE_WIRE_LIMIT");
+    failure
 }
 
 #[test]
@@ -155,6 +155,29 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
     let boundary_component = fail_allocation(component_allocations, || component.encode())
         .expect("first non-failing component boundary must encode");
     assert_eq!(boundary_component, canonical);
+
+    let (baseline_prepared, preparation_allocations) =
+        count_allocations(|| component.prepare_encoded_columns());
+    let baseline_prepared = baseline_prepared.expect("encoded columns must prepare");
+    assert!(preparation_allocations > 1);
+    let baseline_prepared_columns = baseline_prepared
+        .publish()
+        .expect("prepared encoded columns must publish");
+
+    for fail_after in 0..preparation_allocations {
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+            component.prepare_encoded_columns()
+        }));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let boundary_prepared = fail_allocation(preparation_allocations, || {
+        component.prepare_encoded_columns()
+    })
+    .expect("first non-failing encoded-column preparation boundary must succeed");
+    let boundary_prepared_columns = boundary_prepared
+        .publish()
+        .expect("boundary encoded columns must publish");
+    assert_eq!(boundary_prepared_columns, baseline_prepared_columns);
 
     let prepared = component
         .prepare_encoded_columns()

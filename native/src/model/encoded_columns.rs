@@ -332,7 +332,7 @@ impl EncodedStructuralColumnsV1 {
 
 pub(crate) struct PreparedEncodedStructuralColumnsV1<'arena> {
     arena: &'arena NativeComponentArena,
-    roots: Box<dyn EncodedRootSourceV1 + 'arena>,
+    roots: RetainedRootSourceV1<'arena>,
     root_rows: usize,
     nodes: Vec<NodeRow>,
     node_ids: HashMap<ComponentId, u32>,
@@ -360,7 +360,7 @@ impl PreparedEncodedStructuralColumnsV1<'_> {
         let mut buffers = fixed_buffers(output, self.layout)?;
         fill_buffers(
             self.arena,
-            self.roots.as_ref(),
+            &self.roots,
             self.root_rows,
             &self.nodes,
             &self.node_ids,
@@ -380,7 +380,7 @@ impl PreparedEncodedStructuralColumnsV1<'_> {
         let mut buffers = allocate_buffers_from_layout(self.layout)?;
         fill_buffers(
             self.arena,
-            self.roots.as_ref(),
+            &self.roots,
             self.root_rows,
             &self.nodes,
             &self.node_ids,
@@ -408,7 +408,7 @@ pub(crate) fn build_encoded_structural_columns_v1(
 ) -> NativeResult<EncodedStructuralColumnsV1> {
     prepare_encoded_structural_columns_from_source_v1(
         arena,
-        Box::new(RootSliceV1(roots)),
+        RetainedRootSourceV1::Slice(RootSliceV1(roots)),
         limits,
         cancellation,
         interrupt,
@@ -482,10 +482,9 @@ fn prepare_encoded_structural_columns_from_tables_with_work_v1<'arena>(
     mut work: ColumnWork,
 ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'arena>> {
     let roots = RootTablesV1::new(tables, &mut work)?;
-    work.allocation_checkpoint()?;
     prepare_encoded_structural_columns_from_source_with_work_v1(
         arena,
-        Box::new(roots),
+        RetainedRootSourceV1::Tables(roots),
         limits,
         caller_external_bytes,
         work,
@@ -496,6 +495,36 @@ trait EncodedRootSourceV1: Send + Sync {
     fn len(&self) -> NativeResult<usize>;
     fn get(&self, index: usize) -> NativeResult<EncodedRootV1>;
     fn workspace_bytes(&self) -> NativeResult<usize>;
+}
+
+/// Closed root-source storage keeps preparation fully fallible without an
+/// unaccounted trait-object control allocation.
+enum RetainedRootSourceV1<'arena> {
+    Slice(RootSliceV1<'arena>),
+    Tables(RootTablesV1<'arena>),
+}
+
+impl EncodedRootSourceV1 for RetainedRootSourceV1<'_> {
+    fn len(&self) -> NativeResult<usize> {
+        match self {
+            Self::Slice(source) => source.len(),
+            Self::Tables(source) => source.len(),
+        }
+    }
+
+    fn get(&self, index: usize) -> NativeResult<EncodedRootV1> {
+        match self {
+            Self::Slice(source) => source.get(index),
+            Self::Tables(source) => source.get(index),
+        }
+    }
+
+    fn workspace_bytes(&self) -> NativeResult<usize> {
+        match self {
+            Self::Slice(source) => source.workspace_bytes(),
+            Self::Tables(source) => source.workspace_bytes(),
+        }
+    }
 }
 
 struct RootSliceV1<'roots>(&'roots [EncodedRootV1]);
@@ -564,7 +593,7 @@ impl EncodedRootSourceV1 for RootTablesV1<'_> {
 
 fn prepare_encoded_structural_columns_from_source_v1<'arena>(
     arena: &'arena NativeComponentArena,
-    roots: Box<dyn EncodedRootSourceV1 + 'arena>,
+    roots: RetainedRootSourceV1<'arena>,
     limits: &Limits,
     cancellation: Cancellation,
     interrupt: Option<InterruptSlot>,
@@ -582,7 +611,7 @@ fn prepare_encoded_structural_columns_from_source_v1<'arena>(
 
 fn prepare_encoded_structural_columns_from_source_with_work_v1<'arena>(
     arena: &'arena NativeComponentArena,
-    roots: Box<dyn EncodedRootSourceV1 + 'arena>,
+    roots: RetainedRootSourceV1<'arena>,
     limits: &Limits,
     caller_external_bytes: usize,
     mut work: ColumnWork,
@@ -703,7 +732,7 @@ fn prepare_encoded_structural_columns_from_source_with_work_v1<'arena>(
     nodes = ordered;
     validate_root_order(
         arena,
-        roots.as_ref(),
+        &roots,
         root_rows,
         &lengths,
         limits,
@@ -2632,7 +2661,7 @@ mod tests {
             .into_arena();
         let prepared = prepare_encoded_structural_columns_from_source_v1(
             &arena,
-            Box::new(RootSliceV1(&[])),
+            RetainedRootSourceV1::Slice(RootSliceV1(&[])),
             &limits,
             Cancellation::with_duration(None),
             None,
@@ -2804,7 +2833,7 @@ mod tests {
         .expect("owned columns");
         let prepared = prepare_encoded_structural_columns_from_source_v1(
             &arena,
-            Box::new(RootSliceV1(&roots)),
+            RetainedRootSourceV1::Slice(RootSliceV1(&roots)),
             &limits,
             Cancellation::with_duration(None),
             None,

@@ -218,7 +218,7 @@ def test_direct_workspace_allocation_checkpoints_fail_before_publication(
     before = handle._publication_counters_v2().encoded_view_requests
 
     buffers, counters, allocations = invoke(handle, "closure", None, _config(), None)
-    assert allocations == 13
+    assert allocations == 14
     _assert_direct_buffers(buffers, counters)
     expected = canonical_bytes(Declaration(Class(IRI("urn:encoded-view:fixture"))))
     assert decode_root_canonical_bytes(buffers) == ((2, expected),)
