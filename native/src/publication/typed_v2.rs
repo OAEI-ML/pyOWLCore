@@ -444,6 +444,37 @@ impl TypedFacadeStorageV2 {
         !self.raw_document_tables.is_empty()
     }
 
+    /// Consume one unscoped parser owner into its arena and raw structural
+    /// root manifests. Signature, closure, and axiom-index metadata are
+    /// dropped; the document root vectors themselves are moved without copy.
+    pub(crate) fn into_flat_document(
+        mut self,
+    ) -> NativeResult<(NativeComponentArena, [Vec<ComponentId>; 3])> {
+        if self.document_count != 1 || self.has_raw_document_overrides() {
+            return Err(NativeError::protocol(
+                "native closure composition requires one unscoped parser document per owner",
+            ));
+        }
+        let mut roots: [Vec<ComponentId>; 3] = Default::default();
+        for (index, collection) in [
+            TypedFacadeCollectionV2::OntologyAnnotations,
+            TypedFacadeCollectionV2::Axioms,
+            TypedFacadeCollectionV2::Extensions,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let coordinate = TypedFacadeCoordinateV2::document(collection, 0);
+            if let Ok(table_index) = self
+                .effective_tables
+                .binary_search_by_key(&coordinate, |table| table.coordinate)
+            {
+                roots[index] = std::mem::take(&mut self.effective_tables[table_index].roots);
+            }
+        }
+        Ok((self.arena, roots))
+    }
+
     pub(crate) const fn maximum_row_bytes(&self) -> u64 {
         self.maximum_row_bytes
     }

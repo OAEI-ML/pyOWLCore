@@ -51,7 +51,7 @@ enum LocalComponentId {
     Swrl(DenseId),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct ComponentOwnerId(u64);
 
 static NEXT_COMPONENT_OWNER: AtomicU64 = AtomicU64::new(1);
@@ -649,13 +649,21 @@ impl ComponentTables {
 pub(crate) struct NativeComponentArena {
     owner: ComponentOwnerId,
     tables: Arc<ComponentTables>,
+    additional: Arc<Vec<ComponentArenaPartition>>,
     counters: ComponentCounters,
+}
+
+#[derive(Clone, Debug)]
+struct ComponentArenaPartition {
+    owner: ComponentOwnerId,
+    tables: Arc<ComponentTables>,
 }
 
 /// A borrowing view of one immutable component record.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ComponentRecordRef<'arena> {
     arena: &'arena NativeComponentArena,
+    owner: ComponentOwnerId,
     component: &'arena FrozenComponent,
 }
 
@@ -679,7 +687,7 @@ impl<'arena> ComponentRecordRef<'arena> {
             .get(index)
             .copied()
             .ok_or_else(|| NativeError::protocol("native component field is out of bounds"))?;
-        self.arena.field_ref(value)
+        self.arena.field_ref(self.owner, value)
     }
 }
 
@@ -701,6 +709,7 @@ pub(crate) enum ComponentFieldRef<'arena> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ComponentSequenceRef<'arena> {
     arena: &'arena NativeComponentArena,
+    owner: ComponentOwnerId,
     sequence: &'arena FrozenComponentSequence,
 }
 
@@ -721,7 +730,7 @@ impl<'arena> ComponentSequenceRef<'arena> {
         let value = self.sequence.elements.get(index).copied().ok_or_else(|| {
             NativeError::protocol("native component sequence item is out of bounds")
         })?;
-        self.arena.field_ref(value)
+        self.arena.field_ref(self.owner, value)
     }
 }
 
@@ -735,39 +744,67 @@ impl NativeComponentArena {
         identifier: ComponentId,
         work: &mut ComponentWork,
     ) -> NativeResult<Vec<u8>> {
-        if identifier.owner != self.owner {
-            return Err(NativeError::protocol(
-                "native component id belongs to a different arena",
-            ));
-        }
-        self.tables.encode_with_work(identifier.local, work)
+        let tables = self.lookup_tables(identifier.owner)?;
+        let base_external = work.external_bytes;
+        let other_retained = self
+            .counters
+            .retained_bytes
+            .checked_sub(tables.retained_bytes)
+            .ok_or_else(|| NativeError::protocol("native component accounting is inconsistent"))?;
+        work.external_bytes = base_external
+            .checked_add(other_retained)
+            .ok_or_else(|| NativeError::limit("native component encoding memory overflow"))?;
+        let result = tables.encode_with_work(identifier.local, work);
+        work.external_bytes = base_external;
+        result
     }
 
     fn validate_identifier(&self, identifier: ComponentId) -> NativeResult<LocalComponentId> {
-        if identifier.owner != self.owner {
-            return Err(NativeError::protocol(
-                "native component id belongs to a different arena",
-            ));
-        }
-        self.tables.component(identifier.local)?;
+        self.lookup_tables(identifier.owner)?
+            .component(identifier.local)?;
         Ok(identifier.local)
+    }
+
+    fn lookup_tables(&self, owner: ComponentOwnerId) -> NativeResult<&ComponentTables> {
+        self.lookup_tables_arc(owner)
+            .map(Arc::as_ref)
+            .ok_or_else(|| {
+                NativeError::protocol("native component id belongs to a different arena")
+            })
+    }
+
+    fn lookup_tables_arc(&self, owner: ComponentOwnerId) -> Option<&Arc<ComponentTables>> {
+        if owner == self.owner {
+            return Some(&self.tables);
+        }
+        self.additional
+            .binary_search_by_key(&owner, |partition| partition.owner)
+            .ok()
+            .and_then(|index| self.additional.get(index))
+            .map(|partition| &partition.tables)
     }
 
     /// Borrow a validated record without reconstructing canonical bytes.
     pub(crate) fn record(&self, identifier: ComponentId) -> NativeResult<ComponentRecordRef<'_>> {
-        let identifier = self.validate_identifier(identifier)?;
+        let local = self.validate_identifier(identifier)?;
+        let tables = self.lookup_tables(identifier.owner)?;
         Ok(ComponentRecordRef {
             arena: self,
-            component: self.tables.component(identifier)?,
+            owner: identifier.owner,
+            component: tables.component(local)?,
         })
     }
 
-    fn field_ref(&self, value: ComponentValue) -> NativeResult<ComponentFieldRef<'_>> {
+    fn field_ref(
+        &self,
+        owner: ComponentOwnerId,
+        value: ComponentValue,
+    ) -> NativeResult<ComponentFieldRef<'_>> {
+        let tables = self.lookup_tables(owner)?;
         match value {
             ComponentValue::None => Ok(ComponentFieldRef::None),
             ComponentValue::String(kind, identifier) => {
-                let value = self
-                    .tables
+                let value = tables
                     .strings
                     .get(identifier.0.index())
                     .map(Vec::as_slice)
@@ -777,35 +814,33 @@ impl NativeComponentArena {
                     ScalarKind::Enum => ComponentFieldRef::Enum(value),
                 })
             }
-            ComponentValue::Bytes(identifier) => self
-                .tables
+            ComponentValue::Bytes(identifier) => tables
                 .bytes
                 .get(identifier.0.index())
                 .map(Vec::as_slice)
                 .map(ComponentFieldRef::Bytes)
                 .ok_or_else(|| NativeError::protocol("native bytes id is out of bounds")),
-            ComponentValue::Integer(identifier) => self
-                .tables
+            ComponentValue::Integer(identifier) => tables
                 .integers
                 .get(identifier.0.index())
                 .map(Vec::as_slice)
                 .map(ComponentFieldRef::NonnegativeIntegerVarint)
                 .ok_or_else(|| NativeError::protocol("native integer id is out of bounds")),
             ComponentValue::Node(identifier) => {
-                self.tables.component(identifier)?;
+                tables.component(identifier)?;
                 Ok(ComponentFieldRef::Node(ComponentId {
-                    owner: self.owner,
+                    owner,
                     local: identifier,
                 }))
             }
             ComponentValue::Sequence(identifier) => {
-                let sequence = self
-                    .tables
+                let sequence = tables
                     .sequences
                     .get(identifier.0.index())
                     .ok_or_else(|| NativeError::protocol("native sequence id is out of bounds"))?;
                 let sequence = ComponentSequenceRef {
                     arena: self,
+                    owner,
                     sequence,
                 };
                 Ok(match sequence.kind() {
@@ -913,7 +948,29 @@ impl NativeComponentArena {
             ordered.push(identifiers[index]);
             work.consume(1)?;
         }
-        ordered.dedup();
+        let output_capacity_bytes = ordered
+            .capacity()
+            .checked_mul(size_of::<ComponentId>())
+            .ok_or_else(|| NativeError::limit("native component output size overflow"))?;
+        let mut previous: Option<Vec<u8>> = None;
+        let mut write = 0_usize;
+        for read in 0..ordered.len() {
+            let previous_bytes = previous.as_ref().map_or(0, Vec::capacity);
+            work.auxiliary_bytes = output_capacity_bytes
+                .checked_add(previous_bytes)
+                .and_then(|value| u64::try_from(value).ok())
+                .ok_or_else(|| NativeError::limit("native component sort workspace overflow"))?;
+            let canonical = self.encode_with_work(ordered[read], &mut work)?;
+            if previous
+                .as_ref()
+                .is_none_or(|value| value.as_slice() != canonical.as_slice())
+            {
+                ordered[write] = ordered[read];
+                write += 1;
+            }
+            previous = Some(canonical);
+        }
+        ordered.truncate(write);
         *identifiers = ordered;
         Ok(())
     }
@@ -951,10 +1008,8 @@ impl NativeComponentArena {
     }
 
     pub(crate) fn tag(&self, identifier: ComponentId) -> NativeResult<u16> {
-        Ok(self
-            .tables
-            .component(self.validate_identifier(identifier)?)?
-            .tag)
+        let local = self.validate_identifier(identifier)?;
+        Ok(self.lookup_tables(identifier.owner)?.component(local)?.tag)
     }
 
     pub(crate) fn encoded_len(
@@ -965,9 +1020,19 @@ impl NativeComponentArena {
         interrupt: Option<InterruptSlot>,
         external_bytes: usize,
     ) -> NativeResult<usize> {
-        let identifier = self.validate_identifier(identifier)?;
+        let local = self.validate_identifier(identifier)?;
+        let tables = self.lookup_tables(identifier.owner)?;
         let mut work = ComponentWork::new(limits, cancellation, interrupt, external_bytes)?;
-        self.tables.encoded_len_with_work(identifier, &mut work)
+        let other_retained = self
+            .counters
+            .retained_bytes
+            .checked_sub(tables.retained_bytes)
+            .ok_or_else(|| NativeError::protocol("native component accounting is inconsistent"))?;
+        work.external_bytes = work
+            .external_bytes
+            .checked_add(other_retained)
+            .ok_or_else(|| NativeError::limit("native component encoding memory overflow"))?;
+        tables.encoded_len_with_work(local, &mut work)
     }
 
     pub(crate) fn encode(
@@ -987,7 +1052,125 @@ impl NativeComponentArena {
     }
 
     pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.tables, &other.tables)
+        if Arc::ptr_eq(&self.tables, &other.tables)
+            || (Arc::ptr_eq(&self.additional, &other.additional) && !self.additional.is_empty())
+        {
+            return true;
+        }
+        other
+            .lookup_tables_arc(self.owner)
+            .is_some_and(|tables| Arc::ptr_eq(&self.tables, tables))
+            || self.additional.iter().any(|partition| {
+                other
+                    .lookup_tables_arc(partition.owner)
+                    .is_some_and(|tables| Arc::ptr_eq(&partition.tables, tables))
+            })
+    }
+
+    /// Retain several immutable single-owner arenas as one lookup owner.
+    ///
+    /// The component tables are shared by `Arc`; only the bounded partition
+    /// manifest is new. Root identifiers keep their original private owner
+    /// tokens, so no structural component is decoded or re-interned.
+    pub(crate) fn compose_flat(sources: &[&Self]) -> NativeResult<Self> {
+        let primary = sources
+            .first()
+            .copied()
+            .ok_or_else(|| NativeError::protocol("native component composition is empty"))?;
+        let additional_count = sources.len().saturating_sub(1);
+        let mut additional = Vec::new();
+        additional
+            .try_reserve_exact(additional_count)
+            .map_err(|_| NativeError::limit("native component partition allocation failed"))?;
+        let mut counters = ComponentCounters::default();
+        let mut maximum_builder_peak = 0_u64;
+        for (index, source) in sources.iter().copied().enumerate() {
+            if !source.additional.is_empty() {
+                return Err(NativeError::protocol(
+                    "native component composition requires flat source arenas",
+                ));
+            }
+            counters.checked_add_usage(source.counters)?;
+            maximum_builder_peak = maximum_builder_peak.max(source.counters.peak_builder_bytes);
+            if index != 0 {
+                additional.push(ComponentArenaPartition {
+                    owner: source.owner,
+                    tables: Arc::clone(&source.tables),
+                });
+            }
+        }
+        additional.sort_unstable_by_key(|partition| partition.owner);
+        if additional
+            .binary_search_by_key(&primary.owner, |partition| partition.owner)
+            .is_ok()
+            || additional
+                .windows(2)
+                .any(|pair| pair[0].owner == pair[1].owner)
+        {
+            return Err(NativeError::protocol(
+                "native component composition contains a duplicate owner",
+            ));
+        }
+        let manifest_bytes = additional
+            .capacity()
+            .checked_mul(size_of::<ComponentArenaPartition>())
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| NativeError::limit("native component partition size overflow"))?;
+        counters.retained_bytes = counters
+            .retained_bytes
+            .checked_add(manifest_bytes)
+            .ok_or_else(|| NativeError::limit("native component retained size overflow"))?;
+        counters.peak_builder_bytes = maximum_builder_peak.max(counters.retained_bytes);
+        Ok(Self {
+            owner: primary.owner,
+            tables: Arc::clone(&primary.tables),
+            additional: Arc::new(additional),
+            counters,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn partition_count(&self) -> usize {
+        self.additional.len().saturating_add(1)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn partition_manifest_bytes(&self) -> u64 {
+        self.additional
+            .capacity()
+            .checked_mul(size_of::<ComponentArenaPartition>())
+            .and_then(|value| u64::try_from(value).ok())
+            .expect("validated native component partition size")
+    }
+}
+
+impl ComponentCounters {
+    fn checked_add_usage(&mut self, source: Self) -> NativeResult<()> {
+        macro_rules! add {
+            ($field:ident) => {
+                self.$field = self
+                    .$field
+                    .checked_add(source.$field)
+                    .ok_or_else(|| NativeError::limit("native component counter overflow"))?;
+            };
+        }
+        add!(node_requests);
+        add!(node_hits);
+        add!(unique_nodes);
+        add!(string_requests);
+        add!(string_hits);
+        add!(unique_strings);
+        add!(bytes_requests);
+        add!(bytes_hits);
+        add!(unique_bytes);
+        add!(integer_requests);
+        add!(integer_hits);
+        add!(unique_integers);
+        add!(sequence_requests);
+        add!(sequence_hits);
+        add!(unique_sequences);
+        add!(retained_bytes);
+        Ok(())
     }
 }
 
@@ -1465,6 +1648,7 @@ impl NativeComponentBuilder {
                 // is fallible and preflighted; this one small control-block
                 // allocation is the explicit safe-Rust residual.
                 tables: Arc::new(tables),
+                additional: Arc::new(Vec::new()),
                 counters: self.counters,
             },
             roots: remaps.components,

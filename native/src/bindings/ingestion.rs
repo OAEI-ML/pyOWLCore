@@ -1091,8 +1091,8 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
     )
 }
 
-/// Merge parser-built single-document owners into one retained closure without
-/// exporting their structural root tables through Python.
+/// Compose parser-built single-document owners into one retained closure
+/// without exporting roots through Python or duplicating component arenas.
 #[pyfunction]
 #[pyo3(signature = (
     parsed_documents,
@@ -1136,7 +1136,7 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
         )));
     }
     let mut parser_bytes = 0_u64;
-    let mut external_bytes = 0_usize;
+    let mut source_owner_bytes = 0_usize;
     for item in parsed_documents.iter() {
         if !item
             .get_type()
@@ -1174,10 +1174,11 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
                 "native closure storage size exceeds usize",
             ))
         })?;
-        external_bytes = external_bytes.checked_add(retained).ok_or_else(|| {
+        source_owner_bytes = source_owner_bytes.checked_add(retained).ok_or_else(|| {
             crate::python_error(NativeError::limit("native closure storage size overflow"))
         })?;
     }
+    let mut external_bytes = source_owner_bytes;
 
     let mut storages = Vec::new();
     storages
@@ -1243,6 +1244,14 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
         })
         .transpose()?;
     let owned_attestation = NativeSnapshotAttestationV2::from_python(attestation)?;
+    let closure_external_bytes =
+        external_bytes
+            .checked_sub(source_owner_bytes)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::protocol(
+                    "native closure external accounting is inconsistent",
+                ))
+            })?;
 
     for item in parsed_documents.iter() {
         let mut parsed: PyRefMut<'_, NativeParsedStructuralStorageV2> = item.extract()?;
@@ -1252,11 +1261,6 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
     }
 
     let (storage, retained_origins, raw_origins) = crate::run_detached(py, move |interrupt| {
-        let mut builder =
-            TypedFacadeBuilderV2::new(limits, cancellation, Some(interrupt), external_bytes)?;
-        for parsed in &storages {
-            builder.add_native_document(parsed)?;
-        }
         let (effective, raw) = match (owned_origins, owned_effective_origins) {
             (Some(raw), Some(effective)) => (Some(effective), Some(raw)),
             (Some(effective), None) => (Some(effective), None),
@@ -1268,7 +1272,15 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
             }
         };
         Ok((
-            builder.freeze(&effective_document_ordinals, &closure_document_ordinals)?,
+            TypedFacadeBuilderV2::compose_native_documents(
+                storages,
+                &effective_document_ordinals,
+                &closure_document_ordinals,
+                limits,
+                cancellation,
+                Some(interrupt),
+                closure_external_bytes,
+            )?,
             effective,
             raw,
         ))
