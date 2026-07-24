@@ -727,13 +727,18 @@ class SnapshotLoader:
 
         results: dict[int, _ImportParseResult] = {}
         for group, result in zip(grouped.values(), unique_results, strict=True):
-            for offset, (index, _acquired, _resolved) in enumerate(group):
+            for offset, (index, acquired, resolved) in enumerate(group):
                 if isinstance(result, Exception):
                     results[index] = result
                     continue
                 document, storage, phase_timings, cache_hit = result
                 results[index] = (
-                    document,
+                    _with_resolved_provenance(
+                        document,
+                        acquired,
+                        resolved,
+                        resolved.provenance.get("media_type") or None,
+                    ),
                     storage,
                     phase_timings,
                     cache_hit if offset == 0 else True,
@@ -788,14 +793,6 @@ class SnapshotLoader:
                 media_type=media_type,
                 cancellation_token=cancellation_token,
             )
-        provenance = replace(
-            document.provenance,
-            expected_sha256=resolved.expected_sha256,
-            acquisition_locator=acquired.locator,
-            media_type=media_type,
-        )
-        if provenance != document.provenance:
-            document = replace(document, provenance=provenance)
         retained = self._document_cache.publish(key, document)
         return retained, native_storage, phase_timings, cached is not None
 
@@ -1136,6 +1133,24 @@ def _parsed_document_key(
     options: LoadOptions,
 ) -> tuple[object, ...]:
     return _parsed_document_context(acquired, resolved, options)[2]
+
+
+def _with_resolved_provenance(
+    document: OntologyDocument,
+    acquired: AcquiredImport,
+    resolved: ResolvedDocument,
+    media_type: str | None,
+) -> OntologyDocument:
+    provenance = replace(
+        document.provenance,
+        expected_sha256=resolved.expected_sha256,
+        acquisition_locator=acquired.locator,
+        media_type=media_type,
+    )
+    return document if provenance == document.provenance else replace(
+        document,
+        provenance=provenance,
+    )
 
 
 def _merge_phase_timings(

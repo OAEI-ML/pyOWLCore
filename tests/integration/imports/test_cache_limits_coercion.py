@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import time
 from dataclasses import replace
 
 import pytest
 
 from pyowl_core import (
+    IRI,
+    AcquiredImport,
     AcquisitionCache,
     AdapterCompatibilityError,
     CancellationSource,
@@ -135,6 +139,104 @@ def test_document_cache_identity_keeps_parse_limits_fail_closed() -> None:
 
     repeated = loader.load(root, options=default_options, resolver=resolver)
     assert repeated.report.document_cache_hits == 1
+
+
+def test_document_cache_hit_rebinds_current_integrity_provenance() -> None:
+    root = functional("urn:root", imports=("urn:child",))
+    child = functional("urn:child", body=("Declaration(Class(:Child))",))
+    digest = hashlib.sha256(child).digest()
+    loader = SnapshotLoader(
+        acquisition_cache=AcquisitionCache(),
+        document_cache=ParsedDocumentCache(),
+    )
+    options = load_options(ImportPolicy.RESOLVE_LOCAL)
+
+    first = loader.load(
+        root,
+        options=options,
+        resolver=MappingResolver(
+            {
+                "urn:child": ResolvedDocument(
+                    child,
+                    IRI("urn:child"),
+                    provenance={"locator": "cache:first"},
+                )
+            }
+        ),
+    )
+    first_child = next(
+        document
+        for document in first.documents
+        if document.ontology_id.ontology_iri == IRI("urn:child")
+    )
+    assert first_child.provenance.expected_sha256 is None
+    assert first_child.provenance.acquisition_locator == "cache:first"
+
+    pinned = loader.load(
+        root,
+        options=options,
+        resolver=MappingResolver(
+            {
+                "urn:child": ResolvedDocument(
+                    child,
+                    IRI("urn:child"),
+                    expected_sha256=digest,
+                    provenance={"locator": "cache:second"},
+                )
+            }
+        ),
+    )
+    pinned_child = next(
+        document
+        for document in pinned.documents
+        if document.ontology_id.ontology_iri == IRI("urn:child")
+    )
+    assert pinned.report.document_cache_hits == 1
+    assert pinned_child.provenance.expected_sha256 == digest
+    assert pinned_child.provenance.acquisition_locator == "cache:second"
+
+
+def test_parse_batch_rebinds_each_grouped_resolution_provenance() -> None:
+    child = functional("urn:child", body=("Declaration(Class(:Child))",))
+    digest = hashlib.sha256(child).digest()
+    first = ResolvedDocument(
+        child,
+        IRI("urn:child"),
+        provenance={"locator": "batch:first"},
+    )
+    second = ResolvedDocument(
+        child,
+        IRI("urn:child"),
+        expected_sha256=digest,
+        provenance={"locator": "batch:second"},
+    )
+    loader = SnapshotLoader(
+        acquisition_cache=AcquisitionCache(),
+        document_cache=ParsedDocumentCache(),
+    )
+    outcomes = loader._parse_import_batch(
+        (
+            (0, AcquiredImport(child, digest, "batch:first", False), first),
+            (1, AcquiredImport(child, digest, "batch:second", True), second),
+        ),
+        load_options(ImportPolicy.RESOLVE_LOCAL),
+        None,
+        time.monotonic(),
+    )
+    first_outcome = outcomes[0]
+    second_outcome = outcomes[1]
+    assert not isinstance(first_outcome, Exception)
+    assert not isinstance(second_outcome, Exception)
+    first_document, _first_storage, _first_timings, first_hit = first_outcome
+    second_document, _second_storage, _second_timings, second_hit = second_outcome
+
+    assert first_hit is False
+    assert first_document.provenance.expected_sha256 is None
+    assert first_document.provenance.acquisition_locator == "batch:first"
+    assert second_hit is True
+    assert second_document.provenance.expected_sha256 == digest
+    assert second_document.provenance.acquisition_locator == "batch:second"
+    assert second_document.document_fingerprint == first_document.document_fingerprint
 
 
 class _CrashingDocumentCache(ParsedDocumentCache):
