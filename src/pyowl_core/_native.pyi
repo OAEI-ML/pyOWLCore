@@ -144,6 +144,14 @@ def _encoded_structural_document_bridge_allocation_probe_v1(
     config: object,
     fail_after: int | None = None,
 ) -> tuple[dict[str, memoryview], dict[str, int], int]: ...
+def _retained_snapshot_counters_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    fail_after: int | None = None,
+) -> tuple[NativeFacadeCountersV2, int]: ...
+def _retained_document_counters_bridge_allocation_probe_v1(
+    handle: _NativeDocumentHandle,
+    fail_after: int | None = None,
+) -> tuple[NativeFacadeCountersV2, int]: ...
 def _encoded_structural_workspace_allocation_probe_v1(
     handle: _NativeSnapshotHandle,
     scope: object,

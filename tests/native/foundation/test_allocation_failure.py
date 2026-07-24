@@ -417,6 +417,8 @@ def retained_view_layout_bridge_extension(
         "_retained_signature_index_bridge_allocation_probe_v1",
         "_retained_identity_index_bridge_allocation_probe_v1",
         "_retained_axiom_type_index_bridge_allocation_probe_v1",
+        "_retained_snapshot_counters_bridge_allocation_probe_v1",
+        "_retained_document_counters_bridge_allocation_probe_v1",
         "_retained_signature_layout_bridge_allocation_probe_v1",
         "_retained_identity_layout_bridge_allocation_probe_v1",
         "_retained_axiom_type_layout_bridge_allocation_probe_v1",
@@ -594,6 +596,67 @@ def test_retained_index_and_layout_bridge_failures_publish_no_partial_result(
         assert owner._publication_closed_v2() is False
         assert config == original_config
 
+    selected.close()
+    assert selected.closed
+
+
+def test_retained_counter_bridge_failures_publish_no_partial_result(
+    retained_view_layout_bridge_extension: NativeTestExtension,
+) -> None:
+    extension = cast(Any, retained_view_layout_bridge_extension)
+    selected = cast(
+        Any,
+        load_snapshot(
+            b"Ontology(<urn:allocation:counters> "
+            b"Declaration(Class(<urn:allocation:counters:A>)))",
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.NATIVE,
+            ),
+        ),
+    )
+    snapshot = object.__getattribute__(
+        selected._native_snapshot_state.owner.handle,
+        "_owner_v2",
+    )
+    document = snapshot._publication_document_v2(0)
+    expected = snapshot._publication_counters_v2()
+    assert document._publication_counters_v2() == expected
+
+    cases = (
+        (
+            extension._retained_snapshot_counters_bridge_allocation_probe_v1,
+            snapshot,
+        ),
+        (
+            extension._retained_document_counters_bridge_allocation_probe_v1,
+            document,
+        ),
+    )
+    for probe, owner in cases:
+        counters, allocations = probe(owner, None)
+        assert counters == expected
+        assert allocations == 93
+
+        for fail_after in range(allocations):
+            with pytest.raises(
+                MemoryError,
+                match=r"^injected native retained-counters bridge allocation failure$",
+            ):
+                probe(owner, fail_after)
+            assert snapshot._publication_counters_v2() == expected
+            assert document._publication_counters_v2() == expected
+            assert snapshot._publication_closed_v2() is False
+            assert document._publication_closed_v2() is False
+
+        boundary_counters, boundary_allocations = probe(owner, allocations)
+        assert boundary_counters == expected
+        assert boundary_allocations == allocations
+        assert snapshot._publication_counters_v2() == expected
+        assert document._publication_counters_v2() == expected
+
+    document._publication_close_v2()
     selected.close()
     assert selected.closed
 

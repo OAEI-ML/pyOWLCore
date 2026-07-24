@@ -95,6 +95,15 @@ impl NativeDocumentHandle {
             PyRuntimeError::new_err("native document owner has no typed V2 publication")
         })
     }
+
+    pub(crate) fn counters_to_python_with_allocations(
+        &self,
+        py: Python<'_>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<Py<PyAny>> {
+        self.require_v2()?
+            .counters_to_python_with_allocations(py, allocations)
+    }
 }
 
 #[pymethods]
@@ -145,7 +154,8 @@ impl NativeDocumentHandle {
     }
 
     fn _publication_counters_v2(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.require_v2()?.counters_to_python(py)
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.counters_to_python_with_allocations(py, &mut allocations)
     }
 }
 
@@ -233,6 +243,15 @@ impl NativeSnapshotHandle {
             PyRuntimeError::new_err("native snapshot owner has no typed V2 publication")
         })
     }
+
+    pub(crate) fn counters_to_python_with_allocations(
+        &self,
+        py: Python<'_>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<Py<PyAny>> {
+        self.require_v2()?
+            .counters_to_python_with_allocations(py, allocations)
+    }
 }
 
 #[pymethods]
@@ -287,7 +306,8 @@ impl NativeSnapshotHandle {
     }
 
     fn _publication_counters_v2(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.require_v2()?.counters_to_python(py)
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.counters_to_python_with_allocations(py, &mut allocations)
     }
 
     fn _publication_document_v2(

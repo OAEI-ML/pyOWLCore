@@ -1028,17 +1028,24 @@ impl PublicationStorageV2 {
         Ok(found)
     }
 
-    pub(super) fn counters_to_python(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    pub(crate) fn counters_to_python_with_allocations(
+        &self,
+        py: Python<'_>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<Py<PyAny>> {
         let values = self.counters.snapshot();
+        allocations.checkpoint()?;
         let kwargs = PyDict::new(py);
         for (name, value) in COUNTER_NAMES.iter().zip(values) {
+            allocations.checkpoint()?;
             kwargs.set_item(*name, value)?;
         }
+        allocations.checkpoint()?;
         let handoff = py.import(HANDOFF_MODULE)?;
-        Ok(handoff
-            .getattr("NativeFacadeCountersV2")?
-            .call((), Some(&kwargs))?
-            .unbind())
+        allocations.checkpoint()?;
+        let record = handoff.getattr("NativeFacadeCountersV2")?;
+        allocations.checkpoint()?;
+        Ok(record.call((), Some(&kwargs))?.unbind())
     }
 
     pub(crate) fn encoded_structural_columns(
