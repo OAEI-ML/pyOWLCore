@@ -1437,6 +1437,87 @@ def test_rdf_mapping_rejects_ambiguous_detached_inverse_property_expression() ->
     assert raised.value.code == "RDF_MAPPING_CARDINALITY"
 
 
+def test_rdf_mapping_consumes_detached_class_complement() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C"/>
+  <owl:Class rdf:nodeID="complement">
+    <owl:complementOf rdf:resource="urn:C"/>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 3
+    assert document.rdf_mapping_report.consumed_triples == 3
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert len(tuple(document.iter_axioms(m.Declaration))) == 1
+    assert len(document.axioms) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        """
+  <owl:Class rdf:about="urn:C"/>
+  <rdf:Description rdf:nodeID="complement">
+    <owl:complementOf rdf:resource="urn:C"/>
+  </rdf:Description>
+""",
+        """
+  <owl:Class rdf:nodeID="complement">
+    <owl:complementOf rdf:resource="urn:undeclared"/>
+  </owl:Class>
+""",
+        """
+  <owl:Class rdf:about="urn:C"/>
+  <owl:Class rdf:nodeID="complement">
+    <owl:complementOf rdf:nodeID="anonymous"/>
+  </owl:Class>
+""",
+        """
+  <owl:Class rdf:about="urn:C"/>
+  <owl:Class rdf:nodeID="left">
+    <owl:complementOf rdf:nodeID="right"/>
+  </owl:Class>
+  <owl:Class rdf:nodeID="right">
+    <owl:complementOf rdf:nodeID="left"/>
+  </owl:Class>
+""",
+    ),
+)
+def test_rdf_mapping_rejects_unestablished_detached_class_complement(body: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
+def test_rdf_mapping_rejects_ambiguous_detached_class_complement() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C"/>
+  <owl:Class rdf:about="urn:D"/>
+  <owl:Class rdf:nodeID="complement">
+    <owl:complementOf rdf:resource="urn:C"/>
+    <owl:complementOf rdf:resource="urn:D"/>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_CARDINALITY"
+
+
 def test_rdf_mapping_enforces_the_distinct_ontology_annotation_limit() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"

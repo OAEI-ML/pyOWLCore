@@ -2909,6 +2909,13 @@ fn map_graph(
         &mut expressions,
         session,
     )?;
+    consume_detached_class_complements(
+        &list_graph,
+        &mut consumed,
+        &kinds,
+        &mut expressions,
+        session,
+    )?;
     if axiom_annotations.has_unclaimed() {
         return Err(rdf_axiom_reification(
             "native owl:Axiom reification targets an unsupported axiom mapping",
@@ -3273,6 +3280,61 @@ fn consume_detached_inverse_property_expressions<'view, 'graph>(
             node: _,
             consumed: expression_consumed,
         } = expressions.decode_object_property_term(ListTerm::Blank(subject), session)?;
+        consume_collection_indexes(expression_consumed, consumed, session)?;
+    }
+    Ok(())
+}
+
+fn consume_detached_class_complements<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index] || triple.predicate != OWL_COMPLEMENT_OF {
+            continue;
+        }
+        let (ListResource::Blank(subject), ListTerm::Iri(target)) = (triple.subject, triple.object)
+        else {
+            continue;
+        };
+        if !has_kind(kinds, target, "class") {
+            continue;
+        }
+        let mut marker_present = false;
+        let mut complement_targets = 0_usize;
+        for (candidate_index, candidate) in triples.iter().enumerate() {
+            session.step(1)?;
+            if candidate.subject != ListResource::Blank(subject) {
+                continue;
+            }
+            if candidate.predicate == RDF_TYPE
+                && candidate.object == ListTerm::Iri(OWL_CLASS)
+                && !consumed[candidate_index]
+            {
+                marker_present = true;
+            }
+            if candidate.predicate == OWL_COMPLEMENT_OF {
+                complement_targets = complement_targets.checked_add(1).ok_or_else(|| {
+                    NativeError::limit("native detached class-complement target count overflow")
+                })?;
+                if complement_targets > 1 {
+                    return Err(rdf_mapping_cardinality(
+                        "native detached class complement has more than one target",
+                    ));
+                }
+            }
+        }
+        if !marker_present {
+            continue;
+        }
+        let DecodedClassExpression {
+            node: _,
+            consumed: expression_consumed,
+        } = expressions.decode_term(ListTerm::Blank(subject), session)?;
         consume_collection_indexes(expression_consumed, consumed, session)?;
     }
     Ok(())
@@ -9246,6 +9308,47 @@ mod tests {
         assert_eq!(
             one_of.mapping.total_triples,
             one_of.mapping.consumed_triples
+        );
+    }
+
+    #[test]
+    fn detached_class_complement_requires_exact_expression_shape() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><owl:Class rdf:nodeID=\"complement\"><owl:complementOf rdf:resource=\"urn:C\"/></owl:Class></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("detached class complement");
+        assert_eq!(document.axioms.len(), 1);
+        assert_eq!(document.mapping.total_triples, 3);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let markerless = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><rdf:Description rdf:nodeID=\"complement\"><owl:complementOf rdf:resource=\"urn:C\"/></rdf:Description></rdf:RDF>"
+        );
+        let undeclared = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"complement\"><owl:complementOf rdf:resource=\"urn:undeclared\"/></owl:Class></rdf:RDF>"
+        );
+        let anonymous = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><owl:Class rdf:nodeID=\"complement\"><owl:complementOf rdf:nodeID=\"anonymous\"/></owl:Class></rdf:RDF>"
+        );
+        let cyclic = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><owl:Class rdf:nodeID=\"left\"><owl:complementOf rdf:nodeID=\"right\"/></owl:Class><owl:Class rdf:nodeID=\"right\"><owl:complementOf rdf:nodeID=\"left\"/></owl:Class></rdf:RDF>"
+        );
+        for incomplete in [markerless, undeclared, anonymous, cyclic] {
+            assert_eq!(
+                mapped(incomplete.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            );
+        }
+
+        let ambiguous = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><owl:Class rdf:about=\"urn:D\"/><owl:Class rdf:nodeID=\"complement\"><owl:complementOf rdf:resource=\"urn:C\"/><owl:complementOf rdf:resource=\"urn:D\"/></owl:Class></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(ambiguous.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
         );
     }
 
