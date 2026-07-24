@@ -208,6 +208,69 @@ def _retained_signature_index_v1(
 def _retained_ontology_identity_index_v1(
     handle: _NativeSnapshotHandle,
 ) -> _NativeRetainedOntologyIdentityIndexV1: ...
+def _retained_signature_layout_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    fail_after: int | None = None,
+) -> tuple[
+    tuple[
+        bytes,
+        bytes,
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        dict[str, int],
+    ],
+    int,
+]: ...
+def _retained_identity_layout_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    fail_after: int | None = None,
+) -> tuple[tuple[str, bytes, bytes, bytes, dict[str, int]], int]: ...
+def _retained_axiom_type_layout_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    fail_after: int | None = None,
+) -> tuple[
+    tuple[
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        tuple[int, ...],
+        dict[str, int],
+    ],
+    int,
+]: ...
+def _retained_axiom_type_binding_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    fail_after: int | None = None,
+) -> tuple[tuple[bytes, bytes], int]: ...
+def _retained_axiom_type_sizes_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    fail_after: int | None = None,
+) -> tuple[tuple[int, ...], int]: ...
+def _retained_axiom_type_page_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    tag: int,
+    start: int,
+    max_rows: int,
+    max_bytes: int,
+    fail_after: int | None = None,
+) -> tuple[tuple[tuple[bytes, ...], int, int | None], int]: ...
 def _retain_structural_snapshot_v2(
     documents: object,
     origins: object,
@@ -247,6 +310,16 @@ def _parse_rdfxml_retained_v2(
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
 ) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
+def _parse_rdfxml_retained_source_map_v2(
+    source: object,
+    document_iri: str | None,
+    config: object,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+    cancel: _Cancellation | None = None,
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
 def _prepare_parsed_structural_snapshot_v2(
     parsed: _NativeParsedStructuralStorageV2,
     manifest: bytes,
@@ -269,6 +342,12 @@ def _finalize_parsed_structural_snapshot_v2(
     attestation: NativeSnapshotAttestationV2,
     cancel: _Cancellation | None = None,
 ) -> _NativeSnapshotHandle: ...
+def _finalize_parsed_structural_bridge_allocation_probe_v2(
+    parsed: _NativeParsedStructuralStorageV2,
+    prepared_summary: bytes,
+    attestation: NativeSnapshotAttestationV2,
+    fail_after: int | None = None,
+) -> tuple[_NativeSnapshotHandle, int]: ...
 def _work_probe(iterations: int, config: object, cancel: _Cancellation | None = None) -> int: ...
 def _panic_probe() -> None: ...
 def _encoded_structural_fixture_v1() -> _NativeSnapshotHandle: ...

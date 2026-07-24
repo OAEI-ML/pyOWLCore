@@ -346,6 +346,7 @@ def _retained_snapshot(
         document_iri=None if document_iri is None else document_iri.value,
         limits=selected_options.limits,
         collect_provenance=selected_options.collect_provenance,
+        preserve_source_map=selected_options.preserve_source_map,
         allow_partial_rdf_mapping=False,
         allow_swrl=allow_swrl,
         require_empty_imports=require_empty_imports,
@@ -1190,6 +1191,212 @@ def test_private_provenance_rows_match_python_and_remain_native_until_access() -
     assert after.origin_rows_emitted >= expected_origin_rows
     assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
     assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_private_source_map_matches_python_with_empty_prefixes_and_language_details(
+    extension: NativeTestExtension,
+) -> None:
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            collect_provenance=False,
+            preserve_source_map=True,
+        )
+
+    reference = load_snapshot(
+        W3C_RDFXML_SOURCE,
+        document_iri=None,
+        options=options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("source-mapped RDF/XML crossed the Python parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(
+            Any,
+            _retained_snapshot(
+                W3C_RDFXML_SOURCE,
+                options=options(BackendPreference.NATIVE),
+                document_iri=None,
+            ),
+        )
+
+    handle = selected._native_snapshot_state.owner.handle
+    raw_owner = handle._owner_v2
+    before = raw_owner._publication_counters_v2()
+    before_python = selected._native_python_counters()
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.root.source_map is not None
+    assert reference.root.source_map is not None
+    assert handle.attestation.capability_bits == 47
+    assert before.retained_source_map_rows == 5
+    assert before.retained_source_prefix_rows == 0
+    assert before.source_map_rows_emitted == 0
+    assert before.source_prefix_rows_emitted == 0
+    assert before_python.auxiliary_rows_decoded == 0
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+
+    assert selected.root.source_map == reference.root.source_map
+    assert dict(selected.root.source_map.prefixes) == {}
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    after = raw_owner._publication_counters_v2()
+    after_python = selected._native_python_counters()
+    assert after.source_map_rows_emitted > before.source_map_rows_emitted
+    assert after.source_prefix_rows_emitted == 0
+    assert after_python.auxiliary_rows_decoded > before_python.auxiliary_rows_decoded
+
+
+def test_private_source_map_preserves_every_constructor_occurrence_order() -> None:
+    source = render_document(
+        every_constructor_document(),
+        format=DocumentFormat.RDF_XML,
+    )
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            collect_provenance=False,
+            preserve_source_map=True,
+        )
+
+    reference = load_snapshot(
+        source,
+        document_iri=DOCUMENT_IRI,
+        options=options(BackendPreference.PYTHON),
+    )
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            source,
+            options=options(BackendPreference.NATIVE),
+            document_iri=DOCUMENT_IRI,
+        ),
+    )
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    counters = raw_owner._publication_counters_v2()
+
+    assert selected.root.source_map is not None
+    assert reference.root.source_map is not None
+    assert selected.root.source_map == reference.root.source_map
+    assert dict(selected.root.source_map.prefixes) == {}
+    assert counters.retained_source_map_rows == sum(
+        len(occurrences) for occurrences in reference.root.source_map.entries.values()
+    )
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_private_source_map_and_provenance_match_under_default_combination() -> None:
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            collect_provenance=True,
+            preserve_source_map=True,
+        )
+
+    reference = load_snapshot(
+        W3C_RDFXML_SOURCE,
+        document_iri=None,
+        options=options(BackendPreference.PYTHON),
+    )
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            W3C_RDFXML_SOURCE,
+            options=options(BackendPreference.NATIVE),
+            document_iri=None,
+        ),
+    )
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    counters = raw_owner._publication_counters_v2()
+
+    assert selected.root.source_map == reference.root.source_map
+    assert tuple(selected.root.origin_index.entries) == tuple(
+        reference.root.origin_index.entries
+    )
+    assert {
+        digest: tuple((item.occurrence, item.span) for item in occurrences)
+        for digest, occurrences in selected.root.origin_index.entries.items()
+    } == {
+        digest: tuple((item.occurrence, item.span) for item in occurrences)
+        for digest, occurrences in reference.root.origin_index.entries.items()
+    }
+    assert selected.origin_index == reference.origin_index
+    assert counters.retained_source_map_rows > 0
+    assert counters.retained_origin_rows > 0
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_private_source_map_accepts_zero_entries_and_zero_prefixes() -> None:
+    source = (
+        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>'
+    )
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            preserve_source_map=True,
+        )
+
+    reference = load_snapshot(source, options=options(BackendPreference.PYTHON))
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            source,
+            options=options(BackendPreference.NATIVE),
+            document_iri=None,
+        ),
+    )
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    counters = raw_owner._publication_counters_v2()
+
+    assert selected.root.source_map == reference.root.source_map
+    assert selected.root.source_map is not None
+    assert dict(selected.root.source_map.entries) == {}
+    assert dict(selected.root.source_map.prefixes) == {}
+    assert counters.retained_source_map_rows == 0
+    assert counters.retained_source_prefix_rows == 0
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_private_source_map_limit_counts_rdfxml_language_rows() -> None:
+    options = LoadOptions(
+        format=DocumentFormat.RDF_XML,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=False,
+        preserve_source_map=True,
+        limits=ParseLimits(max_source_map_entries=4),
+    )
+
+    with pytest.raises(ResourceLimitError) as selected_error:
+        _retained_snapshot(
+            W3C_RDFXML_SOURCE,
+            options=options,
+            document_iri=None,
+        )
+    with pytest.raises(ResourceLimitError) as reference_error:
+        load_snapshot(
+            W3C_RDFXML_SOURCE,
+            document_iri=None,
+            options=LoadOptions(
+                format=DocumentFormat.RDF_XML,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.PYTHON,
+                preserve_source_map=True,
+                limits=ParseLimits(max_source_map_entries=4),
+            ),
+        )
+
+    assert selected_error.value.code == "NATIVE_WIRE_LIMIT"
+    assert "max_source_map_entries" in str(selected_error.value)
+    assert reference_error.value.limit == "max_source_map_entries"
 
 
 def test_private_rdfxml_axiom_index_builds_over_the_retained_arena(

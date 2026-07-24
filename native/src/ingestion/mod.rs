@@ -26,6 +26,7 @@ use std::time::Instant;
 pub(super) struct MappingEvidence {
     pub(super) total_triples: u64,
     pub(super) consumed_triples: u64,
+    pub(super) occurrence_count: u64,
     pub(super) rule_ids: &'static [&'static str],
 }
 
@@ -38,10 +39,18 @@ pub(super) struct CanonicalDocument {
     pub(super) ontology_annotations: Vec<Vec<u8>>,
     pub(super) axioms: Vec<Vec<u8>>,
     pub(super) extensions: Vec<Vec<u8>>,
+    pub(super) occurrences: Vec<CanonicalOccurrence>,
+    pub(super) language_spellings: Vec<String>,
     pub(super) source_sha256: [u8; 32],
     pub(super) byte_length: u64,
     pub(super) decoded_codepoints: u64,
     pub(super) mapping: MappingEvidence,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CanonicalOccurrence {
+    pub(crate) collection: u8,
+    pub(crate) row: Vec<u8>,
 }
 
 pub(crate) struct RetainedRdfXmlOutcomeV2 {
@@ -64,13 +73,15 @@ fn parse_rdfxml(
     allow_swrl: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<CanonicalDocument> {
-    Ok(parse_rdfxml_timed(source, document_iri, allow_swrl, session)?.0)
+    Ok(parse_rdfxml_timed(source, document_iri, allow_swrl, false, false, session)?.0)
 }
 
 fn parse_rdfxml_timed(
     source: &[u8],
     document_iri: Option<&str>,
     allow_swrl: bool,
+    capture_occurrences: bool,
+    preserve_source_map: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<(CanonicalDocument, u64)> {
     check_source(source, session)?;
@@ -81,8 +92,14 @@ fn parse_rdfxml_timed(
             "native RDF/XML document IRI exceeds max_iri_bytes",
         )?;
     }
-    let (mut document, mapping_ns) =
-        rdfxml::parse_and_map_timed(source, document_iri, allow_swrl, session)?;
+    let (mut document, mapping_ns) = rdfxml::parse_and_map_timed(
+        source,
+        document_iri,
+        allow_swrl,
+        capture_occurrences,
+        preserve_source_map,
+        session,
+    )?;
     document.document_iri = document_iri
         .map(|value| owned_text(value, session))
         .transpose()?;
@@ -102,11 +119,19 @@ pub(crate) fn parse_rdfxml_retained_v2(
     interrupt: Option<crate::cancel::InterruptSlot>,
     caller_external_bytes: usize,
     collect_provenance: bool,
+    preserve_source_map: bool,
     allow_swrl: bool,
     require_empty_imports: bool,
 ) -> NativeResult<RetainedRdfXmlOutcomeV2> {
     let parse_started = Instant::now();
-    let (mut document, mapping_ns) = parse_rdfxml_timed(source, document_iri, allow_swrl, session)?;
+    let (mut document, mapping_ns) = parse_rdfxml_timed(
+        source,
+        document_iri,
+        allow_swrl,
+        collect_provenance || preserve_source_map,
+        preserve_source_map,
+        session,
+    )?;
     let parse_mapping_ns = elapsed_ns(parse_started)?;
     let syntax_parse_ns = parse_mapping_ns.saturating_sub(mapping_ns);
     if require_empty_imports && !document.imports.is_empty() {
@@ -123,26 +148,92 @@ pub(crate) fn parse_rdfxml_retained_v2(
     let contains_anonymous = crate::parse::retained_rows_contain_anonymous_v2(rows, &limits)?;
     let anonymous_started = Instant::now();
     let mut effective_rows = None;
-    let mut effective_occurrence_digests = None;
+    let mut scoped_occurrence_digests: Option<Vec<([u8; 32], [u8; 32])>> = None;
     if contains_anonymous {
+        let scoped_rows = [
+            document.ontology_annotations.clone(),
+            document.axioms.clone(),
+            document.extensions.clone(),
+        ];
         let scoped = crate::parse::scope_rdfxml_anonymous_rows_v2(
             document.ontology_iri.as_deref(),
             document.version_iri.as_deref(),
             &document.imports,
-            rows,
+            [
+                scoped_rows[0].as_slice(),
+                scoped_rows[1].as_slice(),
+                scoped_rows[2].as_slice(),
+            ],
             session,
             &cancellation,
         )?;
         let crate::parse::ScopedAnonymousRowsV2 {
             raw: [annotations, axioms, extensions],
             effective,
-            effective_occurrence_digests: digests,
-            source_occurrence_digests: _,
+            effective_occurrence_digests,
+            source_occurrence_digests,
         } = scoped;
+        if effective_occurrence_digests.len() != source_occurrence_digests.len() {
+            return Err(NativeError::protocol(
+                "native RDF/XML scoped occurrence digest tables diverge",
+            ));
+        }
         document.ontology_annotations = annotations;
         document.axioms = axioms;
         document.extensions = extensions;
-        effective_occurrence_digests = Some(digests);
+        if collect_provenance || preserve_source_map {
+            let canonical_count = scoped_rows.iter().try_fold(0_usize, |total, values| {
+                total
+                    .checked_add(values.len())
+                    .ok_or_else(|| NativeError::limit("native RDF/XML root count overflow"))
+            })?;
+            if source_occurrence_digests.len() != canonical_count {
+                return Err(NativeError::protocol(
+                    "native RDF/XML scoped root digests diverge from canonical roots",
+                ));
+            }
+            let lookup_bytes = canonical_count
+                .checked_mul(std::mem::size_of::<(&[u8], ([u8; 32], [u8; 32]))>())
+                .ok_or_else(|| {
+                    NativeError::limit("native RDF/XML occurrence lookup size overflow")
+                })?;
+            session.reserve_bytes(lookup_bytes)?;
+            let mut lookup = Vec::new();
+            lookup.try_reserve_exact(canonical_count).map_err(|_| {
+                NativeError::limit("native RDF/XML occurrence lookup allocation failed")
+            })?;
+            lookup.extend(
+                scoped_rows
+                    .iter()
+                    .flatten()
+                    .map(Vec::as_slice)
+                    .zip(source_occurrence_digests.iter().copied()),
+            );
+            lookup.sort_unstable_by(|left, right| left.0.cmp(right.0));
+            if lookup
+                .windows(2)
+                .any(|pair| pair[0].0 == pair[1].0 && pair[0].1 != pair[1].1)
+            {
+                return Err(NativeError::protocol(
+                    "native RDF/XML equal roots received different anonymous scopes",
+                ));
+            }
+            let mut ordered = Vec::new();
+            ordered
+                .try_reserve_exact(document.occurrences.len())
+                .map_err(|_| NativeError::limit("native RDF/XML occurrence allocation failed"))?;
+            for occurrence in &document.occurrences {
+                let selected = lookup
+                    .binary_search_by(|candidate| candidate.0.cmp(occurrence.row.as_slice()))
+                    .map_err(|_| {
+                        NativeError::protocol(
+                            "native RDF/XML occurrence root is absent from canonical storage",
+                        )
+                    })?;
+                ordered.push(lookup[selected].1);
+            }
+            scoped_occurrence_digests = Some(ordered);
+        }
         effective_rows = Some(effective);
     }
     let anonymous_scope_ns = elapsed_ns(anonymous_started)?;
@@ -159,9 +250,17 @@ pub(crate) fn parse_rdfxml_retained_v2(
         rows,
         document.decoded_codepoints,
         document.mapping.total_triples,
-        collect_provenance,
-        effective_occurrence_digests.as_deref(),
+        document.mapping.occurrence_count,
+        &document.occurrences,
+        std::mem::take(&mut document.language_spellings),
+        collect_provenance || preserve_source_map,
+        preserve_source_map,
+        contains_anonymous,
+        scoped_occurrence_digests.as_deref(),
+        &limits,
+        &cancellation,
     )?;
+    document.occurrences = Vec::new();
     let result_encode_ns = elapsed_ns(encode_started)?;
     session.finish()?;
     let published = match effective_rows.as_ref() {
@@ -320,6 +419,7 @@ mod tests {
             source.len(),
             true,
             true,
+            true,
             false,
         )
         .expect("retained RDF/XML outcome");
@@ -340,13 +440,27 @@ mod tests {
             b"manifest",
             "document-key",
             true,
-            false,
+            true,
             &limits,
             Cancellation::with_duration(None),
             None,
         )
         .expect("prepared RDF/XML publication");
         assert_eq!(prepared.origin_rows.as_ref().map(Vec::len), Some(1));
+        assert_eq!(
+            prepared
+                .source_map
+                .as_ref()
+                .map(|source| source.entries.len()),
+            Some(1),
+        );
+        assert_eq!(
+            prepared
+                .source_map
+                .as_ref()
+                .map(|source| source.prefixes.len()),
+            Some(0),
+        );
         assert_eq!(
             prepared
                 .origin_rows
@@ -394,6 +508,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .err()
         .expect("disabled SWRL must fail");
@@ -414,6 +529,7 @@ mod tests {
             cancellation,
             None,
             source.len(),
+            false,
             false,
             true,
             false,
@@ -456,6 +572,7 @@ mod tests {
             None,
             anonymous.len(),
             true,
+            false,
             true,
             false,
         )
@@ -499,6 +616,7 @@ mod tests {
             cancellation,
             None,
             imported.len(),
+            false,
             false,
             true,
             true,

@@ -10,6 +10,7 @@ use crate::canonical::{canonical_set, entity, iri, Field, Node};
 use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
 use crate::session::Session;
+use std::cmp::Ordering;
 use std::time::Instant;
 
 use super::rdf_class_expressions::{
@@ -18,7 +19,7 @@ use super::rdf_class_expressions::{
     RdfClassExpressionDecoder,
 };
 use super::rdf_lists::{RdfResource as ListResource, RdfTerm as ListTerm, RdfTriple as ListTriple};
-use super::{CanonicalDocument, MappingEvidence};
+use super::{CanonicalDocument, CanonicalOccurrence, MappingEvidence};
 
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const OWL: &str = "http://www.w3.org/2002/07/owl#";
@@ -482,6 +483,18 @@ struct Triple {
     object: Term,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum PythonResourceAnchor<'graph> {
+    Blank(&'graph str),
+    Iri(&'graph str),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ComponentOccurrenceAnchor<'graph> {
+    phase: u8,
+    member: PythonResourceAnchor<'graph>,
+}
+
 #[derive(Clone, Debug)]
 struct NamespaceBinding {
     prefix: String,
@@ -581,6 +594,8 @@ struct GraphParser<'text, 'session, 'guard> {
     prefix_declarations: u64,
     root_closed: bool,
     xml_literal_capture: Option<XmlLiteralCapture>,
+    language_spellings: Vec<String>,
+    preserve_source_map: bool,
 }
 
 impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
@@ -588,6 +603,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         text: &'text str,
         document_iri: Option<&str>,
         source_encoding: XmlSourceEncoding,
+        preserve_source_map: bool,
         session: &'session mut Session<'guard>,
     ) -> NativeResult<Self> {
         let binding = NamespaceBinding {
@@ -612,10 +628,12 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             prefix_declarations: 0,
             root_closed: false,
             xml_literal_capture: None,
+            language_spellings: Vec::new(),
+            preserve_source_map,
         })
     }
 
-    fn parse(mut self) -> NativeResult<Vec<Triple>> {
+    fn parse(mut self) -> NativeResult<(Vec<Triple>, Vec<String>)> {
         while let Some(event) = self.stream.next(self.session)? {
             match event {
                 XmlEvent::Start(value) => {
@@ -635,7 +653,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         // Duplicate RDF triples collapse deterministically before mapping.
         self.triples.sort_unstable();
         self.triples.dedup();
-        Ok(self.triples)
+        Ok((self.triples, self.language_spellings))
     }
 
     fn start(&mut self, event: StartEvent) -> NativeResult<()> {
@@ -643,6 +661,26 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             return Err(xml_syntax());
         }
         let namespace_start = self.namespaces.len();
+        if self.preserve_source_map {
+            let xml_language = event
+                .attributes
+                .iter()
+                .find(|attribute| attribute.name == "xml:lang")
+                .map(|attribute| attribute.value.as_str());
+            let plain_language = event
+                .attributes
+                .iter()
+                .find(|attribute| attribute.name == "lang")
+                .map(|attribute| attribute.value.as_str());
+            let selected = xml_language
+                .filter(|value| !value.is_empty())
+                .or(plain_language);
+            if let Some(language) = selected {
+                let language = owned_text(language, self.session)?;
+                reserve_vec_item(&mut self.language_spellings, self.session)?;
+                self.language_spellings.push(language);
+            }
+        }
         for attribute in &event.attributes {
             if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
                 let prefix = attribute.name.strip_prefix("xmlns:").unwrap_or("");
@@ -1962,13 +2000,15 @@ pub(super) fn parse_and_map(
     document_iri: Option<&str>,
     session: &mut Session<'_>,
 ) -> NativeResult<CanonicalDocument> {
-    Ok(parse_and_map_timed(source, document_iri, true, session)?.0)
+    Ok(parse_and_map_timed(source, document_iri, true, false, false, session)?.0)
 }
 
 pub(super) fn parse_and_map_timed(
     source: &[u8],
     document_iri: Option<&str>,
     allow_swrl: bool,
+    capture_occurrences: bool,
+    preserve_source_map: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<(CanonicalDocument, u64)> {
     let (text, decoded_codepoints, source_encoding) = decode_xml(source, session)?;
@@ -1980,9 +2020,23 @@ pub(super) fn parse_and_map_timed(
         &text
     };
     let decoded_codepoints = decoded_codepoints.saturating_sub(u64::from(utf8_bom));
-    let triples = GraphParser::new(text, document_iri, source_encoding, session)?.parse()?;
+    let (triples, language_spellings) = GraphParser::new(
+        text,
+        document_iri,
+        source_encoding,
+        preserve_source_map,
+        session,
+    )?
+    .parse()?;
     let mapping_started = Instant::now();
-    let document = map_graph(triples, decoded_codepoints, allow_swrl, session)?;
+    let document = map_graph(
+        triples,
+        decoded_codepoints,
+        allow_swrl,
+        capture_occurrences,
+        language_spellings,
+        session,
+    )?;
     let mapping_ns = u64::try_from(mapping_started.elapsed().as_nanos())
         .map_err(|_| NativeError::limit("native RDF mapping phase time exceeds u64"))?;
     Ok((document, mapping_ns))
@@ -2134,6 +2188,8 @@ fn map_graph(
     triples: Vec<Triple>,
     decoded_codepoints: u64,
     allow_swrl: bool,
+    capture_occurrences: bool,
+    language_spellings: Vec<String>,
     session: &mut Session<'_>,
 ) -> NativeResult<CanonicalDocument> {
     let total_triples = u64::try_from(triples.len())
@@ -2198,6 +2254,11 @@ fn map_graph(
 
     let mut axioms = Vec::new();
     let mut extensions = Vec::new();
+    let mut declaration_occurrences = Vec::new();
+    let mut rule_occurrences = Vec::new();
+    let mut special_occurrences = Vec::new();
+    let mut equivalence_occurrences = Vec::new();
+    let mut simple_occurrences = Vec::new();
     let list_graph = list_graph_view(&triples, session)?;
     let mut expressions = RdfClassExpressionDecoder::new(&list_graph);
     for kind in &kinds {
@@ -2271,6 +2332,9 @@ fn map_graph(
             axiom_annotations.claim(triple, &triples)?;
         }
     }
+    if capture_occurrences {
+        capture_occurrences_since(&axioms, 0, 1, &mut declaration_occurrences, session)?;
+    }
     map_ontology_annotations(
         header_index,
         &list_graph,
@@ -2282,6 +2346,7 @@ fn map_graph(
         &mut ontology_annotations,
         session,
     )?;
+    let extension_start = extensions.len();
     map_swrl_rules(
         &list_graph,
         &triples,
@@ -2292,6 +2357,24 @@ fn map_graph(
         allow_swrl,
         session,
     )?;
+    if capture_occurrences {
+        capture_occurrences_since(
+            &extensions,
+            extension_start,
+            2,
+            &mut rule_occurrences,
+            session,
+        )?;
+        let anchors = swrl_rule_occurrence_anchors(&triples, session)?;
+        order_occurrences_by_anchors(
+            &mut rule_occurrences,
+            &anchors,
+            &triples,
+            "native RDF rule occurrence anchors diverge from mapped roots",
+            session,
+        )?;
+    }
+    let special_start = axioms.len();
     map_negative_property_assertions(
         &list_graph,
         &triples,
@@ -2319,6 +2402,23 @@ fn map_graph(
         &mut axioms,
         session,
     )?;
+    if capture_occurrences {
+        capture_occurrences_since(&axioms, special_start, 1, &mut special_occurrences, session)?;
+        let anchors = special_occurrence_anchors(&triples, session)?;
+        order_occurrences_by_anchors(
+            &mut special_occurrences,
+            &anchors,
+            &triples,
+            "native RDF special occurrence anchors diverge from mapped roots",
+            session,
+        )?;
+    }
+    let simple_start = axioms.len();
+    let mut simple_anchors = if capture_occurrences {
+        pre_simple_occurrence_anchors(&triples, &consumed, &kinds, session)?
+    } else {
+        Vec::new()
+    };
     map_property_chains(
         &list_graph,
         &triples,
@@ -2366,6 +2466,11 @@ fn map_graph(
         &mut axioms,
         session,
     )?;
+    if capture_occurrences {
+        capture_occurrences_since(&axioms, simple_start, 1, &mut simple_occurrences, session)?;
+    }
+    let equivalence_start = axioms.len();
+    let mut equivalence_anchors = Vec::new();
     map_equivalent_class_components(
         &list_graph,
         &triples,
@@ -2374,6 +2479,7 @@ fn map_graph(
         &mut expressions,
         &mut axiom_annotations,
         &mut axioms,
+        capture_occurrences.then_some(&mut equivalence_anchors),
         session,
     )?;
     map_equivalent_property_components(
@@ -2385,6 +2491,7 @@ fn map_graph(
         &mut expressions,
         &mut axiom_annotations,
         &mut axioms,
+        capture_occurrences.then_some(&mut equivalence_anchors),
         session,
     )?;
     map_same_individual_components(
@@ -2394,8 +2501,24 @@ fn map_graph(
         &mut expressions,
         &mut axiom_annotations,
         &mut axioms,
+        capture_occurrences.then_some(&mut equivalence_anchors),
         session,
     )?;
+    if capture_occurrences {
+        capture_occurrences_since(
+            &axioms,
+            equivalence_start,
+            1,
+            &mut equivalence_occurrences,
+            session,
+        )?;
+        order_occurrences_by_component_anchors(
+            &mut equivalence_occurrences,
+            &equivalence_anchors,
+            session,
+        )?;
+    }
+    let trailing_simple_start = axioms.len();
     for (index, triple) in triples.iter().enumerate() {
         if consumed[index] {
             continue;
@@ -2436,14 +2559,60 @@ fn map_graph(
         };
         if let Some(axiom) = axiom {
             push_axiom(axiom, &mut axioms, session)?;
+            if capture_occurrences {
+                reserve_vec_item(&mut simple_anchors, session)?;
+                simple_anchors.push(index);
+            }
             consumed[index] = true;
             axiom_annotations.claim(triple, &triples)?;
         }
+    }
+    if capture_occurrences {
+        capture_occurrences_since(
+            &axioms,
+            trailing_simple_start,
+            1,
+            &mut simple_occurrences,
+            session,
+        )?;
+        order_occurrences_by_anchors(
+            &mut simple_occurrences,
+            &simple_anchors,
+            &triples,
+            "native RDF simple occurrence anchors diverge from mapped roots",
+            session,
+        )?;
     }
     if axiom_annotations.has_unclaimed() {
         return Err(rdf_axiom_reification(
             "native owl:Axiom reification targets an unsupported axiom mapping",
         ));
+    }
+    let occurrence_count = u64::try_from(axioms.len())
+        .ok()
+        .and_then(|count| {
+            u64::try_from(extensions.len())
+                .ok()
+                .and_then(|extensions| count.checked_add(extensions))
+        })
+        .ok_or_else(|| NativeError::limit("native RDF occurrence count overflow"))?;
+    let mut occurrences = Vec::new();
+    if capture_occurrences {
+        let count = usize::try_from(occurrence_count)
+            .map_err(|_| NativeError::limit("native RDF occurrence count exceeds usize"))?;
+        occurrences
+            .try_reserve_exact(count)
+            .map_err(|_| NativeError::limit("native RDF occurrence allocation failed"))?;
+        occurrences.extend(declaration_occurrences);
+        occurrences.extend(rule_occurrences);
+        occurrences.extend(special_occurrences);
+        occurrences.extend(equivalence_occurrences);
+        occurrences.extend(simple_occurrences);
+        if occurrences.len() != count {
+            return Err(NativeError::protocol(
+                "native RDF occurrence capture diverges from mapped roots",
+            ));
+        }
     }
     axioms.sort_unstable();
     axioms.dedup();
@@ -2473,6 +2642,8 @@ fn map_graph(
         ontology_annotations,
         axioms,
         extensions,
+        occurrences,
+        language_spellings,
         source_sha256: [0; 32],
         byte_length: 0,
         decoded_codepoints,
@@ -2480,6 +2651,7 @@ fn map_graph(
             total_triples,
             consumed_triples: u64::try_from(consumed_triples)
                 .map_err(|_| NativeError::limit("native consumed triple count exceeds u64"))?,
+            occurrence_count,
             rule_ids: &[
                 "OWL2-RDF-REVERSE-HEADER",
                 "OWL2-RDF-REVERSE-DECLARATION",
@@ -4088,6 +4260,7 @@ fn map_equivalent_class_components<'view, 'graph>(
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
     reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
+    mut occurrence_anchors: Option<&mut Vec<ComponentOccurrenceAnchor<'graph>>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
     for start in 0..triples.len() {
@@ -4134,6 +4307,14 @@ fn map_equivalent_class_components<'view, 'graph>(
             }
         }
 
+        if let Some(anchors) = occurrence_anchors.as_deref_mut() {
+            push_component_occurrence_anchor(
+                anchors,
+                0,
+                members.iter().copied().map(class_term_anchor),
+                session,
+            )?;
+        }
         let mut nodes = reserved_vec(members.len(), session)?;
         for member in members {
             nodes.push(decode_class_expression(
@@ -4510,6 +4691,7 @@ fn map_equivalent_property_components<'view, 'graph>(
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
     reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
+    mut occurrence_anchors: Option<&mut Vec<ComponentOccurrenceAnchor<'graph>>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
     for start in 0..triples.len() {
@@ -4559,6 +4741,14 @@ fn map_equivalent_property_components<'view, 'graph>(
             if !changed {
                 break;
             }
+        }
+        if let Some(anchors) = occurrence_anchors.as_deref_mut() {
+            push_component_occurrence_anchor(
+                anchors,
+                1,
+                members.iter().copied().map(class_term_anchor),
+                session,
+            )?;
         }
         let data_properties = members.iter().all(
             |value| matches!(value, ClassTerm::Iri(iri) if has_kind(kinds, iri, "data_property")),
@@ -4635,6 +4825,7 @@ fn map_same_individual_components<'view, 'graph>(
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
     reifications: &mut AxiomAnnotationLedger,
     axioms: &mut Vec<Vec<u8>>,
+    mut occurrence_anchors: Option<&mut Vec<ComponentOccurrenceAnchor<'graph>>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
     for start in 0..triples.len() {
@@ -4675,6 +4866,14 @@ fn map_same_individual_components<'view, 'graph>(
             }
         }
 
+        if let Some(anchors) = occurrence_anchors.as_deref_mut() {
+            push_component_occurrence_anchor(
+                anchors,
+                2,
+                members.iter().copied().map(individual_term_anchor),
+                session,
+            )?;
+        }
         let mut nodes = reserved_vec(members.len(), session)?;
         for member in members {
             nodes.push(expressions.decode_individual(member.as_term(), session)?);
@@ -5689,6 +5888,266 @@ fn push_extension(
     Ok(())
 }
 
+fn capture_occurrences_since(
+    rows: &[Vec<u8>],
+    start: usize,
+    collection: u8,
+    occurrences: &mut Vec<CanonicalOccurrence>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    let selected = rows.get(start..).ok_or_else(|| {
+        NativeError::protocol("native RDF occurrence capture starts outside its root table")
+    })?;
+    occurrences
+        .try_reserve_exact(selected.len())
+        .map_err(|_| NativeError::limit("native RDF occurrence allocation failed"))?;
+    for row in selected {
+        session.reserve_bytes(row.len())?;
+        occurrences.push(CanonicalOccurrence {
+            collection,
+            row: row.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn swrl_rule_occurrence_anchors(
+    triples: &[Triple],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<usize>> {
+    let mut anchors = Vec::new();
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if triple.predicate == RDF_TYPE
+            && matches!(&triple.object, Term::Iri(value) if value == SWRL_IMP)
+        {
+            reserve_vec_item(&mut anchors, session)?;
+            anchors.push(index);
+        }
+    }
+    Ok(anchors)
+}
+
+fn special_occurrence_anchors(
+    triples: &[Triple],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<usize>> {
+    let mut anchors = Vec::new();
+    for selected in [
+        &[OWL_NEGATIVE_PROPERTY_ASSERTION][..],
+        &[OWL_ALL_DIFFERENT][..],
+        &[OWL_ALL_DISJOINT_CLASSES, OWL_ALL_DISJOINT_PROPERTIES][..],
+    ] {
+        for (index, triple) in triples.iter().enumerate() {
+            session.step(1)?;
+            if triple.predicate == RDF_TYPE
+                && matches!(&triple.object, Term::Iri(value) if selected.contains(&value.as_str()))
+            {
+                reserve_vec_item(&mut anchors, session)?;
+                anchors.push(index);
+            }
+        }
+    }
+    Ok(anchors)
+}
+
+fn pre_simple_occurrence_anchors(
+    triples: &[Triple],
+    consumed: &[bool],
+    kinds: &[KindRecord<'_>],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<usize>> {
+    if triples.len() != consumed.len() {
+        return Err(NativeError::protocol(
+            "native RDF simple occurrence ledger diverges from graph",
+        ));
+    }
+    let mut anchors = Vec::new();
+    for phase in 0_u8..5 {
+        for (index, triple) in triples.iter().enumerate() {
+            session.step(1)?;
+            if consumed[index] {
+                continue;
+            }
+            let selected = match phase {
+                0 => triple.predicate == OWL_PROPERTY_CHAIN_AXIOM,
+                1 => triple.predicate == OWL_HAS_KEY,
+                2 => triple.predicate == OWL_DISJOINT_UNION_OF,
+                3 => {
+                    matches!(
+                        triple.predicate.as_str(),
+                        OWL_COMPLEMENT_OF | OWL_UNION_OF | OWL_INTERSECTION_OF | OWL_ONE_OF
+                    ) && matches!(
+                        &triple.subject,
+                        Resource::Iri(value) if has_kind(kinds, value, "class")
+                    )
+                }
+                4 => {
+                    triple.predicate == OWL_EQUIVALENT_CLASS
+                        && matches!(
+                            &triple.subject,
+                            Resource::Iri(value) if has_kind(kinds, value, "datatype")
+                        )
+                }
+                _ => {
+                    return Err(NativeError::protocol(
+                        "native RDF simple occurrence phase is invalid",
+                    ))
+                }
+            };
+            if selected {
+                reserve_vec_item(&mut anchors, session)?;
+                anchors.push(index);
+            }
+        }
+    }
+    Ok(anchors)
+}
+
+fn order_occurrences_by_anchors(
+    occurrences: &mut Vec<CanonicalOccurrence>,
+    anchors: &[usize],
+    triples: &[Triple],
+    mismatch: &'static str,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    if occurrences.len() != anchors.len() {
+        return Err(NativeError::protocol(mismatch));
+    }
+    if anchors.iter().any(|index| *index >= triples.len()) {
+        return Err(NativeError::protocol(
+            "native RDF occurrence anchor exceeds graph",
+        ));
+    }
+    let mut keyed = reserved_vec(occurrences.len(), session)?;
+    for (anchor, occurrence) in anchors.iter().copied().zip(occurrences.drain(..)) {
+        keyed.push((anchor, occurrence));
+    }
+    keyed.sort_unstable_by(|left, right| {
+        python_triple_cmp(&triples[left.0], &triples[right.0]).then_with(|| left.0.cmp(&right.0))
+    });
+    occurrences.extend(keyed.into_iter().map(|(_anchor, occurrence)| occurrence));
+    Ok(())
+}
+
+fn push_component_occurrence_anchor<'graph>(
+    anchors: &mut Vec<ComponentOccurrenceAnchor<'graph>>,
+    phase: u8,
+    members: impl IntoIterator<Item = PythonResourceAnchor<'graph>>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    let member = members
+        .into_iter()
+        .min_by(python_resource_anchor_cmp)
+        .ok_or_else(|| NativeError::protocol("native RDF equivalence component is empty"))?;
+    reserve_vec_item(anchors, session)?;
+    anchors.push(ComponentOccurrenceAnchor { phase, member });
+    Ok(())
+}
+
+fn order_occurrences_by_component_anchors(
+    occurrences: &mut Vec<CanonicalOccurrence>,
+    anchors: &[ComponentOccurrenceAnchor<'_>],
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    if occurrences.len() != anchors.len() {
+        return Err(NativeError::protocol(
+            "native RDF component anchors diverge from mapped roots",
+        ));
+    }
+    let mut keyed = reserved_vec(occurrences.len(), session)?;
+    for (anchor, occurrence) in anchors.iter().copied().zip(occurrences.drain(..)) {
+        keyed.push((anchor, occurrence));
+    }
+    keyed.sort_unstable_by(|left, right| {
+        left.0
+            .phase
+            .cmp(&right.0.phase)
+            .then_with(|| python_resource_anchor_cmp(&left.0.member, &right.0.member))
+            .then_with(|| left.1.row.cmp(&right.1.row))
+    });
+    occurrences.extend(keyed.into_iter().map(|(_anchor, occurrence)| occurrence));
+    Ok(())
+}
+
+fn class_term_anchor(value: ClassTerm<'_>) -> PythonResourceAnchor<'_> {
+    match value {
+        ClassTerm::Iri(value) => PythonResourceAnchor::Iri(value),
+        ClassTerm::Blank(value) => PythonResourceAnchor::Blank(value),
+    }
+}
+
+fn individual_term_anchor(value: IndividualTerm<'_>) -> PythonResourceAnchor<'_> {
+    match value {
+        IndividualTerm::Iri(value) => PythonResourceAnchor::Iri(value),
+        IndividualTerm::Blank(value) => PythonResourceAnchor::Blank(value),
+    }
+}
+
+fn python_resource_anchor_cmp(
+    left: &PythonResourceAnchor<'_>,
+    right: &PythonResourceAnchor<'_>,
+) -> Ordering {
+    match (left, right) {
+        (PythonResourceAnchor::Blank(left), PythonResourceAnchor::Blank(right))
+        | (PythonResourceAnchor::Iri(left), PythonResourceAnchor::Iri(right)) => left.cmp(right),
+        (PythonResourceAnchor::Blank(_), PythonResourceAnchor::Iri(_)) => Ordering::Less,
+        (PythonResourceAnchor::Iri(_), PythonResourceAnchor::Blank(_)) => Ordering::Greater,
+    }
+}
+
+fn python_triple_cmp(left: &Triple, right: &Triple) -> Ordering {
+    python_resource_cmp(&left.subject, &right.subject)
+        .then_with(|| left.predicate.cmp(&right.predicate))
+        .then_with(|| python_term_cmp(&left.object, &right.object))
+}
+
+fn python_resource_cmp(left: &Resource, right: &Resource) -> Ordering {
+    match (left, right) {
+        (Resource::Blank(left), Resource::Blank(right))
+        | (Resource::Iri(left), Resource::Iri(right)) => left.cmp(right),
+        (Resource::Blank(_), Resource::Iri(_)) => Ordering::Less,
+        (Resource::Iri(_), Resource::Blank(_)) => Ordering::Greater,
+    }
+}
+
+fn python_term_cmp(left: &Term, right: &Term) -> Ordering {
+    match (left, right) {
+        (Term::Blank(left), Term::Blank(right)) | (Term::Iri(left), Term::Iri(right)) => {
+            left.cmp(right)
+        }
+        (
+            Term::Literal {
+                lexical: left_lexical,
+                datatype: left_datatype,
+                language: left_language,
+            },
+            Term::Literal {
+                lexical: right_lexical,
+                datatype: right_datatype,
+                language: right_language,
+            },
+        ) => left_lexical
+            .cmp(right_lexical)
+            .then_with(|| {
+                left_language
+                    .as_deref()
+                    .unwrap_or("")
+                    .cmp(right_language.as_deref().unwrap_or(""))
+            })
+            .then_with(|| {
+                left_datatype
+                    .as_deref()
+                    .unwrap_or("")
+                    .cmp(right_datatype.as_deref().unwrap_or(""))
+            }),
+        (Term::Blank(_), Term::Iri(_) | Term::Literal { .. }) => Ordering::Less,
+        (Term::Iri(_), Term::Blank(_)) => Ordering::Greater,
+        (Term::Iri(_), Term::Literal { .. }) => Ordering::Less,
+        (Term::Literal { .. }, Term::Blank(_) | Term::Iri(_)) => Ordering::Greater,
+    }
+}
+
 fn push_annotation(
     annotation: Node,
     annotations: &mut Vec<Vec<u8>>,
@@ -6630,7 +7089,11 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, limits, source.len())?;
-        GraphParser::new(source, None, XmlSourceEncoding::Utf8, &mut session)?.parse()
+        Ok(
+            GraphParser::new(source, None, XmlSourceEncoding::Utf8, false, &mut session)?
+                .parse()?
+                .0,
+        )
     }
 
     fn graph(source: &str) -> NativeResult<Vec<Triple>> {
@@ -7452,8 +7915,8 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut parser =
-            GraphParser::new("", None, XmlSourceEncoding::Utf8, &mut session).expect("parser");
+        let mut parser = GraphParser::new("", None, XmlSourceEncoding::Utf8, false, &mut session)
+            .expect("parser");
         parser.frames.push(Frame {
             raw_name: "rdf:Description".to_owned(),
             namespace_start: parser.namespaces.len(),
@@ -7502,8 +7965,8 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut parser =
-            GraphParser::new("", None, XmlSourceEncoding::Utf8, &mut session).expect("parser");
+        let mut parser = GraphParser::new("", None, XmlSourceEncoding::Utf8, false, &mut session)
+            .expect("parser");
         parser.frames.push(Frame {
             raw_name: "e:p".to_owned(),
             namespace_start: parser.namespaces.len(),
@@ -10869,7 +11332,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("bounded session");
-        let mut parser = GraphParser::new("", None, XmlSourceEncoding::Utf8, &mut session)
+        let mut parser = GraphParser::new("", None, XmlSourceEncoding::Utf8, false, &mut session)
             .expect("parser prefix table");
         assert_eq!(
             parser.expand("xml:base", true).unwrap_err().code,

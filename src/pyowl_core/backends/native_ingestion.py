@@ -760,11 +760,6 @@ def _decode_retained_rdfxml_seed_v2(
         native._RETAINED_FUNCTIONAL_SEED_MAGIC_V2 + encoded[8:-8],
         limits,
     )
-    if structural.structural_occurrence_rows_scanned != sum(structural.rows):
-        raise BackendProtocolError(
-            "native retained RDF/XML structural counters diverge",
-            code="NATIVE_PARSE_MODEL",
-        )
     return _RetainedRdfXmlSeedV2(structural, total_triples)
 
 
@@ -866,9 +861,7 @@ def _decode_prepared_retained_publication_v2(
             "native retained publication summary has inconsistent provenance counters",
             code="NATIVE_PARSE_MODEL",
         )
-    if (not preserve_source_map and (source_map_rows != 0 or source_prefix_rows != 0)) or (
-        preserve_source_map and source_prefix_rows == 0
-    ):
+    if not preserve_source_map and (source_map_rows != 0 or source_prefix_rows != 0):
         raise BackendProtocolError(
             "native retained publication summary has inconsistent source-map counters",
             code="NATIVE_PARSE_MODEL",
@@ -1065,7 +1058,10 @@ def _publish_retained_snapshot_v2(
         raise TypeError("retained parser publication received invalid source metadata")
     if (
         options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
-        or (options.preserve_source_map and expected_format != "functional")
+        or (
+            options.preserve_source_map
+            and expected_format not in {"functional", "rdfxml"}
+        )
         or options.validate_owl2_dl
         or detection.format.value != expected_format
     ):

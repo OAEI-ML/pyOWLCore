@@ -180,6 +180,18 @@ class _Extension(Protocol):
         cancel: _NativeCancellation | None = None,
     ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
 
+    def _parse_rdfxml_retained_source_map_v2(
+        self,
+        data: object,
+        document_iri: str | None,
+        config: object,
+        collect_provenance: bool,
+        allow_partial_rdf_mapping: bool,
+        allow_swrl: bool,
+        require_empty_imports: bool,
+        cancel: _NativeCancellation | None = None,
+    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+
     def build_index(
         self, data: object, request: object, cancel: _NativeCancellation | None = None
     ) -> bytes: ...
@@ -536,6 +548,7 @@ def _parse_rdfxml_retained_v2(
     document_iri: str | None,
     limits: ParseLimits | None = None,
     collect_provenance: bool = False,
+    preserve_source_map: bool = False,
     allow_partial_rdf_mapping: bool = False,
     allow_swrl: bool = False,
     require_empty_imports: bool = False,
@@ -551,7 +564,12 @@ def _parse_rdfxml_retained_v2(
             f"{runtime.probe.reason or 'unknown compatibility failure'}",
             code="NATIVE_BACKEND_UNAVAILABLE",
         )
-    hook = getattr(extension, "_parse_rdfxml_retained_v2", None)
+    hook_name = (
+        "_parse_rdfxml_retained_source_map_v2"
+        if preserve_source_map
+        else "_parse_rdfxml_retained_v2"
+    )
+    hook = getattr(extension, hook_name, None)
     if not callable(hook):
         raise BackendUnavailableError(
             "native backend lacks the private retained RDF/XML ingestion seam",
@@ -564,6 +582,7 @@ def _parse_rdfxml_retained_v2(
         raise TypeError("document_iri must be str or None")
     for name, value in (
         ("collect_provenance", collect_provenance),
+        ("preserve_source_map", preserve_source_map),
         ("allow_partial_rdf_mapping", allow_partial_rdf_mapping),
         ("allow_swrl", allow_swrl),
         ("require_empty_imports", require_empty_imports),

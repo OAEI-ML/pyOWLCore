@@ -296,9 +296,21 @@ pub(crate) fn build_rdfxml_seed(
     rows: [&[Vec<u8>]; 3],
     decoded_codepoints: u64,
     total_triples: u64,
-    collect_provenance: bool,
-    effective_occurrence_digests: Option<&[[u8; 32]]>,
+    occurrence_count: u64,
+    occurrence_rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
+    language_spellings: Vec<String>,
+    collect_occurrences: bool,
+    preserve_source_map: bool,
+    scoped_roots: bool,
+    scoped_occurrence_digests: Option<&[([u8; 32], [u8; 32])]>,
+    limits: &Limits,
+    cancellation: &Cancellation,
 ) -> NativeResult<(Vec<u8>, RetainedParseMetadataV2)> {
+    if scoped_occurrence_digests.is_some() && !scoped_roots {
+        return Err(NativeError::protocol(
+            "native RDF/XML occurrence scopes require scoped root ownership",
+        ));
+    }
     let ontology_node = ontology_iri
         .map(|value| iri(value.to_owned()))
         .transpose()?;
@@ -319,13 +331,6 @@ pub(crate) fn build_rdfxml_seed(
         u64::try_from(rows[2].len())
             .map_err(|_| NativeError::limit("native RDF/XML extension count exceeds u64"))?,
     ];
-    let occurrence_count = root_counts.into_iter().try_fold(0_u64, |total, count| {
-        checked_add(
-            total,
-            count,
-            "native RDF/XML structural occurrence count overflow",
-        )
-    })?;
     let metadata_iri_objects = u64::from(ontology_iri.is_some())
         .checked_add(u64::from(version_iri.is_some()))
         .and_then(|value| value.checked_add(u64::try_from(import_nodes.len()).ok()?))
@@ -334,10 +339,16 @@ pub(crate) fn build_rdfxml_seed(
         .checked_add(metadata_iri_objects)
         .ok_or_else(|| NativeError::limit("native RDF/XML canonical row count overflow"))?;
     let occurrences = rdfxml_retained_occurrences(
-        rows,
-        occurrence_count,
-        collect_provenance,
-        effective_occurrence_digests,
+        occurrence_rows,
+        RdfXmlOccurrenceCaptureV2 {
+            count: occurrence_count,
+            collect: collect_occurrences,
+            scoped_digests: scoped_occurrence_digests,
+            language_spellings,
+            preserve_source_map,
+            limits,
+            cancellation,
+        },
     )?;
 
     let mut encoded = Vec::new();
@@ -375,9 +386,9 @@ pub(crate) fn build_rdfxml_seed(
             occurrence_count,
             root_counts,
             occurrences,
-            source_prefixes: None,
+            source_prefixes: preserve_source_map.then(Vec::new),
             rdf_total_triples: Some(total_triples),
-            scoped_roots: effective_occurrence_digests.is_some(),
+            scoped_roots,
         },
     ))
 }
@@ -1432,13 +1443,35 @@ fn bounded_end(start: usize, length: u64, bound: usize) -> NativeResult<usize> {
         .ok_or_else(|| NativeError::protocol("canonical source-map frame is truncated"))
 }
 
-fn rdfxml_retained_occurrences(
-    rows: [&[Vec<u8>]; 3],
+struct RdfXmlOccurrenceCaptureV2<'a> {
     count: u64,
     collect: bool,
-    effective_digests: Option<&[[u8; 32]]>,
+    scoped_digests: Option<&'a [([u8; 32], [u8; 32])]>,
+    language_spellings: Vec<String>,
+    preserve_source_map: bool,
+    limits: &'a Limits,
+    cancellation: &'a Cancellation,
+}
+
+fn rdfxml_retained_occurrences(
+    rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
+    capture: RdfXmlOccurrenceCaptureV2<'_>,
 ) -> NativeResult<Vec<RetainedOccurrenceV2>> {
+    let RdfXmlOccurrenceCaptureV2 {
+        count,
+        collect,
+        scoped_digests,
+        language_spellings,
+        preserve_source_map,
+        limits,
+        cancellation,
+    } = capture;
     if !collect {
+        if !rows.is_empty() || !language_spellings.is_empty() || scoped_digests.is_some() {
+            return Err(NativeError::protocol(
+                "native RDF/XML occurrence metadata was captured while disabled",
+            ));
+        }
         return Ok(Vec::new());
     }
     let capacity = usize::try_from(count)
@@ -1447,25 +1480,85 @@ fn rdfxml_retained_occurrences(
     result
         .try_reserve_exact(capacity)
         .map_err(|_| NativeError::limit("native RDF/XML occurrence allocation failed"))?;
-    if let Some(digests) = effective_digests {
+    if u64::try_from(rows.len()).ok() != Some(count) {
+        return Err(NativeError::protocol(
+            "native RDF/XML occurrence rows are incomplete",
+        ));
+    }
+    if let Some(digests) = scoped_digests {
         if u64::try_from(digests.len()).ok() != Some(count) {
             return Err(NativeError::protocol(
-                "native RDF/XML effective occurrence digests are incomplete",
+                "native RDF/XML scoped occurrence digests are incomplete",
             ));
         }
     }
-    for (source_order, row) in rows.into_iter().flatten().enumerate() {
-        let digest = structural_digest_v1(row);
+    for (source_order, row) in rows.iter().enumerate() {
+        let provisional = structural_digest_v1(&row.row);
+        let (digest, effective_digest) = scoped_digests
+            .map(|values| values[source_order])
+            .unwrap_or((provisional, provisional));
         result.push(RetainedOccurrenceV2 {
             digest,
-            effective_digest: effective_digests.map_or(digest, |values| values[source_order]),
+            effective_digest,
             span: None,
             source_order: u64::try_from(source_order)
                 .map_err(|_| NativeError::limit("native RDF/XML occurrence ordinal exceeds u64"))?,
             language_details: Vec::new(),
         });
     }
+    if preserve_source_map {
+        attach_rdfxml_language_details(
+            rows,
+            &mut result,
+            language_spellings,
+            limits,
+            cancellation,
+        )?;
+    } else if !language_spellings.is_empty() {
+        return Err(NativeError::protocol(
+            "native RDF/XML language spellings were captured while disabled",
+        ));
+    }
     Ok(result)
+}
+
+fn attach_rdfxml_language_details(
+    rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
+    occurrences: &mut [RetainedOccurrenceV2],
+    language_spellings: Vec<String>,
+    limits: &Limits,
+    cancellation: &Cancellation,
+) -> NativeResult<()> {
+    if rows.len() != occurrences.len() {
+        return Err(NativeError::protocol(
+            "native RDF/XML source details diverge from occurrence roots",
+        ));
+    }
+    let mut by_language: BTreeMap<String, VecDeque<String>> = BTreeMap::new();
+    for spelling in language_spellings {
+        by_language
+            .entry(spelling.to_ascii_lowercase())
+            .or_default()
+            .push_back(spelling);
+    }
+    let mut terms = 0_u64;
+    for (row, occurrence) in rows.iter().zip(occurrences) {
+        cancellation.checkpoint()?;
+        let literals = canonical_language_literals(&row.row, limits, cancellation, &mut terms)?;
+        occurrence
+            .language_details
+            .try_reserve_exact(literals.len())
+            .map_err(|_| NativeError::limit("native RDF/XML language detail allocation failed"))?;
+        for (digest, language) in literals {
+            let Some(spelling) = by_language.get_mut(language).and_then(VecDeque::pop_front) else {
+                continue;
+            };
+            occurrence
+                .language_details
+                .push(RetainedLanguageDetailV2 { digest, spelling });
+        }
+    }
+    Ok(())
 }
 
 fn total_occurrences(parsed: &ParsedDocument) -> NativeResult<u64> {

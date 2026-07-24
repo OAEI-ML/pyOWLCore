@@ -58,6 +58,10 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     )?)?;
     _module.add_function(wrap_pyfunction!(_parse_functional_retained_v2, _module)?)?;
     _module.add_function(wrap_pyfunction!(_parse_rdfxml_retained_v2, _module)?)?;
+    _module.add_function(wrap_pyfunction!(
+        _parse_rdfxml_retained_source_map_v2,
+        _module
+    )?)?;
     #[cfg(feature = "test-hooks")]
     _module.add_function(wrap_pyfunction!(
         _rdfxml_retained_bridge_allocation_probe_v2,
@@ -125,6 +129,49 @@ fn _parse_rdfxml_retained_v2<'py>(
         document_iri,
         config,
         collect_provenance,
+        false,
+        allow_partial_rdf_mapping,
+        allow_swrl,
+        require_empty_imports,
+        cancel,
+        &mut allocations,
+    )
+}
+
+/// Parse one RDF/XML document while retaining its exact source occurrence
+/// metadata. This additive private seam keeps the stable retained-parser call
+/// shape intact and remains absent from the capability ledger.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    source,
+    document_iri,
+    config,
+    collect_provenance,
+    allow_partial_rdf_mapping,
+    allow_swrl,
+    require_empty_imports,
+    cancel=None
+))]
+fn _parse_rdfxml_retained_source_map_v2<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    document_iri: Option<&Bound<'py, PyAny>>,
+    config: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<RetainedRdfXmlParseBindingResult> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    parse_rdfxml_retained_v2_with_allocations(
+        py,
+        source,
+        document_iri,
+        config,
+        collect_provenance,
+        true,
         allow_partial_rdf_mapping,
         allow_swrl,
         require_empty_imports,
@@ -167,6 +214,7 @@ fn _rdfxml_retained_bridge_allocation_probe_v2<'py>(
         document_iri,
         config,
         collect_provenance,
+        false,
         allow_partial_rdf_mapping,
         allow_swrl,
         require_empty_imports,
@@ -183,6 +231,7 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
     document_iri: Option<&Bound<'py, PyAny>>,
     config: &Bound<'py, PyAny>,
     collect_provenance: bool,
+    preserve_source_map: bool,
     allow_partial_rdf_mapping: bool,
     allow_swrl: bool,
     require_empty_imports: bool,
@@ -227,6 +276,7 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
             Some(interrupt),
             accounted_input,
             collect_provenance,
+            preserve_source_map,
             allow_swrl,
             require_empty_imports,
         )?;
