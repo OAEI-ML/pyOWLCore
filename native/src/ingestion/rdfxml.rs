@@ -4817,14 +4817,18 @@ fn map_negative_property_assertions<'view, 'graph>(
             session,
         )?;
         if target_individual.is_some() == target_value.is_some() {
-            return Err(rdf_mapping_cardinality(
+            return Err(rdf_mapping_unsupported(
                 "native negative property assertion requires exactly one target",
             ));
         }
         let source = match source {
             ListTerm::Iri(value) => ListTerm::Iri(value),
             ListTerm::Blank(value) => ListTerm::Blank(value),
-            ListTerm::Literal(_) => return Err(rdf_mapping_type()),
+            ListTerm::Literal(_) => {
+                return Err(rdf_mapping_unsupported(
+                    "native negative property assertion source must be a resource",
+                ));
+            }
         };
         let source = expressions.decode_individual(source, session)?;
         let annotations = annotations_on_structural_node(
@@ -4846,12 +4850,20 @@ fn map_negative_property_assertions<'view, 'graph>(
             let target = match target {
                 ListTerm::Iri(value) => ListTerm::Iri(value),
                 ListTerm::Blank(value) => ListTerm::Blank(value),
-                ListTerm::Literal(_) => return Err(rdf_mapping_type()),
+                ListTerm::Literal(_) => {
+                    return Err(rdf_mapping_unsupported(
+                        "native negative object assertion target must be a resource",
+                    ));
+                }
             };
             let property = match property {
                 ListTerm::Iri(value) => ListTerm::Iri(value),
                 ListTerm::Blank(value) => ListTerm::Blank(value),
-                ListTerm::Literal(_) => return Err(rdf_mapping_type()),
+                ListTerm::Literal(_) => {
+                    return Err(rdf_mapping_unsupported(
+                        "native negative property assertion property must be a resource",
+                    ));
+                }
             };
             let DecodedPropertyExpression {
                 node: property,
@@ -4874,10 +4886,14 @@ fn map_negative_property_assertions<'view, 'graph>(
             let (target_index, target) = target_value
                 .ok_or_else(|| NativeError::protocol("native negative target ledger is empty"))?;
             if !matches!(target, ListTerm::Literal(_)) {
-                return Err(rdf_mapping_type());
+                return Err(rdf_mapping_unsupported(
+                    "native negative data assertion target must be a literal",
+                ));
             }
             let ListTerm::Iri(property) = property else {
-                return Err(rdf_mapping_type());
+                return Err(rdf_mapping_unsupported(
+                    "native negative data assertion property must be named",
+                ));
             };
             (
                 build_node(
@@ -12054,7 +12070,23 @@ mod tests {
             );
             assert_eq!(
                 mapped(invalid.as_bytes(), None).unwrap_err().code,
-                "NATIVE_RDF_MAPPING_CARDINALITY",
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
+        }
+
+        for body in [
+            "<owl:sourceIndividual>source</owl:sourceIndividual><owl:assertionProperty rdf:resource=\"urn:p\"/><owl:targetIndividual rdf:resource=\"urn:t\"/>",
+            "<owl:sourceIndividual rdf:resource=\"urn:s\"/><owl:assertionProperty>property</owl:assertionProperty><owl:targetIndividual rdf:resource=\"urn:t\"/>",
+            "<owl:sourceIndividual rdf:resource=\"urn:s\"/><owl:assertionProperty rdf:resource=\"urn:p\"/><owl:targetIndividual>target</owl:targetIndividual>",
+            "<owl:sourceIndividual rdf:resource=\"urn:s\"/><owl:assertionProperty rdf:resource=\"urn:d\"/><owl:targetValue rdf:resource=\"urn:value\"/>",
+            "<owl:sourceIndividual rdf:resource=\"urn:s\"/><owl:assertionProperty><rdf:Description/></owl:assertionProperty><owl:targetValue>value</owl:targetValue>",
+        ] {
+            let invalid = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:NegativePropertyAssertion>{body}</owl:NegativePropertyAssertion></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(invalid.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
             );
         }
 

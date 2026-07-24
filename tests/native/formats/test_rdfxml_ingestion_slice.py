@@ -1728,6 +1728,66 @@ def test_expression_edge_cardinality_matches_python(
 @pytest.mark.parametrize(
     "body",
     (
+        """
+  <owl:sourceIndividual rdf:resource='urn:s'/>
+  <owl:assertionProperty rdf:resource='urn:p'/>
+""",
+        """
+  <owl:sourceIndividual rdf:resource='urn:s'/>
+  <owl:assertionProperty rdf:resource='urn:p'/>
+  <owl:targetIndividual rdf:resource='urn:t'/>
+  <owl:targetValue>value</owl:targetValue>
+""",
+        """
+  <owl:sourceIndividual>source</owl:sourceIndividual>
+  <owl:assertionProperty rdf:resource='urn:p'/>
+  <owl:targetIndividual rdf:resource='urn:t'/>
+""",
+        """
+  <owl:sourceIndividual rdf:resource='urn:s'/>
+  <owl:assertionProperty>property</owl:assertionProperty>
+  <owl:targetIndividual rdf:resource='urn:t'/>
+""",
+        """
+  <owl:sourceIndividual rdf:resource='urn:s'/>
+  <owl:assertionProperty rdf:resource='urn:p'/>
+  <owl:targetIndividual>target</owl:targetIndividual>
+""",
+        """
+  <owl:sourceIndividual rdf:resource='urn:s'/>
+  <owl:assertionProperty rdf:resource='urn:d'/>
+  <owl:targetValue rdf:resource='urn:value'/>
+""",
+        """
+  <owl:sourceIndividual rdf:resource='urn:s'/>
+  <owl:assertionProperty><rdf:Description/></owl:assertionProperty>
+  <owl:targetValue>value</owl:targetValue>
+""",
+    ),
+)
+def test_negative_assertion_structure_matches_python(
+    extension: NativeTestExtension,
+    body: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <owl:NegativePropertyAssertion>
+{body}
+ </owl:NegativePropertyAssertion>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_UNSUPPORTED"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
         (
             "<owl:Class rdf:about='urn:C'>"
             "<rdf:type rdf:resource='http://www.w3.org/2000/01/rdf-schema#Class'/>"

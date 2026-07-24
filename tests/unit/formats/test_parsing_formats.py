@@ -1662,6 +1662,63 @@ def test_rdf_mapping_classifies_expression_edge_cardinality(
 @pytest.mark.parametrize(
     "body",
     (
+        """
+    <owl:sourceIndividual rdf:resource="urn:s"/>
+    <owl:assertionProperty rdf:resource="urn:p"/>
+""",
+        """
+    <owl:sourceIndividual rdf:resource="urn:s"/>
+    <owl:assertionProperty rdf:resource="urn:p"/>
+    <owl:targetIndividual rdf:resource="urn:t"/>
+    <owl:targetValue>value</owl:targetValue>
+""",
+        """
+    <owl:sourceIndividual>source</owl:sourceIndividual>
+    <owl:assertionProperty rdf:resource="urn:p"/>
+    <owl:targetIndividual rdf:resource="urn:t"/>
+""",
+        """
+    <owl:sourceIndividual rdf:resource="urn:s"/>
+    <owl:assertionProperty>property</owl:assertionProperty>
+    <owl:targetIndividual rdf:resource="urn:t"/>
+""",
+        """
+    <owl:sourceIndividual rdf:resource="urn:s"/>
+    <owl:assertionProperty rdf:resource="urn:p"/>
+    <owl:targetIndividual>target</owl:targetIndividual>
+""",
+        """
+    <owl:sourceIndividual rdf:resource="urn:s"/>
+    <owl:assertionProperty rdf:resource="urn:d"/>
+    <owl:targetValue rdf:resource="urn:value"/>
+""",
+        """
+    <owl:sourceIndividual rdf:resource="urn:s"/>
+    <owl:assertionProperty><rdf:Description/></owl:assertionProperty>
+    <owl:targetValue>value</owl:targetValue>
+""",
+    ),
+)
+def test_rdf_mapping_rejects_negative_assertion_structure(
+    body: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <owl:NegativePropertyAssertion>
+{body}
+  </owl:NegativePropertyAssertion>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
         (
             '<owl:Class rdf:about="urn:C">'
             '<rdf:type rdf:resource="http://www.w3.org/2000/01/rdf-schema#Class"/>'
