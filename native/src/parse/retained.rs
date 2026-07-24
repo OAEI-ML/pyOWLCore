@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::mem::size_of;
 
 use crate::cancel::{Cancellation, InterruptSlot};
-use crate::canonical::{iri, Node};
+use crate::canonical::{iri, Node, LEXICAL_KEY, PROVISIONAL_SCOPE};
 use crate::error::{NativeError, NativeResult};
 use crate::hash::Sha256;
 use crate::limits::{LimitKey, Limits};
@@ -68,6 +68,7 @@ pub(crate) struct RetainedOccurrenceV2 {
     span: Option<Span>,
     source_order: u64,
     language_details: Vec<RetainedLanguageDetailV2>,
+    source_blank_labels: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -256,6 +257,24 @@ impl RetainedParseMetadataV2 {
                         NativeError::limit("native retained language spelling overflow")
                     })?;
             }
+            retained = retained
+                .checked_add(
+                    occurrence
+                        .source_blank_labels
+                        .capacity()
+                        .checked_mul(size_of::<String>())
+                        .ok_or_else(|| {
+                            NativeError::limit("native retained blank-label metadata overflow")
+                        })?,
+                )
+                .ok_or_else(|| {
+                    NativeError::limit("native retained blank-label metadata overflow")
+                })?;
+            for label in &occurrence.source_blank_labels {
+                retained = retained.checked_add(label.capacity()).ok_or_else(|| {
+                    NativeError::limit("native retained blank-label spelling overflow")
+                })?;
+            }
         }
         self.source_prefixes.as_ref().map_or(Ok(retained), |rows| {
             rows.iter().try_fold(
@@ -299,6 +318,7 @@ pub(crate) fn build_rdfxml_seed(
     occurrence_count: u64,
     occurrence_rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
     language_spellings: Vec<String>,
+    source_blank_labels: Vec<String>,
     source_prefixes: Vec<(String, String)>,
     collect_occurrences: bool,
     preserve_source_map: bool,
@@ -346,6 +366,7 @@ pub(crate) fn build_rdfxml_seed(
             collect: collect_occurrences,
             scoped_digests: scoped_occurrence_digests,
             language_spellings,
+            source_blank_labels,
             preserve_source_map,
             limits,
             cancellation,
@@ -1152,6 +1173,7 @@ fn retained_occurrences(
             source_order: u64::try_from(source_order)
                 .map_err(|_| NativeError::limit("native occurrence ordinal exceeds u64"))?,
             language_details: Vec::new(),
+            source_blank_labels: Vec::new(),
         });
     }
     result.sort_unstable_by_key(|value| {
@@ -1249,13 +1271,30 @@ fn canonical_language_literals<'a>(
     cancellation: &Cancellation,
     terms: &mut u64,
 ) -> NativeResult<Vec<([u8; 32], &'a str)>> {
+    canonical_lexical_nodes(row, limits, cancellation, terms, false)
+        .map(|details| details.language_literals)
+}
+
+struct CanonicalLexicalNodes<'a> {
+    language_literals: Vec<([u8; 32], &'a str)>,
+    blank_labels: Vec<&'a str>,
+}
+
+fn canonical_lexical_nodes<'a>(
+    row: &'a [u8],
+    limits: &Limits,
+    cancellation: &Cancellation,
+    terms: &mut u64,
+    collect_blank_labels: bool,
+) -> NativeResult<CanonicalLexicalNodes<'a>> {
     if u64::try_from(row.len()).map_or(true, |size| size > limits.max_canonical_work) {
         return Err(NativeError::limit(
             "native source-map scan exceeds max_canonical_work",
         ));
     }
-    let mut result = Vec::new();
-    let end = scan_language_node(
+    let mut language_literals = Vec::new();
+    let mut blank_labels = Vec::new();
+    let end = scan_lexical_node(
         row,
         0,
         row.len(),
@@ -1263,18 +1302,23 @@ fn canonical_language_literals<'a>(
         limits,
         cancellation,
         terms,
-        &mut result,
+        collect_blank_labels,
+        &mut language_literals,
+        &mut blank_labels,
     )?;
     if end != row.len() {
         return Err(NativeError::protocol(
             "native source-map canonical row has trailing bytes",
         ));
     }
-    Ok(result)
+    Ok(CanonicalLexicalNodes {
+        language_literals,
+        blank_labels,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
-fn scan_language_node<'a>(
+fn scan_lexical_node<'a>(
     data: &'a [u8],
     start: usize,
     bound: usize,
@@ -1282,7 +1326,9 @@ fn scan_language_node<'a>(
     limits: &Limits,
     cancellation: &Cancellation,
     terms: &mut u64,
-    result: &mut Vec<([u8; 32], &'a str)>,
+    collect_blank_labels: bool,
+    language_literals: &mut Vec<([u8; 32], &'a str)>,
+    blank_labels: &mut Vec<&'a str>,
 ) -> NativeResult<usize> {
     cancellation.checkpoint()?;
     *terms = terms
@@ -1299,6 +1345,8 @@ fn scan_language_node<'a>(
     )
     .ok_or_else(|| NativeError::protocol("canonical source-map tag is unknown"))?;
     let mut language = None;
+    let mut anonymous_scope = None;
+    let mut anonymous_key = None;
     for field in 0..field_count {
         let marker = *data
             .get(offset)
@@ -1312,7 +1360,7 @@ fn scan_language_node<'a>(
             1 => {
                 let (length, child_start) = read_varint(data, offset)?;
                 let child_end = bounded_end(child_start, length, bound)?;
-                let observed = scan_language_node(
+                let observed = scan_lexical_node(
                     data,
                     child_start,
                     child_end,
@@ -1320,7 +1368,9 @@ fn scan_language_node<'a>(
                     limits,
                     cancellation,
                     terms,
-                    result,
+                    collect_blank_labels,
+                    language_literals,
+                    blank_labels,
                 )?;
                 if observed != child_end {
                     return Err(NativeError::protocol(
@@ -1342,6 +1392,18 @@ fn scan_language_node<'a>(
                         |_| NativeError::protocol("canonical literal language is not UTF-8"),
                     )?);
                 }
+                if collect_blank_labels && tag == 3 && field < 2 {
+                    if marker != 3 {
+                        return Err(NativeError::protocol(
+                            "canonical anonymous identity has the wrong marker",
+                        ));
+                    }
+                    if field == 0 {
+                        anonymous_scope = Some(&data[value_start..value_end]);
+                    } else {
+                        anonymous_key = Some(&data[value_start..value_end]);
+                    }
+                }
                 offset = value_end;
             }
             4 => {
@@ -1358,7 +1420,7 @@ fn scan_language_node<'a>(
                 for _ in 0..count {
                     let (length, child_start) = read_varint(data, offset)?;
                     let child_end = bounded_end(child_start, length, bound)?;
-                    let observed = scan_language_node(
+                    let observed = scan_lexical_node(
                         data,
                         child_start,
                         child_end,
@@ -1366,7 +1428,9 @@ fn scan_language_node<'a>(
                         limits,
                         cancellation,
                         terms,
-                        result,
+                        collect_blank_labels,
+                        language_literals,
+                        blank_labels,
                     )?;
                     if observed != child_end {
                         return Err(NativeError::protocol(
@@ -1395,7 +1459,7 @@ fn scan_language_node<'a>(
                     })?;
                     let (length, child_start) = read_varint(data, offset)?;
                     let child_end = bounded_end(child_start, length, bound)?;
-                    let observed = scan_language_node(
+                    let observed = scan_lexical_node(
                         data,
                         child_start,
                         child_end,
@@ -1403,7 +1467,9 @@ fn scan_language_node<'a>(
                         limits,
                         cancellation,
                         terms,
-                        result,
+                        collect_blank_labels,
+                        language_literals,
+                        blank_labels,
                     )?;
                     if observed != child_end {
                         return Err(NativeError::protocol(
@@ -1426,12 +1492,46 @@ fn scan_language_node<'a>(
         ));
     }
     if let Some(language) = language {
-        result
+        language_literals
             .try_reserve(1)
             .map_err(|_| NativeError::limit("native language literal allocation failed"))?;
-        result.push((structural_digest_v1(&data[start..offset]), language));
+        language_literals.push((structural_digest_v1(&data[start..offset]), language));
+    }
+    if collect_blank_labels && tag == 3 {
+        let scope = anonymous_scope.ok_or_else(|| {
+            NativeError::protocol("canonical anonymous identity is missing its scope")
+        })?;
+        let key = anonymous_key.ok_or_else(|| {
+            NativeError::protocol("canonical anonymous identity is missing its local key")
+        })?;
+        if let Some(label) = provisional_source_blank_label(scope, key)? {
+            blank_labels
+                .try_reserve(1)
+                .map_err(|_| NativeError::limit("native blank-label allocation failed"))?;
+            blank_labels.push(label);
+        }
     }
     Ok(offset)
+}
+
+fn provisional_source_blank_label<'a>(
+    scope: &[u8],
+    local_key: &'a [u8],
+) -> NativeResult<Option<&'a str>> {
+    if scope != PROVISIONAL_SCOPE || !local_key.starts_with(LEXICAL_KEY) {
+        return Ok(None);
+    }
+    let payload = &local_key[LEXICAL_KEY.len()..];
+    let (length, start) = read_varint(payload, 0)?;
+    let end = bounded_end(start, length, payload.len())?;
+    if end != payload.len() {
+        return Err(NativeError::protocol(
+            "canonical blank-label frame has trailing bytes",
+        ));
+    }
+    std::str::from_utf8(&payload[start..end])
+        .map(Some)
+        .map_err(|_| NativeError::protocol("canonical blank label is not UTF-8"))
 }
 
 fn bounded_end(start: usize, length: u64, bound: usize) -> NativeResult<usize> {
@@ -1449,6 +1549,7 @@ struct RdfXmlOccurrenceCaptureV2<'a> {
     collect: bool,
     scoped_digests: Option<&'a [([u8; 32], [u8; 32])]>,
     language_spellings: Vec<String>,
+    source_blank_labels: Vec<String>,
     preserve_source_map: bool,
     limits: &'a Limits,
     cancellation: &'a Cancellation,
@@ -1463,12 +1564,17 @@ fn rdfxml_retained_occurrences(
         collect,
         scoped_digests,
         language_spellings,
+        source_blank_labels,
         preserve_source_map,
         limits,
         cancellation,
     } = capture;
     if !collect {
-        if !rows.is_empty() || !language_spellings.is_empty() || scoped_digests.is_some() {
+        if !rows.is_empty()
+            || !language_spellings.is_empty()
+            || !source_blank_labels.is_empty()
+            || scoped_digests.is_some()
+        {
             return Err(NativeError::protocol(
                 "native RDF/XML occurrence metadata was captured while disabled",
             ));
@@ -1505,28 +1611,31 @@ fn rdfxml_retained_occurrences(
             source_order: u64::try_from(source_order)
                 .map_err(|_| NativeError::limit("native RDF/XML occurrence ordinal exceeds u64"))?,
             language_details: Vec::new(),
+            source_blank_labels: Vec::new(),
         });
     }
     if preserve_source_map {
-        attach_rdfxml_language_details(
+        attach_rdfxml_lexical_details(
             rows,
             &mut result,
             language_spellings,
+            source_blank_labels,
             limits,
             cancellation,
         )?;
-    } else if !language_spellings.is_empty() {
+    } else if !language_spellings.is_empty() || !source_blank_labels.is_empty() {
         return Err(NativeError::protocol(
-            "native RDF/XML language spellings were captured while disabled",
+            "native RDF/XML source spellings were captured while disabled",
         ));
     }
     Ok(result)
 }
 
-fn attach_rdfxml_language_details(
+fn attach_rdfxml_lexical_details(
     rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
     occurrences: &mut [RetainedOccurrenceV2],
     language_spellings: Vec<String>,
+    source_blank_labels: Vec<String>,
     limits: &Limits,
     cancellation: &Cancellation,
 ) -> NativeResult<()> {
@@ -1542,10 +1651,28 @@ fn attach_rdfxml_language_details(
             .or_default()
             .push_back(spelling);
     }
+    if source_blank_labels
+        .windows(2)
+        .any(|pair| pair[0].as_bytes() >= pair[1].as_bytes())
+    {
+        return Err(NativeError::protocol(
+            "native RDF/XML source blank labels are not canonical",
+        ));
+    }
+    let collect_blank_labels = !source_blank_labels.is_empty();
     let mut terms = 0_u64;
     for (row, occurrence) in rows.iter().zip(occurrences) {
         cancellation.checkpoint()?;
-        let literals = canonical_language_literals(&row.row, limits, cancellation, &mut terms)?;
+        let CanonicalLexicalNodes {
+            language_literals: literals,
+            mut blank_labels,
+        } = canonical_lexical_nodes(
+            &row.row,
+            limits,
+            cancellation,
+            &mut terms,
+            collect_blank_labels,
+        )?;
         occurrence
             .language_details
             .try_reserve_exact(literals.len())
@@ -1557,6 +1684,25 @@ fn attach_rdfxml_language_details(
             occurrence
                 .language_details
                 .push(RetainedLanguageDetailV2 { digest, spelling });
+        }
+        blank_labels.sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+        blank_labels.dedup();
+        blank_labels.retain(|label| {
+            source_blank_labels
+                .binary_search_by(|candidate| candidate.as_bytes().cmp(label.as_bytes()))
+                .is_ok()
+        });
+        occurrence
+            .source_blank_labels
+            .try_reserve_exact(blank_labels.len())
+            .map_err(|_| NativeError::limit("native RDF/XML blank-label allocation failed"))?;
+        for label in blank_labels {
+            let mut retained = String::new();
+            retained
+                .try_reserve_exact(label.len())
+                .map_err(|_| NativeError::limit("native RDF/XML blank-label allocation failed"))?;
+            retained.push_str(label);
+            occurrence.source_blank_labels.push(retained);
         }
     }
     Ok(())
@@ -1667,7 +1813,12 @@ fn encode_source_map_rows(
             .map_err(|_| NativeError::limit("native source-map occurrence exceeds u64"))?;
         let mut root_lexical = Vec::new();
         root_lexical
-            .try_reserve_exact(value.language_details.len())
+            .try_reserve_exact(
+                value
+                    .language_details
+                    .len()
+                    .saturating_add(value.source_blank_labels.len()),
+            )
             .map_err(|_| NativeError::limit("native source-map lexical allocation failed"))?;
         for (index, detail) in value.language_details.iter().enumerate() {
             let key = if index == 0 {
@@ -1676,6 +1827,14 @@ fn encode_source_map_rows(
                 format!("language-tag:{}", index + 1)
             };
             root_lexical.push((key, detail.spelling.as_str()));
+        }
+        for (index, label) in value.source_blank_labels.iter().enumerate() {
+            let key = if index == 0 {
+                "blank-label".to_owned()
+            } else {
+                format!("blank-label:{}", index + 1)
+            };
+            root_lexical.push((key, label.as_str()));
         }
         root_lexical.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
         let row = encode_source_map_row(value.digest, occurrence, value.span, &root_lexical)?;
@@ -2395,6 +2554,7 @@ mod tests {
             span: Some(span),
             source_order: 0,
             language_details: Vec::new(),
+            source_blank_labels: Vec::new(),
         }];
 
         attach_language_details(

@@ -290,6 +290,51 @@ ANONYMOUS_SOURCE = b"""\
   </rdf:Description>
 </rdf:RDF>
 """
+ANONYMOUS_IMPLICIT_SOURCE = b"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdf:Description>
+    <owl:sameAs rdf:nodeID="lexical-a"/>
+  </rdf:Description>
+</rdf:RDF>
+"""
+ANONYMOUS_LEXICAL_SOURCE = b"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#">
+  <rdf:Description rdf:nodeID="lexical-subject">
+    <rdfs:comment xml:lang="EN">note</rdfs:comment>
+  </rdf:Description>
+</rdf:RDF>
+"""
+
+
+def _anonymous_generator_collision_source(label: str) -> bytes:
+    return f"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdf:Description>
+    <owl:sameAs rdf:nodeID="{label}"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+
+def _anonymous_generator_provenance_source(label: str) -> bytes:
+    return f"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdf:Description rdf:nodeID="{label}"/>
+  <rdf:Description>
+    <owl:sameAs rdf:resource="urn:named"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+
 ANONYMOUS_ASSERTION_SOURCE = b"""\
 <rdf:RDF
   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -1206,6 +1251,96 @@ def test_anonymous_provenance_uses_effective_digests_without_python_rescoping() 
     assert encode_snapshot(selected) == encode_snapshot(reference)
     assert counters.retained_origin_rows == 3
     assert counters.retained_origin_bytes > 0
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_lexical", "expected_anonymous"),
+    (
+        (
+            ANONYMOUS_SOURCE,
+            {"blank-label": "lexical-a", "blank-label:2": "lexical-z"},
+            2,
+        ),
+        (ANONYMOUS_IMPLICIT_SOURCE, {"blank-label": "lexical-a"}, 2),
+        (
+            ANONYMOUS_LEXICAL_SOURCE,
+            {"blank-label": "lexical-subject", "language-tag": "EN"},
+            1,
+        ),
+        (
+            _anonymous_generator_collision_source("node-1"),
+            {"blank-label": "node-1"},
+            2,
+        ),
+        (
+            _anonymous_generator_collision_source("generated-1"),
+            {"blank-label": "generated-1"},
+            2,
+        ),
+        (_anonymous_generator_provenance_source("node-1"), None, 1),
+        (_anonymous_generator_provenance_source("generated-1"), None, 1),
+    ),
+)
+def test_private_source_map_retains_only_explicit_blank_labels(
+    source: bytes,
+    expected_lexical: dict[str, str] | None,
+    expected_anonymous: int,
+) -> None:
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            preserve_source_map=True,
+        )
+
+    reference = load_snapshot(
+        source,
+        document_iri=None,
+        options=options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("blank-label source map crossed the Python parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(
+            Any,
+            _retained_snapshot(
+                source,
+                options=options(BackendPreference.NATIVE),
+                document_iri=None,
+            ),
+        )
+
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    before = raw_owner._publication_counters_v2()
+    assert before.source_map_rows_emitted == 0
+    assert selected.root.source_map == reference.root.source_map
+    assert selected.root.source_map is not None
+    lexical_rows = [
+        dict(occurrence.lexical)
+        for occurrences in selected.root.source_map.entries.values()
+        for occurrence in occurrences
+        if "blank-label" in occurrence.lexical
+    ]
+    assert lexical_rows == ([] if expected_lexical is None else [expected_lexical])
+    reference_axiom = next(iter(reference.root.axioms))
+    selected_axiom = next(iter(selected.root.axioms))
+    assert len(
+        {
+            value
+            for value in m.walk(reference_axiom)
+            if isinstance(value, m.AnonymousIndividual)
+        }
+    ) == expected_anonymous
+    assert len(
+        {
+            value
+            for value in m.walk(selected_axiom)
+            if isinstance(value, m.AnonymousIndividual)
+        }
+    ) == expected_anonymous
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    after = raw_owner._publication_counters_v2()
+    assert after.source_map_rows_emitted > before.source_map_rows_emitted
 
 
 def test_private_provenance_rows_match_python_and_remain_native_until_access() -> None:

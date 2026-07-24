@@ -809,6 +809,89 @@ def test_rdfxml_source_map_retains_effective_namespace_bindings() -> None:
     }
 
 
+def test_rdfxml_source_map_retains_only_explicit_blank_labels() -> None:
+    explicit = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdf:Description rdf:nodeID="lexical-z">
+    <owl:sameAs rdf:nodeID="lexical-a"/>
+  </rdf:Description>
+</rdf:RDF>
+"""
+    implicit = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdf:Description>
+    <owl:sameAs rdf:nodeID="lexical-a"/>
+  </rdf:Description>
+</rdf:RDF>
+"""
+    options = LoadOptions(
+        backend=BackendPreference.PYTHON,
+        preserve_source_map=True,
+    )
+
+    explicit_document = parse_document(explicit, format="rdfxml", options=options)
+    implicit_document = parse_document(implicit, format="rdfxml", options=options)
+
+    assert explicit_document.source_map is not None
+    assert implicit_document.source_map is not None
+    assert [
+        dict(occurrence.lexical)
+        for occurrences in explicit_document.source_map.entries.values()
+        for occurrence in occurrences
+    ] == [{"blank-label": "lexical-a", "blank-label:2": "lexical-z"}]
+    assert [
+        dict(occurrence.lexical)
+        for occurrences in implicit_document.source_map.entries.values()
+        for occurrence in occurrences
+    ] == [{"blank-label": "lexical-a"}]
+    for label in ("node-1", "generated-1"):
+        collision = f"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdf:Description>
+    <owl:sameAs rdf:nodeID="{label}"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+        collision_document = parse_document(collision, format="rdfxml", options=options)
+        assert collision_document.source_map is not None
+        assert [
+            dict(occurrence.lexical)
+            for occurrences in collision_document.source_map.entries.values()
+            for occurrence in occurrences
+        ] == [{"blank-label": label}]
+        collision_axiom = next(iter(collision_document.axioms))
+        assert len(
+            {
+                value
+                for value in m.walk(collision_axiom)
+                if isinstance(value, m.AnonymousIndividual)
+            }
+        ) == 2
+        provenance_collision = f"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdf:Description rdf:nodeID="{label}"/>
+  <rdf:Description>
+    <owl:sameAs rdf:resource="urn:named"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+        provenance_document = parse_document(
+            provenance_collision,
+            format="rdfxml",
+            options=options,
+        )
+        assert provenance_document.source_map is not None
+        assert not any(
+            "blank-label" in occurrence.lexical
+            for occurrences in provenance_document.source_map.entries.values()
+            for occurrence in occurrences
+        )
+
+
 @pytest.mark.parametrize(
     ("document", "expanded_iri_bytes"),
     (

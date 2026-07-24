@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.diagnostics import SourceSpan
@@ -26,6 +26,7 @@ class ParsedOntology:
     occurrences: tuple[tuple[StructuralNode, SourceSpan | None], ...] = ()
     rdf_mapping_report: RDFMappingReport | None = None
     decoded_codepoint_length: int = 0
+    source_blank_labels: tuple[str, ...] = field(default=(), compare=False)
 
 
 class ParseContext:

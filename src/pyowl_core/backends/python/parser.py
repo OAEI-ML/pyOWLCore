@@ -329,6 +329,7 @@ class PythonParser:
                     cancellation_token,
                 ),
             )
+            blank_label_details = _blank_label_details(parsed)
             source_map_entries = 0
             for occurrence, (original, span) in enumerate(parsed.occurrences):
                 frozen, digest = matcher.match(original)
@@ -338,7 +339,10 @@ class PythonParser:
                         digest,
                         occurrence,
                         span,
-                        _root_lexical_details(details),
+                        _root_lexical_details(
+                            details,
+                            blank_label_details[occurrence],
+                        ),
                     )
                     source_map_entries += 1
                     for literal, spelling in details:
@@ -458,16 +462,32 @@ def _language_details(
     return tuple(result)
 
 
-def _root_lexical_details(details: tuple[tuple[Literal, str], ...]) -> Mapping[str, str]:
-    if not details:
-        return {}
-    result = {"language-tag": details[0][1]}
-    result.update(
-        {
-            f"language-tag:{index}": spelling
-            for index, (_literal, spelling) in enumerate(details[1:], 2)
-        }
-    )
+def _blank_label_details(parsed: ParsedOntology) -> tuple[tuple[str, ...], ...]:
+    source_labels = frozenset(parsed.source_blank_labels)
+    result: list[tuple[str, ...]] = []
+    for value, _span in parsed.occurrences:
+        labels: set[str] = set()
+        for node in walk(value):
+            if not isinstance(node, AnonymousIndividual):
+                continue
+            label = provisional_label(node)
+            if label is not None and label in source_labels:
+                labels.add(label)
+        result.append(tuple(sorted(labels)))
+    return tuple(result)
+
+
+def _root_lexical_details(
+    language_details: tuple[tuple[Literal, str], ...],
+    blank_labels: tuple[str, ...],
+) -> Mapping[str, str]:
+    result: dict[str, str] = {}
+    for index, (_literal, spelling) in enumerate(language_details, 1):
+        key = "language-tag" if index == 1 else f"language-tag:{index}"
+        result[key] = spelling
+    for index, label in enumerate(blank_labels, 1):
+        key = "blank-label" if index == 1 else f"blank-label:{index}"
+        result[key] = label
     return result
 
 

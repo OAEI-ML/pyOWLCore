@@ -37,6 +37,9 @@ XML_NS = "http://www.w3.org/XML/1998/namespace"
 _XML_SPACE = frozenset(" \t\r\n")
 _IRI_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
 _XML_UNDEFINED_ENTITY = expat.errors.codes[expat.errors.XML_ERROR_UNDEFINED_ENTITY]
+# NUL cannot occur in an XML NCName, so generated identities cannot collide
+# with an explicit rdf:nodeID spelling.
+_GENERATED_BLANK_PREFIX = "\x00"
 _RDF_CORE_SYNTAX_IRIS = frozenset(
     RDF + local for local in ("RDF", "ID", "about", "parseType", "resource", "nodeID", "datatype")
 )
@@ -133,13 +136,14 @@ def parse_rdfxml(
                 reserved_xml_attributes_by_element[id(element)] = attributes
         if structural_element_count != lexical_element_count:
             raise AssertionError("RDF/XML lexical and structural element streams diverged")
-    graph = RDFXMLGraphParser(
+    graph_parser = RDFXMLGraphParser(
         root,
         limits,
         document_iri,
         cancellation_token,
         reserved_xml_attributes_by_element,
-    ).parse()
+    )
+    graph = graph_parser.parse()
     mapped = RDFMapper(
         graph,
         limits=limits,
@@ -157,6 +161,7 @@ def parse_rdfxml(
         occurrences=mapped.occurrences,
         rdf_mapping_report=mapped.rdf_mapping_report,
         decoded_codepoint_length=len(text),
+        source_blank_labels=tuple(sorted(graph_parser.node_ids)),
     )
 
 
@@ -594,7 +599,7 @@ class RDFXMLGraphParser:
 
     def _fresh(self, stem: str) -> RDFBlank:
         self.blank_counter += 1
-        return RDFBlank(f"{stem}-{self.blank_counter}")
+        return RDFBlank(f"{_GENERATED_BLANK_PREFIX}{stem}:{self.blank_counter}")
 
     def _add(self, subject: RDFResource, predicate: str, object: RDFTerm) -> Triple:
         triple = Triple(subject, RDFIRI(predicate), object)

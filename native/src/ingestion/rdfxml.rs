@@ -29,6 +29,9 @@ const XML_BASE: &str = "http://www.w3.org/XML/1998/namespacebase";
 const XML_LANG: &str = "http://www.w3.org/XML/1998/namespacelang";
 const XINCLUDE: &str = "http://www.w3.org/2001/XInclude";
 const SWRL: &str = "http://www.w3.org/2003/11/swrl#";
+// NUL cannot occur in an XML NCName, so generated identities cannot collide
+// with an explicit rdf:nodeID spelling.
+const GENERATED_BLANK_PREFIX: &str = "\0";
 
 const RDF_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#RDF";
 const RDF_DESCRIPTION: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Description";
@@ -598,6 +601,7 @@ struct Frame {
 struct ParsedGraph {
     triples: Vec<Triple>,
     language_spellings: Vec<String>,
+    source_blank_labels: Vec<String>,
     source_prefixes: Vec<(String, String)>,
 }
 
@@ -614,6 +618,7 @@ struct GraphParser<'text, 'session, 'guard> {
     root_closed: bool,
     xml_literal_capture: Option<XmlLiteralCapture>,
     language_spellings: Vec<String>,
+    source_blank_labels: Vec<String>,
     source_prefixes: Vec<(String, String)>,
     preserve_source_map: bool,
 }
@@ -649,6 +654,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             root_closed: false,
             xml_literal_capture: None,
             language_spellings: Vec::new(),
+            source_blank_labels: Vec::new(),
             source_prefixes: Vec::new(),
             preserve_source_map,
         })
@@ -676,9 +682,13 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         self.triples.dedup();
         self.source_prefixes
             .sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+        self.source_blank_labels
+            .sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+        self.source_blank_labels.dedup();
         Ok(ParsedGraph {
             triples: self.triples,
             language_spellings: self.language_spellings,
+            source_blank_labels: self.source_blank_labels,
             source_prefixes: self.source_prefixes,
         })
     }
@@ -756,6 +766,11 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 None,
                 FrameRole::XmlLiteralElement,
             );
+        }
+        if self.preserve_source_map {
+            if let Some(label) = self.attribute(&event.attributes, RDF, "nodeID")? {
+                self.retain_source_blank_label(label)?;
+            }
         }
         super::check_iri(
             &expanded_name,
@@ -914,6 +929,13 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         let prefix = owned_text(prefix, self.session)?;
         reserve_vec_item(&mut self.source_prefixes, self.session)?;
         self.source_prefixes.push((prefix, value));
+        Ok(())
+    }
+
+    fn retain_source_blank_label(&mut self, label: &str) -> NativeResult<()> {
+        let label = owned_text(label, self.session)?;
+        reserve_vec_item(&mut self.source_blank_labels, self.session)?;
+        self.source_blank_labels.push(label);
         Ok(())
     }
 
@@ -2135,6 +2157,7 @@ pub(super) fn parse_and_map_timed(
         graph.language_spellings,
         session,
     )?;
+    document.source_blank_labels = graph.source_blank_labels;
     document.source_prefixes = graph.source_prefixes;
     let mapping_ns = u64::try_from(mapping_started.elapsed().as_nanos())
         .map_err(|_| NativeError::limit("native RDF mapping phase time exceeds u64"))?;
@@ -2936,6 +2959,7 @@ fn map_graph(
         extensions,
         occurrences,
         language_spellings,
+        source_blank_labels: Vec::new(),
         source_prefixes: Vec::new(),
         source_sha256: [0; 32],
         byte_length: 0,
@@ -7158,7 +7182,7 @@ fn generated_blank(value: u64, session: &mut Session<'_>) -> NativeResult<String
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("native RDF blank identifier size overflow"))?
     };
-    let size = "generated-"
+    let size = GENERATED_BLANK_PREFIX
         .len()
         .checked_add(digits)
         .ok_or_else(|| NativeError::limit("native RDF blank identifier size overflow"))?;
@@ -7167,7 +7191,8 @@ fn generated_blank(value: u64, session: &mut Session<'_>) -> NativeResult<String
     output
         .try_reserve_exact(size)
         .map_err(|_| NativeError::limit("native RDF blank identifier allocation failed"))?;
-    write!(&mut output, "generated-{value}")
+    output.push_str(GENERATED_BLANK_PREFIX);
+    write!(&mut output, "{value}")
         .map_err(|_| NativeError::protocol("native RDF blank identifier formatting failed"))?;
     Ok(output)
 }
@@ -7442,6 +7467,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn retained_source_blank_labels_are_explicit_unique_and_skip_xml_literals() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:e:\">\
+             <rdf:Description rdf:nodeID=\"lexical-z\">\
+             <owl:sameAs rdf:nodeID=\"lexical-a\"/></rdf:Description>\
+             <rdf:Description rdf:nodeID=\"lexical-a\"/>\
+             <rdf:Description><owl:sameAs rdf:nodeID=\"generated-1\"/></rdf:Description>\
+             <rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Literal\">\
+             <e:value rdf:nodeID=\"literal-only\"/></e:p></rdf:Description>\
+             </rdf:RDF>"
+        );
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len()).expect("bounded session");
+        let parsed = GraphParser::new(&source, None, XmlSourceEncoding::Utf8, true, &mut session)
+            .expect("graph parser")
+            .parse()
+            .expect("RDF/XML graph");
+
+        assert_eq!(
+            parsed.source_blank_labels,
+            vec![
+                "generated-1".to_owned(),
+                "lexical-a".to_owned(),
+                "lexical-z".to_owned(),
+            ],
+        );
+        assert!(contains_edge(
+            &parsed.triples,
+            generated_resource(1),
+            OWL_SAME_AS,
+            blank_resource("generated-1").into(),
+        ));
+
+        let mut disabled_guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut disabled_session =
+            Session::new(&mut disabled_guard, &limits, source.len()).expect("bounded session");
+        let disabled = GraphParser::new(
+            &source,
+            None,
+            XmlSourceEncoding::Utf8,
+            false,
+            &mut disabled_session,
+        )
+        .expect("graph parser")
+        .parse()
+        .expect("RDF/XML graph")
+        .source_blank_labels;
+        assert!(disabled.is_empty());
+    }
+
     fn utf16_bytes(source: &str, little_endian: bool, bom: bool) -> Vec<u8> {
         let mut output = Vec::with_capacity(source.len().saturating_mul(2).saturating_add(2));
         if bom {
@@ -7485,6 +7570,10 @@ mod tests {
 
     fn blank_resource(value: &str) -> Resource {
         Resource::Blank(value.to_owned())
+    }
+
+    fn generated_resource(value: u64) -> Resource {
+        Resource::Blank(format!("{GENERATED_BLANK_PREFIX}{value}"))
     }
 
     fn contains_edge(graph: &[Triple], subject: Resource, predicate: &str, object: Term) -> bool {
@@ -7557,17 +7646,17 @@ mod tests {
             &single,
             iri_resource("urn:s"),
             "urn:e:p",
-            blank_resource("generated-1").into(),
+            generated_resource(1).into(),
         ));
         assert!(contains_edge(
             &single,
-            blank_resource("generated-1"),
+            generated_resource(1),
             RDF_FIRST,
             iri_resource("urn:a").into(),
         ));
         assert!(contains_edge(
             &single,
-            blank_resource("generated-1"),
+            generated_resource(1),
             RDF_REST,
             Term::Iri(RDF_NIL.to_owned()),
         ));
@@ -7579,19 +7668,19 @@ mod tests {
         assert_eq!(multiple.len(), 5);
         assert!(contains_edge(
             &multiple,
-            blank_resource("generated-1"),
+            generated_resource(1),
             RDF_REST,
-            blank_resource("generated-2").into(),
+            generated_resource(2).into(),
         ));
         assert!(contains_edge(
             &multiple,
-            blank_resource("generated-2"),
+            generated_resource(2),
             RDF_FIRST,
             iri_resource("urn:b").into(),
         ));
         assert!(contains_edge(
             &multiple,
-            blank_resource("generated-2"),
+            generated_resource(2),
             RDF_REST,
             Term::Iri(RDF_NIL.to_owned()),
         ));
@@ -7609,17 +7698,17 @@ mod tests {
             &parsed,
             iri_resource("urn:s"),
             "urn:e:p",
-            blank_resource("generated-1").into(),
+            generated_resource(1).into(),
         ));
         assert!(contains_edge(
             &parsed,
-            blank_resource("generated-1"),
+            generated_resource(1),
             "urn:e:q",
             iri_resource("urn:o").into(),
         ));
         assert!(contains_edge(
             &parsed,
-            blank_resource("generated-1"),
+            generated_resource(1),
             "urn:e:label",
             Term::Literal {
                 lexical: "value".to_owned(),
@@ -7637,7 +7726,7 @@ mod tests {
             &empty,
             iri_resource("urn:s"),
             "urn:e:p",
-            blank_resource("generated-1").into(),
+            generated_resource(1).into(),
         ));
     }
 
@@ -7760,11 +7849,11 @@ mod tests {
             "http://example.test/doc#described",
             iri_resource("urn:s"),
             "urn:e:described",
-            blank_resource("generated-1").into(),
+            generated_resource(1).into(),
         );
         assert!(contains_edge(
             &parsed,
-            blank_resource("generated-1"),
+            generated_resource(1),
             "urn:e:q",
             Term::Literal {
                 lexical: "attribute".to_owned(),
@@ -7787,11 +7876,11 @@ mod tests {
             "http://example.test/doc#resource",
             iri_resource("urn:s"),
             "urn:e:resource",
-            blank_resource("generated-1").into(),
+            generated_resource(1).into(),
         );
         assert!(contains_edge(
             &parsed,
-            blank_resource("generated-1"),
+            generated_resource(1),
             "urn:e:q",
             iri_resource("urn:q").into(),
         ));
@@ -7800,13 +7889,13 @@ mod tests {
             "http://example.test/doc#collection",
             iri_resource("urn:s"),
             "urn:e:collection",
-            blank_resource("generated-2").into(),
+            generated_resource(2).into(),
         );
         assert!(contains_edge(
             &parsed,
-            blank_resource("generated-2"),
+            generated_resource(2),
             RDF_REST,
-            blank_resource("generated-3").into(),
+            generated_resource(3).into(),
         ));
         assert_statement_reification(
             &parsed,
@@ -8236,11 +8325,11 @@ mod tests {
             &implicit,
             iri_resource("urn:s"),
             "urn:e:p",
-            blank_resource("generated-1").into(),
+            generated_resource(1).into(),
         ));
         assert!(contains_edge(
             &implicit,
-            blank_resource("generated-1"),
+            generated_resource(1),
             "urn:e:q",
             Term::Literal {
                 lexical: "value".to_owned(),
@@ -8339,13 +8428,13 @@ mod tests {
         ));
         assert!(contains_edge(
             &parsed,
-            blank_resource("generated-1"),
+            generated_resource(1),
             &format!("{RDF}_1"),
             iri_resource("urn:b").into(),
         ));
         assert!(contains_edge(
             &parsed,
-            blank_resource("generated-1"),
+            generated_resource(1),
             &format!("{RDF}_2"),
             iri_resource("urn:c").into(),
         ));
