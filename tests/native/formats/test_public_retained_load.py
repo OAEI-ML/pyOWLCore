@@ -1422,6 +1422,73 @@ def test_large_auto_resolver_built_closure_retains_one_native_owner(
     assert extension.INGESTION_FEATURES == ()
 
 
+@pytest.mark.parametrize("small_document", ("root", "child"))
+def test_mixed_size_auto_closure_skips_owner_construction(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+    small_document: str,
+) -> None:
+    padding = b" " * (256 * 1024)
+    root_padding = b"" if small_document == "root" else padding
+    child_padding = b"" if small_document == "child" else padding
+    root = (
+        b"Ontology(<urn:retained-auto-mixed:root> "
+        b"Import(<urn:retained-auto-mixed:child>) "
+        + root_padding
+        + b"Declaration(Class(<urn:retained-auto-mixed:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-auto-mixed:child> "
+        + child_padding
+        + b"Declaration(Class(<urn:retained-auto-mixed:Child>)))"
+    )
+    resolver = MappingResolver({"urn:retained-auto-mixed:child": child})
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RESOLVE_LOCAL,
+            backend=backend,
+            collect_provenance=True,
+            preserve_source_map=True,
+        )
+
+    reference = load_snapshot(
+        root,
+        options=options(BackendPreference.PYTHON),
+        resolver=resolver,
+    )
+    owner_calls = 0
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        nonlocal owner_calls
+        owner_calls += 1
+        raise AssertionError("mixed AUTO closure reached retained-owner construction")
+
+    monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", unexpected)
+    selected = load_snapshot(
+        root,
+        options=options(BackendPreference.AUTO),
+        resolver=resolver,
+    )
+
+    assert type(selected).__name__ == "OntologySnapshot"
+    assert {document.provenance.backend for document in selected.documents} == {
+        "native",
+        "python",
+    }
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert tuple(document.source_map for document in selected.documents) == tuple(
+        document.source_map for document in reference.documents
+    )
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert owner_calls == 0
+
+
 @pytest.mark.parametrize("collect_provenance", (False, True))
 @pytest.mark.parametrize("preserve_source_map", (False, True))
 @pytest.mark.parametrize(
