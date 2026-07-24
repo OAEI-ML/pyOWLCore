@@ -5,8 +5,8 @@ use crate::cancel::Cancellation;
 use crate::error::NativeError;
 use crate::limits::Limits;
 use crate::model::{
-    prepare_encoded_structural_columns_from_tables_v1, ComponentId, EncodedRootKindV1,
-    EncodedRootTableV1, FrozenComponentBuild, NativeComponentBuilder,
+    prepare_encoded_structural_columns_from_tables_v1, Category, ComponentId, EncodedRootKindV1,
+    EncodedRootTableV1, FrozenComponentBuild, NativeComponentBuilder, NativeComponentDigestIndex,
     PreparedEncodedStructuralColumnsV1,
 };
 use crate::wire::Validation;
@@ -64,6 +64,23 @@ impl ComponentEncodingFixture {
         self.frozen
             .encode(self.identifiers[0])
             .map_err(Failure::from)
+    }
+
+    /// Build and consume the production digest index while allocation
+    /// injection is armed.
+    ///
+    /// The primitive summary escapes without another allocation; the retained
+    /// index is dropped transactionally before this method returns.
+    pub fn build_digest_index(&self) -> Result<(usize, u64), Failure> {
+        let index = NativeComponentDigestIndex::build(
+            self.frozen.arena(),
+            &self.identifiers,
+            Category::Axiom,
+            &Limits::default(),
+            self.cancellation.clone(),
+            None,
+        )?;
+        Ok((index.len(), index.retained_bytes()))
     }
 
     /// Prepare retained encoded-column metadata before allocation injection.

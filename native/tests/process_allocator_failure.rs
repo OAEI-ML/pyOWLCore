@@ -156,6 +156,22 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
         .expect("first non-failing component boundary must encode");
     assert_eq!(boundary_component, canonical);
 
+    let (baseline_index, index_allocations) = count_allocations(|| component.build_digest_index());
+    let baseline_index = baseline_index.expect("component digest index baseline must build");
+    assert_eq!(baseline_index.0, 1);
+    assert!(baseline_index.1 > 0);
+    assert!(index_allocations > 1);
+
+    for fail_after in 0..index_allocations {
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+            component.build_digest_index()
+        }));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let boundary_index = fail_allocation(index_allocations, || component.build_digest_index())
+        .expect("first non-failing component digest index boundary must build");
+    assert_eq!(boundary_index, baseline_index);
+
     let (baseline_prepared, preparation_allocations) =
         count_allocations(|| component.prepare_encoded_columns());
     let baseline_prepared = baseline_prepared.expect("encoded columns must prepare");
