@@ -219,6 +219,7 @@ class RDFMapper:
                 occurrences.append((simple_axiom, None))
         self._consume_detached_inverse_property_expressions()
         self._consume_detached_empty_class_booleans()
+        self._consume_detached_named_class_booleans()
         self._consume_detached_class_complements()
         self._consume_detached_object_enumerations()
         self._consume_detached_data_complements()
@@ -382,6 +383,72 @@ class RDFMapper:
                 if has_other_constructor:
                     self._mapping_error("empty class boolean has conflicting constructors")
                 self._class_expression(triple.subject)
+
+    def _consume_detached_named_class_booleans(self) -> None:
+        for predicate in (OWL + "intersectionOf", OWL + "unionOf"):
+            for triple in self.graph.find(predicate=predicate):
+                self.context.check()
+                if triple in self.consumed or not isinstance(triple.subject, RDFBlank):
+                    continue
+                marker = Triple(
+                    triple.subject,
+                    RDFIRI(RDF + "type"),
+                    RDFIRI(OWL + "Class"),
+                )
+                if marker in self.consumed or not self.graph.contains(marker):
+                    continue
+                if not self._is_established_named_class_list(triple.object):
+                    continue
+                self.graph.one(triple.subject, predicate)
+                has_other_constructor = any(
+                    candidate != predicate and self.graph.objects(triple.subject, candidate)
+                    for candidate in (
+                        OWL + "intersectionOf",
+                        OWL + "unionOf",
+                        OWL + "complementOf",
+                        OWL + "oneOf",
+                    )
+                ) or self.graph.contains(
+                    Triple(
+                        triple.subject,
+                        RDFIRI(RDF + "type"),
+                        RDFIRI(OWL + "Restriction"),
+                    )
+                )
+                if has_other_constructor:
+                    self._mapping_error("class boolean has conflicting constructors")
+                self._class_expression(triple.subject)
+
+    def _is_established_named_class_list(self, head: RDFTerm) -> bool:
+        if not isinstance(head, RDFBlank):
+            return False
+        visited: set[RDFBlank] = set()
+        current = head
+        length = 0
+        while True:
+            self.context.check()
+            length += 1
+            self.context.limits.enforce("max_rdf_list_length", length)
+            self.context.limits.enforce("max_sequence_arity", length)
+            if current in visited:
+                return False
+            visited.add(current)
+            firsts = self.graph.objects(current, RDF + "first")
+            rests = self.graph.objects(current, RDF + "rest")
+            if len(firsts) != 1 or len(rests) != 1:
+                return False
+            first = firsts[0]
+            if (
+                not isinstance(first, RDFIRI)
+                or m.EntityKind.CLASS not in self.kinds.get(first.value, set())
+            ):
+                return False
+            rest = rests[0]
+            if isinstance(rest, RDFIRI) and rest.value == RDF + "nil":
+                return True
+            if not isinstance(rest, RDFBlank):
+                return False
+            current = rest
 
     def _consume_detached_class_complements(self) -> None:
         for triple in self.graph.find(predicate=OWL + "complementOf"):

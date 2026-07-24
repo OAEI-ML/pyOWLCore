@@ -1630,6 +1630,88 @@ def test_detached_empty_class_boolean_matches_python(
     assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
+@pytest.mark.parametrize(
+    ("operator", "members"),
+    (
+        ("intersectionOf", ("A",)),
+        ("unionOf", ("A",)),
+        ("intersectionOf", ("A", "B")),
+        ("unionOf", ("A", "B")),
+    ),
+)
+def test_detached_named_class_boolean_matches_python(
+    extension: NativeTestExtension,
+    operator: str,
+    members: tuple[str, ...],
+) -> None:
+    declarations = "".join(
+        f"<owl:Class rdf:about='urn:{member}'/>" for member in members
+    )
+    items = "".join(
+        f"<rdf:Description rdf:about='urn:{member}'/>" for member in members
+    )
+    source = f"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ {declarations}
+ <owl:Class rdf:nodeID='expression'>
+  <owl:{operator} rdf:parseType='Collection'>{items}</owl:{operator}>
+ </owl:Class>
+</rdf:RDF>""".encode()
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    expected_triples = 2 + 3 * len(members)
+    assert python.rdf_mapping_report is not None
+    assert python.rdf_mapping_report.conformant
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert len(observed.axioms) == len(members)
+    assert observed.total_triples == observed.consumed_triples == expected_triples
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == len(members)
+    assert attestation.rdf_mapping_report_count == 1
+    assert extension.INGESTION_FEATURES == ()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
+@pytest.mark.parametrize(
+    ("operator", "members"),
+    (
+        ("intersectionOf", ("A",)),
+        ("unionOf", ("A",)),
+        ("intersectionOf", ("A", "B")),
+        ("unionOf", ("A", "B")),
+    ),
+)
+def test_named_class_boolean_axiom_matches_python(
+    extension: NativeTestExtension,
+    operator: str,
+    members: tuple[str, ...],
+) -> None:
+    declarations = "".join(
+        f"<owl:Class rdf:about='urn:{member}'/>" for member in members
+    )
+    items = "".join(
+        f"<rdf:Description rdf:about='urn:{member}'/>" for member in members
+    )
+    source = f"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'>
+  <owl:{operator} rdf:parseType='Collection'>{items}</owl:{operator}>
+ </owl:Class>
+ {declarations}
+</rdf:RDF>""".encode()
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert len(observed.axioms) == len(members) + 2
+    assert observed.total_triples == observed.consumed_triples == 2 + 3 * len(members)
+
+
 @pytest.mark.parametrize("operator", ("intersectionOf", "unionOf"))
 def test_named_empty_class_boolean_axiom_matches_python(
     extension: NativeTestExtension,
@@ -1656,8 +1738,39 @@ def test_named_empty_class_boolean_axiom_matches_python(
     (
         (
             """
+ <owl:Class rdf:about='urn:A'/>
  <rdf:Description rdf:nodeID='expression'>
-  <owl:intersectionOf
+  <owl:intersectionOf rdf:parseType='Collection'>
+   <rdf:Description rdf:about='urn:A'/>
+  </owl:intersectionOf>
+ </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+ <owl:Class rdf:nodeID='expression'>
+  <owl:intersectionOf rdf:parseType='Collection'>
+   <rdf:Description rdf:about='urn:undeclared'/>
+  </owl:intersectionOf>
+ </owl:Class>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+ <owl:Class rdf:nodeID='inner'>
+  <owl:unionOf
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </owl:Class>
+ <owl:Class rdf:nodeID='expression'>
+  <owl:intersectionOf rdf:nodeID='values'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='values'>
+  <rdf:first rdf:nodeID='inner'/>
+  <rdf:rest
    rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
  </rdf:Description>
 """,
@@ -1669,11 +1782,14 @@ def test_named_empty_class_boolean_axiom_matches_python(
  <owl:Class rdf:about='urn:A'/>
  <owl:Class rdf:about='urn:B'/>
  <owl:Class rdf:nodeID='expression'>
-  <owl:intersectionOf rdf:parseType='Collection'>
-   <rdf:Description rdf:about='urn:A'/>
-   <rdf:Description rdf:about='urn:B'/>
-  </owl:intersectionOf>
+  <owl:intersectionOf rdf:nodeID='values'/>
  </owl:Class>
+ <rdf:Description rdf:nodeID='values'>
+  <rdf:first rdf:resource='urn:A'/>
+  <rdf:first rdf:resource='urn:B'/>
+  <rdf:rest
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
 """,
             "RDF_MAPPING_INCOMPLETE",
             "NATIVE_RDF_MAPPING_INCOMPLETE",
@@ -1682,10 +1798,192 @@ def test_named_empty_class_boolean_axiom_matches_python(
             """
  <owl:Class rdf:about='urn:A'/>
  <owl:Class rdf:nodeID='expression'>
-  <owl:unionOf rdf:parseType='Collection'>
-   <rdf:Description rdf:about='urn:A'/>
-  </owl:unionOf>
+  <owl:intersectionOf rdf:nodeID='values'/>
  </owl:Class>
+ <rdf:Description rdf:nodeID='values'>
+  <rdf:first rdf:resource='urn:A'/>
+  <rdf:rest
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+  <rdf:rest rdf:nodeID='values'/>
+ </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+ <owl:Class rdf:about='urn:A'/>
+ <owl:Class rdf:nodeID='expression'>
+  <owl:intersectionOf rdf:nodeID='values'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='values'>
+  <rdf:first rdf:resource='urn:A'/>
+  <rdf:rest rdf:nodeID='values'/>
+ </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+ <owl:Class rdf:about='urn:A'/>
+ <owl:Class rdf:nodeID='expression'>
+  <rdf:type rdf:resource='http://www.w3.org/2002/07/owl#Restriction'/>
+  <owl:intersectionOf rdf:nodeID='values'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='values'>
+  <rdf:first rdf:resource='urn:A'/>
+  <rdf:rest
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+ <owl:Class rdf:about='urn:A'/>
+ <owl:Class rdf:nodeID='expression'>
+  <owl:intersectionOf rdf:parseType='Collection'>
+   <rdf:Description rdf:about='urn:A'/>
+  </owl:intersectionOf>
+  <owl:complementOf rdf:resource='urn:A'/>
+ </owl:Class>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            """
+ <owl:Class rdf:about='urn:A'/>
+ <owl:Class rdf:nodeID='expression'>
+  <owl:intersectionOf rdf:nodeID='left'/>
+  <owl:intersectionOf rdf:nodeID='right'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='left'>
+  <rdf:first rdf:resource='urn:A'/>
+  <rdf:rest
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+ <rdf:Description rdf:nodeID='right'>
+  <rdf:first rdf:resource='urn:A'/>
+  <rdf:rest
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+""",
+            "RDF_MAPPING_CARDINALITY",
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            """
+ <owl:Class rdf:about='urn:A'/>
+ <owl:Class rdf:about='urn:B'/>
+ <owl:Class rdf:nodeID='left-expression'>
+  <owl:intersectionOf rdf:nodeID='left'/>
+ </owl:Class>
+ <owl:Class rdf:nodeID='right-expression'>
+  <owl:unionOf rdf:nodeID='right'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='left'>
+  <rdf:first rdf:resource='urn:A'/>
+  <rdf:rest rdf:nodeID='tail'/>
+ </rdf:Description>
+ <rdf:Description rdf:nodeID='right'>
+  <rdf:first rdf:resource='urn:B'/>
+  <rdf:rest rdf:nodeID='tail'/>
+ </rdf:Description>
+ <rdf:Description rdf:nodeID='tail'>
+  <rdf:first rdf:resource='urn:A'/>
+  <rdf:rest
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        ),
+    ),
+)
+def test_detached_named_class_boolean_boundary_matches_python(
+    extension: NativeTestExtension,
+    body: str,
+    python_code: str,
+    native_code: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>{body}</rdf:RDF>""".encode()
+
+    with pytest.raises(PyOWLCoreError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == python_code
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == native_code
+
+
+@pytest.mark.parametrize(
+    ("boundary", "limited", "limit_name"),
+    (
+        (
+            ParseLimits(max_rdf_list_length=2),
+            ParseLimits(max_rdf_list_length=1),
+            "max_rdf_list_length",
+        ),
+        (
+            ParseLimits(max_sequence_arity=2),
+            ParseLimits(max_sequence_arity=1),
+            "max_sequence_arity",
+        ),
+    ),
+)
+def test_detached_named_class_boolean_list_limits_match_python(
+    extension: NativeTestExtension,
+    boundary: ParseLimits,
+    limited: ParseLimits,
+    limit_name: str,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:A'/>
+ <owl:Class rdf:about='urn:B'/>
+ <owl:Class rdf:nodeID='expression'>
+  <owl:intersectionOf rdf:nodeID='head'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='head'>
+  <rdf:first rdf:resource='urn:A'/>
+  <rdf:rest rdf:nodeID='tail'/>
+ </rdf:Description>
+ <rdf:Description rdf:nodeID='tail'>
+  <rdf:first rdf:resource='urn:B'/>
+  <rdf:rest
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source, limits=boundary)
+    python = parse_rdfxml(source, limits=boundary, document_iri=None)
+    assert python.rdf_mapping_report is not None
+    assert observed.total_triples == observed.consumed_triples == 8
+    assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples
+
+    with pytest.raises(ResourceLimitError) as python_error:
+        parse_rdfxml(source, limits=limited, document_iri=None)
+    assert python_error.value.limit == limit_name
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, limits=limited)
+    assert native_error.value.args[0] == "NATIVE_WIRE_LIMIT"
+
+
+@pytest.mark.parametrize(
+    ("body", "python_code", "native_code"),
+    (
+        (
+            """
+ <rdf:Description rdf:nodeID='expression'>
+  <owl:intersectionOf
+   rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
 """,
             "RDF_MAPPING_INCOMPLETE",
             "NATIVE_RDF_MAPPING_INCOMPLETE",

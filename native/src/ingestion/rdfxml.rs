@@ -2913,6 +2913,13 @@ fn map_graph(
         session,
     )?;
     consume_detached_empty_class_booleans(&list_graph, &mut consumed, &mut expressions, session)?;
+    consume_detached_named_class_booleans(
+        &list_graph,
+        &mut consumed,
+        &kinds,
+        &mut expressions,
+        session,
+    )?;
     consume_detached_class_complements(
         &list_graph,
         &mut consumed,
@@ -3350,6 +3357,132 @@ fn consume_detached_empty_class_booleans<'view, 'graph>(
         consume_collection_indexes(expression_consumed, consumed, session)?;
     }
     Ok(())
+}
+
+fn consume_detached_named_class_booleans<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index] || !matches!(triple.predicate, OWL_INTERSECTION_OF | OWL_UNION_OF) {
+            continue;
+        }
+        let ListResource::Blank(subject) = triple.subject else {
+            continue;
+        };
+        let mut marker_present = false;
+        let mut constructor_targets = 0_usize;
+        for (candidate_index, candidate) in triples.iter().enumerate() {
+            session.step(1)?;
+            if candidate.subject != ListResource::Blank(subject) {
+                continue;
+            }
+            if candidate.predicate == RDF_TYPE
+                && candidate.object == ListTerm::Iri(OWL_CLASS)
+                && !consumed[candidate_index]
+            {
+                marker_present = true;
+            }
+            if candidate.predicate == triple.predicate {
+                constructor_targets = constructor_targets.checked_add(1).ok_or_else(|| {
+                    NativeError::limit("native detached class-boolean target count overflow")
+                })?;
+            }
+        }
+        if !marker_present {
+            continue;
+        }
+        if !established_named_class_list(triples, triple.object, kinds, session)? {
+            continue;
+        }
+        if constructor_targets > 1 {
+            return Err(rdf_mapping_cardinality(
+                "native detached class boolean has more than one target",
+            ));
+        }
+        let DecodedClassExpression {
+            node: _,
+            consumed: expression_consumed,
+        } = expressions.decode_term(ListTerm::Blank(subject), session)?;
+        consume_collection_indexes(expression_consumed, consumed, session)?;
+    }
+    Ok(())
+}
+
+fn established_named_class_list<'graph>(
+    triples: &[ListTriple<'graph>],
+    head: ListTerm<'graph>,
+    kinds: &[KindRecord<'graph>],
+    session: &mut Session<'_>,
+) -> NativeResult<bool> {
+    session.finish()?;
+    let ListTerm::Blank(mut current) = head else {
+        return Ok(false);
+    };
+    let mut visited = Vec::new();
+    loop {
+        let next_length = visited
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native detached class list length overflow"))?;
+        enforce_usize(
+            next_length,
+            session.limits().value(LimitKey::MaxRdfListLength),
+            "native detached class list exceeds max_rdf_list_length",
+        )?;
+        enforce_usize(
+            next_length,
+            session.limits().value(LimitKey::MaxSequenceArity),
+            "native detached class list exceeds max_sequence_arity",
+        )?;
+        session
+            .step(u64::try_from(visited.len()).map_err(|_| {
+                NativeError::limit("native detached class list work exceeds u64")
+            })?)?;
+        if visited.contains(&current) {
+            return Ok(false);
+        }
+        reserve_temporary_vec_item(&mut visited, session)?;
+        visited.push(current);
+
+        let mut first = None;
+        let mut rest = None;
+        for candidate in triples {
+            session.step(1)?;
+            if candidate.subject != ListResource::Blank(current) {
+                continue;
+            }
+            if candidate.predicate == RDF_FIRST && first.replace(candidate.object).is_some() {
+                return Ok(false);
+            }
+            if candidate.predicate == RDF_REST && rest.replace(candidate.object).is_some() {
+                return Ok(false);
+            }
+        }
+        let Some(ListTerm::Iri(member)) = first else {
+            return Ok(false);
+        };
+        let mut established = false;
+        for record in kinds {
+            session.step(1)?;
+            if record.iri == member && record.kind == "class" {
+                established = true;
+                break;
+            }
+        }
+        if !established {
+            return Ok(false);
+        }
+        match rest {
+            Some(ListTerm::Iri(RDF_NIL)) => return Ok(true),
+            Some(ListTerm::Blank(next)) => current = next,
+            Some(ListTerm::Iri(_)) | Some(ListTerm::Literal(_)) | None => return Ok(false),
+        }
+    }
 }
 
 fn consume_detached_class_complements<'view, 'graph>(
@@ -7926,6 +8059,19 @@ fn reserve_vec_item<T>(values: &mut Vec<T>, session: &mut Session<'_>) -> Native
     Ok(())
 }
 
+fn reserve_temporary_vec_item<T>(
+    values: &mut Vec<T>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    if values.len() == values.capacity() {
+        session.reserve_temporary_bytes(std::mem::size_of::<T>())?;
+        values
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native RDF temporary allocation failed"))?;
+    }
+    Ok(())
+}
+
 fn enforce_usize(value: usize, maximum: u64, message: &'static str) -> NativeResult<()> {
     enforce_u64(
         u64::try_from(value).map_err(|_| NativeError::limit(message))?,
@@ -9653,25 +9799,13 @@ mod tests {
         let markerless = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"expression\"><owl:intersectionOf rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
         );
-        let nonempty = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:about=\"urn:B\"/><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:intersectionOf></owl:Class></rdf:RDF>"
-        );
-        let singleton = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:nodeID=\"expression\"><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/></owl:unionOf></owl:Class></rdf:RDF>"
-        );
         let restriction = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"expression\"><rdf:type rdf:resource=\"{OWL_RESTRICTION}\"/><owl:intersectionOf rdf:resource=\"{RDF_NIL}\"/></owl:Class></rdf:RDF>"
         );
         let markerless_duplicate = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"expression\"><owl:intersectionOf rdf:resource=\"{RDF_NIL}\"/><owl:intersectionOf rdf:resource=\"urn:not-a-list\"/></rdf:Description></rdf:RDF>"
         );
-        for incomplete in [
-            markerless,
-            nonempty,
-            singleton,
-            restriction,
-            markerless_duplicate,
-        ] {
+        for incomplete in [markerless, restriction, markerless_duplicate] {
             assert_eq!(
                 mapped(incomplete.as_bytes(), None).unwrap_err().code,
                 "NATIVE_RDF_MAPPING_INCOMPLETE",
@@ -9692,6 +9826,165 @@ mod tests {
         assert_eq!(
             mapped(duplicate.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+    }
+
+    #[test]
+    fn detached_named_class_boolean_requires_established_named_operands() {
+        for local_name in ["intersectionOf", "unionOf"] {
+            let singleton = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:nodeID=\"expression\"><owl:{local_name} rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/></owl:{local_name}></owl:Class></rdf:RDF>"
+            );
+            let singleton =
+                mapped(singleton.as_bytes(), None).expect("detached singleton class boolean");
+            assert_eq!(singleton.axioms.len(), 1);
+            assert_eq!(singleton.mapping.total_triples, 5);
+            assert_eq!(
+                singleton.mapping.total_triples,
+                singleton.mapping.consumed_triples,
+            );
+
+            let binary = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:about=\"urn:B\"/><owl:Class rdf:nodeID=\"expression\"><owl:{local_name} rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:{local_name}></owl:Class></rdf:RDF>"
+            );
+            let binary = mapped(binary.as_bytes(), None).expect("detached binary class boolean");
+            assert_eq!(binary.axioms.len(), 2);
+            assert_eq!(binary.mapping.total_triples, 8);
+            assert_eq!(
+                binary.mapping.total_triples,
+                binary.mapping.consumed_triples,
+            );
+
+            let named = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"><owl:{local_name} rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:{local_name}></owl:Class><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:about=\"urn:B\"/></rdf:RDF>"
+            );
+            let named = mapped(named.as_bytes(), None).expect("named binary class boolean");
+            assert_eq!(named.axioms.len(), 4);
+            assert_eq!(named.mapping.total_triples, 8);
+            assert_eq!(named.mapping.total_triples, named.mapping.consumed_triples,);
+        }
+
+        let markerless = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><rdf:Description rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/></owl:intersectionOf></rdf:Description></rdf:RDF>"
+        );
+        let undeclared = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:undeclared\"/></owl:intersectionOf></owl:Class></rdf:RDF>"
+        );
+        let forked = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:about=\"urn:B\"/><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:nodeID=\"values\"/></owl:Class><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:resource=\"urn:A\"/><rdf:first rdf:resource=\"urn:B\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
+        );
+        let cyclic = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:nodeID=\"values\"/></owl:Class><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:resource=\"urn:A\"/><rdf:rest rdf:nodeID=\"values\"/></rdf:Description></rdf:RDF>"
+        );
+        let restriction = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:nodeID=\"expression\"><rdf:type rdf:resource=\"{OWL_RESTRICTION}\"/><owl:intersectionOf rdf:nodeID=\"values\"/></owl:Class><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:resource=\"urn:A\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
+        );
+        for incomplete in [markerless, undeclared, forked, cyclic, restriction] {
+            assert_eq!(
+                mapped(incomplete.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            );
+        }
+
+        let conflict = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/></owl:intersectionOf><owl:complementOf rdf:resource=\"urn:A\"/></owl:Class></rdf:RDF>"
+        );
+        let shared_tail = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:about=\"urn:B\"/><owl:Class rdf:nodeID=\"left-expression\"><owl:intersectionOf rdf:nodeID=\"left\"/></owl:Class><owl:Class rdf:nodeID=\"right-expression\"><owl:unionOf rdf:nodeID=\"right\"/></owl:Class><rdf:Description rdf:nodeID=\"left\"><rdf:first rdf:resource=\"urn:A\"/><rdf:rest rdf:nodeID=\"tail\"/></rdf:Description><rdf:Description rdf:nodeID=\"right\"><rdf:first rdf:resource=\"urn:B\"/><rdf:rest rdf:nodeID=\"tail\"/></rdf:Description><rdf:Description rdf:nodeID=\"tail\"><rdf:first rdf:resource=\"urn:A\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
+        );
+        for unsupported in [conflict, shared_tail] {
+            assert_eq!(
+                mapped(unsupported.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
+        }
+
+        let duplicate = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:nodeID=\"left\"/><owl:intersectionOf rdf:nodeID=\"right\"/></owl:Class><rdf:Description rdf:nodeID=\"left\"><rdf:first rdf:resource=\"urn:A\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description><rdf:Description rdf:nodeID=\"right\"><rdf:first rdf:resource=\"urn:A\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(duplicate.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+    }
+
+    #[test]
+    fn detached_named_class_list_precheck_is_bounded_and_cancellable() {
+        let graph = [
+            ListTriple {
+                subject: ListResource::Blank("head"),
+                predicate: RDF_FIRST,
+                object: ListTerm::Iri("urn:A"),
+            },
+            ListTriple {
+                subject: ListResource::Blank("head"),
+                predicate: RDF_REST,
+                object: ListTerm::Iri(RDF_NIL),
+            },
+        ];
+        let kinds = [KindRecord {
+            iri: "urn:A",
+            kind: "class",
+        }];
+
+        let temporary_limits = limits_with(LimitKey::MaxTemporaryBytes, 1);
+        let mut temporary_guard = Guard::new(
+            Cancellation::with_duration(None),
+            temporary_limits.deadline,
+            temporary_limits.cancellation_stride,
+        );
+        let mut temporary_session =
+            Session::new(&mut temporary_guard, &temporary_limits, 0).expect("bounded session");
+        assert_eq!(
+            established_named_class_list(
+                &graph,
+                ListTerm::Blank("head"),
+                &kinds,
+                &mut temporary_session,
+            )
+            .unwrap_err()
+            .code,
+            "NATIVE_WIRE_LIMIT",
+        );
+
+        let work_limits = limits_with(LimitKey::MaxCanonicalWork, 1);
+        let mut work_guard = Guard::new(
+            Cancellation::with_duration(None),
+            work_limits.deadline,
+            work_limits.cancellation_stride,
+        );
+        let mut work_session =
+            Session::new(&mut work_guard, &work_limits, 0).expect("bounded session");
+        assert_eq!(
+            established_named_class_list(
+                &graph,
+                ListTerm::Blank("head"),
+                &kinds,
+                &mut work_session,
+            )
+            .unwrap_err()
+            .code,
+            "NATIVE_WIRE_LIMIT",
+        );
+
+        let limits = Limits::default();
+        let mut cancelled_guard = Guard::new(
+            Cancellation::with_duration(Some(Duration::ZERO)),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut cancelled_session =
+            Session::new(&mut cancelled_guard, &limits, 0).expect("bounded session");
+        assert_eq!(
+            established_named_class_list(
+                &graph,
+                ListTerm::Blank("head"),
+                &kinds,
+                &mut cancelled_session,
+            )
+            .unwrap_err()
+            .code,
+            "NATIVE_DEADLINE",
         );
     }
 
