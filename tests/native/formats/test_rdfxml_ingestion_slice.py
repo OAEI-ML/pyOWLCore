@@ -16,6 +16,7 @@ from pyowl_core import (
     PyOWLCoreError,
     ResourceLimitError,
     UnsupportedSyntaxError,
+    parse_document,
     render_document,
 )
 from pyowl_core.backends import native
@@ -318,6 +319,34 @@ def test_generated_every_constructor_corpus_matches_python_mapping(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == len(python.axioms)
     assert attestation.total_source_bytes == len(source)
+    assert attestation.rdf_mapping_report_count == 1
+
+
+def test_qualified_exact_cardinality_writer_output_matches_native(
+    extension: NativeTestExtension,
+) -> None:
+    functional = f"""\
+Ontology(<urn:qualified-exact>
+ SubClassOf(<urn:C>
+  ObjectExactCardinality(3 <{OWL_NAMESPACE}topObjectProperty> <{OWL_NAMESPACE}Thing>))
+ SubClassOf(<urn:C>
+  DataExactCardinality(4 <{OWL_NAMESPACE}topDataProperty> <{XSD_NAMESPACE}string>))
+)
+""".encode()
+    document = parse_document(functional, format=DocumentFormat.FUNCTIONAL)
+    source = render_document(document, format=DocumentFormat.RDF_XML)
+    assert source.count(b"<owl:qualifiedCardinality") == 2
+    assert b"<owl:QualifiedCardinality" not in source
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+    assert m.CanonicalSet(python.axioms) == document.axioms
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in document.axioms))
+    assert observed.total_triples == observed.consumed_triples
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == 2
     assert attestation.rdf_mapping_report_count == 1
 
 

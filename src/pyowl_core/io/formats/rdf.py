@@ -2381,7 +2381,11 @@ def _cardinality_predicate(value: object, *, qualified: bool) -> str:
         if isinstance(value, (m.ObjectMinCardinality, m.DataMinCardinality))
         else ("max" if isinstance(value, (m.ObjectMaxCardinality, m.DataMaxCardinality)) else "")
     )
-    return OWL + middle + ("QualifiedCardinality" if qualified else "Cardinality")
+    if qualified:
+        return OWL + (
+            middle + "QualifiedCardinality" if middle else "qualifiedCardinality"
+        )
+    return OWL + middle + "Cardinality"
 
 
 def _cardinality_literal(value: int) -> RDFLiteral:

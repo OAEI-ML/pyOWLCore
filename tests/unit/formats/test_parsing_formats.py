@@ -4426,6 +4426,26 @@ def test_each_writer_is_deterministic_and_round_trips(format: DocumentFormat) ->
     assert reparsed.document_fingerprint == document.document_fingerprint
 
 
+def test_rdfxml_writer_round_trips_qualified_exact_cardinalities() -> None:
+    functional = f"""\
+Ontology(<urn:qualified-exact>
+ SubClassOf(<urn:C>
+  ObjectExactCardinality(3 <{OWL_NAMESPACE}topObjectProperty> <{OWL_NAMESPACE}Thing>))
+ SubClassOf(<urn:C>
+  DataExactCardinality(4 <{OWL_NAMESPACE}topDataProperty> <{XSD_NAMESPACE}string>))
+)
+""".encode()
+    document = parse_document(functional, format="functional", options=PYTHON_OPTIONS)
+
+    encoded = render_document(document, format="rdfxml")
+    assert encoded.count(b"<owl:qualifiedCardinality") == 2
+    assert b"<owl:QualifiedCardinality" not in encoded
+
+    reparsed = parse_document(encoded, format="rdfxml", options=PYTHON_OPTIONS)
+    assert reparsed == document
+    assert reparsed.document_fingerprint == document.document_fingerprint
+
+
 def test_blank_node_labels_are_document_local_and_alpha_invariant() -> None:
     first = b"Ontology(ClassAssertion(ObjectOneOf(_:left) _:left))"
     second = b"Ontology(ClassAssertion(ObjectOneOf(_:renamed) _:renamed))"
