@@ -1786,6 +1786,35 @@ def test_negative_assertion_structure_matches_python(
 
 
 @pytest.mark.parametrize(
+    "imports",
+    (
+        "<owl:imports>not-an-iri</owl:imports>",
+        "<owl:imports><rdf:Description/></owl:imports>",
+        (
+            "<owl:imports rdf:resource='urn:valid'/>"
+            "<owl:imports>not-an-iri</owl:imports>"
+        ),
+    ),
+)
+def test_non_iri_import_rejection_matches_python(
+    extension: NativeTestExtension,
+    imports: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <owl:Ontology rdf:about='urn:o'>{imports}</owl:Ontology>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_IMPORT_IRI"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_IMPORT_IRI"
+
+
+@pytest.mark.parametrize(
     "body",
     (
         (

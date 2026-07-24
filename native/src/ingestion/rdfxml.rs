@@ -2567,7 +2567,7 @@ fn map_graph(
                         imports.push(value);
                         consumed[index] = true;
                     }
-                    _ => return Err(rdf_mapping_type()),
+                    _ => return Err(rdf_import_iri()),
                 },
                 OWL_VERSION_IRI => match &triple.object {
                     Term::Iri(value) if version_iri.is_none() && ontology_iri.is_some() => {
@@ -8474,6 +8474,13 @@ fn rdf_mapping_type() -> NativeError {
     )
 }
 
+fn rdf_import_iri() -> NativeError {
+    NativeError::new(
+        "NATIVE_RDF_IMPORT_IRI",
+        "native owl:imports target must be an IRI",
+    )
+}
+
 fn rdf_mapping_cardinality(message: &'static str) -> NativeError {
     NativeError::new("NATIVE_RDF_MAPPING_CARDINALITY", message)
 }
@@ -13366,6 +13373,20 @@ mod tests {
         assert_eq!(document.axioms.len(), 1);
         assert_eq!(document.mapping.total_triples, 5);
         assert_eq!(document.mapping.consumed_triples, 5);
+
+        for import in [
+            "<owl:imports>not-an-iri</owl:imports>",
+            "<owl:imports><rdf:Description/></owl:imports>",
+            "<owl:imports rdf:resource=\"urn:valid\"/><owl:imports>not-an-iri</owl:imports>",
+        ] {
+            let invalid = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Ontology rdf:about=\"urn:o\">{import}</owl:Ontology></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(invalid.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_IMPORT_IRI",
+            );
+        }
     }
 
     #[test]
