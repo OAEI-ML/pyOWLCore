@@ -1209,6 +1209,108 @@ def test_rdf_mapping_maps_owl1_named_class_constructors(
     ) in document.axioms
 
 
+@pytest.mark.parametrize("subject", ("Thing", "Nothing"))
+@pytest.mark.parametrize(
+    ("constructor", "expected", "triple_count"),
+    (
+        (
+            '<owl:complementOf rdf:resource="urn:A"/>',
+            m.ObjectComplementOf(m.Class(m.IRI("urn:A"))),
+            1,
+        ),
+        (
+            '<owl:intersectionOf rdf:parseType="Collection">'
+            '<rdf:Description rdf:about="urn:A"/>'
+            '<rdf:Description rdf:about="urn:B"/>'
+            "</owl:intersectionOf>",
+            m.ObjectIntersectionOf(
+                m.CanonicalSet(
+                    (m.Class(m.IRI("urn:A")), m.Class(m.IRI("urn:B")))
+                )
+            ),
+            5,
+        ),
+        (
+            '<owl:unionOf rdf:parseType="Collection">'
+            '<rdf:Description rdf:about="urn:A"/>'
+            '<rdf:Description rdf:about="urn:B"/>'
+            "</owl:unionOf>",
+            m.ObjectUnionOf(
+                m.CanonicalSet(
+                    (m.Class(m.IRI("urn:A")), m.Class(m.IRI("urn:B")))
+                )
+            ),
+            5,
+        ),
+        (
+            '<owl:oneOf rdf:parseType="Collection">'
+            '<rdf:Description rdf:about="urn:i"/>'
+            "</owl:oneOf>",
+            m.ObjectOneOf(
+                m.CanonicalSet((m.NamedIndividual(m.IRI("urn:i")),))
+            ),
+            3,
+        ),
+    ),
+)
+def test_rdf_mapping_maps_owl1_builtin_named_class_constructors(
+    subject: str,
+    constructor: str,
+    expected: m.ClassExpression,
+    triple_count: int,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <rdf:Description rdf:about="{OWL_NAMESPACE}{subject}">
+    {constructor}
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == triple_count
+    assert document.rdf_mapping_report.consumed_triples == triple_count
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert tuple(document.iter_axioms(m.Declaration)) == ()
+    assert document.axioms == m.CanonicalSet(
+        (
+            m.EquivalentClasses(
+                m.CanonicalSet(
+                    (m.Class(m.IRI(OWL_NAMESPACE + subject)), expected)
+                )
+            ),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "subject",
+    (
+        OWL_NAMESPACE + "Class",
+        OWL_NAMESPACE + "real",
+        OWL_NAMESPACE + "Thingy",
+    ),
+)
+def test_rdf_mapping_rejects_near_builtin_owl1_named_class_constructor(
+    subject: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <rdf:Description rdf:about="{subject}">
+    <owl:complementOf rdf:resource="urn:A"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
 def test_rdf_mapping_rejects_anonymous_owl1_named_enumeration_member() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"

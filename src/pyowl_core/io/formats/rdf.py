@@ -1219,7 +1219,10 @@ class RDFMapper:
             )
         elif (
             isinstance(s, RDFIRI)
-            and m.EntityKind.CLASS in self.kinds.get(s.value, set())
+            and (
+                m.EntityKind.CLASS in self.kinds.get(s.value, set())
+                or s.value in _BUILTIN_CLASSES
+            )
             and p
             in {
                 OWL + "complementOf",

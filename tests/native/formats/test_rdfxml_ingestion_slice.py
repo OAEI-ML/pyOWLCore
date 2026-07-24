@@ -1238,6 +1238,87 @@ def test_owl1_named_class_constructors_match_python(
     assert observed.total_triples == observed.consumed_triples
 
 
+@pytest.mark.parametrize("subject", ("Thing", "Nothing"))
+@pytest.mark.parametrize(
+    ("constructor", "triple_count"),
+    (
+        ("<owl:complementOf rdf:resource='urn:A'/>", 1),
+        (
+            "<owl:intersectionOf rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:A'/>"
+            "<rdf:Description rdf:about='urn:B'/>"
+            "</owl:intersectionOf>",
+            5,
+        ),
+        (
+            "<owl:unionOf rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:A'/>"
+            "<rdf:Description rdf:about='urn:B'/>"
+            "</owl:unionOf>",
+            5,
+        ),
+        (
+            "<owl:oneOf rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:i'/>"
+            "</owl:oneOf>",
+            3,
+        ),
+    ),
+)
+def test_owl1_builtin_named_class_constructors_match_python(
+    extension: NativeTestExtension,
+    subject: str,
+    constructor: str,
+    triple_count: int,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <rdf:Description rdf:about='{OWL_NAMESPACE}{subject}'>
+  {constructor}
+ </rdf:Description>
+</rdf:RDF>""".encode()
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert len(observed.axioms) == 1
+    assert observed.total_triples == observed.consumed_triples == triple_count
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == 1
+    assert attestation.rdf_mapping_report_count == 1
+    assert extension.INGESTION_FEATURES == ()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
+@pytest.mark.parametrize(
+    "subject",
+    (
+        OWL_NAMESPACE + "Class",
+        OWL_NAMESPACE + "real",
+        OWL_NAMESPACE + "Thingy",
+    ),
+)
+def test_near_builtin_owl1_named_class_constructor_rejection_matches_python(
+    extension: NativeTestExtension,
+    subject: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <rdf:Description rdf:about='{subject}'>
+  <owl:complementOf rdf:resource='urn:A'/>
+ </rdf:Description>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(PyOWLCoreError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_INCOMPLETE"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_INCOMPLETE"
+
+
 def test_anonymous_owl1_named_enumeration_rejection_matches_python(
     extension: NativeTestExtension,
 ) -> None:

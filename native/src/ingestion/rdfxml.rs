@@ -5245,7 +5245,7 @@ fn map_owl1_compatibility_class_axioms<'view, 'graph>(
         let ListResource::Iri(class) = triple.subject else {
             continue;
         };
-        if !has_kind(kinds, class, "class") {
+        if !has_kind(kinds, class, "class") && !is_builtin_class(class) {
             continue;
         }
         let decoded = match triple.predicate {
@@ -7124,7 +7124,8 @@ fn pre_simple_occurrence_anchors(
                         OWL_COMPLEMENT_OF | OWL_UNION_OF | OWL_INTERSECTION_OF | OWL_ONE_OF
                     ) && matches!(
                         &triple.subject,
-                        Resource::Iri(value) if has_kind(kinds, value, "class")
+                        Resource::Iri(value)
+                            if has_kind(kinds, value, "class") || is_builtin_class(value)
                     )
                 }
                 4 => {
@@ -9770,6 +9771,75 @@ mod tests {
             document.mapping.total_triples,
             document.mapping.consumed_triples,
         );
+
+        for class in [OWL_THING, OWL_NOTHING] {
+            let constructors = vec![
+                (
+                    "<owl:complementOf rdf:resource=\"urn:A\"/>".to_owned(),
+                    Node::build(32, vec![Field::Node(class_node("urn:A"))])
+                        .expect("built-in compatibility complement"),
+                    1,
+                ),
+                (
+                    "<owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:intersectionOf>"
+                        .to_owned(),
+                    boolean_node(30, &["urn:A", "urn:B"]),
+                    5,
+                ),
+                (
+                    "<owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:unionOf>"
+                        .to_owned(),
+                    boolean_node(31, &["urn:A", "urn:B"]),
+                    5,
+                ),
+                (
+                    "<owl:oneOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:i\"/></owl:oneOf>"
+                        .to_owned(),
+                    Node::build(
+                        33,
+                        vec![Field::Set(vec![named_individual_node("urn:i")])],
+                    )
+                    .expect("built-in compatibility enumeration"),
+                    3,
+                ),
+            ];
+            for (constructor, expression, triple_count) in constructors {
+                let source = format!(
+                    "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:about=\"{class}\">{constructor}</rdf:Description></rdf:RDF>"
+                );
+                let document =
+                    mapped(source.as_bytes(), None).expect("built-in named class constructor");
+                let expected = Node::build(
+                    62,
+                    vec![
+                        Field::Set(
+                            canonical_set(vec![class_node(class), expression], 2, None)
+                                .expect("built-in compatibility equivalent classes"),
+                        ),
+                        Field::Set(Vec::new()),
+                    ],
+                )
+                .expect("built-in compatibility axiom");
+                assert_eq!(document.axioms.len(), 1);
+                assert_eq!(document.axioms[0], expected.as_bytes());
+                assert_eq!(document.mapping.total_triples, triple_count);
+                assert_eq!(
+                    document.mapping.total_triples,
+                    document.mapping.consumed_triples,
+                );
+            }
+        }
+
+        let near_builtin = format!("{OWL}Thingy");
+        for class in [OWL_CLASS, OWL_REAL, near_builtin.as_str()] {
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:about=\"{class}\"><owl:complementOf rdf:resource=\"urn:A\"/></rdf:Description></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(source.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            );
+        }
 
         let anonymous_enumeration = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:Enum\"><owl:oneOf rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"anonymous\"/></owl:oneOf></owl:Class></rdf:RDF>"
