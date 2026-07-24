@@ -508,6 +508,16 @@ mod tests {
         Ok(result)
     }
 
+    fn origin_document_key(row: &[u8]) -> String {
+        let size = usize::try_from(u32::from_le_bytes(
+            row[32..36].try_into().expect("origin key length"),
+        ))
+        .expect("origin key size");
+        std::str::from_utf8(&row[36..36 + size])
+            .expect("origin key")
+            .to_owned()
+    }
+
     #[test]
     fn source_digest_and_document_iri_wrap_the_parser_without_changing_mapping() {
         let source = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -574,6 +584,18 @@ mod tests {
         )
         .expect("prepared RDF/XML publication");
         assert_eq!(prepared.origin_rows.as_ref().map(Vec::len), Some(1));
+        assert_eq!(prepared.raw_origin_rows.as_ref().map(Vec::len), Some(1));
+        let raw_rows = prepared.raw_origin_rows.as_ref().expect("raw origins");
+        let effective_rows = prepared.origin_rows.as_ref().expect("effective origins");
+        let document_fingerprint = outcome
+            .metadata
+            .document_fingerprint
+            .digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(origin_document_key(&raw_rows[0]), document_fingerprint);
+        assert_eq!(origin_document_key(&effective_rows[0]), "document-key");
         assert_eq!(
             prepared
                 .source_map
@@ -814,15 +836,6 @@ mod tests {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        let origin_document_key = |row: &[u8]| {
-            let size = usize::try_from(u32::from_le_bytes(
-                row[32..36].try_into().expect("origin key length"),
-            ))
-            .expect("origin key size");
-            std::str::from_utf8(&row[36..36 + size])
-                .expect("origin key")
-                .to_owned()
-        };
         assert_eq!(origin_document_key(&raw_rows[0]), document_fingerprint);
         assert!(effective_rows
             .iter()

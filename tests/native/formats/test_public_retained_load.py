@@ -85,6 +85,7 @@ def test_public_forced_native_load_publishes_real_typed_owner_without_scalar_fal
     assert selected.structural_fingerprint == reference.structural_fingerprint
     assert selected.logical_fingerprint == reference.logical_fingerprint
     assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.root.origin_index == reference.root.origin_index
     assert selected.origin_index == reference.origin_index
 
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
@@ -92,7 +93,7 @@ def test_public_forced_native_load_publishes_real_typed_owner_without_scalar_fal
     assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
     before = cast(Any, raw_owner)._publication_counters_v2()
     assert before.parser_bytes == len(SOURCE)
-    assert before.retained_origin_rows == 2 * sum(
+    assert before.retained_origin_rows == 3 * sum(
         len(rows) for rows in reference.origin_index.entries.values()
     )
     assert before.retained_origin_bytes > 0

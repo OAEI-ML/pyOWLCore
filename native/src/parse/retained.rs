@@ -1103,10 +1103,13 @@ pub(crate) fn prepare_publication(
     };
     let (origin_rows, raw_origin_rows, origin_bytes_retained) = if collect_provenance {
         let effective = encode_origin_rows(metadata, document_key, false, limits, &cancellation)?;
-        let raw = metadata
-            .scoped_roots
-            .then(|| encode_origin_rows(metadata, document_key, true, limits, &cancellation))
-            .transpose()?;
+        let raw = Some(encode_origin_rows(
+            metadata,
+            document_key,
+            true,
+            limits,
+            &cancellation,
+        )?);
         let bytes = effective
             .iter()
             .chain(raw.as_deref().unwrap_or_default())

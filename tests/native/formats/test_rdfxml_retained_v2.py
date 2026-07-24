@@ -1665,11 +1665,12 @@ def test_private_provenance_rows_match_python_and_remain_native_until_access() -
     expected_origin_rows = sum(
         len(values) for values in reference.origin_index.entries.values()
     )
-    assert before.retained_origin_rows == 2 * expected_origin_rows
+    assert before.retained_origin_rows == 3 * expected_origin_rows
     assert before.retained_origin_bytes > 0
     assert before.origin_rows_emitted == 0
     assert ingestion.provenance_occurrence_records_materialized == 0
     assert ingestion.canonical_bytes_copied_to_python == 0
+    assert selected.root.origin_index == reference.root.origin_index
     assert selected.origin_index == reference.origin_index
     after = raw_owner._publication_counters_v2()
     assert after.origin_rows_emitted >= expected_origin_rows
@@ -1825,6 +1826,51 @@ def test_private_provenance_preserves_every_constructor_origin_layers() -> None:
     assert {occurrence.document_key for occurrence in effective_origins} == {record.document_key}
     assert len(raw_origins) == 50
     assert len(effective_origins) == 51
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_private_provenance_preserves_identity_document_origin_layers() -> None:
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            collect_provenance=True,
+        )
+
+    reference = load_snapshot(
+        NO_IMPORT_SOURCE,
+        document_iri=DOCUMENT_IRI,
+        options=options(BackendPreference.PYTHON),
+    )
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            NO_IMPORT_SOURCE,
+            options=options(BackendPreference.NATIVE),
+            document_iri=DOCUMENT_IRI,
+        ),
+    )
+
+    assert selected.root.origin_index == reference.root.origin_index
+    assert selected.origin_index == reference.origin_index
+    assert reference.root.origin_index is not None
+    raw_origins = tuple(
+        occurrence
+        for occurrences in reference.root.origin_index.entries.values()
+        for occurrence in occurrences
+    )
+    effective_origins = tuple(
+        occurrence
+        for occurrences in reference.origin_index.entries.values()
+        for occurrence in occurrences
+    )
+    record = reference.import_manifest.documents[0]
+    assert {occurrence.document_key for occurrence in raw_origins} == {
+        reference.root.document_fingerprint.hex
+    }
+    assert {occurrence.document_key for occurrence in effective_origins} == {record.document_key}
+    assert reference.root.document_fingerprint.hex != record.document_key
     assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
