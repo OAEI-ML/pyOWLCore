@@ -1570,6 +1570,98 @@ def test_rdf_mapping_rejects_empty_attached_datatype_restriction() -> None:
 @pytest.mark.parametrize(
     "body",
     (
+        """
+  <owl:Class rdf:about="urn:A">
+    <rdfs:subClassOf>
+      <owl:Class>
+        <owl:complementOf rdf:resource="urn:B"/>
+        <owl:complementOf rdf:resource="urn:C"/>
+      </owl:Class>
+    </rdfs:subClassOf>
+  </owl:Class>
+""",
+        """
+  <owl:Class rdf:about="urn:A">
+    <rdfs:subClassOf>
+      <owl:Restriction>
+        <owl:onProperty rdf:resource="urn:p"/>
+        <owl:onProperty rdf:resource="urn:q"/>
+        <owl:someValuesFrom rdf:resource="urn:B"/>
+      </owl:Restriction>
+    </rdfs:subClassOf>
+  </owl:Class>
+""",
+        """
+  <owl:Class rdf:about="urn:A">
+    <rdfs:subClassOf>
+      <owl:Restriction>
+        <owl:onProperty rdf:resource="urn:p"/>
+        <owl:someValuesFrom rdf:resource="urn:B"/>
+        <owl:someValuesFrom rdf:resource="urn:C"/>
+      </owl:Restriction>
+    </rdfs:subClassOf>
+  </owl:Class>
+""",
+        f"""
+  <owl:DatatypeProperty rdf:about="urn:p">
+    <rdfs:range>
+      <rdfs:Datatype>
+        <owl:onDatatype rdf:resource="{XSD_NAMESPACE}integer"/>
+        <owl:onDatatype rdf:resource="{XSD_NAMESPACE}decimal"/>
+        <owl:withRestrictions rdf:parseType="Collection">
+          <rdf:Description><xsd:minInclusive>0</xsd:minInclusive></rdf:Description>
+        </owl:withRestrictions>
+      </rdfs:Datatype>
+    </rdfs:range>
+  </owl:DatatypeProperty>
+""",
+        """
+  <owl:Class rdf:about="urn:A">
+    <rdfs:subClassOf>
+      <owl:Restriction>
+        <owl:onProperty>
+          <rdf:Description>
+            <owl:inverseOf rdf:resource="urn:p"/>
+            <owl:inverseOf rdf:resource="urn:q"/>
+          </rdf:Description>
+        </owl:onProperty>
+        <owl:someValuesFrom rdf:resource="urn:B"/>
+      </owl:Restriction>
+    </rdfs:subClassOf>
+  </owl:Class>
+""",
+        """
+  <owl:Class rdf:about="urn:A">
+    <rdfs:subClassOf>
+      <owl:Restriction>
+        <owl:onProperty><rdf:Description/></owl:onProperty>
+        <owl:someValuesFrom rdf:resource="urn:B"/>
+      </owl:Restriction>
+    </rdfs:subClassOf>
+  </owl:Class>
+""",
+    ),
+)
+def test_rdf_mapping_classifies_expression_edge_cardinality(
+    body: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}"
+         xmlns:xsd="{XSD_NAMESPACE}">
+  {body}
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_CARDINALITY"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
         (
             '<owl:Class rdf:about="urn:C">'
             '<rdf:type rdf:resource="http://www.w3.org/2000/01/rdf-schema#Class"/>'

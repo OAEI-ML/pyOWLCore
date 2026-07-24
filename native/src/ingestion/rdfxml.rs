@@ -11248,7 +11248,7 @@ mod tests {
         );
         assert_eq!(
             mapped(malformed.as_bytes(), None).unwrap_err().code,
-            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            "NATIVE_RDF_MAPPING_CARDINALITY",
         );
         let unowned_expression = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><owl:inverseOf rdf:resource=\"urn:q\"/></rdf:Description></rdf:RDF>"

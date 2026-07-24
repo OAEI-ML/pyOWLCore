@@ -1226,7 +1226,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 let inverse = self
                     .unique_edge(value, OWL_INVERSE_OF, session)?
                     .ok_or_else(|| {
-                        unsupported("native RDF inverse property has no named target")
+                        mapping_cardinality("native RDF inverse property has no target")
                     })?;
                 let target = match self.triples[inverse].object {
                     RdfTerm::Iri(value) => value,
@@ -1531,7 +1531,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 && triple.predicate == predicate
                 && selected.replace(index).is_some()
             {
-                return Err(unsupported(
+                return Err(mapping_cardinality(
                     "native RDF class constructor has multiple targets",
                 ));
             }
@@ -1738,6 +1738,10 @@ fn unsupported(message: &'static str) -> NativeError {
     NativeError::new("NATIVE_RDF_MAPPING_UNSUPPORTED", message)
 }
 
+fn mapping_cardinality(message: &'static str) -> NativeError {
+    NativeError::new("NATIVE_RDF_MAPPING_CARDINALITY", message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::rdf_lists::{RDF_FIRST, RDF_NIL, RDF_REST};
@@ -1890,6 +1894,31 @@ mod tests {
         let expected_one_of = Node::build(33, vec![Field::Set(individuals)]).unwrap();
         assert_eq!(one_of.node.as_bytes(), expected_one_of.as_bytes());
         assert_eq!(one_of.consumed, [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn duplicate_constructor_targets_report_mapping_cardinality() {
+        let graph = [
+            edge("e", OWL_COMPLEMENT_OF, iri_term("urn:a")),
+            edge("e", OWL_COMPLEMENT_OF, iri_term("urn:b")),
+        ];
+        assert_eq!(
+            decode(&graph, blank_term("e")).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+    }
+
+    #[test]
+    fn missing_inverse_target_reports_mapping_cardinality() {
+        let graph = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, blank_term("inverse")),
+            edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:Class")),
+        ];
+        assert_eq!(
+            decode(&graph, blank_term("e")).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
     }
 
     #[test]
@@ -2736,7 +2765,6 @@ mod tests {
             (complement_literal.as_slice(), blank_term("e")),
             (ambiguous_individual.as_slice(), blank_term("e")),
             (conflicting_quantifiers.as_slice(), blank_term("e")),
-            (blank_property.as_slice(), blank_term("e")),
             (malformed_inverse.as_slice(), blank_term("e")),
             (conflicting_operators.as_slice(), blank_term("e")),
             (literal_has_value.as_slice(), blank_term("e")),
@@ -2754,5 +2782,9 @@ mod tests {
                 "NATIVE_RDF_MAPPING_UNSUPPORTED",
             );
         }
+        assert_eq!(
+            decode(&blank_property, blank_term("e")).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
     }
 }
