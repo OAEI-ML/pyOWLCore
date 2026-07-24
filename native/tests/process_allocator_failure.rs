@@ -193,6 +193,27 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
             .expect("first non-failing retained signature boundary must build");
     assert_eq!(boundary_signature, baseline_signature);
 
+    let (baseline_axiom_type, axiom_type_allocations) =
+        count_allocations(|| component.build_axiom_type_index());
+    let baseline_axiom_type =
+        baseline_axiom_type.expect("retained axiom-type index baseline must build");
+    assert_eq!(baseline_axiom_type[..3], [1, 1, 1]);
+    assert!(baseline_axiom_type[3] > 0);
+    assert_eq!(baseline_axiom_type[4], 0);
+    assert!(axiom_type_allocations > 1);
+
+    for fail_after in 0..axiom_type_allocations {
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+            component.build_axiom_type_index()
+        }));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let boundary_axiom_type = fail_allocation(axiom_type_allocations, || {
+        component.build_axiom_type_index()
+    })
+    .expect("first non-failing retained axiom-type boundary must build");
+    assert_eq!(boundary_axiom_type, baseline_axiom_type);
+
     let (baseline_prepared, preparation_allocations) =
         count_allocations(|| component.prepare_encoded_columns());
     let baseline_prepared = baseline_prepared.expect("encoded columns must prepare");

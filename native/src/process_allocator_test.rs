@@ -4,7 +4,7 @@
 use crate::cancel::{Cancellation, Guard};
 use crate::error::NativeError;
 use crate::hash::crc32c;
-use crate::index::build_retained_signature_index_v1;
+use crate::index::{build_retained_axiom_type_index_v1, build_retained_signature_index_v1};
 use crate::limits::Limits;
 use crate::model::{
     prepare_encoded_structural_columns_from_tables_v1, Category, ComponentFieldRef, ComponentId,
@@ -130,6 +130,30 @@ impl ComponentEncodingFixture {
             counters.referenced_links,
             counters.nonannotation_links,
             counters.declaration_links,
+            counters.complete_root_encode_calls,
+        ])
+    }
+
+    /// Build and consume the production retained axiom-type index while
+    /// allocation injection is armed.
+    ///
+    /// All retained layout vectors are dropped before the allocation-free
+    /// counter summary escapes.
+    pub fn build_axiom_type_index(&self) -> Result<[u64; 5], Failure> {
+        let index = build_retained_axiom_type_index_v1(
+            self.frozen.arena(),
+            &self.identifiers,
+            &Limits::default(),
+            self.cancellation.clone(),
+            None,
+            0,
+        )?;
+        let counters = index.counters();
+        Ok([
+            counters.axiom_rows,
+            counters.constructor_groups,
+            counters.category_groups,
+            counters.retained_buffer_bytes,
             counters.complete_root_encode_calls,
         ])
     }
