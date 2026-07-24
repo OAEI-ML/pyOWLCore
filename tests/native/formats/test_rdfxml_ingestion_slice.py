@@ -1729,6 +1729,48 @@ def test_expression_edge_cardinality_matches_python(
     "body",
     (
         """
+ <owl:Class rdf:about='urn:A'>
+  <rdfs:subClassOf rdf:nodeID='restriction'/>
+ </owl:Class>
+ <owl:Restriction rdf:nodeID='restriction'>
+  <owl:onProperty rdf:nodeID='restriction'/>
+  <owl:someValuesFrom rdf:resource='urn:B'/>
+ </owl:Restriction>
+""",
+        f"""
+ <owl:ObjectProperty rdf:about='urn:p'>
+  <owl:propertyChainAxiom rdf:nodeID='list'/>
+ </owl:ObjectProperty>
+ <rdf:Description rdf:nodeID='list'>
+  <rdf:first rdf:nodeID='list'/>
+  <rdf:rest rdf:resource='{RDF_NAMESPACE}nil'/>
+ </rdf:Description>
+""",
+    ),
+)
+def test_self_referential_property_term_cardinality_matches_python(
+    extension: NativeTestExtension,
+    body: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+{body}
+</rdf:RDF>""".encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_CARDINALITY"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_CARDINALITY"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        """
   <owl:sourceIndividual rdf:resource='urn:s'/>
   <owl:assertionProperty rdf:resource='urn:p'/>
 """,

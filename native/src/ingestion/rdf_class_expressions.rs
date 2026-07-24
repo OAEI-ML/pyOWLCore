@@ -46,7 +46,6 @@ const ROLE_EXPRESSION: u8 = 1;
 const ROLE_LIST: u8 = 2;
 const ROLE_INDIVIDUAL: u8 = 4;
 const ROLE_FACET: u8 = 8;
-const ROLE_PROPERTY: u8 = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedClassExpression {
@@ -1222,7 +1221,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         match value {
             RdfTerm::Iri(value) => named_entity("object_property", value, session),
             RdfTerm::Blank(value) => {
-                self.claim_blank(value, ROLE_PROPERTY, session)?;
+                self.claim_blank(value, ROLE_EXPRESSION, session)?;
                 let inverse = self
                     .unique_edge(value, OWL_INVERSE_OF, session)?
                     .ok_or_else(|| {
@@ -1506,7 +1505,6 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             let roles = record.roles | role;
             if (roles & ROLE_INDIVIDUAL != 0 && roles != ROLE_INDIVIDUAL)
                 || (roles & ROLE_FACET != 0 && roles != ROLE_FACET)
-                || (roles & ROLE_PROPERTY != 0 && roles != ROLE_PROPERTY)
             {
                 return Err(unsupported("native RDF blank node has ambiguous roles"));
             }
@@ -2784,6 +2782,39 @@ mod tests {
         }
         assert_eq!(
             decode(&blank_property, blank_term("e")).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+    }
+
+    #[test]
+    fn self_referential_property_terms_report_missing_inverse_cardinality() {
+        let selector = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, blank_term("e")),
+            edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:A")),
+        ];
+        assert_eq!(
+            decode(&selector, blank_term("e")).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+
+        let list = [
+            edge("h", RDF_FIRST, blank_term("h")),
+            edge("h", RDF_REST, iri_term(RDF_NIL)),
+        ];
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut decoder = RdfClassExpressionDecoder::new(&list);
+        assert_eq!(
+            decoder
+                .decode_object_property_collection(blank_term("h"), &mut session)
+                .unwrap_err()
+                .code,
             "NATIVE_RDF_MAPPING_CARDINALITY",
         );
     }

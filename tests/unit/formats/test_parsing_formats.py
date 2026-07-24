@@ -1663,6 +1663,45 @@ def test_rdf_mapping_classifies_expression_edge_cardinality(
     "body",
     (
         """
+  <owl:Class rdf:about="urn:A">
+    <rdfs:subClassOf rdf:nodeID="restriction"/>
+  </owl:Class>
+  <owl:Restriction rdf:nodeID="restriction">
+    <owl:onProperty rdf:nodeID="restriction"/>
+    <owl:someValuesFrom rdf:resource="urn:B"/>
+  </owl:Restriction>
+""",
+        f"""
+  <owl:ObjectProperty rdf:about="urn:p">
+    <owl:propertyChainAxiom rdf:nodeID="list"/>
+  </owl:ObjectProperty>
+  <rdf:Description rdf:nodeID="list">
+    <rdf:first rdf:nodeID="list"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+    ),
+)
+def test_rdf_mapping_classifies_self_referential_property_terms(
+    body: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+{body}
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_CARDINALITY"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        """
     <owl:sourceIndividual rdf:resource="urn:s"/>
     <owl:assertionProperty rdf:resource="urn:p"/>
 """,
