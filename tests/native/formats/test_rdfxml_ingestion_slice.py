@@ -5052,6 +5052,88 @@ def test_malformed_swrl_rule_rejection_matches_python(
     assert native_error.value.args[0] == native_code
 
 
+@pytest.mark.parametrize(
+    "atom",
+    (
+        (
+            "<swrl:ClassAtom>"
+            "<swrl:classPredicate>literal</swrl:classPredicate>"
+            "<swrl:argument1 rdf:resource='urn:i'/>"
+            "</swrl:ClassAtom>"
+        ),
+        (
+            "<swrl:ClassAtom>"
+            "<swrl:classPredicate rdf:resource='urn:C'/>"
+            "<swrl:argument1>literal</swrl:argument1>"
+            "</swrl:ClassAtom>"
+        ),
+        (
+            "<swrl:DataRangeAtom>"
+            "<swrl:dataRange>literal</swrl:dataRange>"
+            "<swrl:argument1>value</swrl:argument1>"
+            "</swrl:DataRangeAtom>"
+        ),
+        (
+            "<swrl:IndividualPropertyAtom>"
+            "<swrl:propertyPredicate>literal</swrl:propertyPredicate>"
+            "<swrl:argument1 rdf:resource='urn:i'/>"
+            "<swrl:argument2 rdf:resource='urn:j'/>"
+            "</swrl:IndividualPropertyAtom>"
+        ),
+        (
+            "<swrl:IndividualPropertyAtom>"
+            "<swrl:propertyPredicate rdf:resource='urn:p'/>"
+            "<swrl:argument1>literal</swrl:argument1>"
+            "<swrl:argument2 rdf:resource='urn:j'/>"
+            "</swrl:IndividualPropertyAtom>"
+        ),
+        (
+            "<swrl:DatavaluedPropertyAtom>"
+            "<swrl:propertyPredicate rdf:resource='urn:p'/>"
+            "<swrl:argument1>literal</swrl:argument1>"
+            "<swrl:argument2>value</swrl:argument2>"
+            "</swrl:DatavaluedPropertyAtom>"
+        ),
+        (
+            "<swrl:SameIndividualAtom>"
+            "<swrl:argument1>literal</swrl:argument1>"
+            "<swrl:argument2 rdf:resource='urn:j'/>"
+            "</swrl:SameIndividualAtom>"
+        ),
+        (
+            "<swrl:DifferentIndividualsAtom>"
+            "<swrl:argument1 rdf:resource='urn:i'/>"
+            "<swrl:argument2>literal</swrl:argument2>"
+            "</swrl:DifferentIndividualsAtom>"
+        ),
+    ),
+)
+def test_swrl_resource_field_type_rejection_matches_python(
+    extension: NativeTestExtension,
+    atom: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:swrl='http://www.w3.org/2003/11/swrl#'>
+ <swrl:Imp>
+  <swrl:body rdf:parseType='Collection'>{atom}</swrl:body>
+  <swrl:head rdf:resource='{RDF_NAMESPACE}nil'/>
+ </swrl:Imp>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
+        parse_rdfxml(
+            source,
+            limits=ParseLimits(),
+            document_iri=None,
+            allow_swrl=True,
+        )
+    assert python_error.value.code == "RDF_MAPPING_TYPE"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source, allow_swrl=True)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_TYPE"
+
+
 def test_canonical_swrl_atom_limit_matches_python(
     extension: NativeTestExtension,
 ) -> None:

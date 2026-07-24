@@ -4321,6 +4321,9 @@ fn decode_swrl_atom<'view, 'graph>(
                 "native SWRL class atom has more than one class predicate",
                 session,
             )?;
+            if matches!(predicate, ListTerm::Literal(_)) {
+                return Err(rdf_mapping_type());
+            }
             let (_argument_index, argument) = required_metadata_edge(
                 triples,
                 subject,
@@ -4364,6 +4367,9 @@ fn decode_swrl_atom<'view, 'graph>(
                 "native SWRL data-range atom has more than one predicate",
                 session,
             )?;
+            if matches!(predicate, ListTerm::Literal(_)) {
+                return Err(rdf_mapping_type());
+            }
             let (argument_index, argument) = required_metadata_edge(
                 triples,
                 subject,
@@ -4413,6 +4419,9 @@ fn decode_swrl_atom<'view, 'graph>(
                 "native SWRL object-property atom has more than one predicate",
                 session,
             )?;
+            if matches!(predicate, ListTerm::Literal(_)) {
+                return Err(rdf_mapping_type());
+            }
             let (_, first) = required_metadata_edge(
                 triples,
                 subject,
@@ -4633,6 +4642,9 @@ fn decode_swrl_individual_argument<'view, 'graph>(
 ) -> NativeResult<Node> {
     if let Some(variable) = decode_swrl_variable(value, triples, consumed, session)? {
         return Ok(variable);
+    }
+    if matches!(value, ListTerm::Literal(_)) {
+        return Err(rdf_mapping_type());
     }
     expressions.decode_individual(value, session)
 }
@@ -14030,6 +14042,24 @@ mod tests {
             mapped(blank_variable.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_TYPE",
         );
+        for atom in [
+            "<swrl:ClassAtom><swrl:classPredicate>literal</swrl:classPredicate><swrl:argument1 rdf:resource=\"urn:i\"/></swrl:ClassAtom>",
+            "<swrl:ClassAtom><swrl:classPredicate rdf:resource=\"urn:C\"/><swrl:argument1>literal</swrl:argument1></swrl:ClassAtom>",
+            "<swrl:DataRangeAtom><swrl:dataRange>literal</swrl:dataRange><swrl:argument1>value</swrl:argument1></swrl:DataRangeAtom>",
+            "<swrl:IndividualPropertyAtom><swrl:propertyPredicate>literal</swrl:propertyPredicate><swrl:argument1 rdf:resource=\"urn:i\"/><swrl:argument2 rdf:resource=\"urn:j\"/></swrl:IndividualPropertyAtom>",
+            "<swrl:IndividualPropertyAtom><swrl:propertyPredicate rdf:resource=\"urn:p\"/><swrl:argument1>literal</swrl:argument1><swrl:argument2 rdf:resource=\"urn:j\"/></swrl:IndividualPropertyAtom>",
+            "<swrl:DatavaluedPropertyAtom><swrl:propertyPredicate rdf:resource=\"urn:p\"/><swrl:argument1>literal</swrl:argument1><swrl:argument2>value</swrl:argument2></swrl:DatavaluedPropertyAtom>",
+            "<swrl:SameIndividualAtom><swrl:argument1>literal</swrl:argument1><swrl:argument2 rdf:resource=\"urn:j\"/></swrl:SameIndividualAtom>",
+            "<swrl:DifferentIndividualsAtom><swrl:argument1 rdf:resource=\"urn:i\"/><swrl:argument2>literal</swrl:argument2></swrl:DifferentIndividualsAtom>",
+        ] {
+            let wrong_type = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:swrl=\"{SWRL}\"><swrl:Imp><swrl:body rdf:parseType=\"Collection\">{atom}</swrl:body><swrl:head rdf:resource=\"{RDF_NIL}\"/></swrl:Imp></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(wrong_type.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_TYPE",
+            );
+        }
     }
 
     #[test]
