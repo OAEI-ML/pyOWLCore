@@ -13,6 +13,10 @@ use crate::model::{
     EncodedRootKindV1, EncodedRootTableV1, FrozenComponentBuild, NativeComponentBuilder,
     NativeComponentDigestIndex, PreparedEncodedStructuralColumnsV1,
 };
+use crate::publication::{
+    TypedFacadeCollectionV2, TypedFacadeCoordinateV2, TypedFacadePageRequestV2,
+    TypedFacadeStorageV2, TypedFacadeTableV2,
+};
 use crate::wire::Validation;
 
 const WIRE_HEADER_BYTES: usize = 96;
@@ -179,6 +183,41 @@ impl ComponentEncodingFixture {
         })
     }
 
+    /// Prepare a production typed V2 facade and initialize its infallible
+    /// platform mutex control block before allocation injection is armed,
+    /// retaining only identifiers into the shared component arena.
+    pub fn prepare_typed_facade_reads(&self) -> Result<TypedFacadeReadFixture, Failure> {
+        let coordinate = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+        let mut roots = Vec::new();
+        roots
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator typed root allocation failed"))?;
+        roots.push(self.identifiers[0]);
+        let mut tables = Vec::new();
+        tables
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator typed table allocation failed"))?;
+        tables.push(TypedFacadeTableV2::new(coordinate, roots));
+        let storage = TypedFacadeStorageV2::freeze(
+            self.frozen.arena().clone(),
+            tables,
+            Vec::new(),
+            1,
+            Limits::default(),
+            self.cancellation.clone(),
+            None,
+        )?;
+        // The standard-library mutex may initialize platform-owned state on
+        // its first lock. That infallible control allocation is deliberately
+        // prepared before arming, as with the cancellation control block.
+        storage.counters()?;
+        Ok(TypedFacadeReadFixture {
+            storage,
+            coordinate,
+            cancellation: self.cancellation.clone(),
+        })
+    }
+
     /// Prepare retained encoded-column metadata before allocation injection.
     ///
     /// The returned one-shot fixture isolates the production publication
@@ -235,6 +274,63 @@ impl AxiomTypePageFixture {
             row_bytes,
             u64::from(crc32c(row)),
             self.index.complete_root_encode_calls(),
+        ])
+    }
+}
+
+/// One typed V2 facade whose page and contains temporaries have not yet been
+/// allocated.
+pub struct TypedFacadeReadFixture {
+    storage: TypedFacadeStorageV2,
+    coordinate: TypedFacadeCoordinateV2,
+    cancellation: Cancellation,
+}
+
+impl TypedFacadeReadFixture {
+    /// Allocate and encode one bounded page, returning an allocation-free
+    /// correctness and counter summary.
+    pub fn page(&self) -> Result<[u64; 10], Failure> {
+        let page = self.storage.page(
+            TypedFacadePageRequestV2::new(self.coordinate, false, 0, 64, 8 * 1024 * 1024),
+            self.cancellation.clone(),
+            None,
+        )?;
+        let row = page.rows.first().ok_or_else(|| {
+            NativeError::protocol("native allocator typed page fixture emitted no row")
+        })?;
+        let row_count = u64::try_from(page.rows.len())
+            .map_err(|_| NativeError::limit("native allocator typed page rows exceed u64"))?;
+        let counters = self.storage.counters()?;
+        Ok([
+            page.total_count,
+            page.next_cursor.unwrap_or(u64::MAX),
+            row_count,
+            page.page_bytes,
+            u64::from(crc32c(row)),
+            counters.page_requests,
+            counters.pages_returned,
+            counters.rows_emitted,
+            counters.payload_bytes_copied,
+            counters.canonical_encode_requests,
+        ])
+    }
+
+    /// Probe exact axiom membership through the retained digest index and
+    /// canonical encoder, returning an allocation-free counter summary.
+    pub fn contains(&self, canonical: &[u8]) -> Result<[u64; 4], Failure> {
+        let found = self.storage.contains_axiom(
+            self.coordinate,
+            false,
+            canonical,
+            self.cancellation.clone(),
+            None,
+        )?;
+        let counters = self.storage.counters()?;
+        Ok([
+            u64::from(found),
+            counters.contains_requests,
+            counters.contains_hits,
+            counters.canonical_encode_requests,
         ])
     }
 }
