@@ -304,6 +304,14 @@ impl NativeSnapshotHandle {
             .attestation_to_python_with_allocations(py, allocations)
     }
 
+    pub(crate) fn attestation_v1_to_python_with_allocations(
+        &self,
+        py: Python<'_>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<Py<PyAny>> {
+        attestation_v1_to_python_with_allocations(py, self.require_v1()?.attestation(), allocations)
+    }
+
     pub(crate) fn page_to_python_with_allocations(
         &self,
         py: Python<'_>,
@@ -350,7 +358,8 @@ impl NativeSnapshotHandle {
 #[pymethods]
 impl NativeSnapshotHandle {
     fn _publication_attestation_v1(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        attestation_to_python(py, self.require_v1()?.attestation())
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.attestation_v1_to_python_with_allocations(py, &mut allocations)
     }
 
     fn _publication_closed_v1(&self) -> PyResult<bool> {
@@ -495,67 +504,115 @@ fn closed_snapshot_error(py: Python<'_>, message: &str) -> PyResult<PyErr> {
     Ok(PyErr::from_type(exception, message.to_owned()))
 }
 
-fn attestation_to_python(
+fn attestation_v1_to_python_with_allocations(
     py: Python<'_>,
     value: &NativeSnapshotAttestationV1,
+    allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<Py<PyAny>> {
+    allocations.checkpoint()?;
     let handoff = py.import("pyowl_core.backends.native_handoff")?;
-    let record = handoff.getattr("NativeSnapshotAttestationV1")?;
+    allocations.checkpoint()?;
     let kwargs = PyDict::new(py);
+    allocations.checkpoint()?;
     kwargs.set_item("version", value.version)?;
-    set_digest(&kwargs, "ledger_sha256", &value.ledger_sha256)?;
-    set_digest(&kwargs, "root_table_sha256", &value.root_table_sha256)?;
-    set_digest(
+    set_digest_with_allocations(&kwargs, "ledger_sha256", &value.ledger_sha256, allocations)?;
+    set_digest_with_allocations(
+        &kwargs,
+        "root_table_sha256",
+        &value.root_table_sha256,
+        allocations,
+    )?;
+    set_digest_with_allocations(
         &kwargs,
         "fingerprint_inputs_sha256",
         &value.fingerprint_inputs_sha256,
+        allocations,
     )?;
-    set_digest(
+    set_digest_with_allocations(
         &kwargs,
         "source_manifest_sha256",
         &value.source_manifest_sha256,
+        allocations,
     )?;
-    set_digest(
+    set_digest_with_allocations(
         &kwargs,
         "provenance_manifest_sha256",
         &value.provenance_manifest_sha256,
+        allocations,
     )?;
-    set_digest(
+    set_digest_with_allocations(
         &kwargs,
         "diagnostics_manifest_sha256",
         &value.diagnostics_manifest_sha256,
+        allocations,
     )?;
-    set_digest(&kwargs, "load_options_sha256", &value.load_options_sha256)?;
-    set_digest(&kwargs, "report_sha256", &value.report_sha256)?;
+    set_digest_with_allocations(
+        &kwargs,
+        "load_options_sha256",
+        &value.load_options_sha256,
+        allocations,
+    )?;
+    set_digest_with_allocations(&kwargs, "report_sha256", &value.report_sha256, allocations)?;
+    allocations.checkpoint()?;
     kwargs.set_item("document_count", value.document_count)?;
+    allocations.checkpoint()?;
     kwargs.set_item("import_edge_count", value.import_edge_count)?;
+    allocations.checkpoint()?;
     kwargs.set_item("diagnostic_count", value.diagnostic_count)?;
+    allocations.checkpoint()?;
     kwargs.set_item("ontology_annotation_count", value.ontology_annotation_count)?;
+    allocations.checkpoint()?;
     kwargs.set_item("stored_axiom_count", value.stored_axiom_count)?;
+    allocations.checkpoint()?;
     kwargs.set_item("effective_axiom_count", value.effective_axiom_count)?;
+    allocations.checkpoint()?;
     kwargs.set_item("extension_count", value.extension_count)?;
+    allocations.checkpoint()?;
     kwargs.set_item("total_source_bytes", value.total_source_bytes)?;
+    allocations.checkpoint()?;
     kwargs.set_item("source_map_entry_count", value.source_map_entry_count)?;
+    allocations.checkpoint()?;
     kwargs.set_item("origin_entry_count", value.origin_entry_count)?;
+    allocations.checkpoint()?;
     kwargs.set_item("rdf_mapping_report_count", value.rdf_mapping_report_count)?;
+    allocations.checkpoint()?;
     kwargs.set_item("capability_bits", value.capability_bits)?;
-    kwargs.set_item(
-        "api_version",
-        PyTuple::new(py, [value.api_version.0, value.api_version.1])?,
-    )?;
+    allocations.checkpoint()?;
+    let api_version = PyTuple::new(py, [value.api_version.0, value.api_version.1])?;
+    allocations.checkpoint()?;
+    kwargs.set_item("api_version", api_version)?;
+    allocations.checkpoint()?;
     kwargs.set_item("model_schema", value.model_schema)?;
+    allocations.checkpoint()?;
     kwargs.set_item("backend", &*value.backend)?;
+    allocations.checkpoint()?;
     kwargs.set_item("root_document_key", &*value.root_document_key)?;
+    allocations.checkpoint()?;
     kwargs.set_item("owl2_dl_validated", value.owl2_dl_validated)?;
+    allocations.checkpoint()?;
     kwargs.set_item("owl2_dl_conforms", value.owl2_dl_conforms)?;
     match &value.owl2_dl_report_sha256 {
-        Some(digest) => set_digest(&kwargs, "owl2_dl_report_sha256", digest)?,
-        None => kwargs.set_item("owl2_dl_report_sha256", py.None())?,
+        Some(digest) => {
+            set_digest_with_allocations(&kwargs, "owl2_dl_report_sha256", digest, allocations)?
+        }
+        None => {
+            allocations.checkpoint()?;
+            kwargs.set_item("owl2_dl_report_sha256", py.None())?;
+        }
     }
+    allocations.checkpoint()?;
+    let record = handoff.getattr("NativeSnapshotAttestationV1")?;
+    allocations.checkpoint()?;
     Ok(record.call((), Some(&kwargs))?.unbind())
 }
 
-fn set_digest(mapping: &Bound<'_, PyDict>, name: &str, digest: &Digest) -> PyResult<()> {
+fn set_digest_with_allocations(
+    mapping: &Bound<'_, PyDict>,
+    name: &str,
+    digest: &Digest,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<()> {
+    allocations.checkpoint()?;
     mapping.set_item(name, PyBytes::new(mapping.py(), digest))
 }
 

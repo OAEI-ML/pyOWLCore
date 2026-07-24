@@ -774,7 +774,11 @@ fn _retained_snapshot_attestation_bridge_allocation_probe_v1<'py>(
         fail_after,
         "injected native retained-attestation bridge allocation failure",
     );
-    let attestation = handle.attestation_to_python_with_allocations(py, &mut allocations)?;
+    let attestation = if handle.storage().is_some() {
+        handle.attestation_v1_to_python_with_allocations(py, &mut allocations)?
+    } else {
+        handle.attestation_to_python_with_allocations(py, &mut allocations)?
+    };
     Ok((attestation, allocations.count()))
 }
 

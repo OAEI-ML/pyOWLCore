@@ -684,6 +684,40 @@ def test_retained_attestation_bridge_failures_publish_no_partial_result(
     retained_view_layout_bridge_extension: NativeTestExtension,
 ) -> None:
     extension = cast(Any, retained_view_layout_bridge_extension)
+    v1_snapshot = extension._publication_fixture_v1()
+    expected_v1 = v1_snapshot._publication_attestation_v1()
+    v1_attestation, v1_allocations = (
+        extension._retained_snapshot_attestation_bridge_allocation_probe_v1(
+            v1_snapshot,
+            None,
+        )
+    )
+    assert v1_attestation == expected_v1
+    assert v1_allocations == 33
+
+    for fail_after in range(v1_allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native retained-attestation bridge allocation failure$",
+        ):
+            extension._retained_snapshot_attestation_bridge_allocation_probe_v1(
+                v1_snapshot,
+                fail_after,
+            )
+        assert v1_snapshot._publication_attestation_v1() == expected_v1
+        assert v1_snapshot._publication_closed_v1() is False
+
+    boundary_v1_attestation, boundary_v1_allocations = (
+        extension._retained_snapshot_attestation_bridge_allocation_probe_v1(
+            v1_snapshot,
+            v1_allocations,
+        )
+    )
+    assert boundary_v1_attestation == expected_v1
+    assert boundary_v1_allocations == v1_allocations
+    assert v1_snapshot._publication_attestation_v1() == expected_v1
+    assert v1_snapshot._publication_closed_v1() is False
+
     selected = cast(
         Any,
         load_snapshot(
@@ -774,6 +808,7 @@ def test_retained_attestation_bridge_failures_publish_no_partial_result(
     validated_document._publication_close_v2()
     validated_snapshot._publication_close_v2()
     document._publication_close_v2()
+    v1_snapshot._publication_close_v1()
     selected.close()
     assert selected.closed
 
