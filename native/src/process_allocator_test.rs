@@ -14,8 +14,8 @@ use crate::model::{
     NativeComponentBuilder, NativeComponentDigestIndex, PreparedEncodedStructuralColumnsV1,
 };
 use crate::publication::{
-    TypedFacadeCollectionV2, TypedFacadeCoordinateV2, TypedFacadePageRequestV2,
-    TypedFacadeStorageV2, TypedFacadeTableV2,
+    TypedFacadeBuilderV2, TypedFacadeCollectionV2, TypedFacadeCoordinateV2,
+    TypedFacadePageRequestV2, TypedFacadeStorageV2, TypedFacadeTableV2,
 };
 use crate::wire::Validation;
 
@@ -239,6 +239,18 @@ impl ComponentEncodingFixture {
         })
     }
 
+    /// Prepare an empty typed V2 builder and own one canonical axiom row
+    /// before allocation injection is armed.
+    pub fn prepare_typed_builder_add(
+        &self,
+        canonical: &[u8],
+    ) -> Result<TypedBuilderAddFixture, Failure> {
+        let builder =
+            TypedFacadeBuilderV2::new(Limits::default(), self.cancellation.clone(), None, 0)?;
+        let axioms = owned_single_row(canonical)?;
+        Ok(TypedBuilderAddFixture { builder, axioms })
+    }
+
     /// Prepare retained encoded-column metadata before allocation injection.
     ///
     /// The returned one-shot fixture isolates the production publication
@@ -315,6 +327,37 @@ pub struct TypedFacadeFreezeFixture {
     cancellation: Cancellation,
 }
 
+/// One empty typed V2 builder plus one owned canonical document row.
+pub struct TypedBuilderAddFixture {
+    builder: TypedFacadeBuilderV2,
+    axioms: Vec<Vec<u8>>,
+}
+
+impl TypedBuilderAddFixture {
+    /// Add one document while allocation injection is armed.
+    pub fn add_document(mut self) -> Result<PendingTypedBuilderFixture, Failure> {
+        let ordinal = self.builder.add_document(&[], &self.axioms, &[])?;
+        Ok(PendingTypedBuilderFixture {
+            _builder: self.builder,
+            ordinal,
+        })
+    }
+}
+
+/// One typed V2 builder returned across the disarmed allocator boundary.
+pub struct PendingTypedBuilderFixture {
+    _builder: TypedFacadeBuilderV2,
+    ordinal: u64,
+}
+
+impl PendingTypedBuilderFixture {
+    /// Return the stable document ordinal after allocation injection is
+    /// disarmed, retaining the builder until this wrapper is dropped.
+    pub const fn ordinal(&self) -> u64 {
+        self.ordinal
+    }
+}
+
 impl TypedFacadeFreezeFixture {
     /// Freeze the retained typed V2 owner while allocation injection is armed.
     pub fn freeze(self) -> Result<FrozenTypedFacadeFixture, Failure> {
@@ -329,6 +372,18 @@ impl TypedFacadeFreezeFixture {
         )?;
         Ok(FrozenTypedFacadeFixture { storage })
     }
+}
+
+fn owned_single_row(canonical: &[u8]) -> Result<Vec<Vec<u8>>, Failure> {
+    let mut row = Vec::new();
+    row.try_reserve_exact(canonical.len())
+        .map_err(|_| NativeError::limit("native allocator canonical row allocation failed"))?;
+    row.extend_from_slice(canonical);
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(1)
+        .map_err(|_| NativeError::limit("native allocator row table allocation failed"))?;
+    rows.push(row);
+    Ok(rows)
 }
 
 /// One frozen typed V2 owner returned across the disarmed allocator boundary.

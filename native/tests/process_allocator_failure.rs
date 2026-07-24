@@ -278,6 +278,36 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
         .expect("typed facade freeze boundary must be observable");
     assert_eq!(boundary_typed_freeze, baseline_typed_freeze);
 
+    let typed_builder_add = component
+        .prepare_typed_builder_add(&canonical)
+        .expect("typed builder add fixture must prepare");
+    let (baseline_typed_builder_add, typed_builder_add_allocations) =
+        count_allocations(|| typed_builder_add.add_document());
+    let baseline_typed_builder_add =
+        baseline_typed_builder_add.expect("typed builder add baseline must succeed");
+    assert_eq!(baseline_typed_builder_add.ordinal(), 0);
+    assert!(typed_builder_add_allocations > 1);
+
+    for fail_after in 0..typed_builder_add_allocations {
+        let typed_builder_add = component
+            .prepare_typed_builder_add(&canonical)
+            .expect("typed builder add fixture must prepare for every rejection");
+        typed_allocation_failure(fail_allocation(fail_after, || {
+            typed_builder_add.add_document()
+        }));
+    }
+    let typed_builder_add = component
+        .prepare_typed_builder_add(&canonical)
+        .expect("typed builder add boundary fixture must prepare");
+    let boundary_typed_builder_add = fail_allocation(typed_builder_add_allocations, || {
+        typed_builder_add.add_document()
+    })
+    .expect("first non-failing typed builder add boundary must succeed");
+    assert_eq!(
+        boundary_typed_builder_add.ordinal(),
+        baseline_typed_builder_add.ordinal()
+    );
+
     let typed_page = component
         .prepare_typed_facade_reads()
         .expect("typed facade page fixture must prepare");
