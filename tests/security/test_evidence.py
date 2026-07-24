@@ -486,6 +486,32 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         retained_contains_operations
     )
     assert retained_contains_bridge["scope"]
+    retained_document_handle_bridge = sweep[
+        "retained_document_handle_publication_bridge"
+    ]
+    retained_document_handle_operations = {
+        operation["name"]: operation
+        for operation in retained_document_handle_bridge["operations"]
+    }
+    assert {
+        name: operation["allocation_checkpoints"]
+        for name, operation in retained_document_handle_operations.items()
+    } == {
+        "typed structural document handle": 2,
+        "auxiliary retained document handle": 2,
+    }
+    assert retained_document_handle_bridge["allocation_checkpoints"] == sum(
+        operation["allocation_checkpoints"]
+        for operation in retained_document_handle_operations.values()
+    )
+    assert (
+        retained_document_handle_bridge["injected_failures"]
+        == retained_document_handle_bridge["allocation_checkpoints"]
+    )
+    assert retained_document_handle_bridge["boundary_successes"] == len(
+        retained_document_handle_operations
+    )
+    assert retained_document_handle_bridge["scope"]
     retained_view_bridge = sweep["retained_view_layout_bridge"]
     view_operations = {
         operation["name"]: operation for operation in retained_view_bridge["operations"]
@@ -541,6 +567,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + retained_attestation_bridge["allocation_checkpoints"]
         + retained_page_bridge["allocation_checkpoints"]
         + retained_contains_bridge["allocation_checkpoints"]
+        + retained_document_handle_bridge["allocation_checkpoints"]
         + retained_view_bridge["allocation_checkpoints"]
         + index_bridge["allocation_checkpoints"]
         + foundation_bridge["allocation_checkpoints"]
@@ -565,6 +592,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + retained_attestation_bridge["boundary_successes"]
         + retained_page_bridge["boundary_successes"]
         + retained_contains_bridge["boundary_successes"]
+        + retained_document_handle_bridge["boundary_successes"]
         + retained_view_bridge["boundary_successes"]
         + index_bridge["boundary_successes"]
         + foundation_bridge["boundary_successes"]
@@ -622,6 +650,10 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     )
     assert (
         release["native_retained_contains_publication_allocation_failures"]
+        == "local-pass"
+    )
+    assert (
+        release["native_retained_document_handle_publication_allocation_failures"]
         == "local-pass"
     )
     assert release["native_retained_view_layout_allocation_failures"] == "local-pass"
