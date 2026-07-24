@@ -1373,7 +1373,7 @@ impl FrozenComponentBuild {
         })
     }
 
-    const fn arena(&self) -> &NativeComponentArena {
+    pub(crate) const fn arena(&self) -> &NativeComponentArena {
         &self.arena
     }
 

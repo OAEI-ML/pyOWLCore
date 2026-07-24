@@ -105,14 +105,17 @@ fn fail_allocation<T>(fail_after: usize, operation: impl FnOnce() -> T) -> T {
     output
 }
 
-fn assert_typed_allocation_failure(result: Result<Vec<u8>, Failure>, message: &'static str) {
-    assert_eq!(
-        result,
-        Err(Failure {
-            code: "NATIVE_WIRE_LIMIT",
-            message,
-        })
-    );
+fn assert_typed_allocation_failure<T>(result: Result<T, Failure>, message: &'static str) {
+    match result {
+        Ok(_) => panic!("allocation rejection unexpectedly succeeded"),
+        Err(failure) => assert_eq!(
+            failure,
+            Failure {
+                code: "NATIVE_WIRE_LIMIT",
+                message,
+            }
+        ),
+    }
 }
 
 #[test]
@@ -152,6 +155,30 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
     let boundary_component = fail_allocation(component_allocations, || component.encode())
         .expect("first non-failing component boundary must encode");
     assert_eq!(boundary_component, canonical);
+
+    let prepared = component
+        .prepare_encoded_columns()
+        .expect("encoded-column fixture must prepare");
+    let (baseline_columns, column_allocations) = count_allocations(|| prepared.publish());
+    let baseline_columns = baseline_columns.expect("encoded columns must publish");
+    assert!(column_allocations > 1);
+    assert!(baseline_columns.into_iter().sum::<usize>() > canonical.len());
+
+    for fail_after in 0..column_allocations {
+        let prepared = component
+            .prepare_encoded_columns()
+            .expect("encoded-column fixture must prepare for every rejection");
+        assert_typed_allocation_failure(
+            fail_allocation(fail_after, || prepared.publish()),
+            "native encoded-column buffer allocation failed",
+        );
+    }
+    let prepared = component
+        .prepare_encoded_columns()
+        .expect("encoded-column boundary fixture must prepare");
+    let boundary_columns = fail_allocation(column_allocations, || prepared.publish())
+        .expect("first non-failing encoded-column boundary must publish");
+    assert_eq!(boundary_columns, baseline_columns);
 
     let (baseline_receipt, receipt_allocations) = count_allocations(wire_validation_receipt);
     let baseline_receipt = baseline_receipt.expect("wire receipt baseline must publish");

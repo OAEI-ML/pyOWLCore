@@ -4,7 +4,11 @@
 use crate::cancel::Cancellation;
 use crate::error::NativeError;
 use crate::limits::Limits;
-use crate::model::{ComponentId, FrozenComponentBuild, NativeComponentBuilder};
+use crate::model::{
+    prepare_encoded_structural_columns_from_tables_v1, ComponentId, EncodedRootKindV1,
+    EncodedRootTableV1, FrozenComponentBuild, NativeComponentBuilder,
+    PreparedEncodedStructuralColumnsV1,
+};
 use crate::wire::Validation;
 
 /// A stable, allocation-free view of a native failure for the external
@@ -29,7 +33,7 @@ impl From<NativeError> for Failure {
 #[derive(Debug)]
 pub struct ComponentEncodingFixture {
     frozen: FrozenComponentBuild,
-    identifier: ComponentId,
+    identifiers: [ComponentId; 1],
 }
 
 impl ComponentEncodingFixture {
@@ -46,13 +50,56 @@ impl ComponentEncodingFixture {
         let pending = builder.intern_canonical(canonical)?;
         let frozen = builder.freeze()?;
         let identifier = frozen.resolve(pending)?;
-        Ok(Self { frozen, identifier })
+        Ok(Self {
+            frozen,
+            identifiers: [identifier],
+        })
     }
 
     /// Encode through the same fallibly reserved output buffer used by the
     /// native component boundary.
     pub fn encode(&mut self) -> Result<Vec<u8>, Failure> {
-        self.frozen.encode(self.identifier).map_err(Failure::from)
+        self.frozen
+            .encode(self.identifiers[0])
+            .map_err(Failure::from)
+    }
+
+    /// Prepare retained encoded-column metadata before allocation injection.
+    ///
+    /// The returned one-shot fixture isolates the production publication
+    /// allocation from its already validated discovery/sort workspace.
+    pub fn prepare_encoded_columns(&self) -> Result<EncodedColumnPublicationFixture<'_>, Failure> {
+        let tables = [EncodedRootTableV1::new(
+            EncodedRootKindV1::Axiom,
+            &self.identifiers,
+        )];
+        let prepared = prepare_encoded_structural_columns_from_tables_v1(
+            self.frozen.arena(),
+            &tables,
+            &Limits::default(),
+            Cancellation::with_duration(None),
+            None,
+            0,
+        )?;
+        Ok(EncodedColumnPublicationFixture { prepared })
+    }
+}
+
+/// One prepared encoded-column result whose eleven production buffers have
+/// not yet been allocated.
+pub struct EncodedColumnPublicationFixture<'arena> {
+    prepared: PreparedEncodedStructuralColumnsV1<'arena>,
+}
+
+impl EncodedColumnPublicationFixture<'_> {
+    /// Allocate and fill the exact production buffers, returning their stable
+    /// lengths without introducing another heap allocation.
+    pub fn publish(self) -> Result<[usize; 11], Failure> {
+        let columns = self.prepared.into_columns()?;
+        Ok(columns
+            .buffers()
+            .named()
+            .map(|(_name, buffer)| buffer.len()))
     }
 }
 
