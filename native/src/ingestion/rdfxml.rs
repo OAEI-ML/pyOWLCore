@@ -2912,6 +2912,7 @@ fn map_graph(
         &mut expressions,
         session,
     )?;
+    consume_detached_empty_class_booleans(&list_graph, &mut consumed, &mut expressions, session)?;
     consume_detached_class_complements(
         &list_graph,
         &mut consumed,
@@ -3293,6 +3294,59 @@ fn consume_detached_inverse_property_expressions<'view, 'graph>(
             node: _,
             consumed: expression_consumed,
         } = expressions.decode_object_property_term(ListTerm::Blank(subject), session)?;
+        consume_collection_indexes(expression_consumed, consumed, session)?;
+    }
+    Ok(())
+}
+
+fn consume_detached_empty_class_booleans<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index]
+            || !matches!(triple.predicate, OWL_INTERSECTION_OF | OWL_UNION_OF)
+            || triple.object != ListTerm::Iri(RDF_NIL)
+        {
+            continue;
+        }
+        let ListResource::Blank(subject) = triple.subject else {
+            continue;
+        };
+        let mut marker_present = false;
+        let mut constructor_targets = 0_usize;
+        for (candidate_index, candidate) in triples.iter().enumerate() {
+            session.step(1)?;
+            if candidate.subject != ListResource::Blank(subject) {
+                continue;
+            }
+            if candidate.predicate == RDF_TYPE
+                && candidate.object == ListTerm::Iri(OWL_CLASS)
+                && !consumed[candidate_index]
+            {
+                marker_present = true;
+            }
+            if candidate.predicate == triple.predicate {
+                constructor_targets = constructor_targets.checked_add(1).ok_or_else(|| {
+                    NativeError::limit("native detached empty class-boolean target count overflow")
+                })?;
+            }
+        }
+        if !marker_present {
+            continue;
+        }
+        if constructor_targets > 1 {
+            return Err(rdf_mapping_cardinality(
+                "native detached empty class boolean has more than one target",
+            ));
+        }
+        let DecodedClassExpression {
+            node: _,
+            consumed: expression_consumed,
+        } = expressions.decode_term(ListTerm::Blank(subject), session)?;
         consume_collection_indexes(expression_consumed, consumed, session)?;
     }
     Ok(())
@@ -9574,6 +9628,69 @@ mod tests {
         );
         assert_eq!(
             mapped(ambiguous.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+    }
+
+    #[test]
+    fn detached_empty_class_boolean_requires_exact_expression_shape() {
+        for predicate in [OWL_INTERSECTION_OF, OWL_UNION_OF] {
+            let local_name = predicate
+                .strip_prefix(OWL)
+                .expect("class-boolean predicate uses the OWL namespace");
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"expression\"><owl:{local_name} rdf:resource=\"{RDF_NIL}\"/></owl:Class></rdf:RDF>"
+            );
+            let document = mapped(source.as_bytes(), None).expect("detached empty class boolean");
+            assert!(document.axioms.is_empty());
+            assert_eq!(document.mapping.total_triples, 2);
+            assert_eq!(
+                document.mapping.total_triples,
+                document.mapping.consumed_triples,
+            );
+        }
+
+        let markerless = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"expression\"><owl:intersectionOf rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
+        );
+        let nonempty = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:about=\"urn:B\"/><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:intersectionOf></owl:Class></rdf:RDF>"
+        );
+        let singleton = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:nodeID=\"expression\"><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/></owl:unionOf></owl:Class></rdf:RDF>"
+        );
+        let restriction = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"expression\"><rdf:type rdf:resource=\"{OWL_RESTRICTION}\"/><owl:intersectionOf rdf:resource=\"{RDF_NIL}\"/></owl:Class></rdf:RDF>"
+        );
+        let markerless_duplicate = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"expression\"><owl:intersectionOf rdf:resource=\"{RDF_NIL}\"/><owl:intersectionOf rdf:resource=\"urn:not-a-list\"/></rdf:Description></rdf:RDF>"
+        );
+        for incomplete in [
+            markerless,
+            nonempty,
+            singleton,
+            restriction,
+            markerless_duplicate,
+        ] {
+            assert_eq!(
+                mapped(incomplete.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            );
+        }
+
+        let conflict = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:resource=\"{RDF_NIL}\"/><owl:unionOf rdf:resource=\"{RDF_NIL}\"/></owl:Class></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(conflict.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        );
+
+        let duplicate = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:resource=\"{RDF_NIL}\"/><owl:intersectionOf rdf:resource=\"urn:not-a-list\"/></owl:Class></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(duplicate.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_CARDINALITY",
         );
     }

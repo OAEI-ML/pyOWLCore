@@ -218,6 +218,7 @@ class RDFMapper:
                 axioms.append(simple_axiom)
                 occurrences.append((simple_axiom, None))
         self._consume_detached_inverse_property_expressions()
+        self._consume_detached_empty_class_booleans()
         self._consume_detached_class_complements()
         self._consume_detached_object_enumerations()
         self._consume_detached_data_complements()
@@ -344,6 +345,43 @@ class RDFMapper:
             ):
                 continue
             self._object_property(triple.subject)
+
+    def _consume_detached_empty_class_booleans(self) -> None:
+        for predicate in (OWL + "intersectionOf", OWL + "unionOf"):
+            for triple in self.graph.find(predicate=predicate):
+                self.context.check()
+                if (
+                    triple in self.consumed
+                    or not isinstance(triple.subject, RDFBlank)
+                    or triple.object != RDFIRI(RDF + "nil")
+                ):
+                    continue
+                marker = Triple(
+                    triple.subject,
+                    RDFIRI(RDF + "type"),
+                    RDFIRI(OWL + "Class"),
+                )
+                if marker in self.consumed or not self.graph.contains(marker):
+                    continue
+                self.graph.one(triple.subject, predicate)
+                has_other_constructor = any(
+                    candidate != predicate and self.graph.objects(triple.subject, candidate)
+                    for candidate in (
+                        OWL + "intersectionOf",
+                        OWL + "unionOf",
+                        OWL + "complementOf",
+                        OWL + "oneOf",
+                    )
+                ) or self.graph.contains(
+                    Triple(
+                        triple.subject,
+                        RDFIRI(RDF + "type"),
+                        RDFIRI(OWL + "Restriction"),
+                    )
+                )
+                if has_other_constructor:
+                    self._mapping_error("empty class boolean has conflicting constructors")
+                self._class_expression(triple.subject)
 
     def _consume_detached_class_complements(self) -> None:
         for triple in self.graph.find(predicate=OWL + "complementOf"):

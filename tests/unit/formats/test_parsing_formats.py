@@ -1518,6 +1518,140 @@ def test_rdf_mapping_rejects_ambiguous_detached_class_complement() -> None:
     assert raised.value.code == "RDF_MAPPING_CARDINALITY"
 
 
+@pytest.mark.parametrize("operator", ("intersectionOf", "unionOf"))
+def test_rdf_mapping_consumes_detached_empty_class_boolean(operator: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:nodeID="expression">
+    <owl:{operator} rdf:resource="{RDF_NAMESPACE}nil"/>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 2
+    assert document.rdf_mapping_report.consumed_triples == 2
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert len(document.axioms) == 0
+
+
+@pytest.mark.parametrize(
+    ("operator", "expected"),
+    (
+        ("intersectionOf", m.OWL_THING),
+        ("unionOf", m.OWL_NOTHING),
+    ),
+)
+def test_rdf_mapping_preserves_named_empty_class_boolean_axiom(
+    operator: str,
+    expected: m.Class,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C">
+    <owl:{operator} rdf:resource="{RDF_NAMESPACE}nil"/>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert (
+        m.EquivalentClasses(m.CanonicalSet((m.Class(m.IRI("urn:C")), expected))) in document.axioms
+    )
+    assert len(document.axioms) == 2
+
+
+@pytest.mark.parametrize(
+    ("body", "code"),
+    (
+        (
+            f"""
+  <rdf:Description rdf:nodeID="expression">
+    <owl:intersectionOf rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <owl:Class rdf:about="urn:A"/>
+  <owl:Class rdf:about="urn:B"/>
+  <owl:Class rdf:nodeID="expression">
+    <owl:intersectionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="urn:A"/>
+      <rdf:Description rdf:about="urn:B"/>
+    </owl:intersectionOf>
+  </owl:Class>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <owl:Class rdf:about="urn:A"/>
+  <owl:Class rdf:nodeID="expression">
+    <owl:unionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="urn:A"/>
+    </owl:unionOf>
+  </owl:Class>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            f"""
+  <owl:Class rdf:nodeID="expression">
+    <owl:intersectionOf rdf:resource="{RDF_NAMESPACE}nil"/>
+    <owl:unionOf rdf:resource="{RDF_NAMESPACE}nil"/>
+  </owl:Class>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            f"""
+  <owl:Class rdf:nodeID="expression">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#Restriction"/>
+    <owl:intersectionOf rdf:resource="{RDF_NAMESPACE}nil"/>
+  </owl:Class>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            f"""
+  <rdf:Description rdf:nodeID="expression">
+    <owl:intersectionOf rdf:resource="{RDF_NAMESPACE}nil"/>
+    <owl:intersectionOf rdf:resource="urn:not-a-list"/>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            f"""
+  <owl:Class rdf:nodeID="expression">
+    <owl:intersectionOf rdf:resource="{RDF_NAMESPACE}nil"/>
+    <owl:intersectionOf rdf:resource="urn:not-a-list"/>
+  </owl:Class>
+""",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+    ),
+)
+def test_rdf_mapping_preserves_detached_empty_class_boolean_boundary(
+    body: str,
+    code: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises((OntologySyntaxError, UnsupportedSyntaxError)) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == code
+
+
 @pytest.mark.parametrize(
     ("body", "total_triples"),
     (
