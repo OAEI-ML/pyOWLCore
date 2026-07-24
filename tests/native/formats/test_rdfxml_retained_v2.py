@@ -14,6 +14,7 @@ import pyowl_core.model as m
 from pyowl_core import (
     IRI,
     BackendPreference,
+    BackendProtocolError,
     BackendUnavailableError,
     CancellationSource,
     DocumentFormat,
@@ -77,6 +78,31 @@ NO_IMPORT_SOURCE = b"""\
     <rdfs:subClassOf rdf:resource="urn:rdfxml:D"/>
   </owl:Class>
   <owl:Class rdf:about="urn:rdfxml:D"/>
+</rdf:RDF>
+"""
+PARTIAL_MAPPING_SOURCE = b"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#"
+  xmlns:e="urn:partial:">
+  <owl:Ontology rdf:about="urn:partial:ontology"/>
+  <rdf:Description rdf:nodeID="blank-source">
+    <e:unknown rdf:resource="urn:partial:object"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="urn:partial:subject">
+    <e:literal>quote'"\\&#xE9;&#xA0;&#x1F600;</e:literal>
+    <e:unknown rdf:nodeID="blank-object"/>
+  </rdf:Description>
+</rdf:RDF>
+"""
+REIFIED_PARTIAL_SOURCE = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#" xmlns:e="urn:"
+  xml:base="http://example.test/doc">
+  <owl:AnnotationProperty rdf:about="urn:p"/>
+  <owl:Class rdf:about="urn:C">
+    <e:p rdf:ID="statement">value</e:p>
+  </owl:Class>
 </rdf:RDF>
 """
 XML_ENVELOPE_SOURCE = b"""\
@@ -395,6 +421,8 @@ def _retained_snapshot(
     resolver: ImportResolver | None = None,
     cancellation_token: CancellationToken | None = None,
     require_empty_imports: bool | None = None,
+    allow_partial_rdf_mapping: bool = False,
+    publication_allow_partial_rdf_mapping: bool | None = None,
     allow_swrl: bool = False,
 ) -> object:
     selected_options = _options(BackendPreference.NATIVE) if options is None else options
@@ -418,13 +446,18 @@ def _retained_snapshot(
         limits=selected_options.limits,
         collect_provenance=selected_options.collect_provenance,
         preserve_source_map=selected_options.preserve_source_map,
-        allow_partial_rdf_mapping=False,
+        allow_partial_rdf_mapping=allow_partial_rdf_mapping,
         allow_swrl=allow_swrl,
         require_empty_imports=require_empty_imports,
         cancellation_token=cancellation_token,
     )
     if parsed.summary is None or parsed.storage is None:
         raise AssertionError("retained RDF/XML parser returned no owner-first result")
+    publication_partial = (
+        allow_partial_rdf_mapping
+        if publication_allow_partial_rdf_mapping is None
+        else publication_allow_partial_rdf_mapping
+    )
     return publish_retained_rdfxml_snapshot_v2(
         parsed.summary,
         parsed_native_storage=parsed.storage,
@@ -438,6 +471,7 @@ def _retained_snapshot(
         cancellation_token=cancellation_token,
         load_started=started,
         root_parse_started=started,
+        allow_partial_rdf_mapping=publication_partial,
     )
 
 
@@ -513,6 +547,285 @@ def test_private_production_seam_publishes_exact_lazy_rdf_report(
     selected.close()
     assert selected.closed
     assert decode_root_canonical_bytes(direct.buffers) == expected_roots
+
+
+def test_private_partial_mapping_retains_exact_lazy_report_rows(
+    extension: NativeTestExtension,
+) -> None:
+    reference = parse_rdfxml(
+        PARTIAL_MAPPING_SOURCE,
+        limits=ParseLimits(),
+        document_iri=DOCUMENT_IRI,
+        allow_partial_rdf_mapping=True,
+    )
+    assert reference.rdf_mapping_report is not None
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            PARTIAL_MAPPING_SOURCE,
+            allow_partial_rdf_mapping=True,
+        ),
+    )
+
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    before = raw_owner._publication_counters_v2()
+    assert type(raw_owner) is cast(Any, extension)._NativeSnapshotHandle
+    assert before.retained_rdf_header_rows == 1
+    assert before.retained_rdf_triple_rows == 3
+    assert before.retained_rdf_rule_rows == 1
+    assert before.retained_rdf_diagnostic_rows == 0
+    assert before.retained_rdf_bytes > 17
+    assert before.page_requests == 0
+
+    report = selected.root.rdf_mapping_report
+    assert report is not None
+    assert not report.conformant
+    assert raw_owner._publication_counters_v2().page_requests == 0
+    assert report.consumed_triples == 1
+    assert report.total_triples == 4
+    after_header = raw_owner._publication_counters_v2()
+    assert after_header.page_requests == 1
+    assert after_header.rdf_header_rows_emitted == 1
+
+    assert tuple((item.subject, item.predicate, item.object) for item in report.unconsumed) == (
+        ("_:blank-source", "urn:partial:unknown", "<urn:partial:object>"),
+        (
+            "<urn:partial:subject>",
+            "urn:partial:literal",
+            repr("quote'\"\\é\u00a0😀"),
+        ),
+        ("<urn:partial:subject>", "urn:partial:unknown", "_:blank-object"),
+    )
+    after_triples = raw_owner._publication_counters_v2()
+    assert after_triples.page_requests == 2
+    assert after_triples.rdf_triple_rows_emitted == 3
+    assert report.rule_ids == ("OWL2-RDF-REVERSE",)
+    after_rules = raw_owner._publication_counters_v2()
+    assert after_rules.page_requests == 3
+    assert after_rules.rdf_rule_rows_emitted == 1
+    assert report.diagnostics == ()
+    assert report == reference.rdf_mapping_report
+    assert selected.root.axioms == m.CanonicalSet(reference.axioms)
+    assert selected.root.ontology_annotations == m.CanonicalSet(reference.annotations)
+    assert selected.root.extension_components == m.CanonicalSet(reference.extensions)
+
+    encoded = encode_snapshot(selected)
+    decoded = decode_snapshot(encoded)
+    assert decoded.root.rdf_mapping_report is None
+    assert decoded.structural_fingerprint == selected.structural_fingerprint
+
+
+def test_private_partial_mapping_is_explicit_and_diagnostic_bounded() -> None:
+    with pytest.raises(UnsupportedSyntaxError) as incomplete:
+        native._parse_rdfxml_retained_v2(
+            PARTIAL_MAPPING_SOURCE,
+            document_iri=DOCUMENT_IRI.value,
+        )
+    assert incomplete.value.code == "RDF_MAPPING_INCOMPLETE"
+
+    with pytest.raises(BackendProtocolError, match="RDF report summary"):
+        _retained_snapshot(
+            PARTIAL_MAPPING_SOURCE,
+            allow_partial_rdf_mapping=True,
+            publication_allow_partial_rdf_mapping=False,
+        )
+
+    options = LoadOptions(
+        format=DocumentFormat.RDF_XML,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.NATIVE,
+        limits=ParseLimits(max_diagnostics=1),
+        collect_provenance=False,
+    )
+    reference = parse_rdfxml(
+        PARTIAL_MAPPING_SOURCE,
+        limits=options.limits,
+        document_iri=DOCUMENT_IRI,
+        allow_partial_rdf_mapping=True,
+    )
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            PARTIAL_MAPPING_SOURCE,
+            options=options,
+            allow_partial_rdf_mapping=True,
+        ),
+    )
+    assert selected.root.rdf_mapping_report == reference.rdf_mapping_report
+    assert selected.root.rdf_mapping_report is not None
+    assert len(selected.root.rdf_mapping_report.unconsumed) == 1
+    assert selected.root.rdf_mapping_report.total_triples == 4
+    assert selected.root.rdf_mapping_report.consumed_triples == 1
+
+
+def test_private_partial_mapping_retains_classic_statement_reification() -> None:
+    reference = parse_rdfxml(
+        REIFIED_PARTIAL_SOURCE,
+        limits=ParseLimits(),
+        document_iri=None,
+        allow_partial_rdf_mapping=True,
+    )
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            REIFIED_PARTIAL_SOURCE,
+            document_iri=None,
+            allow_partial_rdf_mapping=True,
+        ),
+    )
+    assert selected.root.rdf_mapping_report == reference.rdf_mapping_report
+    assert selected.root.rdf_mapping_report is not None
+    assert selected.root.rdf_mapping_report.consumed_triples == 4
+    assert selected.root.rdf_mapping_report.total_triples == 7
+    assert len(selected.root.rdf_mapping_report.unconsumed) == 3
+
+
+@pytest.mark.parametrize(
+    ("markup", "lexical"),
+    (
+        ("apostrophe'", "apostrophe'"),
+        ('double"', 'double"'),
+        ('both\'"', 'both\'"'),
+        ("line&#9;&#10;&#13;end", "line\t\n\rend"),
+        (
+            "unicode&#x85;&#xA0;&#x200B;&#x2028;&#xFEFF;&#xE000;"
+            "\N{LATIN SMALL LETTER E WITH ACUTE}\N{GRINNING FACE}",
+            "unicode\x85\u00a0\u200b\u2028\ufeff\ue000é😀",
+        ),
+        ("combining\u0300\u034f", "combining\u0300\u034f"),
+        ("\N{MUSICAL SYMBOL COMBINING FLAG-5}", "\N{MUSICAL SYMBOL COMBINING FLAG-5}"),
+        ("\U00013b9d", "\U00013b9d"),
+    ),
+)
+def test_private_partial_literal_evidence_matches_python_repr(
+    markup: str,
+    lexical: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:e="urn:partial:">
+  <rdf:Description rdf:about="urn:partial:subject">
+    <e:unknown>{markup}</e:unknown>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+    reference = parse_rdfxml(
+        source,
+        limits=ParseLimits(),
+        document_iri=None,
+        allow_partial_rdf_mapping=True,
+    )
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            source,
+            document_iri=None,
+            allow_partial_rdf_mapping=True,
+        ),
+    )
+    assert selected.root.rdf_mapping_report == reference.rdf_mapping_report
+    assert selected.root.rdf_mapping_report is not None
+    assert selected.root.rdf_mapping_report.unconsumed[0].object == repr(lexical)
+
+
+def test_private_partial_generated_blank_evidence_uses_the_disjoint_domain() -> None:
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:e="urn:partial:">
+  <rdf:Description><e:unknown e:detail="value"/></rdf:Description>
+</rdf:RDF>
+"""
+    reference = parse_rdfxml(
+        source,
+        limits=ParseLimits(),
+        document_iri=None,
+        allow_partial_rdf_mapping=True,
+    )
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            source,
+            document_iri=None,
+            allow_partial_rdf_mapping=True,
+        ),
+    )
+    assert selected.root.rdf_mapping_report == reference.rdf_mapping_report
+    assert selected.root.rdf_mapping_report is not None
+    assert selected.root.rdf_mapping_report.unconsumed[0].subject == "_:\x001"
+    assert selected.root.rdf_mapping_report.unconsumed[0].object == "_:\x002"
+
+
+def test_private_partial_literal_rendering_is_bounded_by_max_diagnostics(
+    extension: NativeTestExtension,
+) -> None:
+    if not hasattr(extension, "_rdfxml_retained_bridge_allocation_probe_v2"):
+        pytest.skip("native retained RDF/XML bridge allocation hook is unavailable")
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:e="urn:partial:">
+  <rdf:Description rdf:about="urn:partial:subject">
+    <e:c>three</e:c><e:b>two</e:b><e:a>one</e:a>
+  </rdf:Description>
+</rdf:RDF>
+"""
+
+    def invoke(
+        max_diagnostics: int,
+        fail_after: int | None = None,
+    ) -> tuple[bytes, int]:
+        config = native._encode_config(
+            ParseLimits(max_diagnostics=max_diagnostics),
+            None,
+            verify=False,
+        )
+        return extension._rdfxml_retained_bridge_allocation_probe_v2(
+            source,
+            None,
+            config,
+            False,
+            True,
+            False,
+            False,
+            fail_after,
+        )
+
+    _one_encoded, one_allocations = invoke(1)
+    two_encoded, two_allocations = invoke(2)
+    _three_encoded, three_allocations = invoke(3)
+    assert two_allocations == one_allocations + 3
+    assert three_allocations == two_allocations + 3
+
+    for fail_after in range(two_allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native RDF/XML retained bridge allocation failure$",
+        ):
+            invoke(2, fail_after)
+    assert invoke(2, two_allocations) == (two_encoded, two_allocations)
+
+    options = LoadOptions(
+        format=DocumentFormat.RDF_XML,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.NATIVE,
+        limits=ParseLimits(max_diagnostics=1),
+        collect_provenance=False,
+    )
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            source,
+            document_iri=None,
+            options=options,
+            allow_partial_rdf_mapping=True,
+        ),
+    )
+    assert selected.root.rdf_mapping_report is not None
+    assert tuple(
+        (item.subject, item.predicate, item.object)
+        for item in selected.root.rdf_mapping_report.unconsumed
+    ) == (
+        ("<urn:partial:subject>", "urn:partial:a", "'one'"),
+    )
 
 
 def test_retained_swrl_extension_matches_python_canonical_bytes() -> None:
@@ -1099,25 +1412,8 @@ def test_rdfxml_capability_remains_absent_and_public_dispatch_does_not_fallback(
 
 
 def test_private_rdfxml_seam_rejects_unowned_semantics_before_publication() -> None:
-    with pytest.raises(UnsupportedSyntaxError, match="does not support partial mapping"):
-        native._parse_rdfxml_retained_v2(
-            SOURCE,
-            document_iri=DOCUMENT_IRI.value,
-            allow_partial_rdf_mapping=True,
-        )
-
-    reified = b"""\
-    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-      xmlns:owl="http://www.w3.org/2002/07/owl#" xmlns:e="urn:"
-      xml:base="http://example.test/doc">
-      <owl:AnnotationProperty rdf:about="urn:p"/>
-      <owl:Class rdf:about="urn:C">
-        <e:p rdf:ID="statement">value</e:p>
-      </owl:Class>
-    </rdf:RDF>
-    """
     with pytest.raises(UnsupportedSyntaxError) as incomplete:
-        native._parse_rdfxml_retained_v2(reified, document_iri=None)
+        native._parse_rdfxml_retained_v2(REIFIED_PARTIAL_SOURCE, document_iri=None)
     assert incomplete.value.code == "RDF_MAPPING_INCOMPLETE"
 
     with pytest.raises(UnsupportedSyntaxError, match="resolver-backed imports"):

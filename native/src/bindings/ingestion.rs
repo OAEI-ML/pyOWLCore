@@ -240,12 +240,6 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
     allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<RetainedRdfXmlParseBindingResult> {
-    if allow_partial_rdf_mapping {
-        return Err(crate::python_error(NativeError::new(
-            "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
-            "native retained RDF/XML publication does not support partial mapping",
-        )));
-    }
     let limits = crate::limits_from_python_with_allocations(config, allocations)?;
     let cancellation = crate::cancellation_or_default(cancel);
     let document_iri = owned_document_iri_with_allocations(py, document_iri, &limits, allocations)?;
@@ -261,7 +255,7 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
     let input_size = owned.len();
     let accounted_input =
         accounted_input_bytes(input_size, document_iri_size).map_err(crate::python_error)?;
-    let (outcome, parser_bytes) = crate::run_detached(py, move |interrupt| {
+    let (mut outcome, parser_bytes) = crate::run_detached(py, move |interrupt| {
         let mut guard = Guard::with_interrupt(
             cancellation.clone(),
             limits.deadline,
@@ -269,7 +263,7 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
             interrupt.clone(),
         );
         let mut session = Session::new(&mut guard, &limits, accounted_input)?;
-        let outcome = engine::parse_rdfxml_retained_v2(
+        let outcome = engine::parse_rdfxml_retained_v2_with_mapping(
             &owned,
             document_iri.as_deref(),
             &mut session,
@@ -279,6 +273,7 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
             accounted_input,
             collect_provenance,
             preserve_source_map,
+            allow_partial_rdf_mapping,
             allow_swrl,
             require_empty_imports,
         )?;
@@ -286,6 +281,19 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
             .map_err(|_| NativeError::limit("native RDF/XML source exceeds u64"))?;
         Ok((outcome, parser_bytes))
     })?;
+    // Python's repr printability follows the active runtime Unicode database.
+    // Mapping remains detached; only the already truncated evidence set is
+    // rendered here, then retained as final Rust-owned report text.
+    outcome
+        .metadata
+        .render_rdf_literal_evidence(|lexical| -> PyResult<String> {
+            allocations.checkpoint()?;
+            let value = PyString::from_bytes(py, lexical.as_bytes())?;
+            allocations.checkpoint()?;
+            let rendered = value.repr()?;
+            allocations.checkpoint()?;
+            rendered.extract()
+        })?;
     crate::contain(|| limits.check_output_size(input_size, outcome.encoded.len()))
         .map_err(crate::python_error)?;
     let phases = (

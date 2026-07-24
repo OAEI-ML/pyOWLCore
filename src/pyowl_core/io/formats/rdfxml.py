@@ -597,9 +597,9 @@ class RDFXMLGraphParser:
         self.rdf_ids.add(binding)
         return resolved
 
-    def _fresh(self, stem: str) -> RDFBlank:
+    def _fresh(self, _stem: str) -> RDFBlank:
         self.blank_counter += 1
-        return RDFBlank(f"{_GENERATED_BLANK_PREFIX}{stem}:{self.blank_counter}")
+        return RDFBlank(f"{_GENERATED_BLANK_PREFIX}{self.blank_counter}")
 
     def _add(self, subject: RDFResource, predicate: str, object: RDFTerm) -> Triple:
         triple = Triple(subject, RDFIRI(predicate), object)

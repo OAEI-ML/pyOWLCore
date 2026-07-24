@@ -84,8 +84,15 @@ pub(crate) struct RetainedParseMetadataV2 {
     pub(crate) root_counts: [u64; 3],
     occurrences: Vec<RetainedOccurrenceV2>,
     source_prefixes: Option<Vec<(String, String)>>,
-    rdf_total_triples: Option<u64>,
+    rdf_mapping: Option<RetainedRdfMappingEvidenceV2>,
     scoped_roots: bool,
+}
+
+#[derive(Debug)]
+struct RetainedRdfMappingEvidenceV2 {
+    consumed_triples: u64,
+    total_triples: u64,
+    unconsumed: Vec<crate::bindings::ingestion::engine::RdfTripleEvidence>,
 }
 
 type RetainedSeedV2 = (
@@ -232,6 +239,22 @@ impl PreparedRetainedPublicationV2 {
 }
 
 impl RetainedParseMetadataV2 {
+    pub(crate) fn render_rdf_literal_evidence<E>(
+        &mut self,
+        mut render: impl FnMut(&str) -> Result<String, E>,
+    ) -> Result<(), E> {
+        let Some(mapping) = &mut self.rdf_mapping else {
+            return Ok(());
+        };
+        for triple in &mut mapping.unconsumed {
+            if triple.object_requires_repr {
+                triple.object = render(&triple.object)?;
+                triple.object_requires_repr = false;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn retained_bytes(&self) -> NativeResult<usize> {
         let mut retained = self
             .occurrences
@@ -276,8 +299,8 @@ impl RetainedParseMetadataV2 {
                 })?;
             }
         }
-        self.source_prefixes.as_ref().map_or(Ok(retained), |rows| {
-            rows.iter().try_fold(
+        if let Some(rows) = &self.source_prefixes {
+            retained = rows.iter().try_fold(
                 retained
                     .checked_add(
                         rows.capacity()
@@ -299,8 +322,31 @@ impl RetainedParseMetadataV2 {
                             NativeError::limit("native retained source-prefix metadata overflow")
                         })
                 },
-            )
-        })
+            )?;
+        }
+        if let Some(mapping) = &self.rdf_mapping {
+            retained = retained
+                .checked_add(
+                    mapping
+                        .unconsumed
+                        .capacity()
+                        .checked_mul(size_of::<
+                            crate::bindings::ingestion::engine::RdfTripleEvidence,
+                        >())
+                        .ok_or_else(|| {
+                            NativeError::limit("native retained RDF metadata overflow")
+                        })?,
+                )
+                .ok_or_else(|| NativeError::limit("native retained RDF metadata overflow"))?;
+            for triple in &mapping.unconsumed {
+                retained = retained
+                    .checked_add(triple.subject.capacity())
+                    .and_then(|value| value.checked_add(triple.predicate.capacity()))
+                    .and_then(|value| value.checked_add(triple.object.capacity()))
+                    .ok_or_else(|| NativeError::limit("native retained RDF metadata overflow"))?;
+            }
+        }
+        Ok(retained)
     }
 }
 
@@ -315,6 +361,8 @@ pub(crate) fn build_rdfxml_seed(
     rows: [&[Vec<u8>]; 3],
     decoded_codepoints: u64,
     total_triples: u64,
+    consumed_triples: u64,
+    unconsumed: Vec<crate::bindings::ingestion::engine::RdfTripleEvidence>,
     occurrence_count: u64,
     occurrence_rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
     language_spellings: Vec<String>,
@@ -327,6 +375,16 @@ pub(crate) fn build_rdfxml_seed(
     limits: &Limits,
     cancellation: &Cancellation,
 ) -> NativeResult<(Vec<u8>, RetainedParseMetadataV2)> {
+    let unconsumed_count = total_triples
+        .checked_sub(consumed_triples)
+        .ok_or_else(|| NativeError::protocol("native RDF consumed count exceeds total"))?;
+    if (unconsumed_count == 0) != unconsumed.is_empty()
+        || u64::try_from(unconsumed.len()).map_or(true, |count| count > unconsumed_count)
+    {
+        return Err(NativeError::protocol(
+            "native RDF partial-mapping evidence diverges from its counts",
+        ));
+    }
     if scoped_occurrence_digests.is_some() && !scoped_roots {
         return Err(NativeError::protocol(
             "native RDF/XML occurrence scopes require scoped root ownership",
@@ -409,7 +467,11 @@ pub(crate) fn build_rdfxml_seed(
             root_counts,
             occurrences,
             source_prefixes: preserve_source_map.then_some(source_prefixes),
-            rdf_total_triples: Some(total_triples),
+            rdf_mapping: Some(RetainedRdfMappingEvidenceV2 {
+                consumed_triples,
+                total_triples,
+                unconsumed,
+            }),
             scoped_roots,
         },
     ))
@@ -567,7 +629,7 @@ pub(crate) fn build_seed(
             root_counts,
             occurrences,
             source_prefixes: preserve_source_map.then_some(prefixes),
-            rdf_total_triples: None,
+            rdf_mapping: None,
             scoped_roots,
         },
         rows,
@@ -986,8 +1048,9 @@ pub(crate) fn prepare_publication(
     let selected_origins = origin_rows.as_deref().unwrap_or_default();
     let selected_raw_origins = raw_origin_rows.as_deref().unwrap_or(selected_origins);
     let rdf_report = metadata
-        .rdf_total_triples
-        .map(|total| prepare_conformant_rdf_report(document_key, total))
+        .rdf_mapping
+        .as_ref()
+        .map(|mapping| prepare_rdf_report(document_key, mapping, limits))
         .transpose()?;
     let source_manifest_sha256 = source_manifest_digest(document_key, source_map.as_ref())?;
     let provenance_manifest_sha256 = provenance_manifest_digest(
@@ -1016,9 +1079,17 @@ pub(crate) fn prepare_publication(
                     })?,
                 ))
             })?;
-    let rdf_max = rdf_report
-        .as_ref()
-        .map_or(1_u64, |report| report.rows.header.len() as u64);
+    let rdf_max = rdf_report.as_ref().map_or(1_u64, |report| {
+        report
+            .rows
+            .unconsumed_triples
+            .iter()
+            .chain(&report.rows.rule_ids)
+            .chain(&report.rows.diagnostics)
+            .fold(report.rows.header.len() as u64, |maximum, row| {
+                maximum.max(row.len() as u64)
+            })
+    });
     let source_max = source_map.as_ref().map_or(1_u64, |source| {
         source
             .entries
@@ -2151,40 +2222,148 @@ fn provenance_manifest_digest(
     Ok(hasher.finish().digest)
 }
 
-fn prepare_conformant_rdf_report(
+fn prepare_rdf_report(
     document_key: &str,
-    total_triples: u64,
+    mapping: &RetainedRdfMappingEvidenceV2,
+    limits: &Limits,
 ) -> NativeResult<PreparedRetainedRdfReportV2> {
+    let remaining = mapping
+        .total_triples
+        .checked_sub(mapping.consumed_triples)
+        .ok_or_else(|| NativeError::protocol("native RDF consumed count exceeds total"))?;
+    let evidence_count = u64::try_from(mapping.unconsumed.len())
+        .map_err(|_| NativeError::limit("native RDF evidence count exceeds u64"))?;
+    if (remaining == 0) != mapping.unconsumed.is_empty()
+        || evidence_count > remaining
+        || evidence_count > limits.value(crate::limits::LimitKey::MaxDiagnostics)
+    {
+        return Err(NativeError::protocol(
+            "native RDF report evidence diverges from mapping counts",
+        ));
+    }
+    let conformant = remaining == 0;
     let mut header = Vec::new();
     header
         .try_reserve_exact(17)
         .map_err(|_| NativeError::limit("native RDF report header allocation failed"))?;
-    header.push(1);
-    header.extend_from_slice(&total_triples.to_le_bytes());
-    header.extend_from_slice(&total_triples.to_le_bytes());
+    header.push(u8::from(conformant));
+    header.extend_from_slice(&mapping.consumed_triples.to_le_bytes());
+    header.extend_from_slice(&mapping.total_triples.to_le_bytes());
+
+    let mut unconsumed_triples = Vec::new();
+    unconsumed_triples
+        .try_reserve_exact(mapping.unconsumed.len())
+        .map_err(|_| NativeError::limit("native RDF evidence row allocation failed"))?;
+    for triple in &mapping.unconsumed {
+        let row = encode_rdf_triple_evidence(triple, limits)?;
+        unconsumed_triples.push(row);
+    }
+    let mut rule_ids = Vec::new();
+    if !conformant {
+        rule_ids
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native RDF rule row allocation failed"))?;
+        rule_ids.push(encode_rdf_rule_id("OWL2-RDF-REVERSE", limits)?);
+    }
 
     let mut report = MeasuredSha256::domain(RDF_MAPPING_REPORT_DOMAIN_V2)?;
     report.text64(document_key)?;
     report.frame64(&header)?;
-    report.u64_le(0)?;
-    report.u64_le(0)?;
+    report.u64_le(evidence_count)?;
+    for row in &unconsumed_triples {
+        report.frame64(row)?;
+    }
+    report.u64_le(u64::from(!conformant))?;
+    for row in &rule_ids {
+        report.frame64(row)?;
+    }
     report.u64_le(0)?;
     let digest = report.finish().digest;
-    let retained_bytes = u64::try_from(header.capacity())
-        .map_err(|_| NativeError::limit("native RDF report header size exceeds u64"))?;
+    let retained_bytes = unconsumed_triples
+        .iter()
+        .chain(&rule_ids)
+        .try_fold(header.capacity(), |total, row| {
+            total
+                .checked_add(row.capacity())
+                .ok_or_else(|| NativeError::limit("native RDF report size overflow"))
+        })
+        .and_then(|size| {
+            u64::try_from(size)
+                .map_err(|_| NativeError::limit("native RDF report size exceeds u64"))
+        })?;
     Ok(PreparedRetainedRdfReportV2 {
         rows: TypedRdfReportRowsV2 {
             header,
-            unconsumed_triples: Vec::new(),
-            rule_ids: Vec::new(),
+            unconsumed_triples,
+            rule_ids,
             diagnostics: Vec::new(),
         },
-        conformant: true,
-        consumed_triples: total_triples,
-        total_triples,
+        conformant,
+        consumed_triples: mapping.consumed_triples,
+        total_triples: mapping.total_triples,
         digest,
         retained_bytes,
     })
+}
+
+fn encode_rdf_triple_evidence(
+    triple: &crate::bindings::ingestion::engine::RdfTripleEvidence,
+    limits: &Limits,
+) -> NativeResult<Vec<u8>> {
+    if triple.object_requires_repr {
+        return Err(NativeError::protocol(
+            "native RDF literal evidence was not rendered by the binding",
+        ));
+    }
+    if triple.subject.is_empty() || triple.predicate.is_empty() || triple.object.is_empty() {
+        return Err(NativeError::protocol(
+            "native RDF evidence contains empty text",
+        ));
+    }
+    let size = [&triple.subject, &triple.predicate, &triple.object]
+        .into_iter()
+        .try_fold(0_usize, |total, value| {
+            u32::try_from(value.len())
+                .map_err(|_| NativeError::limit("native RDF evidence text exceeds u32"))?;
+            total
+                .checked_add(4)
+                .and_then(|selected| selected.checked_add(value.len()))
+                .ok_or_else(|| NativeError::limit("native RDF evidence row size overflow"))
+        })?;
+    ensure_rdf_auxiliary_row_size(size, limits)?;
+    let mut row = Vec::new();
+    row.try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native RDF evidence row allocation failed"))?;
+    for value in [&triple.subject, &triple.predicate, &triple.object] {
+        encode_source_text(value, &mut row)?;
+    }
+    Ok(row)
+}
+
+fn encode_rdf_rule_id(value: &str, limits: &Limits) -> NativeResult<Vec<u8>> {
+    if value.is_empty() {
+        return Err(NativeError::protocol("native RDF rule id is empty"));
+    }
+    u32::try_from(value.len()).map_err(|_| NativeError::limit("native RDF rule id exceeds u32"))?;
+    let size = value
+        .len()
+        .checked_add(4)
+        .ok_or_else(|| NativeError::limit("native RDF rule row size overflow"))?;
+    ensure_rdf_auxiliary_row_size(size, limits)?;
+    let mut row = Vec::new();
+    row.try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native RDF rule row allocation failed"))?;
+    encode_source_text(value, &mut row)?;
+    Ok(row)
+}
+
+fn ensure_rdf_auxiliary_row_size(size: usize, limits: &Limits) -> NativeResult<()> {
+    if u64::try_from(size).map_or(true, |size| size > limits.max_wire_bytes) {
+        return Err(NativeError::limit(
+            "native RDF report row exceeds max_wire_bytes",
+        ));
+    }
+    Ok(())
 }
 
 fn effective_origin_manifest_digest(

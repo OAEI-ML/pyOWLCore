@@ -11,6 +11,7 @@ use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
 use crate::session::Session;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::time::Instant;
 
 use super::rdf_class_expressions::{
@@ -19,7 +20,7 @@ use super::rdf_class_expressions::{
     RdfClassExpressionDecoder,
 };
 use super::rdf_lists::{RdfResource as ListResource, RdfTerm as ListTerm, RdfTriple as ListTriple};
-use super::{CanonicalDocument, CanonicalOccurrence, MappingEvidence};
+use super::{CanonicalDocument, CanonicalOccurrence, MappingEvidence, RdfTripleEvidence};
 
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const OWL: &str = "http://www.w3.org/2002/07/owl#";
@@ -2135,13 +2136,14 @@ pub(super) fn parse_and_map(
     document_iri: Option<&str>,
     session: &mut Session<'_>,
 ) -> NativeResult<CanonicalDocument> {
-    Ok(parse_and_map_timed(source, document_iri, true, false, false, session)?.0)
+    Ok(parse_and_map_timed(source, document_iri, true, false, false, false, session)?.0)
 }
 
 pub(super) fn parse_and_map_timed(
     source: &[u8],
     document_iri: Option<&str>,
     allow_swrl: bool,
+    allow_partial_rdf_mapping: bool,
     capture_occurrences: bool,
     preserve_source_map: bool,
     session: &mut Session<'_>,
@@ -2153,6 +2155,7 @@ pub(super) fn parse_and_map_timed(
         graph.triples,
         decoded_codepoints,
         allow_swrl,
+        allow_partial_rdf_mapping,
         capture_occurrences,
         graph.language_spellings,
         session,
@@ -2503,6 +2506,7 @@ fn map_graph(
     triples: Vec<Triple>,
     decoded_codepoints: u64,
     allow_swrl: bool,
+    allow_partial_rdf_mapping: bool,
     capture_occurrences: bool,
     language_spellings: Vec<String>,
     session: &mut Session<'_>,
@@ -2945,10 +2949,31 @@ fn map_graph(
         session.limits().value(LimitKey::MaxAxioms),
         "native RDF mapping exceeds max_axioms",
     )?;
-    let consumed_triples = consumed.iter().filter(|value| **value).count();
-    if consumed_triples != triples.len() {
+    let mut consumed_triples = 0_usize;
+    for retained in &consumed {
+        session.step(1)?;
+        if *retained {
+            consumed_triples = consumed_triples
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native RDF consumed count overflow"))?;
+        }
+    }
+    if consumed_triples != triples.len() && !allow_partial_rdf_mapping {
         return Err(mapping_incomplete());
     }
+    let unconsumed = if consumed_triples == triples.len() {
+        Vec::new()
+    } else {
+        partial_mapping_evidence(
+            &triples,
+            &consumed,
+            triples
+                .len()
+                .checked_sub(consumed_triples)
+                .ok_or_else(|| NativeError::protocol("native RDF consumed count exceeds total"))?,
+            session,
+        )?
+    };
     Ok(CanonicalDocument {
         document_iri: None,
         ontology_iri,
@@ -2976,6 +3001,7 @@ fn map_graph(
                 "OWL2-RDF-REVERSE-BOOLEAN-CLASS-EXPRESSION",
                 "SWRL-RDF-REVERSE-RULE",
             ],
+            unconsumed,
         },
     })
 }
@@ -6419,6 +6445,29 @@ fn python_triple_cmp(left: &Triple, right: &Triple) -> Ordering {
         .then_with(|| python_term_cmp(&left.object, &right.object))
 }
 
+#[derive(Clone, Copy)]
+struct PythonOrderedTriple<'a>(&'a Triple);
+
+impl PartialEq for PythonOrderedTriple<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        python_triple_cmp(self.0, other.0) == Ordering::Equal
+    }
+}
+
+impl Eq for PythonOrderedTriple<'_> {}
+
+impl PartialOrd for PythonOrderedTriple<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PythonOrderedTriple<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        python_triple_cmp(self.0, other.0)
+    }
+}
+
 fn python_resource_cmp(left: &Resource, right: &Resource) -> Ordering {
     match (left, right) {
         (Resource::Blank(left), Resource::Blank(right))
@@ -6465,6 +6514,139 @@ fn python_term_cmp(left: &Term, right: &Term) -> Ordering {
     }
 }
 
+fn partial_mapping_evidence(
+    triples: &[Triple],
+    consumed: &[bool],
+    unconsumed_count: usize,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<RdfTripleEvidence>> {
+    if triples.len() != consumed.len() {
+        return Err(NativeError::protocol(
+            "native RDF partial-mapping ledger diverges from graph",
+        ));
+    }
+    let maximum =
+        usize::try_from(session.limits().value(LimitKey::MaxDiagnostics)).unwrap_or(usize::MAX);
+    let mut selected = BinaryHeap::from(reserved_temporary_vec(
+        unconsumed_count.min(maximum),
+        session,
+    )?);
+    let mut observed_unconsumed = 0_usize;
+    for (triple, retained) in triples.iter().zip(consumed) {
+        session.step(1)?;
+        if *retained {
+            continue;
+        }
+        observed_unconsumed = observed_unconsumed
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native RDF unconsumed count overflow"))?;
+        if observed_unconsumed > unconsumed_count {
+            return Err(NativeError::protocol(
+                "native RDF unconsumed count diverges from its ledger",
+            ));
+        }
+        if selected.len() < maximum {
+            selected.push(PythonOrderedTriple(triple));
+        } else if selected
+            .peek()
+            .is_some_and(|largest| python_triple_cmp(triple, largest.0) == Ordering::Less)
+        {
+            selected.pop();
+            selected.push(PythonOrderedTriple(triple));
+        }
+    }
+    if observed_unconsumed != unconsumed_count {
+        return Err(NativeError::protocol(
+            "native RDF unconsumed count diverges from its ledger",
+        ));
+    }
+
+    let mut result = reserved_vec(selected.len(), session)?;
+    for PythonOrderedTriple(triple) in selected.into_sorted_vec() {
+        let (object, object_requires_repr) = rdf_term_evidence(&triple.object, session)?;
+        result.push(RdfTripleEvidence {
+            subject: rdf_resource_evidence(&triple.subject, session)?,
+            predicate: owned_text(&triple.predicate, session)?,
+            object,
+            object_requires_repr,
+        });
+    }
+    Ok(result)
+}
+
+fn rdf_resource_evidence(value: &Resource, session: &mut Session<'_>) -> NativeResult<String> {
+    match value {
+        Resource::Iri(value) => framed_rdf_evidence('<', value, '>', session),
+        Resource::Blank(value) => prefixed_rdf_evidence("_:", value, session),
+    }
+}
+
+fn rdf_term_evidence(value: &Term, session: &mut Session<'_>) -> NativeResult<(String, bool)> {
+    match value {
+        Term::Iri(value) => Ok((framed_rdf_evidence('<', value, '>', session)?, false)),
+        Term::Blank(value) => Ok((prefixed_rdf_evidence("_:", value, session)?, false)),
+        Term::Literal { lexical, .. } => {
+            reserve_python_repr_capacity(lexical, session)?;
+            Ok((owned_text(lexical, session)?, true))
+        }
+    }
+}
+
+fn framed_rdf_evidence(
+    prefix: char,
+    value: &str,
+    suffix: char,
+    session: &mut Session<'_>,
+) -> NativeResult<String> {
+    let capacity = value
+        .len()
+        .checked_add(prefix.len_utf8())
+        .and_then(|size| size.checked_add(suffix.len_utf8()))
+        .ok_or_else(|| NativeError::limit("native RDF evidence text size overflow"))?;
+    session.reserve_bytes(capacity)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(capacity)
+        .map_err(|_| NativeError::limit("native RDF evidence text allocation failed"))?;
+    output.push(prefix);
+    output.push_str(value);
+    output.push(suffix);
+    Ok(output)
+}
+
+fn prefixed_rdf_evidence(
+    prefix: &str,
+    value: &str,
+    session: &mut Session<'_>,
+) -> NativeResult<String> {
+    let capacity = value
+        .len()
+        .checked_add(prefix.len())
+        .ok_or_else(|| NativeError::limit("native RDF evidence text size overflow"))?;
+    session.reserve_bytes(capacity)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(capacity)
+        .map_err(|_| NativeError::limit("native RDF evidence text allocation failed"))?;
+    output.push_str(prefix);
+    output.push_str(value);
+    Ok(output)
+}
+
+fn reserve_python_repr_capacity(value: &str, session: &mut Session<'_>) -> NativeResult<()> {
+    let maximum = value.chars().try_fold(2_usize, |total, character| {
+        let escaped = match u32::from(character) {
+            0..=0xff => 4,
+            0x100..=0xffff => 6,
+            _ => 10,
+        };
+        total
+            .checked_add(escaped)
+            .ok_or_else(|| NativeError::limit("native RDF literal evidence size overflow"))
+    })?;
+    session.reserve_bytes(maximum)
+}
+
 fn push_annotation(
     annotation: Node,
     annotations: &mut Vec<Vec<u8>>,
@@ -6490,6 +6672,18 @@ fn reserved_vec<T>(count: usize, session: &mut Session<'_>) -> NativeResult<Vec<
     output
         .try_reserve_exact(count)
         .map_err(|_| NativeError::limit("native RDF allocation failed"))?;
+    Ok(output)
+}
+
+fn reserved_temporary_vec<T>(count: usize, session: &mut Session<'_>) -> NativeResult<Vec<T>> {
+    let bytes = count
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| NativeError::limit("native RDF temporary allocation overflow"))?;
+    session.reserve_temporary_bytes(bytes)?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(count)
+        .map_err(|_| NativeError::limit("native RDF temporary allocation failed"))?;
     Ok(output)
 }
 
@@ -7404,6 +7598,20 @@ mod tests {
         );
         let mut session = Session::new(&mut guard, &limits, source.len())?;
         parse_and_map(source, document_iri, &mut session)
+    }
+
+    fn mapped_partial(
+        source: &[u8],
+        document_iri: Option<&str>,
+    ) -> NativeResult<CanonicalDocument> {
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len())?;
+        Ok(parse_and_map_timed(source, document_iri, true, true, false, false, &mut session)?.0)
     }
 
     fn resolved(reference: &str, base: Option<&str>) -> NativeResult<String> {
@@ -11763,11 +11971,47 @@ mod tests {
     #[test]
     fn incomplete_mapping_fails_closed_and_is_not_advertisable() {
         let source = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
- xmlns:ex="urn:example:"><rdf:Description rdf:about="urn:s"><ex:p rdf:resource="urn:o"/></rdf:Description></rdf:RDF>"#;
+ xmlns:ex="urn:example:"><rdf:Description rdf:about="urn:s"><ex:p>quote'"\&#xE9;&#xA0;&#x1F600;</ex:p></rdf:Description></rdf:RDF>"#;
         assert_eq!(
             mapped(source, None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_INCOMPLETE",
         );
+        let partial = mapped_partial(source, None).expect("explicit partial mapping");
+        assert_eq!(partial.mapping.total_triples, 1);
+        assert_eq!(partial.mapping.consumed_triples, 0);
+        assert_eq!(
+            partial.mapping.unconsumed,
+            [RdfTripleEvidence {
+                subject: "<urn:s>".to_owned(),
+                predicate: "urn:example:p".to_owned(),
+                object: "quote'\"\\é\u{a0}😀".to_owned(),
+                object_requires_repr: true,
+            }],
+        );
+    }
+
+    #[test]
+    fn partial_mapping_evidence_charges_the_complete_selection_scan() {
+        let triples = (0..4)
+            .map(|index| Triple {
+                subject: Resource::Iri(format!("urn:subject:{index}")),
+                predicate: "urn:example:predicate".to_owned(),
+                object: Term::Iri("urn:example:object".to_owned()),
+            })
+            .collect::<Vec<_>>();
+        let consumed = [true, true, true, false];
+        let mut limits = Limits::default();
+        limits.max_canonical_work = 3;
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let error = partial_mapping_evidence(&triples, &consumed, 1, &mut session)
+            .expect_err("consumed-prefix scan must exhaust the work budget");
+        assert_eq!(error.code, "NATIVE_WIRE_LIMIT");
+        assert_eq!(error.message, "native operation exceeds max_canonical_work",);
     }
 
     #[test]

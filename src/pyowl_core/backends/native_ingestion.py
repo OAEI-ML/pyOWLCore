@@ -769,6 +769,7 @@ def _decode_prepared_retained_publication_v2(
     collect_provenance: bool,
     preserve_source_map: bool,
     expect_rdf_report: bool = False,
+    allow_partial_rdf_mapping: bool = False,
 ) -> _PreparedRetainedPublicationV2:
     reader = native._ResultReader(encoded)
     magic = reader.take(8)
@@ -866,20 +867,35 @@ def _decode_prepared_retained_publication_v2(
             "native retained publication summary has inconsistent source-map counters",
             code="NATIVE_PARSE_MODEL",
         )
-    if rdf_report is not None and (
-        not rdf_report.conformant
-        or rdf_report.consumed_triples != rdf_report.total_triples
-        or rdf_report.unconsumed_triple_count != 0
-        or rdf_report.rule_count != 0
-        or rdf_report.diagnostic_count != 0
-        or len(rdf_report.digest) != 32
-        or rdf_report.retained_bytes != 17
-        or max_row < 17
-    ):
-        raise BackendProtocolError(
-            "native retained RDF report summary is inconsistent",
-            code="NATIVE_RDF_REPORT",
+    if rdf_report is not None:
+        remaining = rdf_report.total_triples - rdf_report.consumed_triples
+        conformant_shape = (
+            rdf_report.conformant
+            and remaining == 0
+            and rdf_report.unconsumed_triple_count == 0
+            and rdf_report.rule_count == 0
+            and rdf_report.diagnostic_count == 0
+            and rdf_report.retained_bytes == 17
         )
+        partial_shape = (
+            allow_partial_rdf_mapping
+            and not rdf_report.conformant
+            and remaining > 0
+            and 0 < rdf_report.unconsumed_triple_count <= remaining
+            and rdf_report.rule_count == 1
+            and rdf_report.diagnostic_count == 0
+            and rdf_report.retained_bytes > 17
+        )
+        if (
+            rdf_report.consumed_triples > rdf_report.total_triples
+            or not (conformant_shape or partial_shape)
+            or len(rdf_report.digest) != 32
+            or max_row < 17
+        ):
+            raise BackendProtocolError(
+                "native retained RDF report summary is inconsistent",
+                code="NATIVE_RDF_REPORT",
+            )
     return _PreparedRetainedPublicationV2(
         fingerprints,
         content,
@@ -923,6 +939,7 @@ def publish_retained_functional_snapshot_v2(
         summary,
         seed=seed,
         rdf_total_triples=None,
+        allow_partial_rdf_mapping=False,
         expected_format="functional",
         extension=extension,
         parsed_native_storage=parsed_native_storage,
@@ -953,9 +970,12 @@ def publish_retained_rdfxml_snapshot_v2(
     cancellation_token: CancellationToken | None,
     load_started: float,
     root_parse_started: float,
+    allow_partial_rdf_mapping: bool = False,
 ) -> OntologySnapshot:
     """Publish one privately selected RDF/XML retained-owner checkpoint."""
 
+    if type(allow_partial_rdf_mapping) is not bool:
+        raise TypeError("allow_partial_rdf_mapping must be bool")
     decoded = _decode_retained_rdfxml_seed_v2(summary, options.limits)
     runtime = native._runtime()
     extension = runtime.extension
@@ -968,6 +988,7 @@ def publish_retained_rdfxml_snapshot_v2(
         summary,
         seed=decoded.structural,
         rdf_total_triples=decoded.total_triples,
+        allow_partial_rdf_mapping=allow_partial_rdf_mapping,
         expected_format="rdfxml",
         extension=extension,
         parsed_native_storage=parsed_native_storage,
@@ -989,6 +1010,7 @@ def _publish_retained_snapshot_v2(
     *,
     seed: _RetainedFunctionalSeedV2,
     rdf_total_triples: int | None,
+    allow_partial_rdf_mapping: bool,
     expected_format: str,
     extension: native._Extension,
     parsed_native_storage: object,
@@ -1004,6 +1026,12 @@ def _publish_retained_snapshot_v2(
     root_parse_started: float,
 ) -> OntologySnapshot:
     """Publish one guarded parser-owned load from bounded native evidence."""
+
+    if allow_partial_rdf_mapping and rdf_total_triples is None:
+        raise BackendProtocolError(
+            "partial RDF mapping cannot be selected for a non-RDF retained parser",
+            code="NATIVE_RDF_REPORT",
+        )
 
     from pyowl_core.backends.native_handoff import (
         NativeDocumentPublicationV1,
@@ -1179,11 +1207,16 @@ def _publish_retained_snapshot_v2(
         collect_provenance=options.collect_provenance,
         preserve_source_map=options.preserve_source_map,
         expect_rdf_report=rdf_total_triples is not None,
+        allow_partial_rdf_mapping=allow_partial_rdf_mapping,
     )
     options.limits.enforce("max_origin_entries", prepared.origin_rows_retained)
     options.limits.enforce(
         "max_source_map_entries", prepared.source_map_rows_retained
     )
+    if prepared.rdf_report is not None:
+        options.limits.enforce(
+            "max_diagnostics", prepared.rdf_report.unconsumed_triple_count
+        )
     if (
         options.preserve_source_map
         and prepared.source_map_rows_retained < seed.structural_occurrence_rows_scanned

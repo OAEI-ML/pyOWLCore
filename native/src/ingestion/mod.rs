@@ -28,6 +28,15 @@ pub(super) struct MappingEvidence {
     pub(super) consumed_triples: u64,
     pub(super) occurrence_count: u64,
     pub(super) rule_ids: &'static [&'static str],
+    pub(crate) unconsumed: Vec<RdfTripleEvidence>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RdfTripleEvidence {
+    pub(crate) subject: String,
+    pub(crate) predicate: String,
+    pub(crate) object: String,
+    pub(crate) object_requires_repr: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,13 +84,23 @@ fn parse_rdfxml(
     allow_swrl: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<CanonicalDocument> {
-    Ok(parse_rdfxml_timed(source, document_iri, allow_swrl, false, false, session)?.0)
+    Ok(parse_rdfxml_timed(
+        source,
+        document_iri,
+        allow_swrl,
+        false,
+        false,
+        false,
+        session,
+    )?
+    .0)
 }
 
 fn parse_rdfxml_timed(
     source: &[u8],
     document_iri: Option<&str>,
     allow_swrl: bool,
+    allow_partial_rdf_mapping: bool,
     capture_occurrences: bool,
     preserve_source_map: bool,
     session: &mut Session<'_>,
@@ -98,6 +117,7 @@ fn parse_rdfxml_timed(
         source,
         document_iri,
         allow_swrl,
+        allow_partial_rdf_mapping,
         capture_occurrences,
         preserve_source_map,
         session,
@@ -125,11 +145,43 @@ pub(crate) fn parse_rdfxml_retained_v2(
     allow_swrl: bool,
     require_empty_imports: bool,
 ) -> NativeResult<RetainedRdfXmlOutcomeV2> {
+    parse_rdfxml_retained_v2_with_mapping(
+        source,
+        document_iri,
+        session,
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+        collect_provenance,
+        preserve_source_map,
+        false,
+        allow_swrl,
+        require_empty_imports,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn parse_rdfxml_retained_v2_with_mapping(
+    source: &[u8],
+    document_iri: Option<&str>,
+    session: &mut Session<'_>,
+    limits: Limits,
+    cancellation: Cancellation,
+    interrupt: Option<crate::cancel::InterruptSlot>,
+    caller_external_bytes: usize,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+) -> NativeResult<RetainedRdfXmlOutcomeV2> {
     let parse_started = Instant::now();
     let (mut document, mapping_ns) = parse_rdfxml_timed(
         source,
         document_iri,
         allow_swrl,
+        allow_partial_rdf_mapping,
         collect_provenance || preserve_source_map,
         preserve_source_map,
         session,
@@ -252,6 +304,8 @@ pub(crate) fn parse_rdfxml_retained_v2(
         rows,
         document.decoded_codepoints,
         document.mapping.total_triples,
+        document.mapping.consumed_triples,
+        std::mem::take(&mut document.mapping.unconsumed),
         document.mapping.occurrence_count,
         &document.occurrences,
         std::mem::take(&mut document.language_spellings),
@@ -498,6 +552,90 @@ mod tests {
         assert!(report.rows.unconsumed_triples.is_empty());
         assert!(report.rows.rule_ids.is_empty());
         assert!(report.rows.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn retained_rdfxml_partial_mapping_keeps_exact_lazy_report_rows() {
+        let source = br#"<rdf:RDF
+            xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:e="urn:example:">
+          <rdf:Description rdf:about="urn:s"><e:p>value</e:p></rdf:Description>
+        </rdf:RDF>"#;
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
+        let mut outcome = parse_rdfxml_retained_v2_with_mapping(
+            source,
+            None,
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            source.len(),
+            false,
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect("explicit partial mapping");
+        let unresolved = crate::parse::prepare_retained_publication_v2(
+            &outcome.storage,
+            &outcome.metadata,
+            b"manifest",
+            "document-key",
+            false,
+            false,
+            &limits,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect_err("raw literal evidence must not reach publication");
+        assert_eq!(unresolved.code, "NATIVE_PROTOCOL");
+        outcome
+            .metadata
+            .render_rdf_literal_evidence(|lexical| {
+                Ok::<String, std::convert::Infallible>(format!("'{lexical}'"))
+            })
+            .expect("literal evidence rendering");
+        let prepared = crate::parse::prepare_retained_publication_v2(
+            &outcome.storage,
+            &outcome.metadata,
+            b"manifest",
+            "document-key",
+            false,
+            false,
+            &limits,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect("prepared partial RDF report");
+        let report = prepared.rdf_report.expect("partial RDF report");
+        assert!(!report.conformant);
+        assert_eq!(report.consumed_triples, 0);
+        assert_eq!(report.total_triples, 1);
+        assert_eq!(report.rows.header[0], 0);
+        assert_eq!(report.rows.unconsumed_triples.len(), 1);
+        assert_eq!(report.rows.rule_ids.len(), 1);
+        assert!(report.rows.diagnostics.is_empty());
+
+        fn text(value: &str) -> Vec<u8> {
+            let mut encoded = Vec::new();
+            encoded.extend_from_slice(&(value.len() as u32).to_le_bytes());
+            encoded.extend_from_slice(value.as_bytes());
+            encoded
+        }
+        let expected = ["<urn:s>", "urn:example:p", "'value'"]
+            .into_iter()
+            .flat_map(text)
+            .collect::<Vec<_>>();
+        assert_eq!(report.rows.unconsumed_triples[0], expected);
+        assert_eq!(report.rows.rule_ids[0], text("OWL2-RDF-REVERSE"));
     }
 
     #[test]
