@@ -1723,11 +1723,11 @@ def test_parsed_closure_bridge_allocations_fail_before_owner_publication(
     root = (
         b"Ontology(<urn:allocation:parsed-closure:root> "
         b"Import(<urn:allocation:parsed-closure:child>) "
-        b"Declaration(Class(<urn:allocation:parsed-closure:Root>)))"
+        b"ClassAssertion(<urn:allocation:parsed-closure:Root> _:root))"
     )
     child = (
         b"Ontology(<urn:allocation:parsed-closure:child> "
-        b"Declaration(Class(<urn:allocation:parsed-closure:Child>)))"
+        b"ClassAssertion(<urn:allocation:parsed-closure:Child> _:child))"
     )
     parse = extension._parse_functional_retained_v2
     merge = extension._merge_parsed_structural_snapshot_v2
@@ -1818,6 +1818,7 @@ def test_parsed_closure_bridge_allocations_fail_before_owner_publication(
             imports=ImportPolicy.RESOLVE_LOCAL,
             backend=BackendPreference.NATIVE,
             collect_provenance=True,
+            preserve_source_map=True,
         ),
         resolver=MappingResolver({"urn:allocation:parsed-closure:child": child}),
     )
@@ -1838,8 +1839,8 @@ def test_parsed_closure_bridge_allocations_fail_before_owner_publication(
     effective_document_ordinals = captured["effective_document_ordinals"]
     closure_document_ordinals = captured["closure_document_ordinals"]
     anonymous_scope_targets = captured["anonymous_scope_targets"]
-    assert source_maps is None
-    assert effective_origins is None
+    assert source_maps is not None
+    assert effective_origins is not None
     assert effective_document_ordinals is not None
     assert closure_document_ordinals is not None
     assert anonymous_scope_targets is not None
@@ -1881,7 +1882,7 @@ def test_parsed_closure_bridge_allocations_fail_before_owner_publication(
         closure_document_ordinals=closure_document_ordinals,
         anonymous_scope_targets=anonymous_scope_targets,
     )
-    assert allocations == 17
+    assert allocations == 37
     assert handle._publication_attestation_v2() == attestation
     assert handle._publication_closed_v2() is False
     handle._publication_close_v2()
