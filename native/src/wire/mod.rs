@@ -201,6 +201,15 @@ fn validate(data: &[u8], limits: &Limits, guard: &mut Guard) -> NativeResult<Val
     validate_with_allocations(data, limits, guard, &mut allocations)
 }
 
+#[cfg(feature = "process-allocator-test")]
+pub(crate) fn validate_process_allocator_fixture(
+    data: &[u8],
+    limits: &Limits,
+    guard: &mut Guard,
+) -> NativeResult<()> {
+    validate(data, limits, guard).map(drop)
+}
+
 fn validate_with_allocations(
     data: &[u8],
     limits: &Limits,

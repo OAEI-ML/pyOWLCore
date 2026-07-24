@@ -1,8 +1,9 @@
 //! Test-only entry points for exercising production fallible allocations with
 //! an executable-owned global allocator.
 
-use crate::cancel::Cancellation;
+use crate::cancel::{Cancellation, Guard};
 use crate::error::NativeError;
+use crate::hash::crc32c;
 use crate::limits::Limits;
 use crate::model::{
     prepare_encoded_structural_columns_from_tables_v1, Category, ComponentId, EncodedRootKindV1,
@@ -10,6 +11,11 @@ use crate::model::{
     PreparedEncodedStructuralColumnsV1,
 };
 use crate::wire::Validation;
+
+const WIRE_HEADER_BYTES: usize = 96;
+const WIRE_DIRECTORY_BYTES: usize = 72;
+const WIRE_SECTION_COUNT: usize = 14;
+const WIRE_FIXTURE_BYTES: usize = WIRE_HEADER_BYTES + WIRE_DIRECTORY_BYTES * WIRE_SECTION_COUNT;
 
 /// A stable, allocation-free view of a native failure for the external
 /// allocator harness.
@@ -160,6 +166,72 @@ impl ComponentBuildFixture {
         )?;
         builder.intern_canonical(&self.canonical)?;
         Ok(())
+    }
+}
+
+/// One deterministic wire whose header and complete required directory are
+/// valid but whose first empty-section digest is deliberately corrupt.
+///
+/// Construction happens before allocator injection. Validation therefore
+/// reaches the production directory, range, and table-ledger allocations
+/// before returning the stable wire corruption.
+#[derive(Debug)]
+pub struct WireValidationFixture {
+    bytes: Vec<u8>,
+    cancellation: Cancellation,
+    limits: Limits,
+}
+
+impl WireValidationFixture {
+    /// Prepare the malformed wire outside the allocator sweep.
+    pub fn new() -> Result<Self, Failure> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(WIRE_FIXTURE_BYTES)
+            .map_err(|_| Failure {
+                code: "NATIVE_WIRE_LIMIT",
+                message: "native wire allocator test-fixture allocation failed",
+            })?;
+        bytes.resize(WIRE_FIXTURE_BYTES, 0);
+        bytes[..8].copy_from_slice(b"PYOCORE\0");
+        bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[10..12].copy_from_slice(&0_u16.to_le_bytes());
+        bytes[12..16].copy_from_slice(&(WIRE_HEADER_BYTES as u32).to_le_bytes());
+        bytes[16..20].copy_from_slice(&0_u32.to_le_bytes());
+        bytes[20..24].copy_from_slice(&(WIRE_SECTION_COUNT as u32).to_le_bytes());
+        bytes[24..28].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[28..32].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[32..40].copy_from_slice(&(WIRE_FIXTURE_BYTES as u64).to_le_bytes());
+        bytes[40..48].copy_from_slice(&(WIRE_HEADER_BYTES as u64).to_le_bytes());
+        bytes[48..56]
+            .copy_from_slice(&((WIRE_DIRECTORY_BYTES * WIRE_SECTION_COUNT) as u64).to_le_bytes());
+        for index in 0..WIRE_SECTION_COUNT {
+            let offset = WIRE_HEADER_BYTES + index * WIRE_DIRECTORY_BYTES;
+            let kind = u16::try_from(index + 1).map_err(|_| Failure {
+                code: "NATIVE_WIRE_LIMIT",
+                message: "native wire allocator test-fixture section count overflowed",
+            })?;
+            bytes[offset..offset + 2].copy_from_slice(&kind.to_le_bytes());
+            bytes[offset + 2..offset + 4].copy_from_slice(&1_u16.to_le_bytes());
+            bytes[offset + 4..offset + 8].copy_from_slice(&1_u32.to_le_bytes());
+            bytes[offset + 8..offset + 16]
+                .copy_from_slice(&(WIRE_FIXTURE_BYTES as u64).to_le_bytes());
+        }
+        let header_crc = crc32c(&bytes[..WIRE_HEADER_BYTES]);
+        bytes[88..92].copy_from_slice(&header_crc.to_le_bytes());
+        Ok(Self {
+            bytes,
+            cancellation: Cancellation::with_duration(None),
+            limits: Limits::default(),
+        })
+    }
+
+    /// Validate through the production wire path and return its deliberate
+    /// corruption only after all pre-semantic ledgers have been allocated.
+    pub fn validate(&self) -> Result<(), Failure> {
+        let mut guard = Guard::new(self.cancellation.clone(), None, 1);
+        crate::wire::validate_process_allocator_fixture(&self.bytes, &self.limits, &mut guard)
+            .map_err(Failure::from)
     }
 }
 

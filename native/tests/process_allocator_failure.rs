@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use _native::process_allocator_test::{
     wire_validation_receipt, ComponentBuildFixture, ComponentEncodingFixture, Failure,
+    WireValidationFixture,
 };
 
 const DISARMED: u8 = 0;
@@ -128,6 +129,8 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
         ComponentBuildFixture::new(&canonical).expect("component build fixture must initialize");
     let mut component =
         ComponentEncodingFixture::new(&canonical).expect("component fixture must freeze");
+    let wire = WireValidationFixture::new()
+        .expect("wire validation fixture must initialize before arming");
 
     let (baseline_build, build_allocations) = count_allocations(|| component_build.build());
     baseline_build.expect("component build baseline must succeed");
@@ -218,6 +221,21 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
     let boundary_columns = fail_allocation(column_allocations, || prepared.publish())
         .expect("first non-failing encoded-column boundary must publish");
     assert_eq!(boundary_columns, baseline_columns);
+
+    let (baseline_wire, wire_allocations) = count_allocations(|| wire.validate());
+    let baseline_wire =
+        baseline_wire.expect_err("malformed wire baseline must reach its digest rejection");
+    assert_eq!(baseline_wire.code, "NATIVE_WIRE_CORRUPTION");
+    assert_eq!(baseline_wire.message, "PYOCORE section SHA-256 mismatch");
+    assert!(wire_allocations > 1);
+
+    for fail_after in 0..wire_allocations {
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || wire.validate()));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let boundary_wire = fail_allocation(wire_allocations, || wire.validate())
+        .expect_err("first non-failing wire boundary must recover its baseline corruption");
+    assert_eq!(boundary_wire, baseline_wire);
 
     let (baseline_receipt, receipt_allocations) = count_allocations(wire_validation_receipt);
     let baseline_receipt = baseline_receipt.expect("wire receipt baseline must publish");
