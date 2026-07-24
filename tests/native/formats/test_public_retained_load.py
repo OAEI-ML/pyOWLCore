@@ -2132,6 +2132,7 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["segmented_right_rows_emitted"] == 0
     assert observed["hostile_descriptor_code"] == "ENCODED_VIEW_DESCRIPTOR"
     assert observed["syntax_error_code"] == "FORMAT_SYNTAX"
+    assert observed["limit_error_code"] == "NATIVE_WIRE_LIMIT"
     assert len(observed["wire_sha256"]) == 64
     assert len(observed["wire_python_sha256"]) == 64
     assert observed["wire_python_parity"] is True
@@ -2194,6 +2195,9 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["closure_matrix_parity"] is True
     assert observed["closure_matrix_snapshot_types"] == ["_NativeOntologySnapshot"]
     assert observed["closure_matrix_document_counts"] == [4]
+    assert observed["closure_malformed_import_code"] == "FORMAT_SYNTAX"
+    assert observed["closure_cancellation_error_code"] == "OPERATION_CANCELLED"
+    assert observed["closure_failure_merge_calls"] == 0
     assert observed["ingestion_features"] == []
     assert observed["view_features"] == []
     assert observed["encoded_view_schemas"] == {}

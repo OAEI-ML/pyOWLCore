@@ -21,6 +21,7 @@ def main() -> None:
         AxiomScope,
         BackendPreference,
         BackendProtocolError,
+        CancellationSource,
         DocumentFormat,
         EncodedStructuralView,
         ImportPolicy,
@@ -28,7 +29,9 @@ def main() -> None:
         MappingResolver,
         OntologyDelta,
         OntologySyntaxError,
+        OperationCancelledError,
         ParseLimits,
+        ResourceLimitError,
         SnapshotInUseError,
         UnresolvedImportWarning,
         apply_delta,
@@ -282,6 +285,20 @@ def main() -> None:
         syntax_error_code = error.code
     if syntax_error_code is None:
         raise AssertionError("forced native malformed input did not fail closed")
+
+    limit_error_code = None
+    try:
+        load_snapshot(
+            source,
+            options=replace(
+                options(BackendPreference.NATIVE),
+                limits=ParseLimits(max_axioms=1),
+            ),
+        )
+    except ResourceLimitError as error:
+        limit_error_code = error.code
+    if limit_error_code is None:
+        raise AssertionError("forced native limit did not fail closed")
 
     reference_wire = encode_snapshot(reference)
     retained_wire = encode_snapshot(selected)
@@ -627,6 +644,88 @@ def main() -> None:
     if not closure_matrix_parity:
         raise AssertionError("installed retained Functional closure matrix diverged")
 
+    failure_root = (
+        b"Ontology(<urn:retained-installed-failure:root> "
+        b"Import(<urn:retained-installed-failure:child>) "
+        b"Declaration(Class(<urn:retained-installed-failure:Root>)))"
+    )
+    malformed_child = (
+        b"Ontology(<urn:retained-installed-failure:child> "
+        b"Declaration(Class(<urn:retained-installed-failure:Child>))"
+    )
+    cancellation_child = (
+        b"Ontology(<urn:retained-installed-failure:child> "
+        b"Declaration(Class(<urn:retained-installed-failure:Child>)))"
+    )
+
+    def failure_options() -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RESOLVE_LOCAL,
+            backend=BackendPreference.NATIVE,
+            collect_provenance=False,
+            limits=replace(ParseLimits(), max_concurrent_fetches=1),
+        )
+
+    merge_calls_after_failure = 0
+    real_merge = cast(Any, extension)._merge_parsed_structural_snapshot_v2
+
+    def unexpected_failure_merge(*_arguments: object, **_keywords: object) -> object:
+        nonlocal merge_calls_after_failure
+        merge_calls_after_failure += 1
+        raise AssertionError("failed installed closure reached final owner publication")
+
+    cast(Any, extension)._merge_parsed_structural_snapshot_v2 = unexpected_failure_merge
+    malformed_import_code = None
+    try:
+        load_snapshot(
+            failure_root,
+            options=failure_options(),
+            resolver=MappingResolver(
+                {"urn:retained-installed-failure:child": malformed_child},
+            ),
+        )
+    except OntologySyntaxError as error:
+        malformed_import_code = error.code
+    if malformed_import_code is None:
+        raise AssertionError("malformed installed import did not fail closed")
+
+    cancellation = CancellationSource()
+    cancellation_reason = "installed Functional import parse cancelled"
+    real_retained_parse = cast(Any, extension)._parse_functional_retained_v2
+
+    def cancel_child_parse(
+        request: object,
+        *arguments: object,
+        **keywords: object,
+    ) -> object:
+        if isinstance(request, bytes) and request.endswith(cancellation_child):
+            cancellation.cancel(cancellation_reason)
+        return real_retained_parse(request, *arguments, **keywords)
+
+    cast(Any, extension)._parse_functional_retained_v2 = cancel_child_parse
+    cancellation_error_code = None
+    try:
+        load_snapshot(
+            failure_root,
+            options=failure_options(),
+            resolver=MappingResolver(
+                {"urn:retained-installed-failure:child": cancellation_child},
+            ),
+            cancellation_token=cancellation.token,
+        )
+    except OperationCancelledError as error:
+        cancellation_error_code = error.code
+        if cancellation_reason not in str(error):
+            raise AssertionError("installed cancellation lost its reason") from error
+    finally:
+        cast(Any, extension)._parse_functional_retained_v2 = real_retained_parse
+        cast(Any, extension)._merge_parsed_structural_snapshot_v2 = real_merge
+    if cancellation_error_code is None:
+        raise AssertionError("installed import cancellation did not fail closed")
+    if merge_calls_after_failure != 0:
+        raise AssertionError("failed installed closure published a native owner")
+
     auto_source = (
         b"Ontology(<urn:retained-auto-installed> "
         b"Import(<urn:retained-auto-installed:ignored>) "
@@ -798,6 +897,9 @@ def main() -> None:
                 "closure_matrix_document_counts": sorted(closure_matrix_document_counts),
                 "closure_matrix_parity": closure_matrix_parity,
                 "closure_matrix_snapshot_types": sorted(closure_matrix_types),
+                "closure_cancellation_error_code": cancellation_error_code,
+                "closure_failure_merge_calls": merge_calls_after_failure,
+                "closure_malformed_import_code": malformed_import_code,
                 "fingerprint_parity": (
                     selected.structural_fingerprint == reference.structural_fingerprint
                     and selected.logical_fingerprint == reference.logical_fingerprint
@@ -886,6 +988,7 @@ def main() -> None:
                     right_after_segmented_native.rows_emitted - right_before_native.rows_emitted
                 ),
                 "syntax_error_code": syntax_error_code,
+                "limit_error_code": limit_error_code,
                 "summary_fingerprint_parity": summary_fingerprint_parity,
                 "summary_inventory_parity": summary_inventory_parity,
                 "summary_node_count_parity": (
