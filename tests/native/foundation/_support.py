@@ -92,6 +92,12 @@ class NativeTestExtension(Protocol):
         materialize_document: bool = False,
     ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
 
+    def _fork_parsed_structural_storage_v2(
+        self,
+        parsed: object,
+        cancel: NativeTestCancellation | None = None,
+    ) -> object: ...
+
     def _merge_parsed_structural_snapshot_v2(
         self,
         parsed_documents: tuple[object, ...],
@@ -101,6 +107,7 @@ class NativeTestExtension(Protocol):
         cancel: NativeTestCancellation | None = None,
         *,
         source_maps: object | None = None,
+        rdf_reports: object | None = None,
         effective_origins: object | None = None,
         effective_document_ordinals: object | None = None,
         closure_document_ordinals: object | None = None,
@@ -116,6 +123,7 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
         *,
         source_maps: object | None = None,
+        rdf_reports: object | None = None,
         effective_origins: object | None = None,
         effective_document_ordinals: object | None = None,
         closure_document_ordinals: object | None = None,

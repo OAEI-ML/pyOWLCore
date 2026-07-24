@@ -763,6 +763,7 @@ class SnapshotLoader:
         retain_native = options.backend is not BackendPreference.PYTHON and resolved.format in {
             None,
             DocumentFormat.FUNCTIONAL,
+            DocumentFormat.RDF_XML,
         }
         if retain_native:
             from pyowl_core.backends.parser import _parse_import_for_retained_load
@@ -1147,9 +1148,18 @@ def _with_resolved_provenance(
         acquisition_locator=acquired.locator,
         media_type=media_type,
     )
-    return document if provenance == document.provenance else replace(
-        document,
-        provenance=provenance,
+    if provenance == document.provenance:
+        return document
+    from .native_storage import _rebind_native_document_provenance_v2
+
+    rebound = _rebind_native_document_provenance_v2(document, provenance)
+    return (
+        rebound
+        if rebound is not None
+        else replace(
+            document,
+            provenance=provenance,
+        )
     )
 
 

@@ -8,7 +8,7 @@
 use std::mem::size_of;
 use std::sync::Mutex;
 
-use crate::cancel::{Cancellation, InterruptSlot};
+use crate::cancel::{Cancellation, Guard, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
 use crate::index::{
     build_retained_axiom_type_index_v1, build_retained_signature_index_v1,
@@ -448,6 +448,65 @@ impl TypedFacadeStorageV2 {
 
     pub(crate) fn has_raw_document_overrides(&self) -> bool {
         !self.raw_document_tables.is_empty()
+    }
+
+    /// Fork one fresh parser document while sharing its immutable component
+    /// arena. Only root manifests and their derived indexes are copied; the
+    /// canonical component rows remain Arc-owned by the parser arena.
+    pub(crate) fn fork_parser_document(
+        self,
+        cancellation: Cancellation,
+        interrupt: Option<InterruptSlot>,
+    ) -> Result<(Self, Self), (Self, NativeError)> {
+        let result = (|| {
+            let mut guard = match interrupt.as_ref() {
+                Some(slot) => Guard::with_interrupt(
+                    cancellation.clone(),
+                    self.limits.deadline,
+                    self.limits.cancellation_stride,
+                    slot.clone(),
+                ),
+                None => Guard::new(
+                    cancellation.clone(),
+                    self.limits.deadline,
+                    self.limits.cancellation_stride,
+                ),
+            };
+            guard.check(0, true)?;
+            if self.document_count != 1 {
+                return Err(NativeError::protocol(
+                    "native parser storage fork requires exactly one document",
+                ));
+            }
+            let source_counters = self.counters()?;
+            let source_external_bytes = preflight_parser_fork_memory_v2(
+                &self.arena,
+                &self.effective_tables,
+                &self.raw_document_tables,
+                &source_counters,
+                &self.limits,
+            )?;
+            let mut clone_work = 0_u64;
+            let effective_tables =
+                clone_parser_tables_v2(&self.effective_tables, &mut guard, &mut clone_work)?;
+            let raw_document_tables =
+                clone_parser_tables_v2(&self.raw_document_tables, &mut guard, &mut clone_work)?;
+            guard.check(clone_work, true)?;
+            Self::freeze_with_external(
+                self.arena.clone(),
+                effective_tables,
+                raw_document_tables,
+                self.document_count,
+                self.limits,
+                cancellation,
+                interrupt,
+                source_external_bytes,
+            )
+        })();
+        match result {
+            Ok(fork) => Ok((self, fork)),
+            Err(error) => Err((self, error)),
+        }
     }
 
     /// Consume one parser owner into its arena plus raw and optional effective
@@ -1190,6 +1249,61 @@ impl TypedFacadeStorageV2 {
     }
 }
 
+fn clone_parser_tables_v2(
+    tables: &[TypedFacadeTableV2],
+    guard: &mut Guard,
+    work: &mut u64,
+) -> NativeResult<Vec<TypedFacadeTableV2>> {
+    guard.check(*work, true)?;
+    let mut cloned = Vec::new();
+    cloned
+        .try_reserve_exact(tables.len())
+        .map_err(|_| NativeError::limit("native parser table fork allocation failed"))?;
+    for table in tables {
+        guard.check(*work, true)?;
+        let mut roots = Vec::new();
+        roots
+            .try_reserve_exact(table.roots.len())
+            .map_err(|_| NativeError::limit("native parser root fork allocation failed"))?;
+        for identifier in &table.roots {
+            *work = checked_add(*work, 1)?;
+            guard.check(*work, false)?;
+            roots.push(*identifier);
+        }
+        cloned.push(TypedFacadeTableV2::new(table.coordinate, roots));
+    }
+    guard.check(*work, true)?;
+    Ok(cloned)
+}
+
+fn preflight_parser_fork_memory_v2(
+    arena: &NativeComponentArena,
+    effective: &[TypedFacadeTableV2],
+    raw: &[TypedFacadeTableV2],
+    source: &TypedFacadeCounterSnapshotV2,
+    limits: &Limits,
+) -> NativeResult<usize> {
+    let source_external_bytes = source
+        .retained_owner_bytes
+        .checked_sub(source.retained_component_bytes)
+        .ok_or_else(|| NativeError::protocol("native parser owner accounting is inconsistent"))?;
+    let fork_root_bytes = parser_fork_root_allocation_bytes(effective, raw)?;
+    let fork_metadata_bytes = metadata_allocation_bytes(effective.len(), raw.len())?;
+    let fork_base_external = source_external_bytes
+        .checked_add(fork_root_bytes)
+        .and_then(|value| value.checked_add(fork_metadata_bytes))
+        .ok_or_else(|| NativeError::limit("native parser fork memory accounting overflow"))?;
+    check_retained_limit(
+        arena,
+        fork_base_external,
+        source.retained_index_bytes,
+        limits,
+    )?;
+
+    usize::try_from(source_external_bytes)
+        .map_err(|_| NativeError::limit("native parser external size exceeds usize"))
+}
+
 fn validate_page_bounds(max_rows: u32, max_bytes: u64, limits: &Limits) -> NativeResult<()> {
     if !(1..=MAX_FACADE_PAGE_ROWS_V2).contains(&max_rows)
         || u64::from(max_rows) > limits.max_wire_rows
@@ -1449,6 +1563,21 @@ fn root_allocation_bytes(
     })
 }
 
+fn parser_fork_root_allocation_bytes(
+    effective: &[TypedFacadeTableV2],
+    raw: &[TypedFacadeTableV2],
+) -> NativeResult<u64> {
+    effective.iter().chain(raw).try_fold(0_u64, |total, table| {
+        let bytes = table
+            .roots
+            .len()
+            .checked_mul(size_of::<ComponentId>())
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| NativeError::limit("native parser fork root size overflow"))?;
+        checked_add(total, bytes)
+    })
+}
+
 fn metadata_allocation_bytes(effective_capacity: usize, raw_capacity: usize) -> NativeResult<u64> {
     let table_capacity = effective_capacity
         .checked_add(raw_capacity)
@@ -1585,7 +1714,10 @@ mod tests {
         TypedFacadeTableV2::new(coordinate, roots)
     }
 
-    fn owner(rows: &[Vec<u8>]) -> (TypedFacadeStorageV2, NativeComponentArena, Vec<ComponentId>) {
+    fn owner_with_limits(
+        rows: &[Vec<u8>],
+        limits: Limits,
+    ) -> (TypedFacadeStorageV2, NativeComponentArena, Vec<ComponentId>) {
         let (arena, roots, _entity) = frozen_axioms(rows);
         let witness = arena.clone();
         let storage = TypedFacadeStorageV2::freeze(
@@ -1602,12 +1734,16 @@ mod tests {
             ],
             Vec::new(),
             1,
-            Limits::default(),
+            limits,
             Cancellation::with_duration(None),
             None,
         )
         .expect("typed owner");
         (storage, witness, roots)
+    }
+
+    fn owner(rows: &[Vec<u8>]) -> (TypedFacadeStorageV2, NativeComponentArena, Vec<ComponentId>) {
+        owner_with_limits(rows, Limits::default())
     }
 
     #[test]
@@ -1701,6 +1837,106 @@ mod tests {
         assert_eq!(counters.contains_requests, 2);
         assert_eq!(counters.contains_hits, 1);
         assert!(counters.canonical_encode_requests >= 4);
+    }
+
+    #[test]
+    fn parser_fork_bounds_clone_memory_and_restores_the_source_on_failure() {
+        let rows = vec![
+            declaration("urn:typed:fork-a"),
+            declaration("urn:typed:fork-b"),
+        ];
+        let coordinate = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+
+        let (baseline, _witness, _roots) = owner(&rows);
+        let source_counters = baseline.counters().expect("source counters");
+        let (baseline, baseline_fork) = baseline
+            .fork_parser_document(Cancellation::with_duration(None), None)
+            .expect("baseline parser fork");
+        let fork_counters = baseline_fork.counters().expect("fork counters");
+        let source_external = source_counters
+            .retained_owner_bytes
+            .checked_sub(source_counters.retained_component_bytes)
+            .expect("source external bytes");
+        let retained_pair = source_external
+            .checked_add(fork_counters.retained_owner_bytes)
+            .expect("retained parser pair");
+        let physical_peak = fork_counters.peak_freeze_live_bytes;
+        assert!(physical_peak >= retained_pair);
+        assert!(physical_peak > source_counters.peak_freeze_live_bytes);
+        drop((baseline, baseline_fork));
+
+        let (tight, tight_witness, _roots) =
+            owner_with_limits(&rows, limits_with_memory(physical_peak));
+        let (tight, tight_fork) = tight
+            .fork_parser_document(Cancellation::with_duration(None), None)
+            .expect("exact physical fork peak");
+        assert!(tight.arena().shares_storage_with(&tight_witness));
+        assert!(tight_fork.arena().shares_storage_with(&tight_witness));
+        assert_eq!(
+            tight_fork
+                .counters()
+                .expect("tight fork counters")
+                .peak_freeze_live_bytes,
+            physical_peak
+        );
+        drop((tight, tight_fork));
+
+        let (limited, limited_witness, _roots) =
+            owner_with_limits(&rows, limits_with_memory(physical_peak - 1));
+        let (limited, limit_error) = limited
+            .fork_parser_document(Cancellation::with_duration(None), None)
+            .expect_err("fork below its physical peak");
+        assert_eq!(limit_error.code, "NATIVE_WIRE_LIMIT");
+        assert!(limited.arena().shares_storage_with(&limited_witness));
+        assert_eq!(
+            limited
+                .page(
+                    TypedFacadePageRequestV2::new(
+                        coordinate,
+                        false,
+                        0,
+                        MAX_FACADE_PAGE_ROWS_V2,
+                        MAX_FACADE_PAGE_BYTES_V2,
+                    ),
+                    Cancellation::with_duration(None),
+                    None,
+                )
+                .expect("recovered limit owner")
+                .rows,
+            rows
+        );
+
+        let (cancellable, cancellable_witness, _roots) = owner(&rows);
+        let before = cancellable.counters().expect("cancellable counters");
+        let (recovered, cancellation_error) = cancellable
+            .fork_parser_document(Cancellation::with_duration(Some(Duration::ZERO)), None)
+            .expect_err("cancelled parser fork");
+        assert_eq!(cancellation_error.code, "NATIVE_DEADLINE");
+        assert_eq!(recovered.counters().expect("recovered counters"), before);
+        let (recovered, recovered_fork) = recovered
+            .fork_parser_document(Cancellation::with_duration(None), None)
+            .expect("source remains reusable after cancellation");
+        assert!(recovered.arena().shares_storage_with(&cancellable_witness));
+        assert!(recovered_fork
+            .arena()
+            .shares_storage_with(&cancellable_witness));
+        assert_eq!(
+            recovered_fork
+                .page(
+                    TypedFacadePageRequestV2::new(
+                        coordinate,
+                        false,
+                        0,
+                        MAX_FACADE_PAGE_ROWS_V2,
+                        MAX_FACADE_PAGE_BYTES_V2,
+                    ),
+                    Cancellation::with_duration(None),
+                    None,
+                )
+                .expect("reused fork")
+                .rows,
+            rows
+        );
     }
 
     #[test]

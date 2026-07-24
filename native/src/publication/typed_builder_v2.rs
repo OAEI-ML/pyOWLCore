@@ -444,9 +444,9 @@ impl TypedFacadeBuilderV2 {
         base_external_bytes: usize,
         source_owner_bytes: usize,
     ) -> NativeResult<TypedFacadeStorageV2> {
-        if sources.len() < 2 {
+        if sources.is_empty() {
             return Err(NativeError::protocol(
-                "native closure composition requires at least two parser owners",
+                "native closure composition requires at least one parser owner",
             ));
         }
         validate_reachability(effective_documents, closure_documents, sources.len())?;
@@ -2073,6 +2073,77 @@ mod tests {
         assert!(source_arenas
             .iter()
             .all(|source| merged.arena().shares_storage_with(source)));
+    }
+
+    #[test]
+    fn builder_composes_one_native_owner_and_still_rejects_empty_input() {
+        let rows = sorted(vec![
+            declaration("class", "urn:builder:one-root"),
+            declaration("class", "urn:builder:one-child"),
+        ]);
+        let limits = Limits::default();
+        let mut builder =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("source builder");
+        builder
+            .add_document(&[], &rows, &[])
+            .expect("source document");
+        let source = builder.freeze(&[vec![0]], &[0]).expect("source storage");
+        let source_arena = source.arena().clone();
+        let source_counters = source.counters().expect("source counters");
+
+        let merged = TypedFacadeBuilderV2::compose_native_documents(
+            vec![source],
+            &[vec![0]],
+            &[0],
+            &[None],
+            limits,
+            Cancellation::with_duration(None),
+            None,
+            0,
+            0,
+        )
+        .expect("one-owner closure");
+        let document = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+        let closure = TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms);
+        assert_eq!(page(&merged, document, false), rows);
+        assert_eq!(page(&merged, document, true), rows);
+        assert_eq!(page(&merged, closure, false), rows);
+        let counters = merged.counters().expect("merged counters");
+        assert_eq!(counters.retained_document_tables, 1);
+        assert_eq!(
+            counters.canonical_input_rows,
+            source_counters.canonical_input_rows
+        );
+        assert_eq!(
+            counters.component.unique_nodes,
+            source_counters.component.unique_nodes
+        );
+        assert_eq!(
+            counters.retained_component_bytes,
+            source_counters.retained_component_bytes + merged.arena().partition_manifest_bytes()
+        );
+        assert_eq!(counters.publication_structural_rows_copied, 0);
+        assert_eq!(counters.publication_structural_bytes_copied, 0);
+        assert_eq!(merged.arena().partition_count(), 1);
+        assert!(merged.arena().shares_storage_with(&source_arena));
+
+        let empty = TypedFacadeBuilderV2::compose_native_documents(
+            Vec::new(),
+            &[],
+            &[],
+            &[],
+            limits,
+            Cancellation::with_duration(None),
+            None,
+            0,
+            0,
+        )
+        .expect_err("empty parser-owner closure must fail");
+        assert_eq!(
+            empty,
+            NativeError::protocol("native closure composition requires at least one parser owner")
+        );
     }
 
     #[test]

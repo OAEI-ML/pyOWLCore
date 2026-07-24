@@ -1243,13 +1243,43 @@ impl PublicationStorageV2 {
         rdf_report: Option<TypedRdfReportRowsV2>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
+        let rdf_reports = rdf_report
+            .map(|report| {
+                let mut reports = Vec::new();
+                reports.try_reserve_exact(1).map_err(|_| {
+                    NativeError::limit("typed V2 RDF document-table allocation failed")
+                })?;
+                reports.push(Some(report));
+                Ok(reports)
+            })
+            .transpose()?;
         Self::from_typed_structural_parts(
             attestation,
             typed_structural,
             origin_rows,
             raw_origin_rows,
             source_maps,
-            rdf_report,
+            rdf_reports,
+            parser_bytes,
+        )
+    }
+
+    pub(super) fn from_typed_structural_with_auxiliary_documents(
+        attestation: NativeSnapshotAttestationV2,
+        typed_structural: TypedFacadeStorageV2,
+        origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+        raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+        source_maps: Option<Vec<TypedSourceMapRowsV2>>,
+        rdf_reports: Option<Vec<Option<TypedRdfReportRowsV2>>>,
+        parser_bytes: u64,
+    ) -> NativeResult<Arc<Self>> {
+        Self::from_typed_structural_parts(
+            attestation,
+            typed_structural,
+            origin_rows,
+            raw_origin_rows,
+            source_maps,
+            rdf_reports,
             parser_bytes,
         )
     }
@@ -1260,7 +1290,7 @@ impl PublicationStorageV2 {
         origin_rows: Option<Vec<Vec<Vec<u8>>>>,
         raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
         source_maps: Option<Vec<TypedSourceMapRowsV2>>,
-        rdf_report: Option<TypedRdfReportRowsV2>,
+        rdf_reports: Option<Vec<Option<TypedRdfReportRowsV2>>>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
         if attestation.version != PUBLICATION_VERSION_V2
@@ -1306,7 +1336,7 @@ impl PublicationStorageV2 {
                 ))
             })?;
         let retained_source = retain_source_tables_v2(source_maps, attestation.document_count)?;
-        let retained_rdf = retain_rdf_tables_v2(rdf_report)?;
+        let retained_rdf = retain_rdf_tables_v2(rdf_reports, attestation.document_count)?;
         let structural_counts = typed_structural.structural_counts()?;
         if attestation.document_count != typed_structural.document_count()
             || attestation.max_facade_row_bytes
@@ -1331,7 +1361,7 @@ impl PublicationStorageV2 {
         if attestation.capability_bits != expected_capability_bits
             || attestation.source_map_entry_count != retained_source.row_counts[0]
             || attestation.origin_entry_count != raw_origin_count
-            || attestation.rdf_mapping_report_count != u64::from(retained_rdf.present)
+            || attestation.rdf_mapping_report_count != retained_rdf.report_count
             || attestation.owl2_dl_report_summary.is_some()
             || attestation.owl2_dl_validated
             || attestation.owl2_dl_conforms.is_some()
@@ -2408,58 +2438,42 @@ struct RetainedRdfTablesV2 {
     payload_bytes: u64,
     metadata_bytes: u64,
     maximum_row_bytes: u64,
+    report_count: u64,
     present: bool,
 }
 
-fn retain_rdf_tables_v2(report: Option<TypedRdfReportRowsV2>) -> NativeResult<RetainedRdfTablesV2> {
-    let Some(report) = report else {
+fn retain_rdf_tables_v2(
+    reports: Option<Vec<Option<TypedRdfReportRowsV2>>>,
+    document_count: u64,
+) -> NativeResult<RetainedRdfTablesV2> {
+    let Some(reports) = reports else {
         return Ok(RetainedRdfTablesV2 {
             maximum_row_bytes: 1,
             ..RetainedRdfTablesV2::default()
         });
     };
-    if report.header.len() != 17 || report.header[0] > 1 {
+    if u64::try_from(reports.len()).ok() != Some(document_count) {
         return Err(NativeError::protocol(
-            "typed V2 RDF report header is malformed",
+            "typed V2 RDF document tables are not aligned",
         ));
     }
-    let consumed = u64::from_le_bytes(
-        report.header[1..9]
-            .try_into()
-            .map_err(|_| NativeError::protocol("typed V2 RDF consumed count is truncated"))?,
-    );
-    let total = u64::from_le_bytes(
-        report.header[9..17]
-            .try_into()
-            .map_err(|_| NativeError::protocol("typed V2 RDF total count is truncated"))?,
-    );
-    let conformant = report.header[0] == 1;
-    if consumed > total
-        || (conformant && consumed != total)
-        || (conformant && !report.unconsumed_triples.is_empty())
-    {
-        return Err(NativeError::protocol(
-            "typed V2 RDF report counts or conformance diverge",
-        ));
-    }
-
-    let collections = [
-        (CollectionV2::RdfReportHeader, vec![report.header]),
-        (
-            CollectionV2::RdfUnconsumedTriples,
-            report.unconsumed_triples,
-        ),
-        (CollectionV2::RdfRuleIds, report.rule_ids),
-        (CollectionV2::RdfDiagnostics, report.diagnostics),
-    ];
+    let report_count = u64::try_from(reports.iter().filter(|report| report.is_some()).count())
+        .map_err(|_| NativeError::limit("typed V2 RDF report count exceeds u64"))?;
+    let table_capacity = usize::try_from(
+        report_count
+            .checked_mul(4)
+            .ok_or_else(|| NativeError::limit("typed V2 RDF table count overflow"))?,
+    )
+    .map_err(|_| NativeError::limit("typed V2 RDF table count exceeds usize"))?;
     let mut result = RetainedRdfTablesV2 {
         maximum_row_bytes: 1,
-        present: true,
+        report_count,
+        present: report_count != 0,
         ..RetainedRdfTablesV2::default()
     };
     result
         .effective_tables
-        .try_reserve_exact(collections.len())
+        .try_reserve_exact(table_capacity)
         .map_err(|_| NativeError::limit("typed V2 RDF table allocation failed"))?;
     result.metadata_bytes = checked_add(
         result.metadata_bytes,
@@ -2472,27 +2486,73 @@ fn retain_rdf_tables_v2(report: Option<TypedRdfReportRowsV2>) -> NativeResult<Re
         )
         .map_err(|_| NativeError::limit("typed V2 RDF table size exceeds u64"))?,
     )?;
-    for (offset, (collection, rows)) in collections.into_iter().enumerate() {
-        result.row_counts[offset] = u64::try_from(rows.len())
-            .map_err(|_| NativeError::limit("typed V2 RDF row count exceeds u64"))?;
-        if rows.is_empty() {
+    for (document_ordinal, report) in reports.into_iter().enumerate() {
+        let Some(report) = report else {
             continue;
+        };
+        if report.header.len() != 17 || report.header[0] > 1 {
+            return Err(NativeError::protocol(
+                "typed V2 RDF report header is malformed",
+            ));
         }
-        let retained = retain_auxiliary_rows_v2(rows, "typed V2 RDF")?;
-        result.payload_bytes = checked_add(result.payload_bytes, retained.payload_bytes)?;
-        result.metadata_bytes = checked_add(result.metadata_bytes, retained.metadata_bytes)?;
-        result.maximum_row_bytes = result.maximum_row_bytes.max(retained.maximum_row_bytes);
-        result.effective_tables.push(FacadeTableV2 {
-            coordinate: CoordinateV2 {
-                collection,
-                scope: ScopeV2::Document,
-                document_ordinal: Some(0),
-                signature_kind: SignatureKindV2::All,
-                include_builtins: true,
-            },
-            rows: retained.rows,
-            source_identity: 0,
-        });
+        let consumed = u64::from_le_bytes(
+            report.header[1..9]
+                .try_into()
+                .map_err(|_| NativeError::protocol("typed V2 RDF consumed count is truncated"))?,
+        );
+        let total = u64::from_le_bytes(
+            report.header[9..17]
+                .try_into()
+                .map_err(|_| NativeError::protocol("typed V2 RDF total count is truncated"))?,
+        );
+        let conformant = report.header[0] == 1;
+        if consumed > total
+            || (conformant && consumed != total)
+            || (conformant && !report.unconsumed_triples.is_empty())
+        {
+            return Err(NativeError::protocol(
+                "typed V2 RDF report counts or conformance diverge",
+            ));
+        }
+        let mut header_rows = Vec::new();
+        header_rows
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("typed V2 RDF header allocation failed"))?;
+        header_rows.push(report.header);
+        let collections = [
+            (CollectionV2::RdfReportHeader, header_rows),
+            (
+                CollectionV2::RdfUnconsumedTriples,
+                report.unconsumed_triples,
+            ),
+            (CollectionV2::RdfRuleIds, report.rule_ids),
+            (CollectionV2::RdfDiagnostics, report.diagnostics),
+        ];
+        let document_ordinal = u64::try_from(document_ordinal)
+            .map_err(|_| NativeError::limit("typed V2 RDF document ordinal exceeds u64"))?;
+        for (offset, (collection, rows)) in collections.into_iter().enumerate() {
+            let row_count = u64::try_from(rows.len())
+                .map_err(|_| NativeError::limit("typed V2 RDF row count exceeds u64"))?;
+            result.row_counts[offset] = checked_add(result.row_counts[offset], row_count)?;
+            if rows.is_empty() {
+                continue;
+            }
+            let retained = retain_auxiliary_rows_v2(rows, "typed V2 RDF")?;
+            result.payload_bytes = checked_add(result.payload_bytes, retained.payload_bytes)?;
+            result.metadata_bytes = checked_add(result.metadata_bytes, retained.metadata_bytes)?;
+            result.maximum_row_bytes = result.maximum_row_bytes.max(retained.maximum_row_bytes);
+            result.effective_tables.push(FacadeTableV2 {
+                coordinate: CoordinateV2 {
+                    collection,
+                    scope: ScopeV2::Document,
+                    document_ordinal: Some(document_ordinal),
+                    signature_kind: SignatureKindV2::All,
+                    include_builtins: true,
+                },
+                rows: retained.rows,
+                source_identity: 0,
+            });
+        }
     }
     Ok(result)
 }

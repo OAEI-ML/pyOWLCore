@@ -96,6 +96,29 @@ pub(crate) fn typed_structural_handle_from_attestation_v2(
     Ok(NativeSnapshotHandle::from_storage_v2(publication))
 }
 
+pub(crate) fn typed_structural_closure_handle_from_attestation_v2(
+    attestation: NativeSnapshotAttestationV2,
+    storage: TypedFacadeStorageV2,
+    origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+    raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+    source_maps: Option<Vec<TypedSourceMapRowsV2>>,
+    rdf_reports: Option<Vec<Option<TypedRdfReportRowsV2>>>,
+    parser_bytes: u64,
+) -> pyo3::PyResult<NativeSnapshotHandle> {
+    let publication =
+        facade_v2::PublicationStorageV2::from_typed_structural_with_auxiliary_documents(
+            attestation,
+            storage,
+            origin_rows,
+            raw_origin_rows,
+            source_maps,
+            rdf_reports,
+            parser_bytes,
+        )
+        .map_err(crate::python_error)?;
+    Ok(NativeSnapshotHandle::from_storage_v2(publication))
+}
+
 #[cfg(feature = "test-hooks")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fixture_handle_v2(

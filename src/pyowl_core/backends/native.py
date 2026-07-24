@@ -194,6 +194,12 @@ class _Extension(Protocol):
         cancel: _NativeCancellation | None = None,
     ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
 
+    def _fork_parsed_structural_storage_v2(
+        self,
+        parsed: object,
+        cancel: _NativeCancellation | None = None,
+    ) -> object: ...
+
     def build_index(
         self, data: object, request: object, cancel: _NativeCancellation | None = None
     ) -> bytes: ...
@@ -657,6 +663,45 @@ def _parse_rdfxml_retained_v2(
         ),
         summary=framing,
     )
+
+
+def _fork_parsed_structural_storage_v2(
+    parsed_native_storage: object,
+    *,
+    limits: ParseLimits,
+    cancellation_token: CancellationToken | None = None,
+) -> object:
+    """Fork parser root manifests while retaining the original arena owner."""
+
+    runtime = _runtime()
+    extension = runtime.extension
+    if not runtime.probe.available or extension is None:
+        raise BackendUnavailableError(
+            "native backend unavailable: "
+            f"{runtime.probe.reason or 'unknown compatibility failure'}",
+            code="NATIVE_BACKEND_UNAVAILABLE",
+        )
+    hook = getattr(extension, "_fork_parsed_structural_storage_v2", None)
+    storage_type = getattr(extension, "_NativeParsedStructuralStorageV2", None)
+    if not callable(hook) or not isinstance(storage_type, type):
+        raise BackendUnavailableError(
+            "native backend lacks the private parser-storage fork seam",
+            code="NATIVE_CAPABILITY_UNAVAILABLE",
+        )
+    if type(parsed_native_storage) is not storage_type:
+        raise TypeError("parsed_native_storage has an invalid native owner type")
+    selected = _coerce_limits(limits)
+    with _relay(extension, selected, cancellation_token) as cancel:
+        fork = _call(
+            extension,
+            lambda: hook(parsed_native_storage, cancel),
+        )
+    if type(fork) is not storage_type:
+        raise BackendProtocolError(
+            "native parser-storage fork returned an invalid owner",
+            code="NATIVE_RESULT_TYPE",
+        )
+    return fork
 
 
 def partition_axioms(

@@ -16,7 +16,7 @@ from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping
 from collections.abc import Set as AbstractSet
 from contextlib import suppress
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from itertools import zip_longest
 from types import TracebackType
 from typing import Any, Generic, TypeVar, cast
@@ -1732,6 +1732,21 @@ class _NativeOntologyDocument(OntologyDocument):
 
     def __reduce__(self) -> str | tuple[Any, ...]:
         raise TypeError("native ontology documents cannot be pickled")
+
+
+def _rebind_native_document_provenance_v2(
+    document: OntologyDocument,
+    provenance: DocumentProvenance,
+) -> OntologyDocument | None:
+    """Rebind resolver evidence without materializing a native document."""
+
+    if not isinstance(document, _NativeOntologyDocument):
+        return None
+    if provenance == document.provenance:
+        return document
+    return _NativeOntologyDocument(
+        replace(document._native_document_state, provenance=provenance)
+    )
 
 
 def _frame(value: bytes) -> bytes:

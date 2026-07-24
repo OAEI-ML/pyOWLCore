@@ -12,6 +12,7 @@ use pyo3::buffer::PyBuffer;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyInt, PyModule, PyString, PyTuple};
 use std::mem::size_of;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::cancel::Guard;
@@ -32,7 +33,7 @@ pub(super) const FEATURES: &[&str] = &[];
 )]
 struct NativeParsedStructuralStorageV2 {
     storage: Option<TypedFacadeStorageV2>,
-    metadata: Option<crate::parse::RetainedParseMetadataV2>,
+    metadata: Option<Arc<crate::parse::RetainedParseMetadataV2>>,
     prepared: Option<crate::parse::PreparedRetainedPublicationV2>,
     prepared_summary: Option<Vec<u8>>,
     limits: Limits,
@@ -74,6 +75,10 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
         _parse_rdfxml_retained_source_map_v2,
         _module
     )?)?;
+    _module.add_function(wrap_pyfunction!(
+        _fork_parsed_structural_storage_v2,
+        _module
+    )?)?;
     #[cfg(feature = "test-hooks")]
     _module.add_function(wrap_pyfunction!(
         _rdfxml_retained_bridge_allocation_probe_v2,
@@ -107,6 +112,57 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     #[cfg(feature = "test-hooks")]
     _module.add_function(wrap_pyfunction!(_parse_rdfxml_graph_v1, _module)?)?;
     Ok(())
+}
+
+/// Fork one fresh parser owner for isolated document materialization while
+/// preserving the original structural storage for a later closure merge.
+#[pyfunction]
+#[pyo3(signature = (parsed, cancel=None))]
+fn _fork_parsed_structural_storage_v2<'py>(
+    py: Python<'py>,
+    mut parsed: PyRefMut<'py, NativeParsedStructuralStorageV2>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<NativeParsedStructuralStorageV2> {
+    if parsed.prepared.is_some() || parsed.prepared_summary.is_some() {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "native parsed structural storage was already prepared",
+        ));
+    }
+    if parsed.metadata.is_none() {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "native parsed structural storage has no compact publication metadata",
+        ));
+    }
+    let storage = parsed.storage.take().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "native parsed structural storage was already consumed",
+        )
+    })?;
+    let cancellation = crate::cancellation_or_default(cancel);
+    let outcome = crate::run_detached(py, move |interrupt| {
+        Ok::<_, NativeError>(storage.fork_parser_document(cancellation, Some(interrupt)))
+    })?;
+    let (storage, fork) = match outcome {
+        Ok(values) => values,
+        Err((storage, error)) => {
+            parsed.storage = Some(storage);
+            return Err(crate::python_error(error));
+        }
+    };
+    parsed.storage = Some(storage);
+    let metadata = parsed
+        .metadata
+        .as_ref()
+        .cloned()
+        .expect("validated native parser publication metadata");
+    Ok(NativeParsedStructuralStorageV2 {
+        storage: Some(fork),
+        metadata: Some(metadata),
+        prepared: None,
+        prepared_summary: None,
+        limits: parsed.limits,
+        parser_bytes: parsed.parser_bytes,
+    })
 }
 
 /// Parse one complete RDF/XML document and retain its canonical structural
@@ -325,7 +381,7 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
         encoded,
         NativeParsedStructuralStorageV2 {
             storage: Some(outcome.storage),
-            metadata: Some(outcome.metadata),
+            metadata: Some(Arc::new(outcome.metadata)),
             prepared: None,
             prepared_summary: None,
             limits,
@@ -483,7 +539,7 @@ fn parse_functional_retained_v2_with_allocations<'py>(
         encoded,
         NativeParsedStructuralStorageV2 {
             storage: Some(outcome.storage),
-            metadata: outcome.metadata,
+            metadata: outcome.metadata.map(Arc::new),
             prepared: None,
             prepared_summary: None,
             limits,
@@ -1107,6 +1163,7 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
     cancel=None,
     *,
     source_maps=None,
+    rdf_reports=None,
     effective_origins=None,
     effective_document_ordinals=None,
     closure_document_ordinals=None,
@@ -1121,6 +1178,7 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
     config: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
     source_maps: Option<&Bound<'py, PyAny>>,
+    rdf_reports: Option<&Bound<'py, PyAny>>,
     effective_origins: Option<&Bound<'py, PyAny>>,
     effective_document_ordinals: Option<&Bound<'py, PyAny>>,
     closure_document_ordinals: Option<&Bound<'py, PyAny>>,
@@ -1135,6 +1193,7 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
         config,
         cancel,
         source_maps,
+        rdf_reports,
         effective_origins,
         effective_document_ordinals,
         closure_document_ordinals,
@@ -1153,6 +1212,7 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
     fail_after=None,
     *,
     source_maps=None,
+    rdf_reports=None,
     effective_origins=None,
     effective_document_ordinals=None,
     closure_document_ordinals=None,
@@ -1167,6 +1227,7 @@ fn _merge_parsed_structural_bridge_allocation_probe_v2<'py>(
     config: &Bound<'py, PyAny>,
     fail_after: Option<u64>,
     source_maps: Option<&Bound<'py, PyAny>>,
+    rdf_reports: Option<&Bound<'py, PyAny>>,
     effective_origins: Option<&Bound<'py, PyAny>>,
     effective_document_ordinals: Option<&Bound<'py, PyAny>>,
     closure_document_ordinals: Option<&Bound<'py, PyAny>>,
@@ -1184,6 +1245,7 @@ fn _merge_parsed_structural_bridge_allocation_probe_v2<'py>(
         config,
         None,
         source_maps,
+        rdf_reports,
         effective_origins,
         effective_document_ordinals,
         closure_document_ordinals,
@@ -1202,6 +1264,7 @@ fn merge_parsed_structural_snapshot_v2_with_allocations<'py>(
     config: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
     source_maps: Option<&Bound<'py, PyAny>>,
+    rdf_reports: Option<&Bound<'py, PyAny>>,
     effective_origins: Option<&Bound<'py, PyAny>>,
     effective_document_ordinals: Option<&Bound<'py, PyAny>>,
     closure_document_ordinals: Option<&Bound<'py, PyAny>>,
@@ -1216,7 +1279,7 @@ fn merge_parsed_structural_snapshot_v2_with_allocations<'py>(
         ));
     }
     let parsed_documents = parsed_documents.cast::<PyTuple>()?;
-    if parsed_documents.len() < 2
+    if parsed_documents.is_empty()
         || u64::try_from(parsed_documents.len()).map_or(true, |count| count > limits.max_documents)
     {
         return Err(crate::python_error(NativeError::limit(
@@ -1345,6 +1408,19 @@ fn merge_parsed_structural_snapshot_v2_with_allocations<'py>(
             )
         })
         .transpose()?;
+    let owned_rdf_reports = rdf_reports
+        .map(|value| {
+            owned_rdf_report_documents(
+                py,
+                value,
+                parsed_documents.len(),
+                &limits,
+                &cancellation,
+                &mut external_bytes,
+                allocations,
+            )
+        })
+        .transpose()?;
     let owned_attestation = NativeSnapshotAttestationV2::from_python(attestation)?;
     let closure_external_bytes =
         external_bytes
@@ -1390,13 +1466,13 @@ fn merge_parsed_structural_snapshot_v2_with_allocations<'py>(
         ))
     })?;
     allocations.checkpoint()?;
-    crate::publication::typed_structural_handle_from_attestation_v2(
+    crate::publication::typed_structural_closure_handle_from_attestation_v2(
         owned_attestation,
         storage,
         retained_origins,
         raw_origins,
         owned_source_maps,
-        None,
+        owned_rdf_reports,
         parser_bytes,
     )
 }
@@ -2082,6 +2158,129 @@ fn owned_source_map_documents(
                 "source-prefix",
             )?,
         });
+    }
+    Ok(owned)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn owned_rdf_report_documents(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    document_count: usize,
+    limits: &Limits,
+    cancellation: &crate::cancel::Cancellation,
+    total_bytes: &mut usize,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Vec<Option<crate::publication::TypedRdfReportRowsV2>>> {
+    if !value.get_type().is(py.get_type::<PyTuple>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "native RDF report document tables must be an exact tuple",
+        ));
+    }
+    let tables = value.cast::<PyTuple>()?;
+    if tables.len() != document_count {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "native RDF report document-table count must match structural documents",
+        ));
+    }
+    let mut owned = Vec::new();
+    if !tables.is_empty() {
+        allocations.checkpoint()?;
+    }
+    owned.try_reserve_exact(tables.len()).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native RDF report document-table allocation failed",
+        ))
+    })?;
+    for table in tables {
+        cancellation.checkpoint().map_err(crate::python_error)?;
+        py.check_signals()?;
+        if table.is_none() {
+            owned.push(None);
+            continue;
+        }
+        if !table.get_type().is(py.get_type::<PyTuple>()) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native RDF report document table must be None or an exact tuple",
+            ));
+        }
+        let table = table.cast::<PyTuple>()?;
+        if table.len() != 4 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "native RDF report document table must contain four sections",
+            ));
+        }
+        let header = table.get_item(0)?;
+        if !header.get_type().is(py.get_type::<PyBytes>()) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native RDF report header must be exact bytes",
+            ));
+        }
+        let header = header.cast::<PyBytes>()?.as_bytes();
+        if header.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "native RDF report header must be nonempty",
+            ));
+        }
+        *total_bytes = total_bytes.checked_add(header.len()).ok_or_else(|| {
+            crate::python_error(NativeError::limit("native retained boundary size overflow"))
+        })?;
+        enforce_retained_boundary(*total_bytes, limits)?;
+        let mut owned_header = Vec::new();
+        allocations.checkpoint()?;
+        owned_header.try_reserve_exact(header.len()).map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native RDF report header allocation failed",
+            ))
+        })?;
+        owned_header.extend_from_slice(header);
+
+        let triples = table.get_item(1)?;
+        let rules = table.get_item(2)?;
+        let diagnostics = table.get_item(3)?;
+        let triple_count = exact_auxiliary_tuple_len(py, &triples, "RDF triples")?;
+        let rule_count = exact_auxiliary_tuple_len(py, &rules, "RDF rules")?;
+        let diagnostic_count = exact_auxiliary_tuple_len(py, &diagnostics, "RDF diagnostics")?;
+        if u64::try_from(triple_count)
+            .map_or(true, |count| count > limits.value(LimitKey::MaxTriples))
+            || u64::try_from(rule_count).map_or(true, |count| count > limits.max_wire_rows)
+            || u64::try_from(diagnostic_count)
+                .map_or(true, |count| count > limits.value(LimitKey::MaxDiagnostics))
+        {
+            return Err(crate::python_error(NativeError::limit(
+                "native RDF report rows exceed configured limits",
+            )));
+        }
+        owned.push(Some(crate::publication::TypedRdfReportRowsV2 {
+            header: owned_header,
+            unconsumed_triples: owned_auxiliary_rows(
+                py,
+                &triples,
+                limits,
+                cancellation,
+                total_bytes,
+                allocations,
+                "RDF triple",
+            )?,
+            rule_ids: owned_auxiliary_rows(
+                py,
+                &rules,
+                limits,
+                cancellation,
+                total_bytes,
+                allocations,
+                "RDF rule",
+            )?,
+            diagnostics: owned_auxiliary_rows(
+                py,
+                &diagnostics,
+                limits,
+                cancellation,
+                total_bytes,
+                allocations,
+                "RDF diagnostic",
+            )?,
+        }));
     }
     Ok(owned)
 }

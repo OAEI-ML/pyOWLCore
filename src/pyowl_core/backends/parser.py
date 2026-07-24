@@ -7,6 +7,7 @@ and execution only for the public backend-aware facade.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Final
 
 from pyowl_core.backends.python.parser import (
@@ -129,6 +130,21 @@ class _NativeBackendDriver:
             native_storage=retained.storage,
             phase_timings=retained.phase_timings,
             native_summary=retained.summary,
+        )
+
+    def fork_retained_storage(
+        self,
+        parsed_native_storage: object,
+        *,
+        limits: ParseLimits,
+        cancellation_token: CancellationToken | None,
+    ) -> object:
+        from pyowl_core.backends.native import _fork_parsed_structural_storage_v2
+
+        return _fork_parsed_structural_storage_v2(
+            parsed_native_storage,
+            limits=limits,
+            cancellation_token=cancellation_token,
         )
 
     def publish_retained_functional(
@@ -285,6 +301,7 @@ def _parse_import_for_retained_load(
 ) -> _ParsedDocumentResult:
     """Parse one closure document while retaining its native structural owner."""
 
+    parse_started = time.monotonic()
     return PythonParser()._parse(
         source,
         format=format,
@@ -295,6 +312,8 @@ def _parse_import_for_retained_load(
         retain_native_storage=True,
         publish_native_document=False,
         materialize_native_document=True,
+        retained_load_started=parse_started,
+        retained_root_parse_started=parse_started,
         backend_driver=_DRIVER,
     )
 

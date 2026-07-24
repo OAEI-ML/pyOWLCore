@@ -356,11 +356,16 @@ def _merge_parsed_structural_snapshot_v2(
     cancel: _Cancellation | None = None,
     *,
     source_maps: object | None = None,
+    rdf_reports: object | None = None,
     effective_origins: object | None = None,
     effective_document_ordinals: object | None = None,
     closure_document_ordinals: object | None = None,
     anonymous_scope_targets: object | None = None,
 ) -> _NativeSnapshotHandle: ...
+def _fork_parsed_structural_storage_v2(
+    parsed: _NativeParsedStructuralStorageV2,
+    cancel: _Cancellation | None = None,
+) -> _NativeParsedStructuralStorageV2: ...
 def _retained_structural_bridge_allocation_probe_v2(
     documents: object,
     origins: object | None,
