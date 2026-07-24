@@ -217,6 +217,7 @@ class RDFMapper:
             if simple_axiom is not None:
                 axioms.append(simple_axiom)
                 occurrences.append((simple_axiom, None))
+        self._consume_detached_inverse_property_expressions()
         if self.unclaimed_axiom_reifications or self.unclaimed_nested_reifications:
             raise OntologySyntaxError(
                 "RDF reification targets an unsupported axiom or annotation mapping",
@@ -326,6 +327,18 @@ class RDFMapper:
                 for candidate in expected
             ):
                 self._consume(triple)
+
+    def _consume_detached_inverse_property_expressions(self) -> None:
+        for triple in self.graph.find(predicate=OWL + "inverseOf"):
+            self.context.check()
+            if (
+                triple in self.consumed
+                or not isinstance(triple.subject, RDFBlank)
+                or not isinstance(triple.object, RDFIRI)
+                or triple.object.value not in self.object_kinds
+            ):
+                continue
+            self._object_property(triple.subject)
 
     def _collect_axiom_annotations(self) -> None:
         annotation_nodes: dict[Triple, list[RDFResource]] = {}

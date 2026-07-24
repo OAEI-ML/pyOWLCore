@@ -1369,6 +1369,74 @@ def test_rdf_mapping_does_not_duplicate_explicit_inferred_declaration() -> None:
     assert len(document.axioms) == 2
 
 
+def test_rdf_mapping_consumes_detached_inverse_property_expression() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:ObjectProperty rdf:about="urn:q"/>
+  <rdf:Description rdf:nodeID="inverse">
+    <owl:inverseOf rdf:resource="urn:q"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 2
+    assert document.rdf_mapping_report.consumed_triples == 2
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert len(tuple(document.iter_axioms(m.Declaration))) == 1
+    assert len(document.axioms) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        """
+  <rdf:Description rdf:nodeID="inverse">
+    <owl:inverseOf rdf:resource="urn:undeclared"/>
+  </rdf:Description>
+""",
+        """
+  <owl:ObjectProperty rdf:about="urn:q"/>
+  <rdf:Description rdf:nodeID="inverse">
+    <owl:inverseOf rdf:nodeID="anonymous"/>
+  </rdf:Description>
+""",
+    ),
+)
+def test_rdf_mapping_rejects_unestablished_detached_inverse_property_expression(
+    body: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
+def test_rdf_mapping_rejects_ambiguous_detached_inverse_property_expression() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:ObjectProperty rdf:about="urn:q"/>
+  <owl:ObjectProperty rdf:about="urn:r"/>
+  <rdf:Description rdf:nodeID="inverse">
+    <owl:inverseOf rdf:resource="urn:q"/>
+    <owl:inverseOf rdf:resource="urn:r"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_CARDINALITY"
+
+
 def test_rdf_mapping_enforces_the_distinct_ontology_annotation_limit() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"

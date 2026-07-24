@@ -2902,6 +2902,13 @@ fn map_graph(
             session,
         )?;
     }
+    consume_detached_inverse_property_expressions(
+        &list_graph,
+        &mut consumed,
+        &kinds,
+        &mut expressions,
+        session,
+    )?;
     if axiom_annotations.has_unclaimed() {
         return Err(rdf_axiom_reification(
             "native owl:Axiom reification targets an unsupported axiom mapping",
@@ -3225,6 +3232,50 @@ fn has_kind(kinds: &[KindRecord<'_>], value: &str, kind: &str) -> bool {
     kinds
         .iter()
         .any(|record| record.iri == value && record.kind == kind)
+}
+
+fn consume_detached_inverse_property_expressions<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index] || triple.predicate != OWL_INVERSE_OF {
+            continue;
+        }
+        let (ListResource::Blank(subject), ListTerm::Iri(target)) = (triple.subject, triple.object)
+        else {
+            continue;
+        };
+        if !has_kind(kinds, target, "object_property") {
+            continue;
+        }
+        let mut inverse_targets = 0_usize;
+        for candidate in triples {
+            session.step(1)?;
+            if candidate.subject == ListResource::Blank(subject)
+                && candidate.predicate == OWL_INVERSE_OF
+            {
+                inverse_targets = inverse_targets.checked_add(1).ok_or_else(|| {
+                    NativeError::limit("native detached inverse target count overflow")
+                })?;
+                if inverse_targets > 1 {
+                    return Err(rdf_mapping_cardinality(
+                        "native detached inverse property has more than one target",
+                    ));
+                }
+            }
+        }
+        let DecodedPropertyExpression {
+            node: _,
+            consumed: expression_consumed,
+        } = expressions.decode_object_property_term(ListTerm::Blank(subject), session)?;
+        consume_collection_indexes(expression_consumed, consumed, session)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9367,6 +9418,34 @@ mod tests {
                 .unwrap_err()
                 .code,
             "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
+        let detached_expression = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:ObjectProperty rdf:about=\"urn:q\"/><rdf:Description rdf:nodeID=\"inverse\"><owl:inverseOf rdf:resource=\"urn:q\"/></rdf:Description></rdf:RDF>"
+        );
+        let detached =
+            mapped(detached_expression.as_bytes(), None).expect("detached inverse expression");
+        assert_eq!(detached.axioms.len(), 1);
+        assert_eq!(detached.mapping.total_triples, 2);
+        assert_eq!(
+            detached.mapping.total_triples,
+            detached.mapping.consumed_triples,
+        );
+
+        let anonymous_target = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:ObjectProperty rdf:about=\"urn:q\"/><rdf:Description rdf:nodeID=\"inverse\"><owl:inverseOf rdf:nodeID=\"anonymous\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(anonymous_target.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
+        let ambiguous_expression = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:ObjectProperty rdf:about=\"urn:q\"/><owl:ObjectProperty rdf:about=\"urn:r\"/><rdf:Description rdf:nodeID=\"inverse\"><owl:inverseOf rdf:resource=\"urn:q\"/><owl:inverseOf rdf:resource=\"urn:r\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(ambiguous_expression.as_bytes(), None)
+                .unwrap_err()
+                .code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
         );
     }
 
