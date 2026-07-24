@@ -98,6 +98,7 @@ class NativeTestExtension(Protocol):
         config: object,
         fail_after: int | None = None,
         *,
+        source_maps: object | None = None,
         effective_documents: object | None = None,
         effective_origins: object | None = None,
         effective_document_ordinals: object | None = None,

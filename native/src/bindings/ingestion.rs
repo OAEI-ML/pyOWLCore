@@ -689,6 +689,11 @@ fn finalize_parsed_structural_snapshot_v2_with_allocations<'py>(
         .as_ref()
         .map(|_| empty_origin_document_table(allocations))
         .transpose()?;
+    let mut source_maps = prepared
+        .source_map
+        .as_ref()
+        .map(|_| empty_source_map_document_table(allocations))
+        .transpose()?;
     allocations.checkpoint()?;
     let parser_bytes = parsed.parser_bytes;
     let storage = parsed.storage.take().ok_or_else(|| {
@@ -702,7 +707,6 @@ fn finalize_parsed_structural_snapshot_v2_with_allocations<'py>(
         )
     })?;
     parsed.prepared_summary = None;
-    let source_map = prepared.source_map;
     let rdf_report = prepared.rdf_report.map(|report| report.rows);
     if let Some(rows) = prepared.origin_rows {
         origin_documents
@@ -716,12 +720,18 @@ fn finalize_parsed_structural_snapshot_v2_with_allocations<'py>(
             .expect("raw origin document table was preallocated")
             .push(rows);
     }
+    if let Some(rows) = prepared.source_map {
+        source_maps
+            .as_mut()
+            .expect("source-map document table was preallocated")
+            .push(rows);
+    }
     crate::publication::typed_structural_handle_v2(
         attestation,
         storage,
         origin_documents,
         raw_origin_documents,
-        source_map,
+        source_maps,
         rdf_report,
         parser_bytes,
     )
@@ -837,6 +847,7 @@ fn validate_prepared_attestation(
     config,
     cancel=None,
     *,
+    source_maps=None,
     effective_documents=None,
     effective_origins=None,
     effective_document_ordinals=None,
@@ -850,6 +861,7 @@ fn _retain_structural_snapshot_v2<'py>(
     attestation: &Bound<'py, PyAny>,
     config: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    source_maps: Option<&Bound<'py, PyAny>>,
     effective_documents: Option<&Bound<'py, PyAny>>,
     effective_origins: Option<&Bound<'py, PyAny>>,
     effective_document_ordinals: Option<&Bound<'py, PyAny>>,
@@ -863,6 +875,7 @@ fn _retain_structural_snapshot_v2<'py>(
         attestation,
         config,
         cancel,
+        source_maps,
         effective_documents,
         effective_origins,
         effective_document_ordinals,
@@ -880,6 +893,7 @@ fn _retain_structural_snapshot_v2<'py>(
     config,
     fail_after=None,
     *,
+    source_maps=None,
     effective_documents=None,
     effective_origins=None,
     effective_document_ordinals=None,
@@ -893,6 +907,7 @@ fn _retained_structural_bridge_allocation_probe_v2<'py>(
     attestation: &Bound<'py, PyAny>,
     config: &Bound<'py, PyAny>,
     fail_after: Option<u64>,
+    source_maps: Option<&Bound<'py, PyAny>>,
     effective_documents: Option<&Bound<'py, PyAny>>,
     effective_origins: Option<&Bound<'py, PyAny>>,
     effective_document_ordinals: Option<&Bound<'py, PyAny>>,
@@ -909,6 +924,7 @@ fn _retained_structural_bridge_allocation_probe_v2<'py>(
         attestation,
         config,
         None,
+        source_maps,
         effective_documents,
         effective_origins,
         effective_document_ordinals,
@@ -926,6 +942,7 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
     attestation: &Bound<'py, PyAny>,
     config: &Bound<'py, PyAny>,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    source_maps: Option<&Bound<'py, PyAny>>,
     effective_documents: Option<&Bound<'py, PyAny>>,
     effective_origins: Option<&Bound<'py, PyAny>>,
     effective_document_ordinals: Option<&Bound<'py, PyAny>>,
@@ -991,6 +1008,19 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
             )
         })
         .transpose()?;
+    let owned_source_maps = source_maps
+        .map(|value| {
+            owned_source_map_documents(
+                py,
+                value,
+                owned_documents.len(),
+                &limits,
+                &cancellation,
+                &mut external_bytes,
+                allocations,
+            )
+        })
+        .transpose()?;
     let owned_effective_documents = owned_effective_documents.map(|(rows, _bytes)| rows);
     let (storage, retained_origins, raw_origins) = crate::run_detached(py, move |interrupt| {
         let mut builder = TypedFacadeBuilderV2::new(
@@ -1042,7 +1072,7 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
         storage,
         retained_origins,
         raw_origins,
-        None,
+        owned_source_maps,
         None,
         0,
     )
@@ -1558,6 +1588,181 @@ fn empty_origin_document_table(
         ))
     })?;
     Ok(documents)
+}
+
+fn empty_source_map_document_table(
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Vec<crate::publication::TypedSourceMapRowsV2>> {
+    allocations.checkpoint()?;
+    let mut documents = Vec::new();
+    documents.try_reserve_exact(1).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native source-map document-table allocation failed",
+        ))
+    })?;
+    Ok(documents)
+}
+
+fn owned_source_map_documents(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    document_count: usize,
+    limits: &Limits,
+    cancellation: &crate::cancel::Cancellation,
+    total_bytes: &mut usize,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Vec<crate::publication::TypedSourceMapRowsV2>> {
+    if !value.get_type().is(py.get_type::<PyTuple>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "native source-map document tables must be an exact tuple",
+        ));
+    }
+    let tables = value.cast::<PyTuple>()?;
+    if tables.len() != document_count {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "native source-map document-table count must match structural documents",
+        ));
+    }
+    let mut owned = Vec::new();
+    if !tables.is_empty() {
+        allocations.checkpoint()?;
+    }
+    owned.try_reserve_exact(tables.len()).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native source-map document-table allocation failed",
+        ))
+    })?;
+    let mut total_entries = 0_u64;
+    for table in tables {
+        cancellation.checkpoint().map_err(crate::python_error)?;
+        py.check_signals()?;
+        if !table.get_type().is(py.get_type::<PyTuple>()) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native source-map document table must be an exact tuple",
+            ));
+        }
+        let table = table.cast::<PyTuple>()?;
+        if table.len() != 2 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "native source-map document table must contain entries and prefixes",
+            ));
+        }
+        let entries = table.get_item(0)?;
+        let prefixes = table.get_item(1)?;
+        let entry_count = exact_auxiliary_tuple_len(py, &entries, "source-map entries")?;
+        total_entries = total_entries
+            .checked_add(u64::try_from(entry_count).map_err(|_| {
+                crate::python_error(NativeError::limit(
+                    "native source-map entry count exceeds u64",
+                ))
+            })?)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::limit("native source-map entry count overflow"))
+            })?;
+        if total_entries > limits.max_source_map_entries {
+            return Err(crate::python_error(NativeError::limit(
+                "native source-map entry count exceeds configured limits",
+            )));
+        }
+        let prefix_count = exact_auxiliary_tuple_len(py, &prefixes, "source-map prefixes")?;
+        if u64::try_from(prefix_count)
+            .map_or(true, |count| count > limits.value(LimitKey::MaxPrefixes))
+        {
+            return Err(crate::python_error(NativeError::limit(
+                "native source-prefix count exceeds configured limits",
+            )));
+        }
+        owned.push(crate::publication::TypedSourceMapRowsV2 {
+            entries: owned_auxiliary_rows(
+                py,
+                &entries,
+                limits,
+                cancellation,
+                total_bytes,
+                allocations,
+                "source-map entry",
+            )?,
+            prefixes: owned_auxiliary_rows(
+                py,
+                &prefixes,
+                limits,
+                cancellation,
+                total_bytes,
+                allocations,
+                "source-prefix",
+            )?,
+        });
+    }
+    Ok(owned)
+}
+
+fn exact_auxiliary_tuple_len(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    name: &'static str,
+) -> PyResult<usize> {
+    if !value.get_type().is(py.get_type::<PyTuple>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "native {name} must be an exact tuple"
+        )));
+    }
+    Ok(value.cast::<PyTuple>()?.len())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn owned_auxiliary_rows(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    limits: &Limits,
+    cancellation: &crate::cancel::Cancellation,
+    total_bytes: &mut usize,
+    allocations: &mut crate::BridgeAllocationProbe,
+    name: &'static str,
+) -> PyResult<Vec<Vec<u8>>> {
+    let rows = value.cast::<PyTuple>()?;
+    let mut owned = Vec::new();
+    if !rows.is_empty() {
+        allocations.checkpoint()?;
+    }
+    owned.try_reserve_exact(rows.len()).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native auxiliary row-table allocation failed",
+        ))
+    })?;
+    for (ordinal, row) in rows.iter().enumerate() {
+        if ordinal
+            % usize::try_from(limits.cancellation_stride)
+                .unwrap_or(1)
+                .max(1)
+            == 0
+        {
+            cancellation.checkpoint().map_err(crate::python_error)?;
+            py.check_signals()?;
+        }
+        if !row.get_type().is(py.get_type::<PyBytes>()) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                "native {name} rows must contain exact bytes"
+            )));
+        }
+        let bytes = row.cast::<PyBytes>()?.as_bytes();
+        if bytes.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "native {name} rows must be nonempty"
+            )));
+        }
+        *total_bytes = total_bytes.checked_add(bytes.len()).ok_or_else(|| {
+            crate::python_error(NativeError::limit("native retained boundary size overflow"))
+        })?;
+        enforce_retained_boundary(*total_bytes, limits)?;
+        let mut copied = Vec::new();
+        allocations.checkpoint()?;
+        copied.try_reserve_exact(bytes.len()).map_err(|_| {
+            crate::python_error(NativeError::limit("native auxiliary row allocation failed"))
+        })?;
+        copied.extend_from_slice(bytes);
+        owned.push(copied);
+    }
+    Ok(owned)
 }
 
 /// Bounded observability hook for the unadvertised first WP16 slice.

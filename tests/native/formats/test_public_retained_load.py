@@ -962,6 +962,7 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
             backend=BackendPreference.NATIVE,
             preserve_source_map=True,
             collect_provenance=True,
+            validate_owl2_dl=True,
         ),
         resolver=MappingResolver(
             {
@@ -981,10 +982,12 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
 
 
 @pytest.mark.parametrize("collect_provenance", (False, True))
+@pytest.mark.parametrize("preserve_source_map", (False, True))
 def test_resolved_functional_diamond_retains_one_native_closure_owner(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
     collect_provenance: bool,
+    preserve_source_map: bool,
 ) -> None:
     root = (
         b"Ontology(<urn:retained-closure:root> "
@@ -1014,6 +1017,7 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
             imports=ImportPolicy.RESOLVE_LOCAL,
             backend=backend,
             collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
         )
 
     reference = load_snapshot(
@@ -1077,6 +1081,22 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         assert sum(len(rows) for rows in captured_origins) == reference_origin_rows
     else:
         assert captured["origins"] is None
+    if preserve_source_map:
+        captured_source_maps = cast(
+            tuple[tuple[tuple[bytes, ...], tuple[bytes, ...]], ...],
+            captured["source_maps"],
+        )
+        assert len(captured_source_maps) == 4
+        assert sum(len(entries) for entries, _prefixes in captured_source_maps) == sum(
+            len(occurrences)
+            for document in reference.documents
+            for occurrences in cast(Any, document.source_map).entries.values()
+        )
+        assert sum(len(prefixes) for _entries, prefixes in captured_source_maps) == sum(
+            len(cast(Any, document.source_map).prefixes) for document in reference.documents
+        )
+    else:
+        assert captured["source_maps"] is None
     assert captured["effective_origins"] is None
     assert captured["effective_document_ordinals"] == ((0,), (1,), (2,), (3,))
     assert captured["closure_document_ordinals"] == (0, 1, 2, 3)
@@ -1087,8 +1107,36 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     assert counters.retained_document_tables == 4
     assert counters.canonical_input_rows == 4
     assert counters.retained_origin_rows == (2 * reference_origin_rows if collect_provenance else 0)
+    expected_source_rows = (
+        sum(
+            len(occurrences)
+            for document in reference.documents
+            for occurrences in cast(Any, document.source_map).entries.values()
+        )
+        if preserve_source_map
+        else 0
+    )
+    expected_prefix_rows = (
+        sum(len(cast(Any, document.source_map).prefixes) for document in reference.documents)
+        if preserve_source_map
+        else 0
+    )
+    assert counters.retained_source_map_rows == expected_source_rows
+    assert counters.retained_source_prefix_rows == expected_prefix_rows
+    assert counters.source_map_rows_emitted == 0
+    assert counters.source_prefix_rows_emitted == 0
     assert counters.publication_structural_rows_copied == 0
     assert counters.publication_structural_bytes_copied == 0
+    assert handle.attestation.capability_bits == (
+        7 | (8 if preserve_source_map else 0) | (16 if collect_provenance else 0)
+    )
+    if preserve_source_map:
+        assert tuple(document.source_map for document in selected.documents) == tuple(
+            document.source_map for document in reference.documents
+        )
+        after_source_maps = cast(Any, raw_owner)._publication_counters_v2()
+        assert after_source_maps.source_map_rows_emitted > counters.source_map_rows_emitted
+        assert after_source_maps.source_prefix_rows_emitted > counters.source_prefix_rows_emitted
 
     scalar_error = AssertionError("closure encoded view crossed scalar traversal")
     with (
@@ -1108,10 +1156,12 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
 
 
 @pytest.mark.parametrize("collect_provenance", (False, True))
+@pytest.mark.parametrize("preserve_source_map", (False, True))
 def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
     collect_provenance: bool,
+    preserve_source_map: bool,
 ) -> None:
     root = (
         b"Ontology(<urn:retained-cycle:a> Import(<urn:retained-cycle:b>) "
@@ -1132,6 +1182,7 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
             imports=ImportPolicy.RESOLVE_LOCAL,
             backend=backend,
             collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
         )
 
     reference = load_snapshot(
@@ -1186,6 +1237,14 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     assert captured["effective_documents"] is not None
     assert captured["effective_document_ordinals"] == ((0,), (1,))
     assert captured["closure_document_ordinals"] == (0, 1)
+    if preserve_source_map:
+        source_maps = cast(
+            tuple[tuple[tuple[bytes, ...], tuple[bytes, ...]], ...],
+            captured["source_maps"],
+        )
+        assert len(source_maps) == 2
+    else:
+        assert captured["source_maps"] is None
 
     raw_rows = tuple(
         tuple(canonical_bytes(value) for value in document.axioms)
@@ -1213,6 +1272,42 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     else:
         assert captured["origins"] is None
         assert captured["effective_origins"] is None
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    before_source_maps = cast(Any, raw_owner)._publication_counters_v2()
+    expected_source_rows = (
+        sum(
+            len(occurrences)
+            for document in reference.documents
+            for occurrences in cast(Any, document.source_map).entries.values()
+        )
+        if preserve_source_map
+        else 0
+    )
+    expected_prefix_rows = (
+        sum(len(cast(Any, document.source_map).prefixes) for document in reference.documents)
+        if preserve_source_map
+        else 0
+    )
+    assert before_source_maps.retained_source_map_rows == expected_source_rows
+    assert before_source_maps.retained_source_prefix_rows == expected_prefix_rows
+    assert before_source_maps.source_map_rows_emitted == 0
+    assert before_source_maps.source_prefix_rows_emitted == 0
+    assert handle.attestation.capability_bits == (
+        7 | (8 if preserve_source_map else 0) | (16 if collect_provenance else 0)
+    )
+    if preserve_source_map:
+        selected_source_maps = tuple(document.source_map for document in selected.documents)
+        reference_source_maps = tuple(document.source_map for document in reference.documents)
+        assert selected_source_maps == reference_source_maps
+        after_source_maps = cast(Any, raw_owner)._publication_counters_v2()
+        assert (
+            after_source_maps.source_map_rows_emitted > before_source_maps.source_map_rows_emitted
+        )
+        assert (
+            after_source_maps.source_prefix_rows_emitted
+            > before_source_maps.source_prefix_rows_emitted
+        )
     effective_rows = tuple(
         tuple(
             canonical_bytes(value)

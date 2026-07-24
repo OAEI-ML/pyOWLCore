@@ -58,7 +58,7 @@ pub(crate) fn typed_structural_handle_v2(
     storage: TypedFacadeStorageV2,
     origin_rows: Option<Vec<Vec<Vec<u8>>>>,
     raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
-    source_map: Option<TypedSourceMapRowsV2>,
+    source_maps: Option<Vec<TypedSourceMapRowsV2>>,
     rdf_report: Option<TypedRdfReportRowsV2>,
     parser_bytes: u64,
 ) -> pyo3::PyResult<NativeSnapshotHandle> {
@@ -68,7 +68,7 @@ pub(crate) fn typed_structural_handle_v2(
         storage,
         origin_rows,
         raw_origin_rows,
-        source_map,
+        source_maps,
         rdf_report,
         parser_bytes,
     )

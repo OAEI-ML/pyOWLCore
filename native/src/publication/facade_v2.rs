@@ -1239,7 +1239,7 @@ impl PublicationStorageV2 {
         typed_structural: TypedFacadeStorageV2,
         origin_rows: Option<Vec<Vec<Vec<u8>>>>,
         raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
-        source_map: Option<TypedSourceMapRowsV2>,
+        source_maps: Option<Vec<TypedSourceMapRowsV2>>,
         rdf_report: Option<TypedRdfReportRowsV2>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
@@ -1248,7 +1248,7 @@ impl PublicationStorageV2 {
             typed_structural,
             origin_rows,
             raw_origin_rows,
-            source_map,
+            source_maps,
             rdf_report,
             parser_bytes,
         )
@@ -1259,7 +1259,7 @@ impl PublicationStorageV2 {
         typed_structural: TypedFacadeStorageV2,
         origin_rows: Option<Vec<Vec<Vec<u8>>>>,
         raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
-        source_map: Option<TypedSourceMapRowsV2>,
+        source_maps: Option<Vec<TypedSourceMapRowsV2>>,
         rdf_report: Option<TypedRdfReportRowsV2>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
@@ -1305,7 +1305,7 @@ impl PublicationStorageV2 {
                         .map_err(|_| NativeError::limit("typed V2 origin row exceeds u64"))?,
                 ))
             })?;
-        let retained_source = retain_source_tables_v2(source_map)?;
+        let retained_source = retain_source_tables_v2(source_maps, attestation.document_count)?;
         let retained_rdf = retain_rdf_tables_v2(rdf_report)?;
         let structural_counts = typed_structural.structural_counts()?;
         if attestation.document_count != typed_structural.document_count()
@@ -1339,11 +1339,6 @@ impl PublicationStorageV2 {
         {
             return Err(NativeError::protocol(
                 "typed V2 owner attests unsupported auxiliary collections",
-            ));
-        }
-        if retained_source.present && attestation.document_count != 1 {
-            return Err(NativeError::protocol(
-                "typed V2 source-map attachment currently requires one document",
             ));
         }
         if parser_bytes != 0 && parser_bytes != attestation.total_source_bytes {
@@ -1835,36 +1830,34 @@ struct RetainedSourceTablesV2 {
 }
 
 fn retain_source_tables_v2(
-    source_map: Option<TypedSourceMapRowsV2>,
+    source_maps: Option<Vec<TypedSourceMapRowsV2>>,
+    document_count: u64,
 ) -> NativeResult<RetainedSourceTablesV2> {
-    let Some(source_map) = source_map else {
+    let Some(source_maps) = source_maps else {
         return Ok(RetainedSourceTablesV2 {
             maximum_row_bytes: 1,
             ..RetainedSourceTablesV2::default()
         });
     };
-    if source_map
-        .entries
-        .windows(2)
-        .any(|pair| pair[0].get(..32) > pair[1].get(..32))
-        || source_map.entries.iter().any(|row| row.len() < 43)
-    {
+    let expected_document_count = usize::try_from(document_count)
+        .map_err(|_| NativeError::limit("typed V2 document count exceeds usize"))?;
+    if source_maps.len() != expected_document_count {
         return Err(NativeError::protocol(
-            "typed V2 retained source-map rows are malformed or unordered",
+            "typed V2 source-map document tables diverge from the structural owner",
         ));
     }
-    let collections = [
-        (CollectionV2::SourceMapEntries, source_map.entries),
-        (CollectionV2::SourceMapPrefixes, source_map.prefixes),
-    ];
     let mut result = RetainedSourceTablesV2 {
         maximum_row_bytes: 1,
         present: true,
         ..RetainedSourceTablesV2::default()
     };
+    let table_capacity = source_maps
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| NativeError::limit("typed V2 source-map table count overflow"))?;
     result
         .effective_tables
-        .try_reserve_exact(collections.len())
+        .try_reserve_exact(table_capacity)
         .map_err(|_| NativeError::limit("typed V2 source-map table allocation failed"))?;
     result.metadata_bytes = checked_add(
         result.metadata_bytes,
@@ -1877,29 +1870,162 @@ fn retain_source_tables_v2(
         )
         .map_err(|_| NativeError::limit("typed V2 source-map table size exceeds u64"))?,
     )?;
-    for (offset, (collection, rows)) in collections.into_iter().enumerate() {
-        result.row_counts[offset] = u64::try_from(rows.len())
-            .map_err(|_| NativeError::limit("typed V2 source-map row count exceeds u64"))?;
-        if rows.is_empty() {
-            continue;
+    for (document_ordinal, source_map) in source_maps.into_iter().enumerate() {
+        validate_source_map_entries_v2(&source_map.entries)?;
+        validate_source_map_prefixes_v2(&source_map.prefixes)?;
+        let collections = [
+            (CollectionV2::SourceMapEntries, source_map.entries),
+            (CollectionV2::SourceMapPrefixes, source_map.prefixes),
+        ];
+        for (offset, (collection, rows)) in collections.into_iter().enumerate() {
+            result.row_counts[offset] = result.row_counts[offset]
+                .checked_add(
+                    u64::try_from(rows.len())
+                        .map_err(|_| NativeError::limit("typed V2 source-map count exceeds u64"))?,
+                )
+                .ok_or_else(|| NativeError::limit("typed V2 source-map row count overflow"))?;
+            if rows.is_empty() {
+                continue;
+            }
+            let retained = retain_auxiliary_rows_v2(rows, "typed V2 source-map")?;
+            result.payload_bytes = checked_add(result.payload_bytes, retained.payload_bytes)?;
+            result.metadata_bytes = checked_add(result.metadata_bytes, retained.metadata_bytes)?;
+            result.maximum_row_bytes = result.maximum_row_bytes.max(retained.maximum_row_bytes);
+            result.effective_tables.push(FacadeTableV2 {
+                coordinate: CoordinateV2 {
+                    collection,
+                    scope: ScopeV2::Document,
+                    document_ordinal: Some(u64::try_from(document_ordinal).map_err(|_| {
+                        NativeError::limit("typed V2 source-map document ordinal exceeds u64")
+                    })?),
+                    signature_kind: SignatureKindV2::All,
+                    include_builtins: true,
+                },
+                rows: retained.rows,
+                source_identity: 0,
+            });
         }
-        let retained = retain_auxiliary_rows_v2(rows, "typed V2 source-map")?;
-        result.payload_bytes = checked_add(result.payload_bytes, retained.payload_bytes)?;
-        result.metadata_bytes = checked_add(result.metadata_bytes, retained.metadata_bytes)?;
-        result.maximum_row_bytes = result.maximum_row_bytes.max(retained.maximum_row_bytes);
-        result.effective_tables.push(FacadeTableV2 {
-            coordinate: CoordinateV2 {
-                collection,
-                scope: ScopeV2::Document,
-                document_ordinal: Some(0),
-                signature_kind: SignatureKindV2::All,
-                include_builtins: true,
-            },
-            rows: retained.rows,
-            source_identity: 0,
-        });
     }
     Ok(result)
+}
+
+fn validate_source_map_entries_v2(rows: &[Vec<u8>]) -> NativeResult<()> {
+    let mut previous_digest: Option<&[u8]> = None;
+    for row in rows {
+        let mut offset = 0_usize;
+        let digest = take_source_bytes_v2(row, &mut offset, 32, "digest")?;
+        let _occurrence = take_source_bytes_v2(row, &mut offset, 8, "occurrence")?;
+        validate_source_span_v2(row, &mut offset)?;
+        let lexical_count = usize::from(read_source_u16_v2(row, &mut offset, "lexical count")?);
+        let mut previous_key: Option<&[u8]> = None;
+        for _ in 0..lexical_count {
+            let key = read_source_text_v2(row, &mut offset, true, "lexical key")?;
+            let _value = read_source_text_v2(row, &mut offset, false, "lexical value")?;
+            if previous_key.is_some_and(|previous| previous >= key) {
+                return Err(NativeError::protocol(
+                    "typed V2 source-map lexical keys are not ascending unique",
+                ));
+            }
+            previous_key = Some(key);
+        }
+        if offset != row.len() {
+            return Err(NativeError::protocol(
+                "typed V2 retained source-map row has trailing bytes",
+            ));
+        }
+        if previous_digest.is_some_and(|previous| previous > digest) {
+            return Err(NativeError::protocol(
+                "typed V2 retained source-map digest groups are not ordered",
+            ));
+        }
+        previous_digest = Some(digest);
+    }
+    Ok(())
+}
+
+fn validate_source_map_prefixes_v2(rows: &[Vec<u8>]) -> NativeResult<()> {
+    let mut previous_prefix: Option<&[u8]> = None;
+    for row in rows {
+        let mut offset = 0_usize;
+        let prefix = read_source_text_v2(row, &mut offset, false, "prefix")?;
+        let _iri = read_source_text_v2(row, &mut offset, true, "prefix IRI")?;
+        if offset != row.len() {
+            return Err(NativeError::protocol(
+                "typed V2 retained source-prefix row has trailing bytes",
+            ));
+        }
+        if previous_prefix.is_some_and(|previous| previous >= prefix) {
+            return Err(NativeError::protocol(
+                "typed V2 retained source prefixes are not ascending unique",
+            ));
+        }
+        previous_prefix = Some(prefix);
+    }
+    Ok(())
+}
+
+fn validate_source_span_v2(row: &[u8], offset: &mut usize) -> NativeResult<()> {
+    let mask = *take_source_bytes_v2(row, offset, 1, "span mask")?
+        .first()
+        .expect("one-byte span mask");
+    if mask == 0 {
+        return Ok(());
+    }
+    if mask & 0xc0 != 0x80 {
+        return Err(NativeError::protocol(
+            "typed V2 retained source-map span mask is invalid",
+        ));
+    }
+    let coordinate_count = usize::try_from((mask & 0x3f).count_ones())
+        .map_err(|_| NativeError::limit("typed V2 source-map span count exceeds usize"))?;
+    let coordinate_bytes = coordinate_count
+        .checked_mul(8)
+        .ok_or_else(|| NativeError::limit("typed V2 source-map span size overflow"))?;
+    let _coordinates = take_source_bytes_v2(row, offset, coordinate_bytes, "span coordinates")?;
+    Ok(())
+}
+
+fn read_source_u16_v2(row: &[u8], offset: &mut usize, field: &'static str) -> NativeResult<u16> {
+    let bytes: [u8; 2] = take_source_bytes_v2(row, offset, 2, field)?
+        .try_into()
+        .map_err(|_| NativeError::protocol("typed V2 source-map u16 field is malformed"))?;
+    Ok(u16::from_le_bytes(bytes))
+}
+
+fn read_source_text_v2<'a>(
+    row: &'a [u8],
+    offset: &mut usize,
+    nonempty: bool,
+    field: &'static str,
+) -> NativeResult<&'a [u8]> {
+    let length_bytes: [u8; 4] = take_source_bytes_v2(row, offset, 4, field)?
+        .try_into()
+        .map_err(|_| NativeError::protocol("typed V2 source-map text length is malformed"))?;
+    let length = usize::try_from(u32::from_le_bytes(length_bytes))
+        .map_err(|_| NativeError::limit("typed V2 source-map text length exceeds usize"))?;
+    let value = take_source_bytes_v2(row, offset, length, field)?;
+    if (nonempty && value.is_empty()) || std::str::from_utf8(value).is_err() {
+        return Err(NativeError::protocol(
+            "typed V2 retained source-map text is invalid",
+        ));
+    }
+    Ok(value)
+}
+
+fn take_source_bytes_v2<'a>(
+    row: &'a [u8],
+    offset: &mut usize,
+    length: usize,
+    _field: &'static str,
+) -> NativeResult<&'a [u8]> {
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| NativeError::limit("typed V2 source-map offset overflow"))?;
+    let value = row
+        .get(*offset..end)
+        .ok_or_else(|| NativeError::protocol("typed V2 retained source-map field is truncated"))?;
+    *offset = end;
+    Ok(value)
 }
 
 #[derive(Debug, Default)]
@@ -4185,6 +4311,29 @@ mod tests {
         row
     }
 
+    fn source_map_row(digest: u8, occurrence: u64) -> Vec<u8> {
+        let mut row = vec![digest; 32];
+        row.extend(occurrence.to_le_bytes());
+        row.push(0);
+        row.extend(0_u16.to_le_bytes());
+        row
+    }
+
+    fn source_prefix_row(prefix: &str, iri: &str) -> Vec<u8> {
+        let mut row = u32::try_from(prefix.len())
+            .expect("source prefix length")
+            .to_le_bytes()
+            .to_vec();
+        row.extend(prefix.as_bytes());
+        row.extend(
+            u32::try_from(iri.len())
+                .expect("source prefix IRI length")
+                .to_le_bytes(),
+        );
+        row.extend(iri.as_bytes());
+        row
+    }
+
     #[test]
     fn typed_coordinate_mapping_is_structural_only_and_preserves_selectors() {
         let kinds = [
@@ -4549,13 +4698,8 @@ mod tests {
     #[test]
     fn typed_structural_owner_retains_lazy_source_map_rows() {
         let (typed, canonical) = typed_structural_owner();
-        let mut entry = vec![0x42; 32];
-        entry.extend_from_slice(&0_u64.to_le_bytes());
-        entry.push(0);
-        entry.extend_from_slice(&0_u16.to_le_bytes());
-        let mut prefix = 0_u32.to_le_bytes().to_vec();
-        prefix.extend_from_slice(&3_u32.to_le_bytes());
-        prefix.extend_from_slice(b"urn");
+        let entry = source_map_row(0x42, 0);
+        let prefix = source_prefix_row("", "urn");
         let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
         attestation.capability_bits |= 8;
         attestation.source_map_entry_count = 1;
@@ -4566,10 +4710,10 @@ mod tests {
             typed,
             None,
             None,
-            Some(TypedSourceMapRowsV2 {
+            Some(vec![TypedSourceMapRowsV2 {
                 entries: vec![entry.clone()],
                 prefixes: vec![prefix.clone()],
-            }),
+            }]),
             None,
             0,
         )
@@ -4594,6 +4738,174 @@ mod tests {
         );
         assert!(counters[RETAINED_METADATA_BYTES] > 0);
         validate_retained_total(&counters).expect("source-map owner counters");
+    }
+
+    #[test]
+    fn typed_structural_owner_routes_multi_document_source_maps() {
+        let typed = typed_two_document_owner();
+        let first_entry = source_map_row(0x40, 0);
+        let second_entry = source_map_row(0x10, 1);
+        let first_prefix = source_prefix_row("ex", "urn:first:");
+        let second_prefix = source_prefix_row("", "urn:second:");
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.document_count = 2;
+        attestation.import_edge_count = 1;
+        attestation.stored_axiom_count = 2;
+        attestation.effective_axiom_count = 2;
+        attestation.capability_bits |= 8;
+        attestation.source_map_entry_count = 2;
+        attestation.root_document_key = Box::from("d1:first");
+        attestation.max_facade_row_bytes = typed.maximum_row_bytes().max(
+            [
+                first_entry.len(),
+                second_entry.len(),
+                first_prefix.len(),
+                second_prefix.len(),
+            ]
+            .into_iter()
+            .max()
+            .expect("source-map rows") as u64,
+        );
+        let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
+            attestation,
+            typed,
+            None,
+            None,
+            Some(vec![
+                TypedSourceMapRowsV2 {
+                    entries: vec![first_entry.clone()],
+                    prefixes: vec![first_prefix.clone()],
+                },
+                TypedSourceMapRowsV2 {
+                    entries: vec![second_entry.clone()],
+                    prefixes: vec![second_prefix.clone()],
+                },
+            ]),
+            None,
+            0,
+        )
+        .expect("multi-document source maps");
+
+        assert_eq!(
+            storage.rows(
+                coordinate(CollectionV2::SourceMapEntries, ScopeV2::Document, Some(0),),
+                true,
+            )[0]
+            .as_slice(),
+            first_entry
+        );
+        assert_eq!(
+            storage.rows(
+                coordinate(CollectionV2::SourceMapEntries, ScopeV2::Document, Some(1),),
+                true,
+            )[0]
+            .as_slice(),
+            second_entry
+        );
+        assert_eq!(
+            storage.rows(
+                coordinate(CollectionV2::SourceMapPrefixes, ScopeV2::Document, Some(0),),
+                true,
+            )[0]
+            .as_slice(),
+            first_prefix
+        );
+        assert_eq!(
+            storage.rows(
+                coordinate(CollectionV2::SourceMapPrefixes, ScopeV2::Document, Some(1),),
+                true,
+            )[0]
+            .as_slice(),
+            second_prefix
+        );
+        let counters = storage.counters.snapshot();
+        assert_eq!(counters[RETAINED_ROW_FIRST + 3], 2);
+        assert_eq!(counters[RETAINED_ROW_FIRST + 4], 2);
+        assert_eq!(
+            counters[RETAINED_SOURCE_BYTES],
+            u64::try_from(
+                first_entry.len() + second_entry.len() + first_prefix.len() + second_prefix.len()
+            )
+            .expect("source-map payload bytes")
+        );
+        validate_retained_total(&counters).expect("multi-document source-map owner counters");
+    }
+
+    #[test]
+    fn multi_document_source_maps_reject_topology_order_and_codec_drift() {
+        assert!(retain_source_tables_v2(
+            Some(vec![TypedSourceMapRowsV2 {
+                entries: vec![source_map_row(0x20, 0)],
+                prefixes: Vec::new(),
+            }]),
+            2,
+        )
+        .is_err());
+        assert!(retain_source_tables_v2(
+            Some(vec![
+                TypedSourceMapRowsV2 {
+                    entries: vec![source_map_row(0x40, 0), source_map_row(0x20, 1)],
+                    prefixes: Vec::new(),
+                },
+                TypedSourceMapRowsV2 {
+                    entries: Vec::new(),
+                    prefixes: Vec::new(),
+                },
+            ]),
+            2,
+        )
+        .is_err());
+        assert!(retain_source_tables_v2(
+            Some(vec![
+                TypedSourceMapRowsV2 {
+                    entries: Vec::new(),
+                    prefixes: vec![
+                        source_prefix_row("z", "urn:z"),
+                        source_prefix_row("a", "urn:a"),
+                    ],
+                },
+                TypedSourceMapRowsV2 {
+                    entries: Vec::new(),
+                    prefixes: Vec::new(),
+                },
+            ]),
+            2,
+        )
+        .is_err());
+
+        let mut malformed_span = source_map_row(0x20, 0);
+        malformed_span[40] = 0x40;
+        assert!(retain_source_tables_v2(
+            Some(vec![
+                TypedSourceMapRowsV2 {
+                    entries: vec![malformed_span],
+                    prefixes: Vec::new(),
+                },
+                TypedSourceMapRowsV2 {
+                    entries: Vec::new(),
+                    prefixes: Vec::new(),
+                },
+            ]),
+            2,
+        )
+        .is_err());
+
+        let mut trailing_prefix = source_prefix_row("ex", "urn:ex");
+        trailing_prefix.push(0);
+        assert!(retain_source_tables_v2(
+            Some(vec![
+                TypedSourceMapRowsV2 {
+                    entries: Vec::new(),
+                    prefixes: vec![trailing_prefix],
+                },
+                TypedSourceMapRowsV2 {
+                    entries: Vec::new(),
+                    prefixes: Vec::new(),
+                },
+            ]),
+            2,
+        )
+        .is_err());
     }
 
     #[test]

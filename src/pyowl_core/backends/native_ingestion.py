@@ -1507,7 +1507,7 @@ def retain_native_snapshot_v2(
     common_ineligible = (
         snapshot.load_options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
         or not snapshot.documents
-        or snapshot.load_options.preserve_source_map
+        or (snapshot.load_options.preserve_source_map and len(snapshot.documents) == 1)
         or snapshot.load_options.validate_owl2_dl
         or any(
             document.provenance.backend != "native"
@@ -1991,6 +1991,8 @@ def _publish_structural_closure_snapshot_v2(
         NativeFingerprintEvidenceV2,
         NativeOriginRowV2,
         NativeSignatureKindV2,
+        NativeSourceMapRowV2,
+        NativeSourcePrefixRowV2,
         _seal_native_snapshot_owner_v2,
         encode_native_auxiliary_row_v2,
         freeze_native_snapshot_publication_v2,
@@ -2023,6 +2025,50 @@ def _publish_structural_closure_snapshot_v2(
         )
         for document in snapshot.documents
     )
+    source_map_documents: tuple[tuple[tuple[bytes, ...], tuple[bytes, ...]], ...] = ()
+    if snapshot.load_options.preserve_source_map:
+        encoded_source_maps: list[tuple[tuple[bytes, ...], tuple[bytes, ...]]] = []
+        for document in snapshot.documents:
+            if document.source_map is None:
+                return snapshot
+            entry_items: list[tuple[bytes, bytes]] = []
+            for digest, source_occurrences in document.source_map.entries.items():
+                for source_occurrence in source_occurrences:
+                    collection, encoded = encode_native_auxiliary_row_v2(
+                        NativeSourceMapRowV2(
+                            digest=digest,
+                            occurrence=source_occurrence.occurrence,
+                            span=source_occurrence.span,
+                            lexical=tuple(
+                                sorted(
+                                    source_occurrence.lexical.items(),
+                                    key=lambda item: item[0].encode("utf-8"),
+                                )
+                            ),
+                        ),
+                        max_row_bytes=snapshot.load_options.limits.max_wire_bytes,
+                    )
+                    if collection is not NativeFacadeCollectionV2.SOURCE_MAP_ENTRIES:
+                        raise AssertionError(collection)
+                    entry_items.append((digest, encoded))
+            entry_items.sort(key=lambda item: item[0])
+            prefix_items: list[tuple[bytes, bytes]] = []
+            for prefix, iri in document.source_map.prefixes.items():
+                collection, encoded = encode_native_auxiliary_row_v2(
+                    NativeSourcePrefixRowV2(prefix=prefix, iri=iri),
+                    max_row_bytes=snapshot.load_options.limits.max_wire_bytes,
+                )
+                if collection is not NativeFacadeCollectionV2.SOURCE_MAP_PREFIXES:
+                    raise AssertionError(collection)
+                prefix_items.append((prefix.encode("utf-8"), encoded))
+            prefix_items.sort(key=lambda item: item[0])
+            encoded_source_maps.append(
+                (
+                    tuple(item[1] for item in entry_items),
+                    tuple(item[1] for item in prefix_items),
+                )
+            )
+        source_map_documents = tuple(encoded_source_maps)
     effective_documents = tuple(
         (
             tuple(
@@ -2137,12 +2183,12 @@ def _publish_structural_closure_snapshot_v2(
             ontology_annotation_count=len(raw_rows[0]),
             axiom_count=len(raw_rows[1]),
             extension_count=len(raw_rows[2]),
-            source_map_entry_count=0,
+            source_map_entry_count=len(source_rows[0]),
             origin_entry_count=len(raw_origins),
             rdf_mapping_conformant=None,
             rdf_mapping_report_sha256=None,
         )
-        for record, document, diagnostics, raw_rows, raw_origins in zip(
+        for record, document, diagnostics, raw_rows, raw_origins, source_rows in zip(
             records,
             snapshot.documents,
             document_diagnostics,
@@ -2151,6 +2197,11 @@ def _publish_structural_closure_snapshot_v2(
                 raw_origin_documents
                 if snapshot.load_options.collect_provenance
                 else ((),) * len(records)
+            ),
+            (
+                source_map_documents
+                if snapshot.load_options.preserve_source_map
+                else (((), ()),) * len(records)
             ),
             strict=True,
         )
@@ -2178,7 +2229,11 @@ def _publish_structural_closure_snapshot_v2(
         owl2_dl_conforms=None,
         owl2_dl_report_sha256=None,
     )
-    capability_bits = 7 | (16 if snapshot.load_options.collect_provenance else 0)
+    capability_bits = (
+        7
+        | (8 if snapshot.load_options.preserve_source_map else 0)
+        | (16 if snapshot.load_options.collect_provenance else 0)
+    )
     import_manifest = freeze_native_import_manifest_publication_v1(snapshot.import_manifest)
     sidecars = NativeDiagnosticReferenceSidecarsV2(
         snapshot=tuple(_diagnostic_reference_kinds(value) for value in diagnostics),
@@ -2199,18 +2254,23 @@ def _publish_structural_closure_snapshot_v2(
                 effective_axiom_count=len(rows[1]),
                 effective_extension_count=len(rows[2]),
                 effective_origin_count=len(origin_rows),
-                raw_source_prefix_count=0,
+                raw_source_prefix_count=len(source_rows[1]),
                 rdf_unconsumed_triple_count=0,
                 rdf_rule_count=0,
                 rdf_diagnostic_count=0,
             )
-            for record, rows, origin_rows in zip(
+            for record, rows, origin_rows, source_rows in zip(
                 records,
                 effective_documents,
                 (
                     effective_origin_documents
                     if snapshot.load_options.collect_provenance
                     else ((),) * len(records)
+                ),
+                (
+                    source_map_documents
+                    if snapshot.load_options.preserve_source_map
+                    else (((), ()),) * len(records)
                 ),
                 strict=True,
             )
@@ -2288,6 +2348,26 @@ def _publish_structural_closure_snapshot_v2(
                 True,
             )
         ] = closure_origin_rows
+    if snapshot.load_options.preserve_source_map:
+        for ordinal, (entries, prefixes) in enumerate(source_map_documents):
+            collections[
+                (
+                    NativeFacadeCollectionV2.SOURCE_MAP_ENTRIES,
+                    NativeFacadeScopeV2.DOCUMENT,
+                    ordinal,
+                    NativeSignatureKindV2.ALL,
+                    True,
+                )
+            ] = entries
+            collections[
+                (
+                    NativeFacadeCollectionV2.SOURCE_MAP_PREFIXES,
+                    NativeFacadeScopeV2.DOCUMENT,
+                    ordinal,
+                    NativeSignatureKindV2.ALL,
+                    True,
+                )
+            ] = prefixes
     raw_collections = None
     if raw_documents != effective_documents or raw_origin_documents != effective_origin_documents:
         raw_collections = dict(collections)
@@ -2384,6 +2464,12 @@ def _publish_structural_closure_snapshot_v2(
             *(len(row) for rows in effective_origin_documents for row in rows),
             *(len(row) for rows in raw_origin_documents for row in rows),
             *(len(row) for row in closure_origin_rows),
+            *(
+                len(row)
+                for entries, prefixes in source_map_documents
+                for rows in (entries, prefixes)
+                for row in rows
+            ),
         )
     )
     content = native_snapshot_content_digests_v2(
@@ -2436,6 +2522,9 @@ def _publish_structural_closure_snapshot_v2(
                 attestation,
                 config,
                 cancel,
+                source_maps=(
+                    source_map_documents if snapshot.load_options.preserve_source_map else None
+                ),
                 effective_documents=(
                     effective_documents if raw_documents != effective_documents else None
                 ),
