@@ -1358,6 +1358,72 @@ def test_record_unresolved_mixed_closure_retains_resolved_documents_and_diagnost
 
 @pytest.mark.parametrize("collect_provenance", (False, True))
 @pytest.mark.parametrize("preserve_source_map", (False, True))
+def test_large_auto_resolver_built_closure_retains_one_native_owner(
+    extension: NativeTestExtension,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+) -> None:
+    padding = b" " * (256 * 1024)
+    root = (
+        b"Ontology(<urn:retained-auto-closure:root> "
+        b"Import(<urn:retained-auto-closure:child>) "
+        + padding
+        + b"Declaration(Class(<urn:retained-auto-closure:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-auto-closure:child> "
+        + padding
+        + b"Declaration(Class(<urn:retained-auto-closure:Child>)))"
+    )
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RESOLVE_LOCAL,
+            backend=backend,
+            collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
+        )
+
+    resolver = MappingResolver({"urn:retained-auto-closure:child": child})
+    reference = load_snapshot(
+        root,
+        options=options(BackendPreference.PYTHON),
+        resolver=resolver,
+    )
+    selected = load_snapshot(
+        root,
+        options=options(BackendPreference.AUTO),
+        resolver=resolver,
+    )
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert all(document.provenance.backend == "native" for document in selected.documents)
+    assert len(selected.documents) == len(reference.documents) == 2
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert tuple(document.source_map for document in selected.documents) == tuple(
+        document.source_map for document in reference.documents
+    )
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    counters = cast(Any, raw_owner)._publication_counters_v2()
+    assert counters.retained_document_tables == 2
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
+    assert handle.attestation.capability_bits == (
+        7 | (8 if preserve_source_map else 0) | (16 if collect_provenance else 0)
+    )
+    assert extension.INGESTION_FEATURES == ()
+
+
+@pytest.mark.parametrize("collect_provenance", (False, True))
+@pytest.mark.parametrize("preserve_source_map", (False, True))
 @pytest.mark.parametrize(
     "policy",
     (ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT),
