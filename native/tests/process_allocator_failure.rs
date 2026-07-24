@@ -373,6 +373,7 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
         baseline_typed_builder_add_scoped.ordinal()
     );
 
+    let mut effective_visit_baseline = None;
     let mut effective_page_baseline = None;
     let mut effective_encoded_columns_baseline = None;
     for prepare in [
@@ -380,6 +381,36 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
             as fn(&ComponentEncodingFixture) -> Result<TypedFacadeReadFixture, Failure>,
         ComponentEncodingFixture::prepare_typed_facade_closure_reads,
     ] {
+        let typed_visit = prepare(&component).expect("typed canonical-visit fixture must prepare");
+        let (baseline_typed_visit, typed_visit_allocations) =
+            count_allocations(|| typed_visit.visit_canonical_roots());
+        let baseline_typed_visit =
+            baseline_typed_visit.expect("typed canonical-visit baseline must succeed");
+        assert_eq!(baseline_typed_visit[0], 1);
+        assert_eq!(baseline_typed_visit[1], canonical.len() as u64);
+        if let Some(expected) = effective_visit_baseline {
+            assert_eq!(baseline_typed_visit, expected);
+        } else {
+            effective_visit_baseline = Some(baseline_typed_visit);
+        }
+        assert!(typed_visit_allocations > 0);
+
+        for fail_after in 0..typed_visit_allocations {
+            let typed_visit = prepare(&component)
+                .expect("typed canonical-visit fixture must prepare for rejection");
+            let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+                typed_visit.visit_canonical_roots()
+            }));
+            assert!(failure.message.contains("allocation failed"));
+        }
+        let typed_visit =
+            prepare(&component).expect("typed canonical-visit boundary fixture must prepare");
+        let boundary_typed_visit = fail_allocation(typed_visit_allocations, || {
+            typed_visit.visit_canonical_roots()
+        })
+        .expect("first non-failing typed canonical-visit boundary must succeed");
+        assert_eq!(boundary_typed_visit, baseline_typed_visit);
+
         let typed_page = prepare(&component).expect("typed facade page fixture must prepare");
         let (baseline_typed_page, typed_page_allocations) = count_allocations(|| typed_page.page());
         let baseline_typed_page =
@@ -474,10 +505,42 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
             baseline_typed_encoded_columns
         );
     }
+    let baseline_typed_visit =
+        effective_visit_baseline.expect("effective typed canonical-visit baseline must exist");
     let baseline_typed_page =
         effective_page_baseline.expect("effective typed facade page baseline must exist");
     let baseline_typed_encoded_columns = effective_encoded_columns_baseline
         .expect("effective typed encoded-column baseline must exist");
+
+    let typed_raw_visit =
+        ComponentEncodingFixture::prepare_typed_facade_raw_reads(&canonical, &effective_canonical)
+            .expect("typed raw canonical-visit fixture must prepare");
+    let (baseline_typed_raw_visit, typed_raw_visit_allocations) =
+        count_allocations(|| typed_raw_visit.visit_canonical_roots());
+    let baseline_typed_raw_visit =
+        baseline_typed_raw_visit.expect("typed raw canonical-visit baseline must succeed");
+    assert_eq!(baseline_typed_raw_visit, baseline_typed_visit);
+    assert!(typed_raw_visit_allocations > 0);
+
+    for fail_after in 0..typed_raw_visit_allocations {
+        let typed_raw_visit = ComponentEncodingFixture::prepare_typed_facade_raw_reads(
+            &canonical,
+            &effective_canonical,
+        )
+        .expect("typed raw canonical-visit fixture must prepare for rejection");
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+            typed_raw_visit.visit_canonical_roots()
+        }));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let typed_raw_visit =
+        ComponentEncodingFixture::prepare_typed_facade_raw_reads(&canonical, &effective_canonical)
+            .expect("typed raw canonical-visit boundary fixture must prepare");
+    let boundary_typed_raw_visit = fail_allocation(typed_raw_visit_allocations, || {
+        typed_raw_visit.visit_canonical_roots()
+    })
+    .expect("first non-failing typed raw canonical-visit boundary must succeed");
+    assert_eq!(boundary_typed_raw_visit, baseline_typed_raw_visit);
 
     let typed_raw_page =
         ComponentEncodingFixture::prepare_typed_facade_raw_reads(&canonical, &effective_canonical)

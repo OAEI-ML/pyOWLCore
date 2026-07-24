@@ -654,6 +654,35 @@ impl FrozenTypedFacadeFixture {
 }
 
 impl TypedFacadeReadFixture {
+    /// Visit and consume the selected canonical axiom roots while allocation
+    /// injection is armed, retaining no encoded row after its callback.
+    pub fn visit_canonical_roots(&self) -> Result<[u64; 3], Failure> {
+        let mut rows = 0_u64;
+        let mut bytes = 0_u64;
+        let mut checksum = 0_u64;
+        self.storage.visit_canonical_roots(
+            TypedFacadeCollectionV2::Axioms,
+            self.coordinate.scope,
+            self.coordinate.document_ordinal,
+            self.raw_document_owner,
+            self.cancellation.clone(),
+            None,
+            |row| {
+                rows = rows
+                    .checked_add(1)
+                    .ok_or_else(|| NativeError::limit("native allocator visit count overflow"))?;
+                bytes = bytes
+                    .checked_add(u64::try_from(row.len()).map_err(|_| {
+                        NativeError::limit("native allocator visited row exceeds u64")
+                    })?)
+                    .ok_or_else(|| NativeError::limit("native allocator visit bytes overflow"))?;
+                checksum = checksum.rotate_left(1) ^ u64::from(crc32c(row));
+                Ok(())
+            },
+        )?;
+        Ok([rows, bytes, checksum])
+    }
+
     /// Build and consume the direct encoded structural columns selected by
     /// this owner role while allocation injection is armed.
     pub fn encoded_columns(&self) -> Result<[u64; 12], Failure> {
