@@ -187,7 +187,24 @@ impl ComponentEncodingFixture {
     /// platform mutex control block before allocation injection is armed,
     /// retaining only identifiers into the shared component arena.
     pub fn prepare_typed_facade_reads(&self) -> Result<TypedFacadeReadFixture, Failure> {
-        let coordinate = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+        self.prepare_typed_facade_effective_reads(TypedFacadeCoordinateV2::document(
+            TypedFacadeCollectionV2::Axioms,
+            0,
+        ))
+    }
+
+    /// Prepare a production typed V2 closure facade before allocation
+    /// injection is armed, retaining only identifiers into the shared arena.
+    pub fn prepare_typed_facade_closure_reads(&self) -> Result<TypedFacadeReadFixture, Failure> {
+        self.prepare_typed_facade_effective_reads(TypedFacadeCoordinateV2::closure(
+            TypedFacadeCollectionV2::Axioms,
+        ))
+    }
+
+    fn prepare_typed_facade_effective_reads(
+        &self,
+        coordinate: TypedFacadeCoordinateV2,
+    ) -> Result<TypedFacadeReadFixture, Failure> {
         let mut roots = Vec::new();
         roots
             .try_reserve_exact(1)
