@@ -1780,6 +1780,62 @@ def test_rdf_mapping_rejects_non_iri_imports(imports: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("body", "code"),
+    (
+        ("<owl:versionIRI>not-an-iri</owl:versionIRI>", "RDF_ONTOLOGY_HEADER"),
+        (
+            "<owl:versionIRI><rdf:Description/></owl:versionIRI>",
+            "RDF_ONTOLOGY_HEADER",
+        ),
+        (
+            '<owl:versionIRI rdf:resource="urn:v1"/>'
+            '<owl:versionIRI rdf:resource="urn:v2"/>',
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            "<owl:imports>not-an-iri</owl:imports>"
+            "<owl:versionIRI>not-an-iri</owl:versionIRI>",
+            "RDF_ONTOLOGY_HEADER",
+        ),
+        (
+            '<owl:versionIRI rdf:resource="urn:v"/>'
+            "<owl:imports>not-an-iri</owl:imports>",
+            "RDF_IMPORT_IRI",
+        ),
+    ),
+)
+def test_rdf_mapping_rejects_invalid_ontology_header_edges(
+    body: str,
+    code: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <owl:Ontology rdf:about="urn:o">{body}</owl:Ontology>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == code
+
+
+def test_rdf_mapping_rejects_version_iri_on_blank_ontology_header() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <owl:Ontology>
+    <owl:versionIRI rdf:resource="urn:v"/>
+  </owl:Ontology>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_ONTOLOGY_HEADER"
+
+
+@pytest.mark.parametrize(
     "body",
     (
         (

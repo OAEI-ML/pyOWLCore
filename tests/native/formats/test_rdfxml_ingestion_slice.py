@@ -1857,6 +1857,69 @@ def test_non_iri_import_rejection_matches_python(
 
 
 @pytest.mark.parametrize(
+    ("body", "code"),
+    (
+        ("<owl:versionIRI>not-an-iri</owl:versionIRI>", "RDF_ONTOLOGY_HEADER"),
+        (
+            "<owl:versionIRI><rdf:Description/></owl:versionIRI>",
+            "RDF_ONTOLOGY_HEADER",
+        ),
+        (
+            "<owl:versionIRI rdf:resource='urn:v1'/>"
+            "<owl:versionIRI rdf:resource='urn:v2'/>",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            "<owl:imports>not-an-iri</owl:imports>"
+            "<owl:versionIRI>not-an-iri</owl:versionIRI>",
+            "RDF_ONTOLOGY_HEADER",
+        ),
+        (
+            "<owl:versionIRI rdf:resource='urn:v'/>"
+            "<owl:imports>not-an-iri</owl:imports>",
+            "RDF_IMPORT_IRI",
+        ),
+    ),
+)
+def test_invalid_ontology_header_edges_match_python(
+    extension: NativeTestExtension,
+    body: str,
+    code: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <owl:Ontology rdf:about='urn:o'>{body}</owl:Ontology>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == code
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == f"NATIVE_{code}"
+
+
+def test_blank_ontology_version_iri_rejection_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <owl:Ontology>
+  <owl:versionIRI rdf:resource='urn:v'/>
+ </owl:Ontology>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_ONTOLOGY_HEADER"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_ONTOLOGY_HEADER"
+
+
+@pytest.mark.parametrize(
     "body",
     (
         (

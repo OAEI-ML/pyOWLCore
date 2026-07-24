@@ -833,6 +833,11 @@ class RDFMapper:
                 raise OntologySyntaxError(
                     "owl:versionIRI must be an IRI", code="RDF_ONTOLOGY_HEADER"
                 )
+            if ontology_iri is None:
+                raise OntologySyntaxError(
+                    "owl:versionIRI requires a named ontology header",
+                    code="RDF_ONTOLOGY_HEADER",
+                )
             version_iri = m.IRI(version.value)
             self._consume_only(node, OWL + "versionIRI", version)
         imports: list[m.IRI] = []

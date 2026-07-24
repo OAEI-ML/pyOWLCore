@@ -2554,6 +2554,36 @@ fn map_graph(
         if let Resource::Iri(value) = &header.subject {
             ontology_iri = Some(owned_text(value, session)?);
         }
+        let mut version_index = None;
+        for (index, triple) in triples.iter().enumerate() {
+            if triple.subject != header.subject || triple.predicate != OWL_VERSION_IRI {
+                continue;
+            }
+            if version_index.replace(index).is_some() {
+                return Err(rdf_mapping_cardinality(
+                    "native owl:versionIRI has more than one target",
+                ));
+            }
+        }
+        if let Some(index) = version_index {
+            let triple = &triples[index];
+            match &triple.object {
+                Term::Iri(value) if ontology_iri.is_some() => {
+                    version_iri = Some(owned_text(value, session)?);
+                    consumed[index] = true;
+                }
+                Term::Iri(_) => {
+                    return Err(rdf_ontology_header(
+                        "native owl:versionIRI requires a named ontology header",
+                    ))
+                }
+                _ => {
+                    return Err(rdf_ontology_header(
+                        "native owl:versionIRI target must be an IRI",
+                    ))
+                }
+            }
+        }
         for (index, triple) in triples.iter().enumerate() {
             if triple.subject != header.subject {
                 continue;
@@ -2569,13 +2599,7 @@ fn map_graph(
                     }
                     _ => return Err(rdf_import_iri()),
                 },
-                OWL_VERSION_IRI => match &triple.object {
-                    Term::Iri(value) if version_iri.is_none() && ontology_iri.is_some() => {
-                        version_iri = Some(owned_text(value, session)?);
-                        consumed[index] = true;
-                    }
-                    _ => return Err(rdf_mapping_type()),
-                },
+                OWL_VERSION_IRI => {}
                 _ => {}
             }
         }
@@ -8481,6 +8505,10 @@ fn rdf_import_iri() -> NativeError {
     )
 }
 
+fn rdf_ontology_header(message: &'static str) -> NativeError {
+    NativeError::new("NATIVE_RDF_ONTOLOGY_HEADER", message)
+}
+
 fn rdf_mapping_cardinality(message: &'static str) -> NativeError {
     NativeError::new("NATIVE_RDF_MAPPING_CARDINALITY", message)
 }
@@ -13387,6 +13415,40 @@ mod tests {
                 "NATIVE_RDF_IMPORT_IRI",
             );
         }
+        for (body, code) in [
+            (
+                "<owl:versionIRI>not-an-iri</owl:versionIRI>",
+                "NATIVE_RDF_ONTOLOGY_HEADER",
+            ),
+            (
+                "<owl:versionIRI><rdf:Description/></owl:versionIRI>",
+                "NATIVE_RDF_ONTOLOGY_HEADER",
+            ),
+            (
+                "<owl:versionIRI rdf:resource=\"urn:v1\"/><owl:versionIRI rdf:resource=\"urn:v2\"/>",
+                "NATIVE_RDF_MAPPING_CARDINALITY",
+            ),
+            (
+                "<owl:imports>not-an-iri</owl:imports><owl:versionIRI>not-an-iri</owl:versionIRI>",
+                "NATIVE_RDF_ONTOLOGY_HEADER",
+            ),
+            (
+                "<owl:versionIRI rdf:resource=\"urn:v\"/><owl:imports>not-an-iri</owl:imports>",
+                "NATIVE_RDF_IMPORT_IRI",
+            ),
+        ] {
+            let invalid = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Ontology rdf:about=\"urn:o\">{body}</owl:Ontology></rdf:RDF>"
+            );
+            assert_eq!(mapped(invalid.as_bytes(), None).unwrap_err().code, code);
+        }
+        let blank_header = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Ontology><owl:versionIRI rdf:resource=\"urn:v\"/></owl:Ontology></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(blank_header.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_ONTOLOGY_HEADER",
+        );
     }
 
     #[test]
