@@ -18,7 +18,9 @@ use crate::cancel::Guard;
 use crate::error::NativeError;
 use crate::error::NativeResult;
 use crate::limits::{LimitKey, Limits};
-use crate::publication::{NativeSnapshotHandle, TypedFacadeBuilderV2, TypedFacadeStorageV2};
+use crate::publication::{
+    NativeSnapshotAttestationV2, NativeSnapshotHandle, TypedFacadeBuilderV2, TypedFacadeStorageV2,
+};
 use crate::session::Session;
 
 pub(super) const FEATURES: &[&str] = &[];
@@ -52,6 +54,10 @@ type RetainedRdfXmlParseBindingResult = (
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
     _module.add_class::<NativeParsedStructuralStorageV2>()?;
     _module.add_function(wrap_pyfunction!(_retain_structural_snapshot_v2, _module)?)?;
+    _module.add_function(wrap_pyfunction!(
+        _merge_parsed_structural_snapshot_v2,
+        _module
+    )?)?;
     #[cfg(feature = "test-hooks")]
     _module.add_function(wrap_pyfunction!(
         _retained_structural_bridge_allocation_probe_v2,
@@ -340,7 +346,9 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
     preserve_source_map,
     record_unresolved,
     require_empty_imports,
-    cancel=None
+    cancel=None,
+    *,
+    materialize_document=false
 ))]
 fn _parse_functional_retained_v2<'py>(
     py: Python<'py>,
@@ -351,6 +359,7 @@ fn _parse_functional_retained_v2<'py>(
     record_unresolved: bool,
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    materialize_document: bool,
 ) -> PyResult<RetainedParseBindingResult> {
     let mut allocations = crate::BridgeAllocationProbe::disabled();
     parse_functional_retained_v2_with_allocations(
@@ -362,6 +371,7 @@ fn _parse_functional_retained_v2<'py>(
         record_unresolved,
         require_empty_imports,
         cancel,
+        materialize_document,
         &mut allocations,
     )
 }
@@ -401,6 +411,7 @@ fn _functional_retained_bridge_allocation_probe_v2<'py>(
         record_unresolved,
         require_empty_imports,
         None,
+        false,
         &mut allocations,
     )?;
     Ok((encoded, allocations.count()))
@@ -416,6 +427,7 @@ fn parse_functional_retained_v2_with_allocations<'py>(
     record_unresolved: bool,
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    materialize_document: bool,
     allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<RetainedParseBindingResult> {
     let limits = crate::limits_from_python_with_allocations(config, allocations)?;
@@ -444,6 +456,7 @@ fn parse_functional_retained_v2_with_allocations<'py>(
             preserve_source_map,
             record_unresolved,
             require_empty_imports,
+            materialize_document,
         )?;
         Ok((outcome, parser_bytes))
     })?;
@@ -1075,6 +1088,200 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
         owned_source_maps,
         None,
         0,
+    )
+}
+
+/// Merge parser-built single-document owners into one retained closure without
+/// exporting their structural root tables through Python.
+#[pyfunction]
+#[pyo3(signature = (
+    parsed_documents,
+    origins,
+    attestation,
+    config,
+    cancel=None,
+    *,
+    source_maps=None,
+    effective_origins=None,
+    effective_document_ordinals=None,
+    closure_document_ordinals=None
+))]
+#[allow(clippy::too_many_arguments)]
+fn _merge_parsed_structural_snapshot_v2<'py>(
+    py: Python<'py>,
+    parsed_documents: &Bound<'py, PyAny>,
+    origins: &Bound<'py, PyAny>,
+    attestation: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    source_maps: Option<&Bound<'py, PyAny>>,
+    effective_origins: Option<&Bound<'py, PyAny>>,
+    effective_document_ordinals: Option<&Bound<'py, PyAny>>,
+    closure_document_ordinals: Option<&Bound<'py, PyAny>>,
+) -> PyResult<NativeSnapshotHandle> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    let limits = crate::limits_from_python_with_allocations(config, &mut allocations)?;
+    let cancellation = crate::cancellation_or_default(cancel);
+    if !parsed_documents.get_type().is(py.get_type::<PyTuple>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "native parsed closure documents must be an exact tuple",
+        ));
+    }
+    let parsed_documents = parsed_documents.cast::<PyTuple>()?;
+    if parsed_documents.len() < 2
+        || u64::try_from(parsed_documents.len()).map_or(true, |count| count > limits.max_documents)
+    {
+        return Err(crate::python_error(NativeError::limit(
+            "native parsed closure document count is invalid",
+        )));
+    }
+    let mut parser_bytes = 0_u64;
+    let mut external_bytes = 0_usize;
+    for item in parsed_documents.iter() {
+        if !item
+            .get_type()
+            .is(py.get_type::<NativeParsedStructuralStorageV2>())
+        {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native parsed closure contains an invalid storage owner",
+            ));
+        }
+        let parsed: PyRef<'_, NativeParsedStructuralStorageV2> = item.extract()?;
+        if parsed.storage.is_none()
+            || parsed.prepared.is_some()
+            || parsed.prepared_summary.is_some()
+        {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "native parsed closure storage was already consumed or prepared",
+            ));
+        }
+        parser_bytes = parser_bytes
+            .checked_add(parsed.parser_bytes)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native closure parser byte count overflow",
+                ))
+            })?;
+        let retained = parsed
+            .storage
+            .as_ref()
+            .expect("validated parsed storage")
+            .counters()
+            .map_err(crate::python_error)?
+            .retained_owner_bytes;
+        let retained = usize::try_from(retained).map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native closure storage size exceeds usize",
+            ))
+        })?;
+        external_bytes = external_bytes.checked_add(retained).ok_or_else(|| {
+            crate::python_error(NativeError::limit("native closure storage size overflow"))
+        })?;
+    }
+
+    let mut storages = Vec::new();
+    storages
+        .try_reserve_exact(parsed_documents.len())
+        .map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native closure storage allocation failed",
+            ))
+        })?;
+    let (effective_document_ordinals, closure_document_ordinals, topology_bytes) =
+        owned_closure_topology(
+            py,
+            effective_document_ordinals,
+            closure_document_ordinals,
+            parsed_documents.len(),
+            &limits,
+            &cancellation,
+            &mut allocations,
+        )?;
+    external_bytes = external_bytes.checked_add(topology_bytes).ok_or_else(|| {
+        crate::python_error(NativeError::limit(
+            "native parsed closure topology size overflow",
+        ))
+    })?;
+    enforce_retained_boundary(external_bytes, &limits)?;
+    let owned_origins = if origins.is_none() {
+        None
+    } else {
+        Some(owned_origin_document_rows(
+            py,
+            origins,
+            parsed_documents.len(),
+            &limits,
+            &cancellation,
+            &mut external_bytes,
+            &mut allocations,
+        )?)
+    };
+    let owned_effective_origins = effective_origins
+        .map(|value| {
+            owned_origin_document_rows(
+                py,
+                value,
+                parsed_documents.len(),
+                &limits,
+                &cancellation,
+                &mut external_bytes,
+                &mut allocations,
+            )
+        })
+        .transpose()?;
+    let owned_source_maps = source_maps
+        .map(|value| {
+            owned_source_map_documents(
+                py,
+                value,
+                parsed_documents.len(),
+                &limits,
+                &cancellation,
+                &mut external_bytes,
+                &mut allocations,
+            )
+        })
+        .transpose()?;
+    let owned_attestation = NativeSnapshotAttestationV2::from_python(attestation)?;
+
+    for item in parsed_documents.iter() {
+        let mut parsed: PyRefMut<'_, NativeParsedStructuralStorageV2> = item.extract()?;
+        storages.push(parsed.storage.take().expect("validated parsed storage"));
+        parsed.metadata = None;
+        parsed.parser_bytes = 0;
+    }
+
+    let (storage, retained_origins, raw_origins) = crate::run_detached(py, move |interrupt| {
+        let mut builder =
+            TypedFacadeBuilderV2::new(limits, cancellation, Some(interrupt), external_bytes)?;
+        for parsed in &storages {
+            builder.add_native_document(parsed)?;
+        }
+        let (effective, raw) = match (owned_origins, owned_effective_origins) {
+            (Some(raw), Some(effective)) => (Some(effective), Some(raw)),
+            (Some(effective), None) => (Some(effective), None),
+            (None, None) => (None, None),
+            (None, Some(_)) => {
+                return Err(NativeError::protocol(
+                    "native effective origins require a raw origin table",
+                ));
+            }
+        };
+        Ok((
+            builder.freeze(&effective_document_ordinals, &closure_document_ordinals)?,
+            effective,
+            raw,
+        ))
+    })?;
+    allocations.checkpoint()?;
+    crate::publication::typed_structural_handle_from_attestation_v2(
+        owned_attestation,
+        storage,
+        retained_origins,
+        raw_origins,
+        owned_source_maps,
+        None,
+        parser_bytes,
     )
 }
 

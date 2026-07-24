@@ -17,7 +17,7 @@ use crate::error::{NativeError, NativeResult};
 use crate::model::{validate_iri, Category};
 
 pub(crate) use facade_v2::{
-    PublicationStorageV2, TypedRdfReportRowsV2, TypedSourceMapRowsV2,
+    NativeSnapshotAttestationV2, PublicationStorageV2, TypedRdfReportRowsV2, TypedSourceMapRowsV2,
     AUXILIARY_CODEC_SCHEMA_SHA256_V2,
 };
 #[allow(unused_imports)]
@@ -62,7 +62,27 @@ pub(crate) fn typed_structural_handle_v2(
     rdf_report: Option<TypedRdfReportRowsV2>,
     parser_bytes: u64,
 ) -> pyo3::PyResult<NativeSnapshotHandle> {
-    let attestation = facade_v2::NativeSnapshotAttestationV2::from_python(attestation)?;
+    let attestation = NativeSnapshotAttestationV2::from_python(attestation)?;
+    typed_structural_handle_from_attestation_v2(
+        attestation,
+        storage,
+        origin_rows,
+        raw_origin_rows,
+        source_maps,
+        rdf_report,
+        parser_bytes,
+    )
+}
+
+pub(crate) fn typed_structural_handle_from_attestation_v2(
+    attestation: NativeSnapshotAttestationV2,
+    storage: TypedFacadeStorageV2,
+    origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+    raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+    source_maps: Option<Vec<TypedSourceMapRowsV2>>,
+    rdf_report: Option<TypedRdfReportRowsV2>,
+    parser_bytes: u64,
+) -> pyo3::PyResult<NativeSnapshotHandle> {
     let publication = facade_v2::PublicationStorageV2::from_typed_structural_with_auxiliary(
         attestation,
         storage,

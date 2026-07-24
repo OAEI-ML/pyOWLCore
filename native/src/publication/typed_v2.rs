@@ -440,6 +440,10 @@ impl TypedFacadeStorageV2 {
         self.document_count
     }
 
+    pub(crate) fn has_raw_document_overrides(&self) -> bool {
+        !self.raw_document_tables.is_empty()
+    }
+
     pub(crate) const fn maximum_row_bytes(&self) -> u64 {
         self.maximum_row_bytes
     }

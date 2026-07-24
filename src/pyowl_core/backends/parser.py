@@ -59,6 +59,7 @@ class _NativeBackendDriver:
         preserve_source_map: bool,
         record_unresolved: bool,
         require_empty_imports: bool,
+        materialize_document: bool,
     ) -> _ParsedPayloadResult:
         if retain_native_storage:
             from pyowl_core.backends.dispatch import _parse_functional_native_retained_v2
@@ -72,6 +73,7 @@ class _NativeBackendDriver:
                 preserve_source_map=preserve_source_map,
                 record_unresolved=record_unresolved,
                 require_empty_imports=require_empty_imports,
+                materialize_document=materialize_document,
             )
             return _ParsedPayloadResult(
                 ontology=retained.parsed,
@@ -192,6 +194,30 @@ def _parse_document_for_retained_load(
         retained_resolver=resolver,
         retained_load_started=load_started,
         retained_root_parse_started=root_parse_started,
+        backend_driver=_DRIVER,
+    )
+
+
+def _parse_import_for_retained_load(
+    source: DocumentSource,
+    *,
+    format: DocumentFormat | str | None,
+    document_iri: IRI | str | None,
+    options: LoadOptions,
+    media_type: str | None,
+    cancellation_token: CancellationToken | None,
+) -> _ParsedDocumentResult:
+    """Parse one closure document while retaining its native structural owner."""
+
+    return PythonParser()._parse(
+        source,
+        format=format,
+        document_iri=document_iri,
+        options=options,
+        media_type=media_type,
+        cancellation_token=cancellation_token,
+        retain_native_storage=True,
+        materialize_native_document=True,
         backend_driver=_DRIVER,
     )
 

@@ -105,6 +105,7 @@ def _parse_functional_native_retained_v2(
     record_unresolved: bool,
     require_empty_imports: bool,
     cancellation_token: CancellationToken | None,
+    materialize_document: bool = False,
 ) -> _NativeRetainedFunctionalParseV2:
     """Execute the unadvertised parser-to-retained-arena construction seam."""
 
@@ -116,6 +117,7 @@ def _parse_functional_native_retained_v2(
         preserve_source_map=preserve_source_map,
         record_unresolved=record_unresolved,
         require_empty_imports=require_empty_imports,
+        materialize_document=materialize_document,
         cancellation_token=cancellation_token,
     )
 

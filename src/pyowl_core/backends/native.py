@@ -166,6 +166,8 @@ class _Extension(Protocol):
         record_unresolved: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
+        *,
+        materialize_document: bool = False,
     ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
 
     def _parse_rdfxml_retained_v2(
@@ -433,6 +435,7 @@ def _parse_functional_retained_v2(
     preserve_source_map: bool = False,
     record_unresolved: bool = False,
     require_empty_imports: bool = False,
+    materialize_document: bool = False,
     cancellation_token: CancellationToken | None = None,
 ) -> _NativeRetainedFunctionalParseV2:
     """Parse once and retain the parser-built structural arena when available."""
@@ -463,6 +466,8 @@ def _parse_functional_retained_v2(
         raise TypeError("record_unresolved must be bool")
     if not isinstance(require_empty_imports, bool):
         raise TypeError("require_empty_imports must be bool")
+    if not isinstance(materialize_document, bool):
+        raise TypeError("materialize_document must be bool")
     selected.enforce("max_source_bytes", len(data))
     request = (
         _PARSE_REQUEST.pack(
@@ -485,6 +490,7 @@ def _parse_functional_retained_v2(
                 record_unresolved,
                 require_empty_imports,
                 cancel,
+                materialize_document=materialize_document,
             ),
         )
     if type(result) is not tuple or len(result) != 3:

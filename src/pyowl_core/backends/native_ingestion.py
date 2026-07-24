@@ -32,6 +32,7 @@ class NativeIngestionExtension(Protocol):
 
 class _RetainedStructuralExtension(NativeIngestionExtension, Protocol):
     _retain_structural_snapshot_v2: Callable[..., object]
+    _merge_parsed_structural_snapshot_v2: Callable[..., object]
     _prepare_parsed_structural_snapshot_v2: Callable[..., object]
     _finalize_parsed_structural_snapshot_v2: Callable[..., object]
 
@@ -1550,7 +1551,18 @@ def retain_native_snapshot_v2(
         return snapshot
     extension = native.require("parse-functional-v1")
     if retained_closure:
-        if not callable(getattr(extension, "_retain_structural_snapshot_v2", None)):
+        parsed_native_storages = (
+            parsed_native_storage
+            if type(parsed_native_storage) is tuple
+            and len(parsed_native_storage) == len(snapshot.documents)
+            else None
+        )
+        required_hook = (
+            "_merge_parsed_structural_snapshot_v2"
+            if parsed_native_storages is not None
+            else "_retain_structural_snapshot_v2"
+        )
+        if not callable(getattr(extension, required_hook, None)):
             raise BackendProtocolError(
                 "native closure has no retained publication boundary",
                 code="NATIVE_INGESTION_REGISTRATION",
@@ -1559,6 +1571,7 @@ def retain_native_snapshot_v2(
             snapshot,
             extension,
             cancellation_token,
+            parsed_native_storages,
         )
     if parsed_native_storage is None:
         if snapshot.load_options.backend is BackendPreference.AUTO:
@@ -1995,6 +2008,7 @@ def _publish_structural_closure_snapshot_v2(
     snapshot: OntologySnapshot,
     extension: native._Extension,
     cancellation_token: CancellationToken | None,
+    parsed_native_storages: tuple[object, ...] | None = None,
 ) -> OntologySnapshot:
     """Publish a resolver-built Functional closure through one typed arena."""
 
@@ -2567,35 +2581,54 @@ def _publish_structural_closure_snapshot_v2(
             cancellation_token,
             verify=False,
         )
-        raw_owner = native._call(
-            extension,
-            lambda: selected_extension._retain_structural_snapshot_v2(
-                raw_documents,
-                (
-                    raw_origin_documents
-                    if raw_origin_documents != effective_origin_documents
-                    else effective_origin_documents
-                )
-                if snapshot.load_options.collect_provenance
-                else None,
-                attestation,
-                config,
-                cancel,
-                source_maps=(
-                    source_map_documents if snapshot.load_options.preserve_source_map else None
-                ),
-                effective_documents=(
-                    effective_documents if raw_documents != effective_documents else None
-                ),
-                effective_origins=(
-                    effective_origin_documents
-                    if raw_origin_documents != effective_origin_documents
-                    else None
-                ),
-                effective_document_ordinals=topology,
-                closure_document_ordinals=closure_ordinals,
-            ),
+        origins = (
+            (
+                raw_origin_documents
+                if raw_origin_documents != effective_origin_documents
+                else effective_origin_documents
+            )
+            if snapshot.load_options.collect_provenance
+            else None
         )
+        source_maps = source_map_documents if snapshot.load_options.preserve_source_map else None
+        effective_origins = (
+            effective_origin_documents
+            if raw_origin_documents != effective_origin_documents
+            else None
+        )
+        if parsed_native_storages is None:
+            raw_owner = native._call(
+                extension,
+                lambda: selected_extension._retain_structural_snapshot_v2(
+                    raw_documents,
+                    origins,
+                    attestation,
+                    config,
+                    cancel,
+                    source_maps=source_maps,
+                    effective_documents=(
+                        effective_documents if raw_documents != effective_documents else None
+                    ),
+                    effective_origins=effective_origins,
+                    effective_document_ordinals=topology,
+                    closure_document_ordinals=closure_ordinals,
+                ),
+            )
+        else:
+            raw_owner = native._call(
+                extension,
+                lambda: selected_extension._merge_parsed_structural_snapshot_v2(
+                    parsed_native_storages,
+                    origins,
+                    attestation,
+                    config,
+                    cancel,
+                    source_maps=source_maps,
+                    effective_origins=effective_origins,
+                    effective_document_ordinals=topology,
+                    closure_document_ordinals=closure_ordinals,
+                ),
+            )
     publication_values: dict[str, object] = {
         "version": NATIVE_SNAPSHOT_PUBLICATION_VERSION_V2,
         "ledger_sha256": NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2,

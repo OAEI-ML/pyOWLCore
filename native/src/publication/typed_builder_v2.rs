@@ -146,6 +146,102 @@ impl TypedFacadeBuilderV2 {
         result
     }
 
+    /// Re-intern one parser-built native document without publishing its
+    /// canonical roots through Python. Canonical rows are streamed one at a
+    /// time between native owners and are dropped immediately after interning.
+    pub(crate) fn add_native_document(
+        &mut self,
+        source: &TypedFacadeStorageV2,
+    ) -> NativeResult<u64> {
+        if self.poisoned {
+            return Err(NativeError::protocol(
+                "typed V2 builder is poisoned after a failed mutation",
+            ));
+        }
+        let result = self.add_native_document_inner(source);
+        if result.is_err() {
+            self.poisoned = true;
+        }
+        result
+    }
+
+    fn add_native_document_inner(&mut self, source: &TypedFacadeStorageV2) -> NativeResult<u64> {
+        self.cancellation.checkpoint()?;
+        if source.document_count() != 1 || source.has_raw_document_overrides() {
+            return Err(NativeError::protocol(
+                "native closure merge requires one unscoped parser document per owner",
+            ));
+        }
+        let following = self
+            .documents
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("typed V2 document count overflow"))?;
+        if u64::try_from(following).map_or(true, |count| count > self.limits.max_documents) {
+            return Err(NativeError::limit("typed V2 builder exceeds max_documents"));
+        }
+
+        let mut pending = PendingDocumentV2::default();
+        for (index, (collection, category)) in STRUCTURAL_COLLECTIONS
+            .into_iter()
+            .zip(STRUCTURAL_CATEGORIES)
+            .enumerate()
+        {
+            let count = source.canonical_root_count(
+                collection,
+                TypedFacadeScopeV2::Document,
+                Some(0),
+                true,
+            )?;
+            let count = usize::try_from(count)
+                .map_err(|_| NativeError::limit("native parser root count exceeds usize"))?;
+            match category {
+                Category::Annotation => check_input_count(
+                    count,
+                    self.limits.max_annotations,
+                    "typed V2 document exceeds max_annotations",
+                )?,
+                Category::Axiom => check_input_count(
+                    count,
+                    self.limits.max_axioms,
+                    "typed V2 document exceeds max_axioms",
+                )?,
+                _ => {}
+            }
+            pending.roots[index]
+                .try_reserve_exact(count)
+                .map_err(|_| NativeError::limit("typed V2 pending root allocation failed"))?;
+            let cancellation = self.cancellation.clone();
+            let interrupt = self.interrupt.clone();
+            source.visit_canonical_roots(
+                collection,
+                TypedFacadeScopeV2::Document,
+                Some(0),
+                true,
+                cancellation,
+                interrupt,
+                |canonical| {
+                    pending.roots[index].push(self.components.intern_canonical(canonical)?);
+                    Ok(())
+                },
+            )?;
+        }
+
+        let staged_bytes = pending.roots.iter().try_fold(0_usize, |total, roots| {
+            total
+                .checked_add(pending_bytes(roots)?)
+                .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))
+        })?;
+        self.preflight_document_capacity(staged_bytes)?;
+        self.documents
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("typed V2 document table allocation failed"))?;
+        self.documents.push(pending);
+        self.refresh_component_external(0)?;
+        u64::try_from(following - 1)
+            .map_err(|_| NativeError::limit("typed V2 document ordinal exceeds u64"))
+    }
+
     fn add_document_inner(
         &mut self,
         ontology_annotations: &[Vec<u8>],
@@ -1461,6 +1557,65 @@ mod tests {
         assert_eq!(cycle_counters.canonical_input_rows, 4);
         assert_eq!(cycle_counters.publication_structural_rows_copied, 0);
         assert_eq!(cycle_counters.publication_structural_bytes_copied, 0);
+    }
+
+    #[test]
+    fn builder_streams_single_document_native_owners_into_one_closure() {
+        let documents = [
+            sorted(vec![declaration("class", "urn:builder:native-root")]),
+            sorted(vec![declaration("class", "urn:builder:native-child")]),
+        ];
+        let limits = Limits::default();
+        let mut sources = Vec::new();
+        for rows in &documents {
+            let mut builder =
+                TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                    .expect("source builder");
+            builder
+                .add_document(&[], rows, &[])
+                .expect("source document");
+            sources.push(builder.freeze(&[vec![0]], &[0]).expect("source storage"));
+        }
+
+        let mut merged =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("merged builder");
+        for source in &sources {
+            merged
+                .add_native_document(source)
+                .expect("streamed native document");
+        }
+        let merged = merged
+            .freeze(&[vec![0], vec![1]], &[0, 1])
+            .expect("merged closure");
+        assert_eq!(
+            page(
+                &merged,
+                TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms),
+                false,
+            ),
+            sorted_unique(documents.iter().flatten().cloned().collect()),
+        );
+        assert_eq!(
+            page(
+                &merged,
+                TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0),
+                true,
+            ),
+            documents[0],
+        );
+        assert_eq!(
+            page(
+                &merged,
+                TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 1),
+                true,
+            ),
+            documents[1],
+        );
+        let counters = merged.counters().expect("merged counters");
+        assert_eq!(counters.retained_document_tables, 2);
+        assert_eq!(counters.canonical_input_rows, 2);
+        assert_eq!(counters.publication_structural_rows_copied, 0);
     }
 
     #[test]

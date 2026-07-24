@@ -85,6 +85,7 @@ class _BackendDriver(Protocol):
         preserve_source_map: bool,
         record_unresolved: bool,
         require_empty_imports: bool,
+        materialize_document: bool,
     ) -> _ParsedPayloadResult: ...
 
     def publish_retained_functional(
@@ -159,6 +160,7 @@ class PythonParser:
         allow_swrl: bool = False,
         cancellation_token: CancellationToken | None = None,
         retain_native_storage: bool,
+        materialize_native_document: bool = False,
         retained_resolver: ImportResolver | None = None,
         retained_load_started: float | None = None,
         retained_root_parse_started: float | None = None,
@@ -242,6 +244,7 @@ class PythonParser:
                     and retained_resolver is not None
                 )
             ),
+            materialize_native_document=materialize_native_document,
             backend_driver=backend_driver,
         )
         if parsed_result.native_summary is not None:
@@ -506,6 +509,7 @@ def _parse_payload(
     preserve_source_map: bool,
     record_unresolved: bool,
     require_empty_imports: bool,
+    materialize_native_document: bool,
     backend_driver: _BackendDriver | None,
 ) -> _ParsedPayloadResult:
     if not isinstance(limits, ParseLimits):
@@ -525,6 +529,7 @@ def _parse_payload(
                     preserve_source_map=preserve_source_map,
                     record_unresolved=record_unresolved,
                     require_empty_imports=require_empty_imports,
+                    materialize_document=materialize_native_document,
                 )
             return _ParsedPayloadResult(
                 parse_functional(

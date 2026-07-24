@@ -26,6 +26,7 @@ class NativeTestExtension(Protocol):
     INGESTION_FEATURES: tuple[str, ...]
     VIEW_FEATURES: tuple[str, ...]
     _NativeError: type[Exception]
+    _NativeParsedStructuralStorageV2: type[object]
     _Cancellation: Callable[[float | None], NativeTestCancellation]
 
     def self_test(self) -> None: ...
@@ -77,6 +78,33 @@ class NativeTestExtension(Protocol):
         require_empty_imports: bool,
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...
+
+    def _parse_functional_retained_v2(
+        self,
+        source: object,
+        config: object,
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        record_unresolved: bool,
+        require_empty_imports: bool,
+        cancel: NativeTestCancellation | None = None,
+        *,
+        materialize_document: bool = False,
+    ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
+
+    def _merge_parsed_structural_snapshot_v2(
+        self,
+        parsed_documents: tuple[object, ...],
+        origins: object | None,
+        attestation: object,
+        config: object,
+        cancel: NativeTestCancellation | None = None,
+        *,
+        source_maps: object | None = None,
+        effective_origins: object | None = None,
+        effective_document_ordinals: object | None = None,
+        closure_document_ordinals: object | None = None,
+    ) -> object: ...
 
     def _rdfxml_retained_bridge_allocation_probe_v2(
         self,

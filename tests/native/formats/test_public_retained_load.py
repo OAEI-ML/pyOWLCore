@@ -1071,7 +1071,12 @@ def test_resolver_built_closure_partial_parse_failure_publishes_no_owner(
         raise AssertionError("partially parsed closure reached retained-owner construction")
 
     monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", unexpected)
-    parse_document_native = cast(Any, extension).parse_document
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_merge_parsed_structural_snapshot_v2",
+        unexpected,
+    )
+    parse_retained = cast(Any, extension)._parse_functional_retained_v2
     root = (
         b"Ontology(<urn:retained-partial:root> "
         b"Import(<urn:retained-partial:good>) "
@@ -1098,13 +1103,18 @@ def test_resolver_built_closure_partial_parse_failure_publishes_no_owner(
     ) -> object:
         assert isinstance(request, bytes)
         matches = tuple(source for source in sources.values() if request.endswith(source))
-        assert len(matches) == 1
-        with thread_lock:
-            thread_ids.add(threading.get_ident())
-        parse_barrier.wait(timeout=5)
-        return parse_document_native(request, *arguments, **keywords)
+        if matches:
+            assert len(matches) == 1
+            with thread_lock:
+                thread_ids.add(threading.get_ident())
+            parse_barrier.wait(timeout=5)
+        return parse_retained(request, *arguments, **keywords)
 
-    monkeypatch.setattr(cast(Any, extension), "parse_document", capture_parallel_parse)
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_parse_functional_retained_v2",
+        capture_parallel_parse,
+    )
     resolver = MappingResolver(sources)
 
     with pytest.raises(ParseError):
@@ -1151,7 +1161,7 @@ def test_parallel_resolved_functional_parse_cancellation_publishes_no_owner(
     thread_ids: set[int] = set()
     thread_lock = threading.Lock()
     cancellation = CancellationSource()
-    parse_document_native = cast(Any, extension).parse_document
+    parse_retained = cast(Any, extension)._parse_functional_retained_v2
 
     def cancel_parallel_parse(
         request: object,
@@ -1160,12 +1170,13 @@ def test_parallel_resolved_functional_parse_cancellation_publishes_no_owner(
     ) -> object:
         assert isinstance(request, bytes)
         matches = tuple(source for source in child_sources if request.endswith(source))
-        assert len(matches) == 1
-        with thread_lock:
-            thread_ids.add(threading.get_ident())
-        parse_barrier.wait(timeout=5)
-        cancellation.cancel("parallel import parse cancelled")
-        return parse_document_native(request, *arguments, **keywords)
+        if matches:
+            assert len(matches) == 1
+            with thread_lock:
+                thread_ids.add(threading.get_ident())
+            parse_barrier.wait(timeout=5)
+            cancellation.cancel("parallel import parse cancelled")
+        return parse_retained(request, *arguments, **keywords)
 
     owner_calls = 0
 
@@ -1174,10 +1185,19 @@ def test_parallel_resolved_functional_parse_cancellation_publishes_no_owner(
         owner_calls += 1
         raise AssertionError("cancelled parallel parse reached owner publication")
 
-    monkeypatch.setattr(cast(Any, extension), "parse_document", cancel_parallel_parse)
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_parse_functional_retained_v2",
+        cancel_parallel_parse,
+    )
     monkeypatch.setattr(
         cast(Any, extension),
         "_retain_structural_snapshot_v2",
+        unexpected_owner,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_merge_parsed_structural_snapshot_v2",
         unexpected_owner,
     )
 
@@ -1262,9 +1282,9 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         ),
         resolver=MappingResolver(sources),
     )
-    parse_document_native = cast(Any, extension).parse_document
     parse_retained = cast(Any, extension)._parse_functional_retained_v2
     parsed_sources: list[bytes] = []
+    materialized_sources: list[bytes] = []
     expected_sources = (root, *sources.values())
     parallel_sources = frozenset(
         (sources["urn:retained-closure:left"], sources["urn:retained-closure:right"])
@@ -1280,48 +1300,41 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         parsed_sources.append(matches[0])
         return matches[0]
 
-    def capture_document_parse(
-        request: object,
-        *arguments: object,
-        **keywords: object,
-    ) -> object:
-        source = record_source(request)
-        if source in parallel_sources:
-            with parallel_thread_lock:
-                parallel_thread_ids.add(threading.get_ident())
-            parallel_barrier.wait(timeout=5)
-        return parse_document_native(request, *arguments, **keywords)
-
     def capture_retained_parse(
         request: object,
         *arguments: object,
         **keywords: object,
     ) -> object:
-        record_source(request)
+        source = record_source(request)
+        if keywords.get("materialize_document") is True:
+            materialized_sources.append(source)
+        if source in parallel_sources:
+            with parallel_thread_lock:
+                parallel_thread_ids.add(threading.get_ident())
+            parallel_barrier.wait(timeout=5)
         return parse_retained(request, *arguments, **keywords)
 
-    monkeypatch.setattr(cast(Any, extension), "parse_document", capture_document_parse)
     monkeypatch.setattr(
         cast(Any, extension),
         "_parse_functional_retained_v2",
         capture_retained_parse,
     )
-    retained = cast(Any, extension)._retain_structural_snapshot_v2
+    merge_retained = cast(Any, extension)._merge_parsed_structural_snapshot_v2
     captured: dict[str, object] = {}
 
     def capture(
-        documents: object,
+        parsed_documents: object,
         origins: object,
         attestation: object,
         config: object,
         cancel: object,
         **keywords: object,
     ) -> object:
-        captured["documents"] = documents
+        captured["parsed_documents"] = parsed_documents
         captured["origins"] = origins
         captured.update(keywords)
-        return retained(
-            documents,
+        return merge_retained(
+            parsed_documents,
             origins,
             attestation,
             config,
@@ -1329,10 +1342,18 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
             **keywords,
         )
 
+    def unexpected_structural(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("parser-built closure crossed Python structural retention")
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_merge_parsed_structural_snapshot_v2",
+        capture,
+    )
     monkeypatch.setattr(
         cast(Any, extension),
         "_retain_structural_snapshot_v2",
-        capture,
+        unexpected_structural,
     )
     selected = SnapshotLoader(
         acquisition_cache=AcquisitionCache(),
@@ -1364,9 +1385,17 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     assert selected.report.document_cache_hits == 1
     assert len(parsed_sources) == len(expected_sources) == 4
     assert all(parsed_sources.count(source) == 1 for source in expected_sources)
+    assert len(materialized_sources) == len(sources) == 3
+    assert root not in materialized_sources
+    assert all(materialized_sources.count(source) == 1 for source in sources.values())
     assert len(parallel_thread_ids) == len(parallel_sources) == 2
 
-    assert len(cast(tuple[object, ...], captured["documents"])) == 4
+    parsed_documents = cast(tuple[object, ...], captured["parsed_documents"])
+    assert len(parsed_documents) == 4
+    assert all(
+        type(value) is cast(Any, extension)._NativeParsedStructuralStorageV2
+        for value in parsed_documents
+    )
     reference_origin_rows = sum(
         len(occurrences) for occurrences in reference.origin_index.entries.values()
     )

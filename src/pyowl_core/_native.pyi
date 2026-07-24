@@ -348,6 +348,18 @@ def _retain_structural_snapshot_v2(
     effective_document_ordinals: object | None = None,
     closure_document_ordinals: object | None = None,
 ) -> _NativeSnapshotHandle: ...
+def _merge_parsed_structural_snapshot_v2(
+    parsed_documents: tuple[_NativeParsedStructuralStorageV2, ...],
+    origins: object | None,
+    attestation: NativeSnapshotAttestationV2,
+    config: object,
+    cancel: _Cancellation | None = None,
+    *,
+    source_maps: object | None = None,
+    effective_origins: object | None = None,
+    effective_document_ordinals: object | None = None,
+    closure_document_ordinals: object | None = None,
+) -> _NativeSnapshotHandle: ...
 def _retained_structural_bridge_allocation_probe_v2(
     documents: object,
     origins: object | None,
@@ -369,6 +381,8 @@ def _parse_functional_retained_v2(
     record_unresolved: bool,
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
+    *,
+    materialize_document: bool = False,
 ) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int]]: ...
 def _parse_rdfxml_retained_v2(
     source: object,

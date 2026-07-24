@@ -115,6 +115,7 @@ pub fn load_functional_common(
         false,
         true,
         false,
+        false,
     )
     .map_err(failure)?;
     let metadata = outcome.metadata.ok_or(ComparatorFailure {

@@ -323,7 +323,9 @@ class _Node:
     status: DocumentStatus
 
 
-_ImportParseResult: TypeAlias = tuple[OntologyDocument, bool] | Exception
+_ImportParseResult: TypeAlias = (
+    tuple[OntologyDocument, object | None, tuple[tuple[str, float], ...], bool] | Exception
+)
 
 
 _DEFAULT_ACQUISITION_CACHE = AcquisitionCache()
@@ -425,6 +427,9 @@ class SnapshotLoader:
         root_node = _node(root, DocumentStatus.ROOT)
         nodes: dict[str, _Node] = {root_node.key: root_node}
         source_identity: dict[tuple[bytes, bytes], _Node] = {_source_identity(root): root_node}
+        native_storages: dict[tuple[bytes, bytes], object] = {}
+        if native_storage is not None:
+            native_storages[_source_identity(root)] = native_storage
         ontology_identity: dict[tuple[str, ...], _Node] = {}
         version_identity: dict[str, _Node] = {}
         _register_identity(root_node, ontology_identity, version_identity)
@@ -549,7 +554,7 @@ class SnapshotLoader:
                     continue
                 if not isinstance(parse_result, tuple):
                     raise AssertionError("resolved import has no parse result")
-                document, cache_hit = parse_result
+                document, parsed_storage, parsed_phase_timings, cache_hit = parse_result
                 counters["document_cache_hits"] += int(cache_hit)
                 acquired, _resolved = acquired_by_index[index]
                 candidate = _node(
@@ -576,6 +581,12 @@ class SnapshotLoader:
                     counters["terms"] += _document_terms(document)
                     _enforce_closure_limits(selected, len(nodes), counters)
                     next_pending.extend(_initial_pending(candidate, selected, parent=item))
+                    if parsed_storage is not None:
+                        native_storages[_source_identity(document)] = parsed_storage
+                        native_phase_timings = _merge_phase_timings(
+                            native_phase_timings,
+                            parsed_phase_timings,
+                        )
                 edges.append(
                     ImportEdge(
                         item.importing_document_key,
@@ -618,10 +629,15 @@ class SnapshotLoader:
         if selected.backend is BackendPreference.NATIVE or native_storage is not None:
             from pyowl_core.backends.native_ingestion import retain_native_snapshot_v2
 
+            parsed_native_storage: object | None = native_storage
+            if len(ordered_documents) > 1 and len(native_storages) == len(ordered_documents):
+                parsed_native_storage = tuple(
+                    native_storages[_source_identity(document)] for document in ordered_documents
+                )
             snapshot = retain_native_snapshot_v2(
                 snapshot,
                 cancellation_token=cancellation_token,
-                parsed_native_storage=native_storage,
+                parsed_native_storage=parsed_native_storage,
             )
         for diagnostic in diagnostics:
             warnings.warn(diagnostic.message, UnresolvedImportWarning, stacklevel=3)
@@ -711,8 +727,13 @@ class SnapshotLoader:
                 if isinstance(result, Exception):
                     results[index] = result
                     continue
-                document, cache_hit = result
-                results[index] = (document, cache_hit if offset == 0 else True)
+                document, storage, phase_timings, cache_hit = result
+                results[index] = (
+                    document,
+                    storage,
+                    phase_timings,
+                    cache_hit if offset == 0 else True,
+                )
         return results
 
     def _parse_import(
@@ -721,25 +742,48 @@ class SnapshotLoader:
         resolved: ResolvedDocument,
         options: LoadOptions,
         cancellation_token: CancellationToken | None,
-    ) -> tuple[OntologyDocument, bool]:
+    ) -> tuple[OntologyDocument, object | None, tuple[tuple[str, float], ...], bool]:
         media_type, parser_options, key = _parsed_document_context(
             acquired,
             resolved,
             options,
         )
         cached = self._document_cache.get(key)
-        if cached is not None:
-            return cached, True
-        from pyowl_core.backends.parser import parse_document
+        native_storage: object | None = None
+        phase_timings: tuple[tuple[str, float], ...] = ()
+        retain_native = options.backend is not BackendPreference.PYTHON and resolved.format in {
+            None,
+            DocumentFormat.FUNCTIONAL,
+        }
+        if retain_native:
+            from pyowl_core.backends.parser import _parse_import_for_retained_load
 
-        document = parse_document(
-            acquired.data,
-            format=resolved.format,
-            document_iri=resolved.document_iri,
-            options=parser_options,
-            media_type=media_type,
-            cancellation_token=cancellation_token,
-        )
+            parsed = _parse_import_for_retained_load(
+                acquired.data,
+                format=resolved.format,
+                document_iri=resolved.document_iri,
+                options=parser_options,
+                media_type=media_type,
+                cancellation_token=cancellation_token,
+            )
+            if parsed.document is None or parsed.snapshot is not None:
+                raise AssertionError("retained import parse did not publish a document")
+            document = parsed.document
+            native_storage = parsed.native_storage
+            phase_timings = parsed.phase_timings
+        else:
+            if cached is not None:
+                return cached, None, (), True
+            from pyowl_core.backends.parser import parse_document
+
+            document = parse_document(
+                acquired.data,
+                format=resolved.format,
+                document_iri=resolved.document_iri,
+                options=parser_options,
+                media_type=media_type,
+                cancellation_token=cancellation_token,
+            )
         provenance = replace(
             document.provenance,
             expected_sha256=resolved.expected_sha256,
@@ -748,7 +792,8 @@ class SnapshotLoader:
         )
         if provenance != document.provenance:
             document = replace(document, provenance=provenance)
-        return self._document_cache.publish(key, document), False
+        retained = self._document_cache.publish(key, document)
+        return retained, native_storage, phase_timings, cached is not None
 
 
 def load_snapshot(
@@ -1086,6 +1131,16 @@ def _parsed_document_key(
     options: LoadOptions,
 ) -> tuple[object, ...]:
     return _parsed_document_context(acquired, resolved, options)[2]
+
+
+def _merge_phase_timings(
+    left: tuple[tuple[str, float], ...],
+    right: tuple[tuple[str, float], ...],
+) -> tuple[tuple[str, float], ...]:
+    totals = dict(left)
+    for name, seconds in right:
+        totals[name] = totals.get(name, 0.0) + seconds
+    return tuple(sorted(totals.items(), key=lambda item: item[0].encode("utf-8")))
 
 
 def _check_expected(actual: bytes, expected: bytes | None) -> None:

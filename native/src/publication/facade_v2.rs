@@ -461,7 +461,7 @@ struct Owl2DlSummaryV2 {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct NativeSnapshotAttestationV2 {
+pub(crate) struct NativeSnapshotAttestationV2 {
     version: u32,
     ledger_sha256: Digest,
     metadata_manifest_sha256: Digest,
@@ -3850,7 +3850,7 @@ impl NativeSnapshotAttestationV2 {
         }
     }
 
-    pub(super) fn from_python(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+    pub(crate) fn from_python(value: &Bound<'_, PyAny>) -> PyResult<Self> {
         let selected = Self {
             version: value.getattr("version")?.extract()?,
             ledger_sha256: digest_attr(value, "ledger_sha256")?,
