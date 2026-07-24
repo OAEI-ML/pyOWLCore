@@ -31,6 +31,7 @@ def main() -> None:
         OntologySyntaxError,
         OperationCancelledError,
         ParseLimits,
+        ResolvedDocument,
         ResourceLimitError,
         SnapshotInUseError,
         UnresolvedImportWarning,
@@ -644,6 +645,117 @@ def main() -> None:
     if not closure_matrix_parity:
         raise AssertionError("installed retained Functional closure matrix diverged")
 
+    shared_root = (
+        b"Ontology(<urn:retained-installed-shared:root> "
+        b"Import(<urn:retained-installed-shared:left>) "
+        b"Import(<urn:retained-installed-shared:right>) "
+        b"Declaration(Class(<urn:retained-installed-shared:Root>)))"
+    )
+    shared_left = (
+        b"Ontology(<urn:retained-installed-shared:left> "
+        b"Import(<urn:retained-installed-shared:leaf-a>) "
+        b"Declaration(Class(<urn:retained-installed-shared:Left>)))"
+    )
+    shared_right = (
+        b"Ontology(<urn:retained-installed-shared:right> "
+        b"Import(<urn:retained-installed-shared:leaf-b>) "
+        b"Declaration(Class(<urn:retained-installed-shared:Right>)))"
+    )
+    shared_leaf = (
+        b"Ontology(<urn:retained-installed-shared:leaf> "
+        b"Declaration(Class(<urn:retained-installed-shared:Leaf>)))"
+    )
+    shared_leaf_digest = hashlib.sha256(shared_leaf).digest()
+    shared_sources = {
+        "urn:retained-installed-shared:left": shared_left,
+        "urn:retained-installed-shared:right": shared_right,
+        "urn:retained-installed-shared:leaf-a": ResolvedDocument(
+            shared_leaf,
+            pyowl_core.IRI("urn:retained-installed-shared:leaf"),
+            format=DocumentFormat.FUNCTIONAL,
+            expected_sha256=shared_leaf_digest,
+            provenance={"locator": "installed:leaf-a"},
+        ),
+        "urn:retained-installed-shared:leaf-b": ResolvedDocument(
+            shared_leaf,
+            pyowl_core.IRI("urn:retained-installed-shared:leaf"),
+            format=DocumentFormat.FUNCTIONAL,
+            provenance={"locator": "installed:leaf-b"},
+        ),
+    }
+    shared_options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=True,
+        preserve_source_map=True,
+        limits=replace(ParseLimits(), max_concurrent_fetches=3),
+    )
+    shared_reference = load_snapshot(
+        shared_root,
+        options=replace(shared_options, backend=BackendPreference.PYTHON),
+        resolver=MappingResolver(shared_sources),
+    )
+    shared_parse_counts = {
+        "root": 0,
+        "left": 0,
+        "right": 0,
+        "leaf": 0,
+    }
+    shared_source_by_name = {
+        "root": shared_root,
+        "left": shared_left,
+        "right": shared_right,
+        "leaf": shared_leaf,
+    }
+    real_shared_parse = cast(Any, extension)._parse_functional_retained_v2
+
+    def capture_shared_parse(
+        request: object,
+        *arguments: object,
+        **keywords: object,
+    ) -> object:
+        if not isinstance(request, bytes):
+            raise AssertionError("installed retained parser request is not bytes")
+        matches = tuple(
+            name
+            for name, expected_source in shared_source_by_name.items()
+            if request.endswith(expected_source)
+        )
+        if len(matches) != 1:
+            raise AssertionError("installed retained parser source was not identified exactly")
+        shared_parse_counts[matches[0]] += 1
+        return real_shared_parse(request, *arguments, **keywords)
+
+    cast(Any, extension)._parse_functional_retained_v2 = capture_shared_parse
+    try:
+        shared_selected = load_snapshot(
+            shared_root,
+            options=shared_options,
+            resolver=MappingResolver(shared_sources),
+        )
+    finally:
+        cast(Any, extension)._parse_functional_retained_v2 = real_shared_parse
+    shared_digest_parity = (
+        type(shared_selected).__name__ == "_NativeOntologySnapshot"
+        and len(shared_selected.documents) == len(shared_reference.documents) == 4
+        and shared_selected.import_manifest == shared_reference.import_manifest
+        and shared_selected.structural_fingerprint
+        == shared_reference.structural_fingerprint
+        and shared_selected.logical_fingerprint == shared_reference.logical_fingerprint
+        and shared_selected.signature_fingerprint
+        == shared_reference.signature_fingerprint
+        and shared_selected.origin_index == shared_reference.origin_index
+        and encode_snapshot(shared_selected) == encode_snapshot(shared_reference)
+        and shared_parse_counts == {"root": 1, "left": 1, "right": 1, "leaf": 1}
+    )
+    if not shared_digest_parity:
+        raise AssertionError(
+            "installed shared digest did not parse exactly once: "
+            f"{shared_parse_counts!r}",
+        )
+    shared_selected.close()
+
     failure_root = (
         b"Ontology(<urn:retained-installed-failure:root> "
         b"Import(<urn:retained-installed-failure:child>) "
@@ -900,6 +1012,8 @@ def main() -> None:
                 "closure_cancellation_error_code": cancellation_error_code,
                 "closure_failure_merge_calls": merge_calls_after_failure,
                 "closure_malformed_import_code": malformed_import_code,
+                "shared_digest_parse_counts": shared_parse_counts,
+                "shared_digest_parity": shared_digest_parity,
                 "fingerprint_parity": (
                     selected.structural_fingerprint == reference.structural_fingerprint
                     and selected.logical_fingerprint == reference.logical_fingerprint

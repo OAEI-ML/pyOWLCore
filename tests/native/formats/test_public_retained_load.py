@@ -2198,6 +2198,13 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
     assert observed["closure_malformed_import_code"] == "FORMAT_SYNTAX"
     assert observed["closure_cancellation_error_code"] == "OPERATION_CANCELLED"
     assert observed["closure_failure_merge_calls"] == 0
+    assert observed["shared_digest_parity"] is True
+    assert observed["shared_digest_parse_counts"] == {
+        "root": 1,
+        "left": 1,
+        "right": 1,
+        "leaf": 1,
+    }
     assert observed["ingestion_features"] == []
     assert observed["view_features"] == []
     assert observed["encoded_view_schemas"] == {}
