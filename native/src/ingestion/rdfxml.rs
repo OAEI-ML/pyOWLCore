@@ -5310,7 +5310,11 @@ fn map_owl1_compatibility_class_axioms<'view, 'graph>(
         let mut members = reserved_vec(2, session)?;
         members.push(named_entity("class", class, session)?);
         members.push(decoded.node);
-        let members = canonical_set(members, 2, None)?;
+        let members = rdf_mapping_canonical_set(
+            members,
+            2,
+            "native named class constructor axiom requires two distinct expressions",
+        )?;
         let source_triple = source_triples.get(index).ok_or_else(|| {
             NativeError::protocol("native OWL 1 compatibility index exceeds source graph")
         })?;
@@ -9931,6 +9935,23 @@ mod tests {
                 .code,
             "NATIVE_RDF_MAPPING_UNSUPPORTED",
         );
+
+        for source in [
+            "<owl:Class rdf:about=\"urn:C\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:C\"/></owl:intersectionOf></owl:Class>".to_owned(),
+            "<owl:Class rdf:about=\"urn:C\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:C\"/><rdf:Description rdf:about=\"urn:C\"/></owl:intersectionOf></owl:Class>".to_owned(),
+            "<owl:Class rdf:about=\"urn:C\"><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:C\"/></owl:unionOf></owl:Class>".to_owned(),
+            "<owl:Class rdf:about=\"urn:C\"><owl:unionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:C\"/><rdf:Description rdf:about=\"urn:C\"/></owl:unionOf></owl:Class>".to_owned(),
+            format!("<owl:Class rdf:about=\"{OWL_THING}\"><owl:intersectionOf rdf:resource=\"{RDF_NIL}\"/></owl:Class>"),
+            format!("<owl:Class rdf:about=\"{OWL_NOTHING}\"><owl:unionOf rdf:resource=\"{RDF_NIL}\"/></owl:Class>"),
+        ] {
+            let invalid = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\">{source}</rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(invalid.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
+        }
     }
 
     #[test]

@@ -1497,6 +1497,60 @@ def test_rdf_mapping_retains_self_disjoint_class_rewrite() -> None:
     (
         (
             '<owl:Class rdf:about="urn:C">'
+            '<owl:intersectionOf rdf:parseType="Collection">'
+            '<rdf:Description rdf:about="urn:C"/>'
+            "</owl:intersectionOf></owl:Class>"
+        ),
+        (
+            '<owl:Class rdf:about="urn:C">'
+            '<owl:intersectionOf rdf:parseType="Collection">'
+            '<rdf:Description rdf:about="urn:C"/>'
+            '<rdf:Description rdf:about="urn:C"/>'
+            "</owl:intersectionOf></owl:Class>"
+        ),
+        (
+            '<owl:Class rdf:about="urn:C">'
+            '<owl:unionOf rdf:parseType="Collection">'
+            '<rdf:Description rdf:about="urn:C"/>'
+            "</owl:unionOf></owl:Class>"
+        ),
+        (
+            '<owl:Class rdf:about="urn:C">'
+            '<owl:unionOf rdf:parseType="Collection">'
+            '<rdf:Description rdf:about="urn:C"/>'
+            '<rdf:Description rdf:about="urn:C"/>'
+            "</owl:unionOf></owl:Class>"
+        ),
+        (
+            f'<owl:Class rdf:about="{OWL_NAMESPACE}Thing">'
+            f'<owl:intersectionOf rdf:resource="{RDF_NAMESPACE}nil"/>'
+            "</owl:Class>"
+        ),
+        (
+            f'<owl:Class rdf:about="{OWL_NAMESPACE}Nothing">'
+            f'<owl:unionOf rdf:resource="{RDF_NAMESPACE}nil"/>'
+            "</owl:Class>"
+        ),
+    ),
+)
+def test_rdf_mapping_rejects_degenerate_named_class_constructors(body: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  {body}
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        (
+            '<owl:Class rdf:about="urn:C">'
             '<rdf:type rdf:resource="http://www.w3.org/2000/01/rdf-schema#Class"/>'
             "</owl:Class>"
         ),

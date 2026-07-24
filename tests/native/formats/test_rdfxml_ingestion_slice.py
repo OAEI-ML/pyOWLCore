@@ -1551,6 +1551,65 @@ def test_self_disjoint_class_rewrite_matches_python(
     (
         (
             "<owl:Class rdf:about='urn:C'>"
+            "<owl:intersectionOf rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:C'/>"
+            "</owl:intersectionOf></owl:Class>"
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'>"
+            "<owl:intersectionOf rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:C'/>"
+            "<rdf:Description rdf:about='urn:C'/>"
+            "</owl:intersectionOf></owl:Class>"
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'>"
+            "<owl:unionOf rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:C'/>"
+            "</owl:unionOf></owl:Class>"
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'>"
+            "<owl:unionOf rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:C'/>"
+            "<rdf:Description rdf:about='urn:C'/>"
+            "</owl:unionOf></owl:Class>"
+        ),
+        (
+            f"<owl:Class rdf:about='{OWL_NAMESPACE}Thing'>"
+            f"<owl:intersectionOf rdf:resource='{RDF_NAMESPACE}nil'/>"
+            "</owl:Class>"
+        ),
+        (
+            f"<owl:Class rdf:about='{OWL_NAMESPACE}Nothing'>"
+            f"<owl:unionOf rdf:resource='{RDF_NAMESPACE}nil'/>"
+            "</owl:Class>"
+        ),
+    ),
+)
+def test_degenerate_named_class_constructors_match_python(
+    extension: NativeTestExtension,
+    body: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ {body}
+</rdf:RDF>""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_UNSUPPORTED"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        (
+            "<owl:Class rdf:about='urn:C'>"
             "<rdf:type rdf:resource='http://www.w3.org/2000/01/rdf-schema#Class'/>"
             "</owl:Class>"
         ),

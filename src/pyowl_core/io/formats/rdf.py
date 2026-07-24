@@ -1292,8 +1292,15 @@ class RDFMapper:
                     named_individuals_only=True,
                 )
             )
+            equivalent_expressions = m.CanonicalSet(
+                (m.Class(m.IRI(s.value)), expression)
+            )
+            if len(equivalent_expressions) < 2:
+                self._mapping_error(
+                    "named class constructor axiom requires two distinct expressions"
+                )
             value = m.EquivalentClasses(
-                m.CanonicalSet((m.Class(m.IRI(s.value)), expression)), annotations
+                equivalent_expressions, annotations
             )
         elif p == RDFS + "subPropertyOf" and isinstance(s, RDFIRI) and isinstance(o, RDFIRI):
             if s.value in self.annotation_kinds or o.value in self.annotation_kinds:
