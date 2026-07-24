@@ -939,6 +939,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             base,
             language,
             &[RDF_ABOUT, RDF_ID, RDF_NODE_ID, XML_BASE, XML_LANG],
+            true,
         )
     }
 
@@ -949,6 +950,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         base: Option<&str>,
         language: Option<&str>,
         ignored: &[&str],
+        reject_forbidden_rdf_syntax: bool,
     ) -> NativeResult<()> {
         for attribute in attributes {
             if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
@@ -962,6 +964,11 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 continue;
             }
             if !is_property_attribute_iri(&predicate) {
+                if reject_forbidden_rdf_syntax
+                    && is_forbidden_rdf_property_attribute_iri(&predicate)
+                {
+                    return Err(xml_syntax());
+                }
                 return Err(mapping_incomplete());
             }
             super::check_iri(
@@ -1135,6 +1142,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     base,
                     language,
                     &[RDF_ID, RDF_RESOURCE, RDF_NODE_ID, XML_BASE, XML_LANG],
+                    false,
                 )?;
             }
             let triple_subject = clone_resource(&subject, self.session)?;
@@ -7008,6 +7016,12 @@ fn is_property_attribute_iri(value: &str) -> bool {
         && !value.starts_with(XML)
 }
 
+fn is_forbidden_rdf_property_attribute_iri(value: &str) -> bool {
+    is_core_syntax_iri(value)
+        || matches!(value, RDF_DESCRIPTION | RDF_LI)
+        || is_old_syntax_iri(value)
+}
+
 fn owned_text(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
     session.reserve_bytes(value.len())?;
     let mut output = String::new();
@@ -7658,13 +7672,22 @@ mod tests {
 
     #[test]
     fn node_property_attributes_reject_reserved_syntax_terms() {
-        let source = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"urn:s\" rdf:resource=\"urn:o\"/></rdf:RDF>"
-        );
-        assert_eq!(
-            graph(&source).unwrap_err().code,
-            "NATIVE_RDF_MAPPING_INCOMPLETE"
-        );
+        for local in [
+            "RDF",
+            "parseType",
+            "resource",
+            "datatype",
+            "Description",
+            "li",
+            "aboutEach",
+            "aboutEachPrefix",
+            "bagID",
+        ] {
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"urn:s\" rdf:{local}=\"value\"/></rdf:RDF>"
+            );
+            assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
     }
 
     #[test]

@@ -1732,3 +1732,34 @@ def test_private_production_seam_fails_closed_for_syntax_limits_and_cancellation
             document_iri=DOCUMENT_IRI.value,
             cancellation_token=cancellation.token,
         )
+
+
+@pytest.mark.parametrize(
+    "local",
+    (
+        "RDF",
+        "parseType",
+        "resource",
+        "datatype",
+        "Description",
+        "li",
+        "aboutEach",
+        "aboutEachPrefix",
+        "bagID",
+    ),
+)
+def test_forbidden_node_property_attributes_publish_no_retained_owner(
+    local: str,
+) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+        f"<rdf:Description rdf:about='urn:s' rdf:{local}='value'/>"
+        "</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(OntologySyntaxError) as native_error:
+        native._parse_rdfxml_retained_v2(source, document_iri=None)
+    assert native_error.value.code == "RDFXML_SYNTAX"

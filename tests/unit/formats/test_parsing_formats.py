@@ -412,6 +412,34 @@ def test_rdfxml_malformed_processing_instructions_are_syntax_errors(
 
 
 @pytest.mark.parametrize(
+    "local",
+    (
+        "RDF",
+        "parseType",
+        "resource",
+        "datatype",
+        "Description",
+        "li",
+        "aboutEach",
+        "aboutEachPrefix",
+        "bagID",
+    ),
+)
+def test_rdfxml_forbidden_node_property_attributes_fail_at_syntax_boundary(
+    local: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}">
+  <rdf:Description rdf:about="urn:s" rdf:{local}="value"/>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
+
+
+@pytest.mark.parametrize(
     "document",
     (
         (

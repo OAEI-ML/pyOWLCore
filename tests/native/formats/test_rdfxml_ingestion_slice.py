@@ -586,6 +586,40 @@ def test_root_and_node_character_data_fail_in_both_backends(
 
 
 @pytest.mark.parametrize(
+    "local",
+    (
+        "RDF",
+        "parseType",
+        "resource",
+        "datatype",
+        "Description",
+        "li",
+        "aboutEach",
+        "aboutEachPrefix",
+        "bagID",
+    ),
+)
+def test_forbidden_node_property_attributes_fail_at_syntax_boundary(
+    extension: NativeTestExtension,
+    local: str,
+) -> None:
+    # Covers the approved W3C rdfms-abouteach and rdf:li negative cases,
+    # plus every RDF name excluded by the propertyAttributeURIs production.
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+        f"<rdf:Description rdf:about='urn:s' rdf:{local}='value'/>"
+        "</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
+@pytest.mark.parametrize(
     "document",
     (
         "<rdf:RDF {namespaces} e:ignored='value'/>",

@@ -268,6 +268,8 @@ class RDFXMLGraphParser:
             if name in ignored or self._is_reserved_xml_attribute(element, name):
                 continue
             predicate = self._expanded(name)
+            if _is_forbidden_rdf_property_attribute_iri(predicate):
+                self._syntax("RDF node element uses a reserved property attribute")
             if predicate == RDF + "type":
                 self._add(subject, predicate, RDFIRI(self._resolve(value, base)))
             else:
@@ -745,6 +747,14 @@ def _is_property_element_iri(value: str) -> bool:
         value not in _RDF_CORE_SYNTAX_IRIS
         and value != RDF + "Description"
         and value not in _RDF_OLD_SYNTAX_IRIS
+    )
+
+
+def _is_forbidden_rdf_property_attribute_iri(value: str) -> bool:
+    return (
+        value in _RDF_CORE_SYNTAX_IRIS
+        or value in {RDF + "Description", RDF + "li"}
+        or value in _RDF_OLD_SYNTAX_IRIS
     )
 
 
