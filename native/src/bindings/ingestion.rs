@@ -10,7 +10,8 @@ pub(crate) mod engine;
 
 use pyo3::buffer::PyBuffer;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyModule, PyString, PyTuple};
+use pyo3::types::{PyAny, PyBytes, PyInt, PyModule, PyString, PyTuple};
+use std::mem::size_of;
 use std::time::Instant;
 
 use crate::cancel::Guard;
@@ -800,13 +801,12 @@ fn validate_prepared_attestation(
     Ok(())
 }
 
-/// Freeze one already-validated document into the real typed V2 owner.
+/// Freeze already-validated documents into one real typed V2 owner.
 ///
 /// This private, unadvertised bridge lets the narrowly eligible public
-/// forced-native load path retain its structural roots in the typed owner.  It
-/// accepts canonical roots plus their attested origin rows, publishes no
-/// format capability, and deliberately remains single-document until native
-/// import orchestration owns the complete closure.
+/// forced-native load path retain its structural roots in the typed owner. It
+/// accepts canonical roots, their attested origin rows, and an explicit
+/// document/closure topology, while publishing no format capability.
 #[pyfunction]
 #[pyo3(signature = (
     documents,
@@ -816,7 +816,9 @@ fn validate_prepared_attestation(
     cancel=None,
     *,
     effective_documents=None,
-    effective_origins=None
+    effective_origins=None,
+    effective_document_ordinals=None,
+    closure_document_ordinals=None
 ))]
 #[allow(clippy::too_many_arguments)]
 fn _retain_structural_snapshot_v2<'py>(
@@ -828,6 +830,8 @@ fn _retain_structural_snapshot_v2<'py>(
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
     effective_documents: Option<&Bound<'py, PyAny>>,
     effective_origins: Option<&Bound<'py, PyAny>>,
+    effective_document_ordinals: Option<&Bound<'py, PyAny>>,
+    closure_document_ordinals: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<NativeSnapshotHandle> {
     let mut allocations = crate::BridgeAllocationProbe::disabled();
     retain_structural_snapshot_v2_with_allocations(
@@ -839,6 +843,8 @@ fn _retain_structural_snapshot_v2<'py>(
         cancel,
         effective_documents,
         effective_origins,
+        effective_document_ordinals,
+        closure_document_ordinals,
         &mut allocations,
     )
 }
@@ -853,7 +859,9 @@ fn _retain_structural_snapshot_v2<'py>(
     fail_after=None,
     *,
     effective_documents=None,
-    effective_origins=None
+    effective_origins=None,
+    effective_document_ordinals=None,
+    closure_document_ordinals=None
 ))]
 #[allow(clippy::too_many_arguments)]
 fn _retained_structural_bridge_allocation_probe_v2<'py>(
@@ -865,6 +873,8 @@ fn _retained_structural_bridge_allocation_probe_v2<'py>(
     fail_after: Option<u64>,
     effective_documents: Option<&Bound<'py, PyAny>>,
     effective_origins: Option<&Bound<'py, PyAny>>,
+    effective_document_ordinals: Option<&Bound<'py, PyAny>>,
+    closure_document_ordinals: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<(NativeSnapshotHandle, u64)> {
     let mut allocations = crate::BridgeAllocationProbe::configured(
         fail_after,
@@ -879,6 +889,8 @@ fn _retained_structural_bridge_allocation_probe_v2<'py>(
         None,
         effective_documents,
         effective_origins,
+        effective_document_ordinals,
+        closure_document_ordinals,
         &mut allocations,
     )?;
     Ok((handle, allocations.count()))
@@ -894,6 +906,8 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
     effective_documents: Option<&Bound<'py, PyAny>>,
     effective_origins: Option<&Bound<'py, PyAny>>,
+    effective_document_ordinals: Option<&Bound<'py, PyAny>>,
+    closure_document_ordinals: Option<&Bound<'py, PyAny>>,
     allocations: &mut crate::BridgeAllocationProbe,
 ) -> PyResult<NativeSnapshotHandle> {
     let limits = crate::limits_from_python_with_allocations(config, allocations)?;
@@ -933,6 +947,22 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
             )
         })
         .transpose()?;
+    let (effective_document_ordinals, closure_document_ordinals, topology_bytes) =
+        owned_closure_topology(
+            py,
+            effective_document_ordinals,
+            closure_document_ordinals,
+            owned_documents.len(),
+            &limits,
+            &cancellation,
+            allocations,
+        )?;
+    external_bytes = external_bytes.checked_add(topology_bytes).ok_or_else(|| {
+        crate::python_error(NativeError::limit(
+            "native retained closure topology size overflow",
+        ))
+    })?;
+    enforce_retained_boundary(external_bytes, &limits)?;
     let owned_effective_documents = owned_effective_documents.map(|(rows, _bytes)| rows);
     let (storage, retained_origins, raw_origins) = crate::run_detached(py, move |interrupt| {
         let mut builder = TypedFacadeBuilderV2::new(
@@ -966,7 +996,11 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
             Some(effective) => (effective, Some(owned_origins)),
             None => (owned_origins, None),
         };
-        Ok((builder.freeze(&[vec![0]], &[0])?, effective, raw))
+        Ok((
+            builder.freeze(&effective_document_ordinals, &closure_document_ordinals)?,
+            effective,
+            raw,
+        ))
     })?;
     allocations.checkpoint()?;
     crate::publication::typed_structural_handle_v2(
@@ -1013,14 +1047,19 @@ fn owned_structural_documents(
         ));
     }
     let documents = value.cast::<PyTuple>()?;
-    if documents.len() != 1 {
+    if documents.is_empty() {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "native structural retention currently requires exactly one document",
+            "native structural retention requires at least one document",
         ));
+    }
+    if u64::try_from(documents.len()).map_or(true, |length| length > limits.max_documents) {
+        return Err(crate::python_error(NativeError::limit(
+            "native structural document count exceeds configured limits",
+        )));
     }
     let mut owned = Vec::new();
     allocations.checkpoint()?;
-    owned.try_reserve_exact(1).map_err(|_| {
+    owned.try_reserve_exact(documents.len()).map_err(|_| {
         crate::python_error(NativeError::limit(
             "native structural document allocation failed",
         ))
@@ -1069,6 +1108,171 @@ fn owned_structural_documents(
         owned.push([annotations, axioms, extensions]);
     }
     Ok((owned, total_bytes))
+}
+
+fn owned_closure_topology(
+    py: Python<'_>,
+    effective: Option<&Bound<'_, PyAny>>,
+    closure: Option<&Bound<'_, PyAny>>,
+    document_count: usize,
+    limits: &Limits,
+    cancellation: &crate::cancel::Cancellation,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<(Vec<Vec<u64>>, Vec<u64>, usize)> {
+    match (effective, closure) {
+        (None, None) if document_count == 1 => {
+            let mut effective = Vec::new();
+            allocations.checkpoint()?;
+            effective.try_reserve_exact(1).map_err(|_| {
+                crate::python_error(NativeError::limit(
+                    "native retained effective topology allocation failed",
+                ))
+            })?;
+            let mut own = Vec::new();
+            allocations.checkpoint()?;
+            own.try_reserve_exact(1).map_err(|_| {
+                crate::python_error(NativeError::limit(
+                    "native retained document topology allocation failed",
+                ))
+            })?;
+            own.push(0);
+            effective.push(own);
+            let mut closure = Vec::new();
+            allocations.checkpoint()?;
+            closure.try_reserve_exact(1).map_err(|_| {
+                crate::python_error(NativeError::limit(
+                    "native retained closure topology allocation failed",
+                ))
+            })?;
+            closure.push(0);
+            let bytes =
+                closure_topology_bytes(effective.capacity(), &effective, closure.capacity())?;
+            Ok((effective, closure, bytes))
+        }
+        (None, None) => Err(pyo3::exceptions::PyValueError::new_err(
+            "native multi-document retention requires explicit closure topology",
+        )),
+        (Some(_), None) | (None, Some(_)) => Err(pyo3::exceptions::PyValueError::new_err(
+            "native retained closure topology requires both ordinal tables",
+        )),
+        (Some(effective), Some(closure)) => {
+            if !effective.get_type().is(py.get_type::<PyTuple>())
+                || !closure.get_type().is(py.get_type::<PyTuple>())
+            {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "native retained closure topology must use exact tuples",
+                ));
+            }
+            let effective = effective.cast::<PyTuple>()?;
+            let closure = closure.cast::<PyTuple>()?;
+            if effective.len() != document_count {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "native retained effective topology must cover every document",
+                ));
+            }
+            let mut owned_effective = Vec::new();
+            allocations.checkpoint()?;
+            owned_effective
+                .try_reserve_exact(effective.len())
+                .map_err(|_| {
+                    crate::python_error(NativeError::limit(
+                        "native retained effective topology allocation failed",
+                    ))
+                })?;
+            for row in effective {
+                cancellation.checkpoint().map_err(crate::python_error)?;
+                py.check_signals()?;
+                owned_effective.push(owned_ordinal_tuple(
+                    py,
+                    &row,
+                    document_count,
+                    limits,
+                    cancellation,
+                    allocations,
+                )?);
+            }
+            let owned_closure = owned_ordinal_tuple(
+                py,
+                closure.as_any(),
+                document_count,
+                limits,
+                cancellation,
+                allocations,
+            )?;
+            let bytes = closure_topology_bytes(
+                owned_effective.capacity(),
+                &owned_effective,
+                owned_closure.capacity(),
+            )?;
+            Ok((owned_effective, owned_closure, bytes))
+        }
+    }
+}
+
+fn owned_ordinal_tuple(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    document_count: usize,
+    limits: &Limits,
+    cancellation: &crate::cancel::Cancellation,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Vec<u64>> {
+    if !value.get_type().is(py.get_type::<PyTuple>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "native retained closure ordinals must be exact tuples",
+        ));
+    }
+    let values = value.cast::<PyTuple>()?;
+    if values.len() > document_count
+        || u64::try_from(values.len()).map_or(true, |length| length > limits.max_documents)
+    {
+        return Err(crate::python_error(NativeError::limit(
+            "native retained closure ordinal count exceeds configured limits",
+        )));
+    }
+    let mut owned = Vec::new();
+    allocations.checkpoint()?;
+    owned.try_reserve_exact(values.len()).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native retained closure ordinal allocation failed",
+        ))
+    })?;
+    for value in values {
+        cancellation.checkpoint().map_err(crate::python_error)?;
+        if !value.get_type().is(py.get_type::<PyInt>()) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native retained closure ordinals must contain exact ints",
+            ));
+        }
+        owned.push(value.extract::<u64>()?);
+    }
+    Ok(owned)
+}
+
+fn closure_topology_bytes(
+    effective_capacity: usize,
+    effective: &[Vec<u64>],
+    closure_capacity: usize,
+) -> PyResult<usize> {
+    effective_capacity
+        .checked_mul(size_of::<Vec<u64>>())
+        .and_then(|metadata| {
+            effective.iter().try_fold(metadata, |total, row| {
+                row.capacity()
+                    .checked_mul(size_of::<u64>())
+                    .and_then(|bytes| total.checked_add(bytes))
+            })
+        })
+        .and_then(|total| {
+            closure_capacity
+                .checked_mul(size_of::<u64>())
+                .and_then(|bytes| total.checked_add(bytes))
+        })
+        .ok_or_else(|| {
+            crate::python_error(NativeError::limit(
+                "native retained closure topology accounting overflow",
+            ))
+        })
 }
 
 fn owned_structural_rows(

@@ -1538,6 +1538,8 @@ def test_retained_structural_bridge_allocations_fail_before_owner_publication(
         *,
         effective_documents: object | None = None,
         effective_origins: object | None = None,
+        effective_document_ordinals: object | None = None,
+        closure_document_ordinals: object | None = None,
     ) -> object:
         captured.update(
             documents=documents,
@@ -1546,6 +1548,8 @@ def test_retained_structural_bridge_allocations_fail_before_owner_publication(
             config=bytes(cast(Any, config)),
             effective_documents=effective_documents,
             effective_origins=effective_origins,
+            effective_document_ordinals=effective_document_ordinals,
+            closure_document_ordinals=closure_document_ordinals,
         )
         return retain(
             documents,
@@ -1555,6 +1559,8 @@ def test_retained_structural_bridge_allocations_fail_before_owner_publication(
             cancel,
             effective_documents=effective_documents,
             effective_origins=effective_origins,
+            effective_document_ordinals=effective_document_ordinals,
+            closure_document_ordinals=closure_document_ordinals,
         )
 
     monkeypatch.setattr(extension, "_retain_structural_snapshot_v2", capture_retain)
@@ -1573,8 +1579,12 @@ def test_retained_structural_bridge_allocations_fail_before_owner_publication(
     config = bytearray(cast(bytes, captured["config"]))
     effective_documents = captured["effective_documents"]
     effective_origins = captured["effective_origins"]
+    effective_document_ordinals = captured["effective_document_ordinals"]
+    closure_document_ordinals = captured["closure_document_ordinals"]
     assert effective_documents is not None
     assert effective_origins is not None
+    assert effective_document_ordinals is None
+    assert closure_document_ordinals is None
     original_documents = documents
     original_origins = origins
     original_config = bytes(config)
@@ -1589,12 +1599,66 @@ def test_retained_structural_bridge_allocations_fail_before_owner_publication(
         effective_documents=effective_documents,
         effective_origins=effective_origins,
     )
-    assert allocations == 17
+    assert allocations == 20
     assert handle._publication_closed_v2() is False
     handle._publication_close_v2()
     assert documents == original_documents
     assert origins == original_origins
     assert config == original_config
+
+    duplicated_documents = (*cast(tuple[object, ...], documents),) * 2
+    duplicated_effective = (*cast(tuple[object, ...], effective_documents),) * 2
+    with pytest.raises(
+        ValueError,
+        match=r"^native multi-document retention requires explicit closure topology$",
+    ):
+        probe(
+            duplicated_documents,
+            origins,
+            attestation,
+            memoryview(config),
+            effective_documents=duplicated_effective,
+            effective_origins=effective_origins,
+        )
+    with pytest.raises(
+        ValueError,
+        match=r"^native retained closure topology requires both ordinal tables$",
+    ):
+        probe(
+            duplicated_documents,
+            origins,
+            attestation,
+            memoryview(config),
+            effective_documents=duplicated_effective,
+            effective_origins=effective_origins,
+            effective_document_ordinals=((0,), (1,)),
+        )
+    with pytest.raises(
+        TypeError,
+        match=r"^native retained closure ordinals must contain exact ints$",
+    ):
+        probe(
+            duplicated_documents,
+            origins,
+            attestation,
+            memoryview(config),
+            effective_documents=duplicated_effective,
+            effective_origins=effective_origins,
+            effective_document_ordinals=((0,), (True,)),
+            closure_document_ordinals=(0, 1),
+        )
+    with pytest.raises(extension._NativeError) as topology_error:
+        probe(
+            duplicated_documents,
+            origins,
+            attestation,
+            memoryview(config),
+            effective_documents=duplicated_effective,
+            effective_origins=effective_origins,
+            effective_document_ordinals=((0,), (0,)),
+            closure_document_ordinals=(0, 1),
+        )
+    assert topology_error.value.args[0] == "NATIVE_PROTOCOL"
 
     for fail_after in range(allocations):
         with pytest.raises(

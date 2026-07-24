@@ -100,6 +100,8 @@ class NativeTestExtension(Protocol):
         *,
         effective_documents: object | None = None,
         effective_origins: object | None = None,
+        effective_document_ordinals: object | None = None,
+        closure_document_ordinals: object | None = None,
     ) -> tuple[object, int]: ...
 
     def _prepare_parsed_structural_bridge_allocation_probe_v2(
