@@ -1380,13 +1380,35 @@ def test_xml_literal_forms_publish_from_the_retained_parser_owner(
     assert counters.publication_structural_bytes_copied == 0
 
 
-def test_guarded_public_rdfxml_route_publishes_the_retained_owner(
+@pytest.mark.parametrize(
+    ("collect_provenance", "preserve_source_map"),
+    ((False, False), (True, False), (False, True), (True, True)),
+)
+@pytest.mark.parametrize("imports", tuple(ImportPolicy))
+@pytest.mark.parametrize(
+    "preference",
+    (BackendPreference.NATIVE, BackendPreference.AUTO),
+)
+def test_guarded_public_rdfxml_route_matrix_publishes_the_retained_owner(
     extension: NativeTestExtension,
+    preference: BackendPreference,
+    imports: ImportPolicy,
+    collect_provenance: bool,
+    preserve_source_map: bool,
 ) -> None:
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=imports,
+            backend=backend,
+            collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
+        )
+
     reference = load_snapshot(
         NO_IMPORT_SOURCE,
         document_iri=DOCUMENT_IRI,
-        options=_options(BackendPreference.PYTHON),
+        options=options(BackendPreference.PYTHON),
     )
     unexpected = AssertionError("guarded public RDF/XML route crossed the Python parser")
     with (
@@ -1402,7 +1424,7 @@ def test_guarded_public_rdfxml_route_publishes_the_retained_owner(
             load_snapshot(
                 NO_IMPORT_SOURCE,
                 document_iri=DOCUMENT_IRI,
-                options=_options(BackendPreference.NATIVE),
+                options=options(preference),
             ),
         )
 
@@ -1413,11 +1435,16 @@ def test_guarded_public_rdfxml_route_publishes_the_retained_owner(
     assert type(selected).__name__ == "_NativeOntologySnapshot"
     assert selected.root.axioms == reference.root.axioms
     assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+    assert selected.root.source_map == reference.root.source_map
+    assert selected.root.origin_index == reference.root.origin_index
+    assert selected.import_manifest == reference.import_manifest
     assert selected.structural_fingerprint == reference.structural_fingerprint
     assert selected.logical_fingerprint == reference.logical_fingerprint
     assert selected.signature_fingerprint == reference.signature_fingerprint
     assert encode_snapshot(selected) == encode_snapshot(reference)
     assert counters.parser_bytes == len(NO_IMPORT_SOURCE)
+    assert (counters.retained_origin_rows > 0) is collect_provenance
+    assert (counters.retained_source_map_rows > 0) is preserve_source_map
     assert counters.publication_structural_rows_copied == 0
     assert counters.publication_structural_bytes_copied == 0
 
