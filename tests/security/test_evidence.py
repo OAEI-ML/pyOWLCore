@@ -408,6 +408,32 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         retained_counter_operations
     )
     assert retained_counter_bridge["scope"]
+    retained_attestation_bridge = sweep["retained_attestation_publication_bridge"]
+    retained_attestation_operations = {
+        operation["name"]: operation
+        for operation in retained_attestation_bridge["operations"]
+    }
+    assert {
+        name: operation["allocation_checkpoints"]
+        for name, operation in retained_attestation_operations.items()
+    } == {
+        "snapshot without OWL2-DL summary": 42,
+        "document without OWL2-DL summary": 42,
+        "snapshot with OWL2-DL summary": 55,
+        "document with OWL2-DL summary": 55,
+    }
+    assert retained_attestation_bridge["allocation_checkpoints"] == sum(
+        operation["allocation_checkpoints"]
+        for operation in retained_attestation_operations.values()
+    )
+    assert (
+        retained_attestation_bridge["injected_failures"]
+        == retained_attestation_bridge["allocation_checkpoints"]
+    )
+    assert retained_attestation_bridge["boundary_successes"] == len(
+        retained_attestation_operations
+    )
+    assert retained_attestation_bridge["scope"]
     retained_view_bridge = sweep["retained_view_layout_bridge"]
     view_operations = {
         operation["name"]: operation for operation in retained_view_bridge["operations"]
@@ -460,6 +486,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + finalization_bridge["allocation_checkpoints"]
         + retained_index_bridge["allocation_checkpoints"]
         + retained_counter_bridge["allocation_checkpoints"]
+        + retained_attestation_bridge["allocation_checkpoints"]
         + retained_view_bridge["allocation_checkpoints"]
         + index_bridge["allocation_checkpoints"]
         + foundation_bridge["allocation_checkpoints"]
@@ -481,6 +508,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + finalization_bridge["boundary_successes"]
         + retained_index_bridge["boundary_successes"]
         + retained_counter_bridge["boundary_successes"]
+        + retained_attestation_bridge["boundary_successes"]
         + retained_view_bridge["boundary_successes"]
         + index_bridge["boundary_successes"]
         + foundation_bridge["boundary_successes"]
