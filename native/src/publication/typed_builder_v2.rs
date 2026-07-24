@@ -1042,6 +1042,12 @@ mod tests {
         rows
     }
 
+    fn sorted_unique(mut rows: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+        rows.sort_unstable();
+        rows.dedup();
+        rows
+    }
+
     fn two_document_owner() -> (TypedFacadeStorageV2, [Vec<Vec<u8>>; 2]) {
         let documents = [
             sorted(vec![
@@ -1332,6 +1338,129 @@ mod tests {
         assert_eq!(counters.canonical_input_rows, 4);
         assert_eq!(counters.publication_structural_rows_copied, 0);
         assert_eq!(counters.publication_structural_bytes_copied, 0);
+    }
+
+    #[test]
+    fn builder_retains_diamond_and_cycle_reachability_without_flattening() {
+        let shared = declaration("class", "urn:builder:shared");
+        let diamond_documents = [
+            sorted(vec![
+                declaration("class", "urn:builder:diamond-root"),
+                shared.clone(),
+            ]),
+            sorted(vec![
+                declaration("class", "urn:builder:diamond-left"),
+                shared.clone(),
+            ]),
+            sorted(vec![
+                declaration("class", "urn:builder:diamond-right"),
+                shared.clone(),
+            ]),
+            sorted(vec![
+                declaration("class", "urn:builder:diamond-leaf"),
+                shared.clone(),
+            ]),
+        ];
+        let limits = Limits::default();
+        let mut diamond =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("diamond builder");
+        for document in &diamond_documents {
+            diamond
+                .add_document(&[], document, &[])
+                .expect("diamond document");
+        }
+        let diamond = diamond
+            .freeze(
+                &[vec![0, 1, 2, 3], vec![1, 3], vec![2, 3], vec![3]],
+                &[0, 1, 2, 3],
+            )
+            .expect("diamond closure");
+        let axiom_coordinate =
+            |ordinal| TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, ordinal);
+        assert_eq!(
+            page(&diamond, axiom_coordinate(0), false),
+            sorted_unique(
+                diamond_documents
+                    .iter()
+                    .flat_map(|rows| rows.iter().cloned())
+                    .collect(),
+            )
+        );
+        assert_eq!(
+            page(&diamond, axiom_coordinate(1), false),
+            sorted_unique(
+                diamond_documents[1]
+                    .iter()
+                    .chain(&diamond_documents[3])
+                    .cloned()
+                    .collect(),
+            )
+        );
+        assert_eq!(
+            page(&diamond, axiom_coordinate(2), false),
+            sorted_unique(
+                diamond_documents[2]
+                    .iter()
+                    .chain(&diamond_documents[3])
+                    .cloned()
+                    .collect(),
+            )
+        );
+        assert_eq!(
+            page(&diamond, axiom_coordinate(0), true),
+            diamond_documents[0]
+        );
+        assert_eq!(
+            page(
+                &diamond,
+                TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms),
+                false,
+            ),
+            sorted_unique(
+                diamond_documents
+                    .iter()
+                    .flat_map(|rows| rows.iter().cloned())
+                    .collect(),
+            )
+        );
+        let diamond_counters = diamond.counters().expect("diamond counters");
+        assert_eq!(diamond_counters.canonical_input_rows, 8);
+        assert_eq!(diamond_counters.publication_structural_rows_copied, 0);
+        assert_eq!(diamond_counters.publication_structural_bytes_copied, 0);
+
+        let cycle_documents = [
+            sorted(vec![
+                declaration("class", "urn:builder:cycle-a"),
+                shared.clone(),
+            ]),
+            sorted(vec![declaration("class", "urn:builder:cycle-b"), shared]),
+        ];
+        let mut cycle =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("cycle builder");
+        for document in &cycle_documents {
+            cycle
+                .add_document(&[], document, &[])
+                .expect("cycle document");
+        }
+        let cycle = cycle
+            .freeze(&[vec![0, 1], vec![0, 1]], &[0, 1])
+            .expect("legal import cycle");
+        let expected_cycle = sorted_unique(
+            cycle_documents
+                .iter()
+                .flat_map(|rows| rows.iter().cloned())
+                .collect(),
+        );
+        assert_eq!(page(&cycle, axiom_coordinate(0), false), expected_cycle);
+        assert_eq!(page(&cycle, axiom_coordinate(1), false), expected_cycle);
+        assert_eq!(page(&cycle, axiom_coordinate(0), true), cycle_documents[0]);
+        assert_eq!(page(&cycle, axiom_coordinate(1), true), cycle_documents[1]);
+        let cycle_counters = cycle.counters().expect("cycle counters");
+        assert_eq!(cycle_counters.canonical_input_rows, 4);
+        assert_eq!(cycle_counters.publication_structural_rows_copied, 0);
+        assert_eq!(cycle_counters.publication_structural_bytes_copied, 0);
     }
 
     #[test]
