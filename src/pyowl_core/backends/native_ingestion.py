@@ -14,10 +14,10 @@ from pyowl_core.exceptions import BackendProtocolError
 from . import native
 
 if TYPE_CHECKING:
-    from pyowl_core.backends.native_handoff import NativeDiagnosticPublicationV1
     from pyowl_core.backends.native_handoff_v2 import NativeDiagnosticReferenceKindsV2
     from pyowl_core.cancellation import CancellationToken
     from pyowl_core.config import LoadOptions
+    from pyowl_core.diagnostics import Diagnostic
     from pyowl_core.document.snapshot import OntologySnapshot
     from pyowl_core.io.formats.detection import FormatDetection
     from pyowl_core.io.resolver import ImportResolver
@@ -1079,7 +1079,6 @@ def _publish_retained_snapshot_v2(
         native_snapshot_publication_attestation_v2,
     )
     from pyowl_core.config import BackendPreference, ImportPolicy, LoadOptions
-    from pyowl_core.diagnostics import Diagnostic
     from pyowl_core.document import Fingerprint, OntologyID
     from pyowl_core.document.imports import (
         DocumentRecord,
@@ -1760,11 +1759,13 @@ def _publish_structural_snapshot_v2(
     capability_bits = 7 | (16 if snapshot.load_options.collect_provenance else 0)
     import_manifest = freeze_native_import_manifest_publication_v1(snapshot.import_manifest)
     sidecars = NativeDiagnosticReferenceSidecarsV2(
-        snapshot=tuple(_diagnostic_reference_kinds(value) for value in diagnostics),
-        documents=(tuple(_diagnostic_reference_kinds(value) for value in document_diagnostics),),
+        snapshot=tuple(_diagnostic_reference_kinds(value) for value in snapshot.diagnostics),
+        documents=(
+            tuple(_diagnostic_reference_kinds(value) for value in document.diagnostics),
+        ),
         import_edges=tuple(
             None if edge.diagnostic is None else _diagnostic_reference_kinds(edge.diagnostic)
-            for edge in import_manifest.edges
+            for edge in snapshot.import_manifest.edges
         ),
     )
     facade_summary = NativeFacadeCardinalitySummaryV2(
@@ -2275,14 +2276,17 @@ def _publish_structural_closure_snapshot_v2(
     )
     import_manifest = freeze_native_import_manifest_publication_v1(snapshot.import_manifest)
     sidecars = NativeDiagnosticReferenceSidecarsV2(
-        snapshot=tuple(_diagnostic_reference_kinds(value) for value in diagnostics),
+        snapshot=tuple(_diagnostic_reference_kinds(value) for value in snapshot.diagnostics),
         documents=tuple(
-            tuple(_diagnostic_reference_kinds(value) for value in values)
-            for values in document_diagnostics
+            tuple(
+                _diagnostic_reference_kinds(value)
+                for value in document.diagnostics
+            )
+            for document in snapshot.documents
         ),
         import_edges=tuple(
             None if edge.diagnostic is None else _diagnostic_reference_kinds(edge.diagnostic)
-            for edge in import_manifest.edges
+            for edge in snapshot.import_manifest.edges
         ),
     )
     facade_summary = NativeFacadeCardinalitySummaryV2(
@@ -2618,20 +2622,16 @@ def _publish_structural_closure_snapshot_v2(
 
 
 def _diagnostic_reference_kinds(
-    value: NativeDiagnosticPublicationV1,
+    value: Diagnostic,
 ) -> NativeDiagnosticReferenceKindsV2:
     from pyowl_core.backends.native_handoff_v2 import (
-        NativeDiagnosticReferenceKindsV2,
-        NativeDiagnosticReferenceKindV2,
+        native_diagnostic_reference_kinds_v2,
     )
+    from pyowl_core.model import IRI
 
-    return NativeDiagnosticReferenceKindsV2(
-        document_reference_kind=(
-            None if value.document_iri is None else NativeDiagnosticReferenceKindV2.TEXT
-        ),
-        import_chain_kinds=tuple(
-            NativeDiagnosticReferenceKindV2.TEXT for _item in value.import_chain
-        ),
+    return native_diagnostic_reference_kinds_v2(
+        document_reference=cast(IRI | str | None, value.document_iri),
+        import_chain=cast(tuple[IRI | str, ...], value.import_chain),
     )
 
 

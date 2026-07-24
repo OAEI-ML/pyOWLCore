@@ -1099,11 +1099,16 @@ def test_resolver_built_closure_partial_parse_failure_publishes_no_owner(
 
 @pytest.mark.parametrize("collect_provenance", (False, True))
 @pytest.mark.parametrize("preserve_source_map", (False, True))
+@pytest.mark.parametrize(
+    "policy",
+    (ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT),
+)
 def test_resolved_functional_diamond_retains_one_native_closure_owner(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
     collect_provenance: bool,
     preserve_source_map: bool,
+    policy: ImportPolicy,
 ) -> None:
     root = (
         b"Ontology(<urn:retained-closure:root> "
@@ -1130,7 +1135,7 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     def options(backend: BackendPreference) -> LoadOptions:
         return LoadOptions(
             format=DocumentFormat.FUNCTIONAL,
-            imports=ImportPolicy.RESOLVE_LOCAL,
+            imports=policy,
             backend=backend,
             collect_provenance=collect_provenance,
             preserve_source_map=preserve_source_map,
@@ -1273,11 +1278,96 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
 
 @pytest.mark.parametrize("collect_provenance", (False, True))
 @pytest.mark.parametrize("preserve_source_map", (False, True))
+def test_record_unresolved_mixed_closure_retains_resolved_documents_and_diagnostics(
+    extension: NativeTestExtension,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-record:root> "
+        b"Import(<urn:retained-record:child>) "
+        b"Import(<urn:retained-record:missing>) "
+        b"Declaration(Class(<urn:retained-record:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-record:child> "
+        b"Declaration(Class(<urn:retained-record:Child>)))"
+    )
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RECORD_UNRESOLVED,
+            backend=backend,
+            collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
+        )
+
+    resolver = MappingResolver({"urn:retained-record:child": child})
+    with pytest.warns(UnresolvedImportWarning):
+        reference = load_snapshot(
+            root,
+            options=options(BackendPreference.PYTHON),
+            resolver=resolver,
+        )
+    with pytest.warns(UnresolvedImportWarning):
+        selected = load_snapshot(
+            root,
+            options=options(BackendPreference.NATIVE),
+            resolver=resolver,
+        )
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert len(selected.documents) == len(reference.documents) == 2
+    assert selected.import_manifest == reference.import_manifest
+    assert {edge.status for edge in selected.import_manifest.edges} == {
+        ImportStatus.RESOLVED,
+        ImportStatus.UNRESOLVED,
+    }
+    unresolved = next(
+        edge
+        for edge in selected.import_manifest.edges
+        if edge.status is ImportStatus.UNRESOLVED
+    )
+    assert unresolved.import_iri.value == "urn:retained-record:missing"
+    assert unresolved.resolver_name == "mapping"
+    assert unresolved.diagnostic is not None
+    assert unresolved.diagnostic.code == "UNRESOLVED_IMPORT"
+    assert selected.report.diagnostics == reference.report.diagnostics
+    assert selected.report.resolution_attempts == reference.report.resolution_attempts == 2
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert tuple(document.source_map for document in selected.documents) == tuple(
+        document.source_map for document in reference.documents
+    )
+
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    counters = cast(Any, raw_owner)._publication_counters_v2()
+    assert counters.retained_document_tables == 2
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
+    assert handle.attestation.capability_bits == (
+        7 | (8 if preserve_source_map else 0) | (16 if collect_provenance else 0)
+    )
+    assert extension.INGESTION_FEATURES == ()
+
+
+@pytest.mark.parametrize("collect_provenance", (False, True))
+@pytest.mark.parametrize("preserve_source_map", (False, True))
+@pytest.mark.parametrize(
+    "policy",
+    (ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT),
+)
 def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
     collect_provenance: bool,
     preserve_source_map: bool,
+    policy: ImportPolicy,
 ) -> None:
     root = (
         b"Ontology(<urn:retained-cycle:a> Import(<urn:retained-cycle:b>) "
@@ -1295,7 +1385,7 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     def options(backend: BackendPreference) -> LoadOptions:
         return LoadOptions(
             format=DocumentFormat.FUNCTIONAL,
-            imports=ImportPolicy.RESOLVE_LOCAL,
+            imports=policy,
             backend=backend,
             collect_provenance=collect_provenance,
             preserve_source_map=preserve_source_map,
