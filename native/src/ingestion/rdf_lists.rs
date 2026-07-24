@@ -198,10 +198,10 @@ impl<'graph, 'data> RdfListDecoder<'graph, 'data> {
                 && triple.predicate == predicate
                 && selected.replace(index).is_some()
             {
-                return Err(unsupported(malformed));
+                return Err(cardinality(malformed));
             }
         }
-        selected.ok_or_else(|| unsupported("native incomplete RDF collection cell"))
+        selected.ok_or_else(|| cardinality("native incomplete RDF collection cell"))
     }
 
     fn consume_list_markers(
@@ -272,6 +272,10 @@ fn usize_as_u64(value: usize, message: &'static str) -> NativeResult<u64> {
 
 fn unsupported(message: &'static str) -> NativeError {
     NativeError::new("NATIVE_RDF_MAPPING_UNSUPPORTED", message)
+}
+
+fn cardinality(message: &'static str) -> NativeError {
+    NativeError::new("NATIVE_RDF_MAPPING_CARDINALITY", message)
 }
 
 #[cfg(test)]
@@ -356,9 +360,9 @@ mod tests {
     }
 
     #[test]
-    fn cycles_forks_duplicates_and_wrong_term_types_fail_closed() {
+    fn cycles_cardinality_conflicts_and_wrong_term_types_fail_closed() {
         let limits = Limits::default();
-        let cases: &[(&[RdfTriple<'static>], RdfTerm<'static>, &str)] = &[
+        let cases: &[(&[RdfTriple<'static>], RdfTerm<'static>, &str, &str)] = &[
             (
                 &[
                     edge("h", RDF_FIRST, iri("urn:a")),
@@ -366,6 +370,7 @@ mod tests {
                 ],
                 bterm("h"),
                 "cyclic",
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
             ),
             (
                 &[
@@ -375,6 +380,7 @@ mod tests {
                 ],
                 bterm("h"),
                 "forked rest",
+                "NATIVE_RDF_MAPPING_CARDINALITY",
             ),
             (
                 &[
@@ -384,6 +390,19 @@ mod tests {
                 ],
                 bterm("h"),
                 "duplicate first",
+                "NATIVE_RDF_MAPPING_CARDINALITY",
+            ),
+            (
+                &[edge("h", RDF_REST, iri(RDF_NIL))],
+                bterm("h"),
+                "missing first",
+                "NATIVE_RDF_MAPPING_CARDINALITY",
+            ),
+            (
+                &[edge("h", RDF_FIRST, iri("urn:a"))],
+                bterm("h"),
+                "missing rest",
+                "NATIVE_RDF_MAPPING_CARDINALITY",
             ),
             (
                 &[
@@ -392,14 +411,25 @@ mod tests {
                 ],
                 bterm("h"),
                 "literal rest",
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
             ),
-            (&[], iri("urn:not-nil"), "named head"),
-            (&[], RdfTerm::Literal("head"), "literal head"),
+            (
+                &[],
+                iri("urn:not-nil"),
+                "named head",
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            ),
+            (
+                &[],
+                RdfTerm::Literal("head"),
+                "literal head",
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            ),
         ];
-        for (graph, head, label) in cases {
+        for (graph, head, label, code) in cases {
             assert_eq!(
                 decode_with_limits(graph, *head, &limits).unwrap_err().code,
-                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+                *code,
                 "{label}",
             );
         }

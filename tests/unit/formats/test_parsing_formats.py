@@ -1111,6 +1111,40 @@ def test_rdf_mapping_enforces_raw_rdf_list_sequence_arity() -> None:
 
 
 @pytest.mark.parametrize(
+    "edges",
+    (
+        f'<rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>',
+        '<rdf:first rdf:resource="urn:A"/>',
+        (
+            '<rdf:first rdf:resource="urn:A"/>'
+            '<rdf:first rdf:resource="urn:B"/>'
+            f'<rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>'
+        ),
+        (
+            '<rdf:first rdf:resource="urn:A"/>'
+            f'<rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>'
+            '<rdf:rest rdf:nodeID="tail"/>'
+        ),
+    ),
+)
+def test_rdf_mapping_classifies_invalid_list_edge_counts_as_cardinality(
+    edges: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}" xmlns:owl="{OWL_NAMESPACE}">
+  <owl:Class rdf:about="urn:C">
+    <owl:disjointUnionOf rdf:nodeID="head"/>
+  </owl:Class>
+  <rdf:Description rdf:nodeID="head">{edges}</rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_CARDINALITY"
+
+
+@pytest.mark.parametrize(
     ("operator", "members", "expected"),
     (
         ("intersectionOf", "", m.OWL_THING),

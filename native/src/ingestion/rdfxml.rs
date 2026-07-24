@@ -13178,7 +13178,7 @@ mod tests {
         );
         assert_eq!(
             mapped(forked.as_bytes(), None).unwrap_err().code,
-            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            "NATIVE_RDF_MAPPING_CARDINALITY",
         );
 
         let shared_tail = format!(

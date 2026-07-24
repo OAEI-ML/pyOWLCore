@@ -1169,6 +1169,42 @@ def test_raw_rdf_list_sequence_arity_limit_matches_python(
 
 
 @pytest.mark.parametrize(
+    "edges",
+    (
+        f"<rdf:rest rdf:resource='{RDF_NAMESPACE}nil'/>",
+        "<rdf:first rdf:resource='urn:A'/>",
+        (
+            "<rdf:first rdf:resource='urn:A'/>"
+            "<rdf:first rdf:resource='urn:B'/>"
+            f"<rdf:rest rdf:resource='{RDF_NAMESPACE}nil'/>"
+        ),
+        (
+            "<rdf:first rdf:resource='urn:A'/>"
+            f"<rdf:rest rdf:resource='{RDF_NAMESPACE}nil'/>"
+            "<rdf:rest rdf:nodeID='tail'/>"
+        ),
+    ),
+)
+def test_invalid_list_edge_counts_match_python_cardinality(
+    extension: NativeTestExtension,
+    edges: str,
+) -> None:
+    source = f"""<rdf:RDF xmlns:rdf='{RDF_NAMESPACE}' xmlns:owl='{OWL_NAMESPACE}'>
+ <owl:Class rdf:about='urn:C'>
+  <owl:disjointUnionOf rdf:nodeID='head'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='head'>{edges}</rdf:Description>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_CARDINALITY"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_CARDINALITY"
+
+
+@pytest.mark.parametrize(
     ("operator", "members"),
     (
         ("intersectionOf", ""),
