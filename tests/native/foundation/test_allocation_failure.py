@@ -17,6 +17,11 @@ from pyowl_core import (
     load_snapshot,
 )
 from pyowl_core.backends import native
+from pyowl_core.backends.native_handoff_v2 import (
+    NativeFacadeCollectionV2,
+    NativeFacadePageRequestV2,
+    NativeFacadeScopeV2,
+)
 from pyowl_core.backends.native_ingestion import _publish_structural_snapshot_v2
 from pyowl_core.model import StructuralNode, constructor_spec
 from tests.generated.model.fixtures import model_fixtures
@@ -427,6 +432,8 @@ def retained_view_layout_bridge_extension(
         "_retained_document_counters_bridge_allocation_probe_v1",
         "_retained_snapshot_attestation_bridge_allocation_probe_v1",
         "_retained_document_attestation_bridge_allocation_probe_v1",
+        "_retained_snapshot_page_bridge_allocation_probe_v1",
+        "_retained_document_page_bridge_allocation_probe_v1",
         "_retained_signature_layout_bridge_allocation_probe_v1",
         "_retained_identity_layout_bridge_allocation_probe_v1",
         "_retained_axiom_type_layout_bridge_allocation_probe_v1",
@@ -762,6 +769,109 @@ def test_retained_attestation_bridge_failures_publish_no_partial_result(
 
     validated_document._publication_close_v2()
     validated_snapshot._publication_close_v2()
+    document._publication_close_v2()
+    selected.close()
+    assert selected.closed
+
+
+def test_retained_page_bridge_failures_publish_no_partial_result_or_counters(
+    retained_view_layout_bridge_extension: NativeTestExtension,
+) -> None:
+    extension = retained_view_layout_bridge_extension
+    selected = cast(
+        Any,
+        load_snapshot(
+            b"Ontology(<urn:allocation:page> "
+            b"Declaration(Class(<urn:allocation:page:A>)))",
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.NATIVE,
+                preserve_source_map=True,
+            ),
+        ),
+    )
+    snapshot = object.__getattribute__(
+        selected._native_snapshot_state.owner.handle,
+        "_owner_v2",
+    )
+    document = snapshot._publication_document_v2(0)
+    max_row_bytes = snapshot._publication_attestation_v2().max_facade_row_bytes
+    typed_request = NativeFacadePageRequestV2(
+        collection=NativeFacadeCollectionV2.AXIOMS,
+        scope=NativeFacadeScopeV2.DOCUMENT,
+        document_ordinal=0,
+        start=0,
+        max_rows=1,
+        max_bytes=max_row_bytes,
+        max_row_bytes=max_row_bytes,
+    )
+    auxiliary_request = NativeFacadePageRequestV2(
+        collection=NativeFacadeCollectionV2.SOURCE_MAP_ENTRIES,
+        scope=NativeFacadeScopeV2.DOCUMENT,
+        document_ordinal=0,
+        start=0,
+        max_rows=1,
+        max_bytes=max_row_bytes,
+        max_row_bytes=max_row_bytes,
+    )
+    cases = (
+        (
+            extension._retained_snapshot_page_bridge_allocation_probe_v1,
+            snapshot,
+            typed_request,
+            11,
+        ),
+        (
+            extension._retained_document_page_bridge_allocation_probe_v1,
+            document,
+            typed_request,
+            11,
+        ),
+        (
+            extension._retained_snapshot_page_bridge_allocation_probe_v1,
+            snapshot,
+            auxiliary_request,
+            13,
+        ),
+        (
+            extension._retained_document_page_bridge_allocation_probe_v1,
+            document,
+            auxiliary_request,
+            13,
+        ),
+    )
+    for probe, owner, request, expected_allocations in cases:
+        before = snapshot._publication_counters_v2()
+        page, allocations = probe(owner, request, None)
+        assert page.rows
+        assert allocations == expected_allocations
+        after_success = snapshot._publication_counters_v2()
+        assert after_success.page_requests == before.page_requests + 1
+        assert after_success.pages_returned == before.pages_returned + 1
+        assert after_success.rows_emitted == before.rows_emitted + len(page.rows)
+        assert document._publication_counters_v2() == after_success
+
+        for fail_after in range(allocations):
+            with pytest.raises(
+                MemoryError,
+                match=r"^injected native retained-page bridge allocation failure$",
+            ):
+                probe(owner, request, fail_after)
+            assert snapshot._publication_counters_v2() == after_success
+            assert document._publication_counters_v2() == after_success
+            assert snapshot._publication_closed_v2() is False
+            assert document._publication_closed_v2() is False
+
+        boundary_page, boundary_allocations = probe(owner, request, allocations)
+        assert boundary_page == page
+        assert boundary_allocations == allocations
+        after_boundary = snapshot._publication_counters_v2()
+        assert after_boundary.page_requests == after_success.page_requests + 1
+        assert after_boundary.pages_returned == after_success.pages_returned + 1
+        assert after_boundary.rows_emitted == after_success.rows_emitted + len(page.rows)
+        assert document._publication_counters_v2() == after_boundary
+
     document._publication_close_v2()
     selected.close()
     assert selected.closed

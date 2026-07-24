@@ -113,6 +113,23 @@ impl NativeDocumentHandle {
         self.require_v2()?
             .attestation_to_python_with_allocations(py, allocations)
     }
+
+    pub(crate) fn page_to_python_with_allocations(
+        &self,
+        py: Python<'_>,
+        request: &Bound<'_, PyAny>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<Py<PyAny>> {
+        let storage = self.require_v2()?;
+        self.require_open_v2(py, "native V2 document handle is closed")?;
+        storage.page_to_python_with_allocations(
+            py,
+            request,
+            true,
+            Some(self.document_ordinal),
+            allocations,
+        )
+    }
 }
 
 #[pymethods]
@@ -148,9 +165,8 @@ impl NativeDocumentHandle {
         py: Python<'_>,
         request: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let storage = self.require_v2()?;
-        self.require_open_v2(py, "native V2 document handle is closed")?;
-        storage.page_to_python(py, request, true, Some(self.document_ordinal))
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.page_to_python_with_allocations(py, request, &mut allocations)
     }
 
     fn _publication_contains_v2(
@@ -271,6 +287,17 @@ impl NativeSnapshotHandle {
         self.require_v2()?
             .attestation_to_python_with_allocations(py, allocations)
     }
+
+    pub(crate) fn page_to_python_with_allocations(
+        &self,
+        py: Python<'_>,
+        request: &Bound<'_, PyAny>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<Py<PyAny>> {
+        let storage = self.require_v2()?;
+        self.require_open_v2(py, "native V2 snapshot handle is closed")?;
+        storage.page_to_python_with_allocations(py, request, false, None, allocations)
+    }
 }
 
 #[pymethods]
@@ -310,9 +337,8 @@ impl NativeSnapshotHandle {
         py: Python<'_>,
         request: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let storage = self.require_v2()?;
-        self.require_open_v2(py, "native V2 snapshot handle is closed")?;
-        storage.page_to_python(py, request, false, None)
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.page_to_python_with_allocations(py, request, &mut allocations)
     }
 
     fn _publication_contains_v2(

@@ -183,6 +183,20 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[object, int]: ...
 
+    def _retained_snapshot_page_bridge_allocation_probe_v1(
+        self,
+        handle: object,
+        request: object,
+        fail_after: int | None = None,
+    ) -> tuple[object, int]: ...
+
+    def _retained_document_page_bridge_allocation_probe_v1(
+        self,
+        handle: object,
+        request: object,
+        fail_after: int | None = None,
+    ) -> tuple[object, int]: ...
+
     def _retained_signature_layout_bridge_allocation_probe_v1(
         self,
         handle: object,

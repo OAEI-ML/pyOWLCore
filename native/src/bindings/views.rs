@@ -184,6 +184,14 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
             _retained_document_attestation_bridge_allocation_probe_v1,
             _module
         )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_snapshot_page_bridge_allocation_probe_v1,
+            _module
+        )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_document_page_bridge_allocation_probe_v1,
+            _module
+        )?)?;
     }
     Ok(())
 }
@@ -772,6 +780,40 @@ fn _retained_document_attestation_bridge_allocation_probe_v1<'py>(
     );
     let attestation = handle.attestation_to_python_with_allocations(py, &mut allocations)?;
     Ok((attestation, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, request, fail_after=None))]
+fn _retained_snapshot_page_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    request: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyAny>, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-page bridge allocation failure",
+    );
+    let page = handle.page_to_python_with_allocations(py, request, &mut allocations)?;
+    Ok((page, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, request, fail_after=None))]
+fn _retained_document_page_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeDocumentHandle>,
+    request: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyAny>, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-page bridge allocation failure",
+    );
+    let page = handle.page_to_python_with_allocations(py, request, &mut allocations)?;
+    Ok((page, allocations.count()))
 }
 
 #[cfg(feature = "test-hooks")]

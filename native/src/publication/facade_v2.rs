@@ -871,13 +871,15 @@ impl PublicationStorageV2 {
         self.attestation.to_python_with_allocations(py, allocations)
     }
 
-    pub(super) fn page_to_python(
+    pub(crate) fn page_to_python_with_allocations(
         &self,
         py: Python<'_>,
         request: &Bound<'_, PyAny>,
         raw_document_owner: bool,
         fixed_document_ordinal: Option<u64>,
+        allocations: &mut crate::BridgeAllocationProbe,
     ) -> PyResult<Py<PyAny>> {
+        allocations.checkpoint()?;
         let handoff = py.import(HANDOFF_MODULE)?;
         require_exact_type(&handoff, "NativeFacadePageRequestV2", request)?;
         let selected = PageRequestV2::from_python(request)?;
@@ -913,18 +915,20 @@ impl PublicationStorageV2 {
             let emitted_count = u64::try_from(page.rows.len())
                 .map_err(|_| PyValueError::new_err("V2 page row count exceeds u64"))?;
             let terminal = page.next_cursor.is_none();
-            let py_rows = PyTuple::new(
+            let py_rows = page_rows_to_python_with_allocations(
                 py,
-                page.rows.iter().map(|row| PyBytes::new(py, row.as_slice())),
+                page.rows.iter().map(Vec::as_slice),
+                allocations,
             )?;
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("total_count", page.total_count)?;
-            kwargs.set_item("next_cursor", page.next_cursor)?;
-            kwargs.set_item("terminal", terminal)?;
-            kwargs.set_item("rows", py_rows)?;
-            let result = handoff
-                .getattr("_unchecked_owner_page_v2")?
-                .call((request,), Some(&kwargs))?;
+            let result = page_record_to_python_with_allocations(
+                &handoff,
+                request,
+                page.total_count,
+                page.next_cursor,
+                terminal,
+                &py_rows,
+                allocations,
+            )?;
             self.counters
                 .page(
                     selected.coordinate.collection,
@@ -932,7 +936,7 @@ impl PublicationStorageV2 {
                     page.page_bytes,
                 )
                 .map_err(native_error_to_python)?;
-            return Ok(result.unbind());
+            return Ok(result);
         }
         let rows = self.rows(selected.coordinate, raw_document_owner);
         let (lower, upper) = digest_range(rows, selected.digest_filter.as_ref());
@@ -954,10 +958,17 @@ impl PublicationStorageV2 {
             bounded_page_end(rows, absolute_start, absolute_stop, selected.max_bytes)
                 .map_err(native_error_to_python)?;
         let mut emitted = Vec::new();
-        emitted
-            .try_reserve_exact(emitted_end.saturating_sub(absolute_start))
-            .map_err(|_| PyMemoryError::new_err("native V2 page allocation failed"))?;
-        emitted.extend(rows[absolute_start..emitted_end].iter().cloned());
+        let emitted_capacity = emitted_end.saturating_sub(absolute_start);
+        if emitted_capacity != 0 {
+            allocations.checkpoint()?;
+            emitted
+                .try_reserve_exact(emitted_capacity)
+                .map_err(|_| PyMemoryError::new_err("native V2 page allocation failed"))?;
+        }
+        for row in &rows[absolute_start..emitted_end] {
+            allocations.checkpoint()?;
+            emitted.push(row.clone());
+        }
         let emitted_count = u64::try_from(emitted.len())
             .map_err(|_| PyValueError::new_err("V2 page row count exceeds u64"))?;
         let end = selected
@@ -967,22 +978,24 @@ impl PublicationStorageV2 {
         let total_u64 =
             u64::try_from(total).map_err(|_| PyValueError::new_err("V2 page total exceeds u64"))?;
         let terminal = end == total_u64;
-        let py_rows = PyTuple::new(
+        let py_rows = page_rows_to_python_with_allocations(
             py,
-            emitted.iter().map(|row| PyBytes::new(py, row.as_slice())),
+            emitted.iter().map(|row| row.as_slice()),
+            allocations,
         )?;
-        let kwargs = PyDict::new(py);
-        kwargs.set_item("total_count", total_u64)?;
-        kwargs.set_item("next_cursor", if terminal { None } else { Some(end) })?;
-        kwargs.set_item("terminal", terminal)?;
-        kwargs.set_item("rows", py_rows)?;
-        let page = handoff
-            .getattr("_unchecked_owner_page_v2")?
-            .call((request,), Some(&kwargs))?;
+        let page = page_record_to_python_with_allocations(
+            &handoff,
+            request,
+            total_u64,
+            if terminal { None } else { Some(end) },
+            terminal,
+            &py_rows,
+            allocations,
+        )?;
         self.counters
             .page(selected.coordinate.collection, emitted_count, page_bytes)
             .map_err(native_error_to_python)?;
-        Ok(page.unbind())
+        Ok(page)
     }
 
     pub(super) fn contains(
@@ -1738,6 +1751,52 @@ impl PublicationStorageV2 {
             .finish_with_allocation_count(attestation_value)
             .map_err(native_error_to_python)
     }
+}
+
+fn page_rows_to_python_with_allocations<'py, 'row>(
+    py: Python<'py>,
+    rows: impl ExactSizeIterator<Item = &'row [u8]>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Bound<'py, PyTuple>> {
+    let mut selected = Vec::new();
+    if rows.len() != 0 {
+        allocations.checkpoint()?;
+        selected
+            .try_reserve_exact(rows.len())
+            .map_err(|_| PyMemoryError::new_err("native V2 page Python-row allocation failed"))?;
+    }
+    for row in rows {
+        allocations.checkpoint()?;
+        selected.push(PyBytes::new(py, row));
+    }
+    allocations.checkpoint()?;
+    PyTuple::new(py, selected)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn page_record_to_python_with_allocations(
+    handoff: &Bound<'_, PyModule>,
+    request: &Bound<'_, PyAny>,
+    total_count: u64,
+    next_cursor: Option<u64>,
+    terminal: bool,
+    rows: &Bound<'_, PyTuple>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Py<PyAny>> {
+    allocations.checkpoint()?;
+    let kwargs = PyDict::new(handoff.py());
+    allocations.checkpoint()?;
+    kwargs.set_item("total_count", total_count)?;
+    allocations.checkpoint()?;
+    kwargs.set_item("next_cursor", next_cursor)?;
+    allocations.checkpoint()?;
+    kwargs.set_item("terminal", terminal)?;
+    allocations.checkpoint()?;
+    kwargs.set_item("rows", rows)?;
+    allocations.checkpoint()?;
+    let page_type = handoff.getattr("_unchecked_owner_page_v2")?;
+    allocations.checkpoint()?;
+    Ok(page_type.call((request,), Some(&kwargs))?.unbind())
 }
 
 #[derive(Debug, Default)]
