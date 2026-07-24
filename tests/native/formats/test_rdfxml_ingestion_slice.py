@@ -1600,6 +1600,159 @@ def test_detached_class_complement_rejections_match_python(
     assert native_error.value.args[0] == native_code
 
 
+@pytest.mark.parametrize(
+    ("body", "total_triples"),
+    (
+        (
+            """
+ <owl:Class rdf:nodeID='range'>
+  <owl:oneOf rdf:nodeID='values'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='values'>
+  <rdf:first rdf:resource='urn:i'/>
+  <rdf:rest rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+""",
+            4,
+        ),
+        (
+            """
+ <owl:Class rdf:nodeID='range'>
+  <owl:oneOf rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </owl:Class>
+""",
+            2,
+        ),
+    ),
+)
+def test_detached_object_enumeration_matches_python(
+    extension: NativeTestExtension,
+    body: str,
+    total_triples: int,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>{body}</rdf:RDF>""".encode()
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+    assert python.rdf_mapping_report.conformant
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.axioms == ()
+    assert observed.total_triples == observed.consumed_triples == total_triples
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == 0
+    assert attestation.rdf_mapping_report_count == 1
+    assert extension.INGESTION_FEATURES == ()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
+def test_named_object_enumeration_axiom_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:Class rdf:about='urn:C'>
+  <owl:oneOf rdf:nodeID='values'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='values'>
+  <rdf:first rdf:resource='urn:i'/>
+  <rdf:rest rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+</rdf:RDF>"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert len(observed.axioms) == 2
+    assert observed.total_triples == observed.consumed_triples == 4
+
+
+@pytest.mark.parametrize(
+    ("body", "python_code", "native_code"),
+    (
+        (
+            """
+ <rdf:Description rdf:nodeID='range'>
+  <owl:oneOf rdf:nodeID='values'/>
+ </rdf:Description>
+ <rdf:Description rdf:nodeID='values'>
+  <rdf:first rdf:resource='urn:i'/>
+  <rdf:rest rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+ <owl:Class rdf:nodeID='range'>
+  <owl:oneOf rdf:nodeID='values'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='values'>
+  <rdf:first>one</rdf:first>
+  <rdf:rest rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            """
+ <owl:Class rdf:nodeID='range'>
+  <owl:oneOf rdf:nodeID='values'/>
+  <owl:complementOf rdf:resource='urn:C'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='values'>
+  <rdf:first rdf:resource='urn:i'/>
+  <rdf:rest rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+            "NATIVE_RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            """
+ <owl:Class rdf:nodeID='range'>
+  <owl:oneOf rdf:nodeID='left'/>
+  <owl:oneOf rdf:nodeID='right'/>
+ </owl:Class>
+ <rdf:Description rdf:nodeID='left'>
+  <rdf:first rdf:resource='urn:left'/>
+  <rdf:rest rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+ <rdf:Description rdf:nodeID='right'>
+  <rdf:first rdf:resource='urn:right'/>
+  <rdf:rest rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#nil'/>
+ </rdf:Description>
+""",
+            "RDF_MAPPING_CARDINALITY",
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        ),
+    ),
+)
+def test_detached_object_enumeration_rejections_match_python(
+    extension: NativeTestExtension,
+    body: str,
+    python_code: str,
+    native_code: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>{body}</rdf:RDF>""".encode()
+
+    with pytest.raises(PyOWLCoreError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == python_code
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == native_code
+
+
 def test_detached_datatype_complement_matches_python(
     extension: NativeTestExtension,
 ) -> None:

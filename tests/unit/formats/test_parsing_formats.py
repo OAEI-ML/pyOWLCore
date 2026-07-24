@@ -1518,6 +1518,151 @@ def test_rdf_mapping_rejects_ambiguous_detached_class_complement() -> None:
     assert raised.value.code == "RDF_MAPPING_CARDINALITY"
 
 
+@pytest.mark.parametrize(
+    ("body", "total_triples"),
+    (
+        (
+            f"""
+  <owl:Class rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </owl:Class>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:resource="urn:i"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+            4,
+        ),
+        (
+            f"""
+  <owl:Class rdf:nodeID="range">
+    <owl:oneOf rdf:resource="{RDF_NAMESPACE}nil"/>
+  </owl:Class>
+""",
+            2,
+        ),
+    ),
+)
+def test_rdf_mapping_consumes_detached_object_enumeration(
+    body: str,
+    total_triples: int,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == total_triples
+    assert document.rdf_mapping_report.consumed_triples == total_triples
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert len(document.axioms) == 0
+
+
+def test_rdf_mapping_preserves_named_object_enumeration_axiom() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C">
+    <owl:oneOf rdf:nodeID="values"/>
+  </owl:Class>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:resource="urn:i"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    enumeration = m.ObjectOneOf(
+        m.CanonicalSet((m.NamedIndividual(m.IRI("urn:i")),))
+    )
+    assert m.EquivalentClasses(
+        m.CanonicalSet((m.Class(m.IRI("urn:C")), enumeration))
+    ) in document.axioms
+    assert len(document.axioms) == 2
+
+
+def test_rdf_mapping_rejects_markerless_detached_object_enumeration() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdf:Description rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:resource="urn:i"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        f"""
+  <owl:Class rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </owl:Class>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first>one</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+        f"""
+  <owl:Class rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="values"/>
+    <owl:complementOf rdf:resource="urn:C"/>
+  </owl:Class>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:resource="urn:i"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+    ),
+)
+def test_rdf_mapping_rejects_invalid_detached_object_enumeration(body: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
+def test_rdf_mapping_rejects_ambiguous_detached_object_enumeration() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="left"/>
+    <owl:oneOf rdf:nodeID="right"/>
+  </owl:Class>
+  <rdf:Description rdf:nodeID="left">
+    <rdf:first rdf:resource="urn:left"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="right">
+    <rdf:first rdf:resource="urn:right"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_CARDINALITY"
+
+
 def test_rdf_mapping_consumes_detached_datatype_complement() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"

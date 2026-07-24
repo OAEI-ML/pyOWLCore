@@ -2919,6 +2919,7 @@ fn map_graph(
         &mut expressions,
         session,
     )?;
+    consume_detached_object_enumerations(&list_graph, &mut consumed, &mut expressions, session)?;
     consume_detached_data_complements(
         &list_graph,
         &mut consumed,
@@ -3336,6 +3337,56 @@ fn consume_detached_class_complements<'view, 'graph>(
                 if complement_targets > 1 {
                     return Err(rdf_mapping_cardinality(
                         "native detached class complement has more than one target",
+                    ));
+                }
+            }
+        }
+        if !marker_present {
+            continue;
+        }
+        let DecodedClassExpression {
+            node: _,
+            consumed: expression_consumed,
+        } = expressions.decode_term(ListTerm::Blank(subject), session)?;
+        consume_collection_indexes(expression_consumed, consumed, session)?;
+    }
+    Ok(())
+}
+
+fn consume_detached_object_enumerations<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index] || triple.predicate != OWL_ONE_OF {
+            continue;
+        }
+        let ListResource::Blank(subject) = triple.subject else {
+            continue;
+        };
+        let mut marker_present = false;
+        let mut enumeration_targets = 0_usize;
+        for (candidate_index, candidate) in triples.iter().enumerate() {
+            session.step(1)?;
+            if candidate.subject != ListResource::Blank(subject) {
+                continue;
+            }
+            if candidate.predicate == RDF_TYPE
+                && candidate.object == ListTerm::Iri(OWL_CLASS)
+                && !consumed[candidate_index]
+            {
+                marker_present = true;
+            }
+            if candidate.predicate == OWL_ONE_OF {
+                enumeration_targets = enumeration_targets.checked_add(1).ok_or_else(|| {
+                    NativeError::limit("native detached object-enumeration target count overflow")
+                })?;
+                if enumeration_targets > 1 {
+                    return Err(rdf_mapping_cardinality(
+                        "native detached object enumeration has more than one target",
                     ));
                 }
             }
@@ -9520,6 +9571,68 @@ mod tests {
 
         let ambiguous = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><owl:Class rdf:about=\"urn:D\"/><owl:Class rdf:nodeID=\"complement\"><owl:complementOf rdf:resource=\"urn:C\"/><owl:complementOf rdf:resource=\"urn:D\"/></owl:Class></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(ambiguous.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_CARDINALITY",
+        );
+    }
+
+    #[test]
+    fn detached_object_enumeration_requires_exact_expression_shape() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"range\"><owl:oneOf rdf:nodeID=\"values\"/></owl:Class><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:resource=\"urn:i\"/><rdf:rest rdf:resource=\"{RDF}nil\"/></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("detached object enumeration");
+        assert!(document.axioms.is_empty());
+        assert_eq!(document.mapping.total_triples, 4);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let empty = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"range\"><owl:oneOf rdf:resource=\"{RDF}nil\"/></owl:Class></rdf:RDF>"
+        );
+        let empty = mapped(empty.as_bytes(), None).expect("empty detached object enumeration");
+        assert!(empty.axioms.is_empty());
+        assert_eq!(empty.mapping.total_triples, 2);
+        assert_eq!(empty.mapping.total_triples, empty.mapping.consumed_triples);
+
+        let named_subject = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"><owl:oneOf rdf:nodeID=\"values\"/></owl:Class><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:resource=\"urn:i\"/><rdf:rest rdf:resource=\"{RDF}nil\"/></rdf:Description></rdf:RDF>"
+        );
+        let named_subject =
+            mapped(named_subject.as_bytes(), None).expect("named object enumeration");
+        assert_eq!(named_subject.axioms.len(), 2);
+        assert_eq!(
+            named_subject.mapping.total_triples,
+            named_subject.mapping.consumed_triples,
+        );
+
+        let markerless = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"range\"><owl:oneOf rdf:nodeID=\"values\"/></rdf:Description><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:resource=\"urn:i\"/><rdf:rest rdf:resource=\"{RDF}nil\"/></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(markerless.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
+
+        let literal = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"range\"><owl:oneOf rdf:nodeID=\"values\"/></owl:Class><rdf:Description rdf:nodeID=\"values\"><rdf:first>one</rdf:first><rdf:rest rdf:resource=\"{RDF}nil\"/></rdf:Description></rdf:RDF>"
+        );
+        let conflict = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"range\"><owl:oneOf rdf:nodeID=\"values\"/><owl:complementOf rdf:resource=\"urn:C\"/></owl:Class><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:resource=\"urn:i\"/><rdf:rest rdf:resource=\"{RDF}nil\"/></rdf:Description></rdf:RDF>"
+        );
+        for unsupported in [literal, conflict] {
+            assert_eq!(
+                mapped(unsupported.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
+        }
+
+        let ambiguous = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"range\"><owl:oneOf rdf:nodeID=\"left\"/><owl:oneOf rdf:nodeID=\"right\"/></owl:Class><rdf:Description rdf:nodeID=\"left\"><rdf:first rdf:resource=\"urn:left\"/><rdf:rest rdf:resource=\"{RDF}nil\"/></rdf:Description><rdf:Description rdf:nodeID=\"right\"><rdf:first rdf:resource=\"urn:right\"/><rdf:rest rdf:resource=\"{RDF}nil\"/></rdf:Description></rdf:RDF>"
         );
         assert_eq!(
             mapped(ambiguous.as_bytes(), None).unwrap_err().code,

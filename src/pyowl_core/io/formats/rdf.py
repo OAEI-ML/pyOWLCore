@@ -219,6 +219,7 @@ class RDFMapper:
                 occurrences.append((simple_axiom, None))
         self._consume_detached_inverse_property_expressions()
         self._consume_detached_class_complements()
+        self._consume_detached_object_enumerations()
         self._consume_detached_data_complements()
         self._consume_detached_data_enumerations()
         self._consume_detached_owl1_data_enumerations()
@@ -361,6 +362,37 @@ class RDFMapper:
             )
             if marker in self.consumed or not self.graph.contains(marker):
                 continue
+            self._class_expression(triple.subject)
+
+    def _consume_detached_object_enumerations(self) -> None:
+        for triple in self.graph.find(predicate=OWL + "oneOf"):
+            self.context.check()
+            if triple in self.consumed or not isinstance(triple.subject, RDFBlank):
+                continue
+            marker = Triple(
+                triple.subject,
+                RDFIRI(RDF + "type"),
+                RDFIRI(OWL + "Class"),
+            )
+            if marker in self.consumed or not self.graph.contains(marker):
+                continue
+            self.graph.one(triple.subject, OWL + "oneOf")
+            has_other_constructor = any(
+                self.graph.objects(triple.subject, OWL + predicate)
+                for predicate in (
+                    "intersectionOf",
+                    "unionOf",
+                    "complementOf",
+                )
+            ) or self.graph.contains(
+                Triple(
+                    triple.subject,
+                    RDFIRI(RDF + "type"),
+                    RDFIRI(OWL + "Restriction"),
+                )
+            )
+            if has_other_constructor:
+                self._mapping_error("object enumeration has conflicting constructors")
             self._class_expression(triple.subject)
 
     def _consume_detached_data_complements(self) -> None:
