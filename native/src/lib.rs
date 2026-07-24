@@ -14,6 +14,9 @@ mod index;
 mod limits;
 mod model;
 mod parse;
+#[cfg(feature = "process-allocator-test")]
+#[doc(hidden)]
+pub mod process_allocator_test;
 #[allow(dead_code)]
 mod publication;
 mod session;

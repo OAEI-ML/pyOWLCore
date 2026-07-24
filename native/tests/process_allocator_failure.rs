@@ -1,0 +1,168 @@
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::ptr;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
+use _native::process_allocator_test::{
+    wire_validation_receipt, ComponentBuildFixture, ComponentEncodingFixture, Failure,
+};
+
+const DISARMED: u8 = 0;
+const COUNTING: u8 = 1;
+const FAILING: u8 = 2;
+
+struct InjectingAllocator;
+
+static MODE: AtomicU8 = AtomicU8::new(DISARMED);
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static FAIL_AFTER: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+#[global_allocator]
+static ALLOCATOR: InjectingAllocator = InjectingAllocator;
+
+unsafe impl GlobalAlloc for InjectingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if rejects_next_allocation() {
+            return ptr::null_mut();
+        }
+        // SAFETY: The request is forwarded unchanged to the system allocator.
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        if rejects_next_allocation() {
+            return ptr::null_mut();
+        }
+        // SAFETY: The request is forwarded unchanged to the system allocator.
+        unsafe { System.alloc_zeroed(layout) }
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        // SAFETY: Every non-null allocation returned by this wrapper came from
+        // the system allocator with the same layout.
+        unsafe { System.dealloc(pointer, layout) }
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if rejects_next_allocation() {
+            return ptr::null_mut();
+        }
+        // SAFETY: The pointer and old layout came from the system allocator,
+        // and the requested size is forwarded unchanged.
+        unsafe { System.realloc(pointer, layout, new_size) }
+    }
+}
+
+fn rejects_next_allocation() -> bool {
+    let mode = MODE.load(Ordering::Relaxed);
+    if mode == DISARMED {
+        return false;
+    }
+    let index = ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+    mode == FAILING && index == FAIL_AFTER.load(Ordering::Relaxed)
+}
+
+struct ArmedAllocator;
+
+impl ArmedAllocator {
+    fn counting() -> Self {
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        FAIL_AFTER.store(usize::MAX, Ordering::Relaxed);
+        MODE.store(COUNTING, Ordering::SeqCst);
+        Self
+    }
+
+    fn failing(fail_after: usize) -> Self {
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        FAIL_AFTER.store(fail_after, Ordering::Relaxed);
+        MODE.store(FAILING, Ordering::SeqCst);
+        Self
+    }
+
+    fn allocations(&self) -> usize {
+        ALLOCATIONS.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for ArmedAllocator {
+    fn drop(&mut self) {
+        MODE.store(DISARMED, Ordering::SeqCst);
+        FAIL_AFTER.store(usize::MAX, Ordering::Relaxed);
+    }
+}
+
+fn count_allocations<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    let armed = ArmedAllocator::counting();
+    let output = operation();
+    let allocations = armed.allocations();
+    drop(armed);
+    (output, allocations)
+}
+
+fn fail_allocation<T>(fail_after: usize, operation: impl FnOnce() -> T) -> T {
+    let armed = ArmedAllocator::failing(fail_after);
+    let output = operation();
+    drop(armed);
+    output
+}
+
+fn assert_typed_allocation_failure(result: Result<Vec<u8>, Failure>, message: &'static str) {
+    assert_eq!(
+        result,
+        Err(Failure {
+            code: "NATIVE_WIRE_LIMIT",
+            message,
+        })
+    );
+}
+
+#[test]
+fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
+    let canonical = [
+        60, 1, 24, 2, 5, 5, b'c', b'l', b'a', b's', b's', 1, 14, 1, 2, 11, b'u', b'r', b'n', b':',
+        b'p', b'r', b'o', b'c', b'e', b's', b's', 6, 0,
+    ];
+    let component_build =
+        ComponentBuildFixture::new(&canonical).expect("component build fixture must initialize");
+    let mut component =
+        ComponentEncodingFixture::new(&canonical).expect("component fixture must freeze");
+
+    let (baseline_build, build_allocations) = count_allocations(|| component_build.build());
+    baseline_build.expect("component build baseline must succeed");
+    assert!(build_allocations > 1);
+
+    for fail_after in 0..build_allocations {
+        let failure = fail_allocation(fail_after, || component_build.build())
+            .expect_err("every observed component build allocation must be fallible");
+        assert_eq!(failure.code, "NATIVE_WIRE_LIMIT");
+    }
+    fail_allocation(build_allocations, || component_build.build())
+        .expect("first non-failing component build boundary must succeed");
+
+    let (baseline_component, component_allocations) = count_allocations(|| component.encode());
+    assert_eq!(
+        baseline_component.expect("component baseline must encode"),
+        canonical
+    );
+    assert_eq!(component_allocations, 1);
+
+    assert_typed_allocation_failure(
+        fail_allocation(0, || component.encode()),
+        "native component encoding allocation failed",
+    );
+    let boundary_component = fail_allocation(component_allocations, || component.encode())
+        .expect("first non-failing component boundary must encode");
+    assert_eq!(boundary_component, canonical);
+
+    let (baseline_receipt, receipt_allocations) = count_allocations(wire_validation_receipt);
+    let baseline_receipt = baseline_receipt.expect("wire receipt baseline must publish");
+    assert_eq!(baseline_receipt.len(), 76);
+    assert_eq!(receipt_allocations, 1);
+
+    assert_typed_allocation_failure(
+        fail_allocation(0, wire_validation_receipt),
+        "native receipt allocation failed",
+    );
+    let boundary_receipt = fail_allocation(receipt_allocations, wire_validation_receipt)
+        .expect("first non-failing receipt boundary must publish");
+    assert_eq!(boundary_receipt, baseline_receipt);
+}
