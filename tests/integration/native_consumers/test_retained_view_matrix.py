@@ -29,6 +29,21 @@ RIGHT_SOURCE = (
 )
 
 
+def _rdfxml_source(identity: str, sub_class: str, super_class: str) -> bytes:
+    return f"""<?xml version="1.0"?>
+<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+    xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Ontology rdf:about="urn:wp18:{identity}"/>
+  <owl:Class rdf:about="urn:wp18:{sub_class}">
+    <rdfs:subClassOf rdf:resource="urn:wp18:{super_class}"/>
+  </owl:Class>
+  <owl:Class rdf:about="urn:wp18:{super_class}"/>
+</rdf:RDF>
+""".encode()
+
+
 @pytest.fixture(scope="module", autouse=True)
 def extension() -> NativeTestExtension:
     selected = load_extension()
@@ -41,15 +56,56 @@ def extension() -> NativeTestExtension:
     return selected
 
 
+@pytest.mark.parametrize(
+    ("format", "left_source", "right_source"),
+    (
+        pytest.param(
+            pyowl_core.DocumentFormat.FUNCTIONAL,
+            LEFT_SOURCE,
+            RIGHT_SOURCE,
+            id="functional",
+        ),
+        pytest.param(
+            pyowl_core.DocumentFormat.RDF_XML,
+            _rdfxml_source("left", "A", "B"),
+            _rdfxml_source("right", "C", "D"),
+            id="rdfxml",
+        ),
+    ),
+)
 def test_retained_direct_wire_mmap_overlay_and_composite_matrix_avoids_scalar_base(
     tmp_path: Path,
+    extension: NativeTestExtension,
+    format: pyowl_core.DocumentFormat,
+    left_source: bytes,
+    right_source: bytes,
 ) -> None:
-    python_options = _options(pyowl_core.BackendPreference.PYTHON)
-    native_options = _options(pyowl_core.BackendPreference.NATIVE)
-    left_reference = pyowl_core.load_snapshot(LEFT_SOURCE, options=python_options)
-    right_reference = pyowl_core.load_snapshot(RIGHT_SOURCE, options=python_options)
-    left = pyowl_core.load_snapshot(LEFT_SOURCE, options=native_options)
-    right = pyowl_core.load_snapshot(RIGHT_SOURCE, options=native_options)
+    if format is pyowl_core.DocumentFormat.RDF_XML and not hasattr(
+        extension, "_parse_rdfxml_retained_v2"
+    ):
+        pytest.skip("selected native artifact lacks retained RDF/XML publication")
+    python_options = _options(pyowl_core.BackendPreference.PYTHON, format)
+    native_options = _options(pyowl_core.BackendPreference.NATIVE, format)
+    left_reference = pyowl_core.load_snapshot(left_source, options=python_options)
+    right_reference = pyowl_core.load_snapshot(right_source, options=python_options)
+    if format is pyowl_core.DocumentFormat.RDF_XML:
+        unexpected = AssertionError("guarded RDF/XML matrix crossed the Python parser")
+        with (
+            patch(
+                "pyowl_core.backends.parser._NativeBackendDriver.select",
+                autospec=True,
+                return_value="native",
+            ),
+            patch(
+                "pyowl_core.backends.python.parser.parse_rdfxml",
+                side_effect=unexpected,
+            ),
+        ):
+            left = pyowl_core.load_snapshot(left_source, options=native_options)
+            right = pyowl_core.load_snapshot(right_source, options=native_options)
+    else:
+        left = pyowl_core.load_snapshot(left_source, options=native_options)
+        right = pyowl_core.load_snapshot(right_source, options=native_options)
     assert type(left).__name__ == type(right).__name__ == "_NativeOntologySnapshot"
 
     left_owner = _raw_owner(left)
@@ -88,7 +144,7 @@ def test_retained_direct_wire_mmap_overlay_and_composite_matrix_avoids_scalar_ba
         payload = pyowl_core.encode_snapshot(left)
 
     decoded = pyowl_core.decode_snapshot(payload)
-    path = tmp_path / "retained-matrix.pyocore"
+    path = tmp_path / f"retained-{format.value}-matrix.pyocore"
     path.write_bytes(payload)
     mapped = pyowl_core.open_snapshot(path, mmap=True, verify=True)
     assert isinstance(mapped, pyowl_core.MappedOntologySnapshot)
@@ -155,9 +211,12 @@ def test_retained_direct_wire_mmap_overlay_and_composite_matrix_avoids_scalar_ba
     assert mapped.closed
 
 
-def _options(backend: pyowl_core.BackendPreference) -> pyowl_core.LoadOptions:
+def _options(
+    backend: pyowl_core.BackendPreference,
+    format: pyowl_core.DocumentFormat,
+) -> pyowl_core.LoadOptions:
     return pyowl_core.LoadOptions(
-        format=pyowl_core.DocumentFormat.FUNCTIONAL,
+        format=format,
         imports=pyowl_core.ImportPolicy.IGNORE,
         backend=backend,
         collect_provenance=False,
