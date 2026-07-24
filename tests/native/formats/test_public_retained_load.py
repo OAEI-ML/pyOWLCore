@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from pyowl_core import (
+    AcquisitionCache,
     AxiomScope,
     BackendPreference,
     CancellationSource,
@@ -22,8 +23,10 @@ from pyowl_core import (
     LoadOptions,
     MappingResolver,
     OperationCancelledError,
+    ParsedDocumentCache,
     ParseError,
     ParseLimits,
+    SnapshotLoader,
     UnresolvedImportWarning,
     encode_snapshot,
     load_snapshot,
@@ -1146,6 +1149,39 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         options=options(BackendPreference.PYTHON),
         resolver=MappingResolver(sources),
     )
+    parse_document_native = cast(Any, extension).parse_document
+    parse_retained = cast(Any, extension)._parse_functional_retained_v2
+    parsed_sources: list[bytes] = []
+    expected_sources = (root, *sources.values())
+
+    def record_source(request: object) -> None:
+        assert isinstance(request, bytes)
+        matches = tuple(source for source in expected_sources if request.endswith(source))
+        assert len(matches) == 1
+        parsed_sources.append(matches[0])
+
+    def capture_document_parse(
+        request: object,
+        *arguments: object,
+        **keywords: object,
+    ) -> object:
+        record_source(request)
+        return parse_document_native(request, *arguments, **keywords)
+
+    def capture_retained_parse(
+        request: object,
+        *arguments: object,
+        **keywords: object,
+    ) -> object:
+        record_source(request)
+        return parse_retained(request, *arguments, **keywords)
+
+    monkeypatch.setattr(cast(Any, extension), "parse_document", capture_document_parse)
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_parse_functional_retained_v2",
+        capture_retained_parse,
+    )
     retained = cast(Any, extension)._retain_structural_snapshot_v2
     captured: dict[str, object] = {}
 
@@ -1174,7 +1210,10 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         "_retain_structural_snapshot_v2",
         capture,
     )
-    selected = load_snapshot(
+    selected = SnapshotLoader(
+        acquisition_cache=AcquisitionCache(),
+        document_cache=ParsedDocumentCache(),
+    ).load(
         root,
         options=options(BackendPreference.NATIVE),
         resolver=MappingResolver(sources),
@@ -1191,6 +1230,10 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     assert selected.signature_fingerprint == reference.signature_fingerprint
     assert selected.origin_index == reference.origin_index
     assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert selected.report.acquisition_cache_hits == 1
+    assert selected.report.document_cache_hits == 1
+    assert len(parsed_sources) == len(expected_sources) == 4
+    assert all(parsed_sources.count(source) == 1 for source in expected_sources)
 
     assert len(cast(tuple[object, ...], captured["documents"])) == 4
     reference_origin_rows = sum(
