@@ -323,6 +323,9 @@ class _Node:
     status: DocumentStatus
 
 
+_ImportParseResult: TypeAlias = tuple[OntologyDocument, bool] | Exception
+
+
 _DEFAULT_ACQUISITION_CACHE = AcquisitionCache()
 _DEFAULT_DOCUMENT_CACHE = ParsedDocumentCache()
 
@@ -471,16 +474,18 @@ class SnapshotLoader:
                 started,
             )
             next_pending: list[_Pending] = []
-            for item, outcome in zip(pending, outcomes, strict=True):
+            acquired_by_index: dict[int, tuple[AcquiredImport, ResolvedDocument]] = {}
+            acquisition_errors: dict[int, Exception] = {}
+            parse_rows: list[tuple[int, AcquiredImport, ResolvedDocument]] = []
+            process_count = len(pending)
+            for index, (_item, outcome) in enumerate(zip(pending, outcomes, strict=True)):
                 _check_operation(cancellation_token, started, selected)
                 counters["resolver_attempts"] += max(1, len(outcome.attempts))
                 selected.limits.enforce("max_resolver_attempts", counters["resolver_attempts"])
                 if outcome.kind is not ResolutionKind.RESOLVED:
-                    edge, diagnostic = _failed_edge(item, outcome, selected.imports)
                     if selected.imports is not ImportPolicy.RECORD_UNRESOLVED:
-                        _raise_resolution(item, outcome)
-                    edges.append(edge)
-                    _append_diagnostic(diagnostics, diagnostic, selected)
+                        process_count = index + 1
+                        break
                     continue
                 resolved = outcome.resolved
                 if resolved is None:
@@ -492,56 +497,95 @@ class SnapshotLoader:
                         cancellation_token=cancellation_token,
                     )
                     counters["acquisition_cache_hits"] += int(acquired.cache_hit)
-                    document, cache_hit = self._parse_import(
-                        acquired,
-                        resolved,
-                        selected,
-                        cancellation_token,
-                    )
-                    counters["document_cache_hits"] += int(cache_hit)
-                    candidate = _node(
-                        document,
-                        DocumentStatus.RESOLVED,
-                        import_iri=item.import_iri,
-                    )
-                    retained = source_identity.get(_source_identity(document))
-                    if retained is None:
-                        _register_identity(candidate, ontology_identity, version_identity)
-                        collision = nodes.get(candidate.key)
-                        if collision is not None and _source_identity(
-                            collision.document
-                        ) != _source_identity(document):
-                            raise DocumentIdentityConflictError(
-                                "canonical document key collision",
-                                code="DOCUMENT_KEY_CONFLICT",
-                            )
-                        retained = candidate
-                        nodes[candidate.key] = candidate
-                        source_identity[_source_identity(document)] = candidate
-                        counters["total_source_bytes"] += document.provenance.byte_length
-                        counters["axioms"] += len(document.axioms)
-                        counters["terms"] += _document_terms(document)
-                        _enforce_closure_limits(selected, len(nodes), counters)
-                        next_pending.extend(_initial_pending(candidate, selected, parent=item))
-                    edges.append(
-                        ImportEdge(
-                            item.importing_document_key,
-                            item.import_iri,
-                            ImportStatus.RESOLVED,
-                            retained.key,
-                            outcome.resolver_name,
-                            acquired.locator,
-                        )
-                    )
-                except (ResourceLimitError, OperationCancelledError, MemoryError):
-                    raise
-                except (ImportResolutionError, ParseError) as error:
+                except (ResourceLimitError, OperationCancelledError, MemoryError) as error:
+                    acquisition_errors[index] = error
+                    process_count = index + 1
+                    break
+                except ImportResolutionError as error:
+                    acquisition_errors[index] = error
                     if selected.imports is not ImportPolicy.RECORD_UNRESOLVED:
-                        raise
-                    outcome = _outcome_from_error(outcome.resolver_name, error)
+                        process_count = index + 1
+                        break
+                    continue
+                acquired_by_index[index] = (acquired, resolved)
+                parse_rows.append((index, acquired, resolved))
+
+            parsed_by_index = self._parse_import_batch(
+                tuple(parse_rows),
+                selected,
+                cancellation_token,
+                started,
+            )
+            for index, (item, outcome) in enumerate(
+                zip(pending[:process_count], outcomes[:process_count], strict=True)
+            ):
+                _check_operation(cancellation_token, started, selected)
+                if outcome.kind is not ResolutionKind.RESOLVED:
                     edge, diagnostic = _failed_edge(item, outcome, selected.imports)
+                    if selected.imports is not ImportPolicy.RECORD_UNRESOLVED:
+                        _raise_resolution(item, outcome)
                     edges.append(edge)
                     _append_diagnostic(diagnostics, diagnostic, selected)
+                    continue
+
+                batch_error = acquisition_errors.get(index)
+                parse_result = parsed_by_index.get(index)
+                if batch_error is None and isinstance(parse_result, Exception):
+                    batch_error = parse_result
+                if batch_error is not None:
+                    if isinstance(
+                        batch_error,
+                        (ResourceLimitError, OperationCancelledError, MemoryError),
+                    ):
+                        raise batch_error
+                    if not isinstance(batch_error, (ImportResolutionError, ParseError)):
+                        raise batch_error
+                    if selected.imports is not ImportPolicy.RECORD_UNRESOLVED:
+                        raise batch_error
+                    failed = _outcome_from_error(outcome.resolver_name, batch_error)
+                    edge, diagnostic = _failed_edge(item, failed, selected.imports)
+                    edges.append(edge)
+                    _append_diagnostic(diagnostics, diagnostic, selected)
+                    continue
+                if not isinstance(parse_result, tuple):
+                    raise AssertionError("resolved import has no parse result")
+                document, cache_hit = parse_result
+                counters["document_cache_hits"] += int(cache_hit)
+                acquired, _resolved = acquired_by_index[index]
+                candidate = _node(
+                    document,
+                    DocumentStatus.RESOLVED,
+                    import_iri=item.import_iri,
+                )
+                retained = source_identity.get(_source_identity(document))
+                if retained is None:
+                    _register_identity(candidate, ontology_identity, version_identity)
+                    collision = nodes.get(candidate.key)
+                    if collision is not None and _source_identity(
+                        collision.document
+                    ) != _source_identity(document):
+                        raise DocumentIdentityConflictError(
+                            "canonical document key collision",
+                            code="DOCUMENT_KEY_CONFLICT",
+                        )
+                    retained = candidate
+                    nodes[candidate.key] = candidate
+                    source_identity[_source_identity(document)] = candidate
+                    counters["total_source_bytes"] += document.provenance.byte_length
+                    counters["axioms"] += len(document.axioms)
+                    counters["terms"] += _document_terms(document)
+                    _enforce_closure_limits(selected, len(nodes), counters)
+                    next_pending.extend(_initial_pending(candidate, selected, parent=item))
+                edges.append(
+                    ImportEdge(
+                        item.importing_document_key,
+                        item.import_iri,
+                        ImportStatus.RESOLVED,
+                        retained.key,
+                        outcome.resolver_name,
+                        acquired.locator,
+                    )
+                )
             pending = next_pending
         records = tuple(_record(node) for node in nodes.values())
         manifest = ImportManifest(
@@ -613,6 +657,64 @@ class SnapshotLoader:
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pyowl-import") as pool:
             return tuple(pool.map(resolve_one, pending))
 
+    def _parse_import_batch(
+        self,
+        rows: tuple[tuple[int, AcquiredImport, ResolvedDocument], ...],
+        options: LoadOptions,
+        cancellation_token: CancellationToken | None,
+        started: float,
+    ) -> dict[int, _ImportParseResult]:
+        if not rows:
+            return {}
+        grouped: dict[
+            tuple[object, ...],
+            list[tuple[int, AcquiredImport, ResolvedDocument]],
+        ] = {}
+        for row in rows:
+            _index, acquired, resolved = row
+            key = _parsed_document_key(acquired, resolved, options)
+            grouped.setdefault(key, []).append(row)
+        unique_rows = tuple(group[0] for group in grouped.values())
+
+        def parse_one(
+            row: tuple[int, AcquiredImport, ResolvedDocument],
+        ) -> _ImportParseResult:
+            _index, acquired, resolved = row
+            try:
+                _check_operation(cancellation_token, started, options)
+                parsed = self._parse_import(
+                    acquired,
+                    resolved,
+                    options,
+                    cancellation_token,
+                )
+                _check_operation(cancellation_token, started, options)
+                return parsed
+            except Exception as error:
+                return error
+
+        workers = min(options.limits.max_concurrent_fetches, len(unique_rows))
+        if options.backend is BackendPreference.PYTHON:
+            workers = 1
+        if workers <= 1:
+            unique_results = tuple(parse_one(row) for row in unique_rows)
+        else:
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="pyowl-parse",
+            ) as pool:
+                unique_results = tuple(pool.map(parse_one, unique_rows))
+
+        results: dict[int, _ImportParseResult] = {}
+        for group, result in zip(grouped.values(), unique_results, strict=True):
+            for offset, (index, _acquired, _resolved) in enumerate(group):
+                if isinstance(result, Exception):
+                    results[index] = result
+                    continue
+                document, cache_hit = result
+                results[index] = (document, cache_hit if offset == 0 else True)
+        return results
+
     def _parse_import(
         self,
         acquired: AcquiredImport,
@@ -620,16 +722,10 @@ class SnapshotLoader:
         options: LoadOptions,
         cancellation_token: CancellationToken | None,
     ) -> tuple[OntologyDocument, bool]:
-        media_type = resolved.provenance.get("media_type") or None
-        parser_options = replace(options, format=None)
-        key = (
-            acquired.source_sha256,
-            None if resolved.format is None else resolved.format.value,
-            resolved.document_iri.value,
-            media_type,
-            parser_options.backend.value,
-            parser_options.preserve_source_map,
-            parser_options.collect_provenance,
+        media_type, parser_options, key = _parsed_document_context(
+            acquired,
+            resolved,
+            options,
         )
         cached = self._document_cache.get(key)
         if cached is not None:
@@ -960,6 +1056,36 @@ def _check_operation(
             observed=elapsed,
             allowed=deadline,
         )
+
+
+def _parsed_document_context(
+    acquired: AcquiredImport,
+    resolved: ResolvedDocument,
+    options: LoadOptions,
+) -> tuple[str | None, LoadOptions, tuple[object, ...]]:
+    media_type = resolved.provenance.get("media_type") or None
+    parser_options = replace(options, format=None)
+    return (
+        media_type,
+        parser_options,
+        (
+            acquired.source_sha256,
+            None if resolved.format is None else resolved.format.value,
+            resolved.document_iri.value,
+            media_type,
+            parser_options.backend.value,
+            parser_options.preserve_source_map,
+            parser_options.collect_provenance,
+        ),
+    )
+
+
+def _parsed_document_key(
+    acquired: AcquiredImport,
+    resolved: ResolvedDocument,
+    options: LoadOptions,
+) -> tuple[object, ...]:
+    return _parsed_document_context(acquired, resolved, options)[2]
 
 
 def _check_expected(actual: bytes, expected: bytes | None) -> None:

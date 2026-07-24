@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -1070,33 +1071,133 @@ def test_resolver_built_closure_partial_parse_failure_publishes_no_owner(
         raise AssertionError("partially parsed closure reached retained-owner construction")
 
     monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", unexpected)
+    parse_document_native = cast(Any, extension).parse_document
     root = (
         b"Ontology(<urn:retained-partial:root> "
         b"Import(<urn:retained-partial:good>) "
         b"Import(<urn:retained-partial:malformed>) "
         b"Declaration(Class(<urn:retained-partial:Root>)))"
     )
-    resolver = MappingResolver(
-        {
-            "urn:retained-partial:good": (
-                b"Ontology(<urn:retained-partial:good> "
-                b"Declaration(Class(<urn:retained-partial:Good>)))"
-            ),
-            "urn:retained-partial:malformed": b"this is not an ontology document",
-        }
-    )
+    sources = {
+        "urn:retained-partial:good": (
+            b"Ontology(<urn:retained-partial:good> "
+            b"Declaration(Class(<urn:retained-partial:Good>)))"
+        ),
+        "urn:retained-partial:malformed": (
+            b"Ontology(<urn:retained-partial:malformed> this is not valid)"
+        ),
+    }
+    parse_barrier = threading.Barrier(len(sources))
+    thread_ids: set[int] = set()
+    thread_lock = threading.Lock()
+
+    def capture_parallel_parse(
+        request: object,
+        *arguments: object,
+        **keywords: object,
+    ) -> object:
+        assert isinstance(request, bytes)
+        matches = tuple(source for source in sources.values() if request.endswith(source))
+        assert len(matches) == 1
+        with thread_lock:
+            thread_ids.add(threading.get_ident())
+        parse_barrier.wait(timeout=5)
+        return parse_document_native(request, *arguments, **keywords)
+
+    monkeypatch.setattr(cast(Any, extension), "parse_document", capture_parallel_parse)
+    resolver = MappingResolver(sources)
 
     with pytest.raises(ParseError):
-        load_snapshot(
+        SnapshotLoader(
+            acquisition_cache=AcquisitionCache(),
+            document_cache=ParsedDocumentCache(),
+        ).load(
             root,
             options=LoadOptions(
                 format=DocumentFormat.FUNCTIONAL,
                 imports=ImportPolicy.RESOLVE_LOCAL,
                 backend=BackendPreference.NATIVE,
+                limits=replace(ParseLimits(), max_concurrent_fetches=2),
             ),
             resolver=resolver,
         )
 
+    assert len(thread_ids) == len(sources) == 2
+    assert owner_calls == 0
+
+
+def test_parallel_resolved_functional_parse_cancellation_publishes_no_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-parallel-cancel:root> "
+        b"Import(<urn:retained-parallel-cancel:left>) "
+        b"Import(<urn:retained-parallel-cancel:right>) "
+        b"Declaration(Class(<urn:retained-parallel-cancel:Root>)))"
+    )
+    children = {
+        "urn:retained-parallel-cancel:left": (
+            b"Ontology(<urn:retained-parallel-cancel:left> "
+            b"Declaration(Class(<urn:retained-parallel-cancel:Left>)))"
+        ),
+        "urn:retained-parallel-cancel:right": (
+            b"Ontology(<urn:retained-parallel-cancel:right> "
+            b"Declaration(Class(<urn:retained-parallel-cancel:Right>)))"
+        ),
+    }
+    child_sources = frozenset(children.values())
+    parse_barrier = threading.Barrier(len(child_sources))
+    thread_ids: set[int] = set()
+    thread_lock = threading.Lock()
+    cancellation = CancellationSource()
+    parse_document_native = cast(Any, extension).parse_document
+
+    def cancel_parallel_parse(
+        request: object,
+        *arguments: object,
+        **keywords: object,
+    ) -> object:
+        assert isinstance(request, bytes)
+        matches = tuple(source for source in child_sources if request.endswith(source))
+        assert len(matches) == 1
+        with thread_lock:
+            thread_ids.add(threading.get_ident())
+        parse_barrier.wait(timeout=5)
+        cancellation.cancel("parallel import parse cancelled")
+        return parse_document_native(request, *arguments, **keywords)
+
+    owner_calls = 0
+
+    def unexpected_owner(*_arguments: object, **_keywords: object) -> object:
+        nonlocal owner_calls
+        owner_calls += 1
+        raise AssertionError("cancelled parallel parse reached owner publication")
+
+    monkeypatch.setattr(cast(Any, extension), "parse_document", cancel_parallel_parse)
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_retain_structural_snapshot_v2",
+        unexpected_owner,
+    )
+
+    with pytest.raises(OperationCancelledError, match="parallel import parse cancelled"):
+        SnapshotLoader(
+            acquisition_cache=AcquisitionCache(),
+            document_cache=ParsedDocumentCache(),
+        ).load(
+            root,
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.RESOLVE_LOCAL,
+                backend=BackendPreference.NATIVE,
+                limits=replace(ParseLimits(), max_concurrent_fetches=2),
+            ),
+            resolver=MappingResolver(children),
+            cancellation_token=cancellation.token,
+        )
+
+    assert len(thread_ids) == len(child_sources) == 2
     assert owner_calls == 0
 
 
@@ -1142,6 +1243,7 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
             backend=backend,
             collect_provenance=collect_provenance,
             preserve_source_map=preserve_source_map,
+            limits=replace(ParseLimits(), max_concurrent_fetches=2),
         )
 
     reference = load_snapshot(
@@ -1149,23 +1251,45 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         options=options(BackendPreference.PYTHON),
         resolver=MappingResolver(sources),
     )
+    sequential = SnapshotLoader(
+        acquisition_cache=AcquisitionCache(),
+        document_cache=ParsedDocumentCache(),
+    ).load(
+        root,
+        options=replace(
+            options(BackendPreference.NATIVE),
+            limits=replace(ParseLimits(), max_concurrent_fetches=1),
+        ),
+        resolver=MappingResolver(sources),
+    )
     parse_document_native = cast(Any, extension).parse_document
     parse_retained = cast(Any, extension)._parse_functional_retained_v2
     parsed_sources: list[bytes] = []
     expected_sources = (root, *sources.values())
+    parallel_sources = frozenset(
+        (sources["urn:retained-closure:left"], sources["urn:retained-closure:right"])
+    )
+    parallel_barrier = threading.Barrier(len(parallel_sources))
+    parallel_thread_ids: set[int] = set()
+    parallel_thread_lock = threading.Lock()
 
-    def record_source(request: object) -> None:
+    def record_source(request: object) -> bytes:
         assert isinstance(request, bytes)
         matches = tuple(source for source in expected_sources if request.endswith(source))
         assert len(matches) == 1
         parsed_sources.append(matches[0])
+        return matches[0]
 
     def capture_document_parse(
         request: object,
         *arguments: object,
         **keywords: object,
     ) -> object:
-        record_source(request)
+        source = record_source(request)
+        if source in parallel_sources:
+            with parallel_thread_lock:
+                parallel_thread_ids.add(threading.get_ident())
+            parallel_barrier.wait(timeout=5)
         return parse_document_native(request, *arguments, **keywords)
 
     def capture_retained_parse(
@@ -1230,10 +1354,17 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     assert selected.signature_fingerprint == reference.signature_fingerprint
     assert selected.origin_index == reference.origin_index
     assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert selected.import_manifest == sequential.import_manifest
+    assert selected.structural_fingerprint == sequential.structural_fingerprint
+    assert selected.logical_fingerprint == sequential.logical_fingerprint
+    assert selected.signature_fingerprint == sequential.signature_fingerprint
+    assert selected.origin_index == sequential.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(sequential)
     assert selected.report.acquisition_cache_hits == 1
     assert selected.report.document_cache_hits == 1
     assert len(parsed_sources) == len(expected_sources) == 4
     assert all(parsed_sources.count(source) == 1 for source in expected_sources)
+    assert len(parallel_thread_ids) == len(parallel_sources) == 2
 
     assert len(cast(tuple[object, ...], captured["documents"])) == 4
     reference_origin_rows = sum(
