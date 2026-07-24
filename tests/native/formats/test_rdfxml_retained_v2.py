@@ -1380,6 +1380,48 @@ def test_xml_literal_forms_publish_from_the_retained_parser_owner(
     assert counters.publication_structural_bytes_copied == 0
 
 
+def test_guarded_public_rdfxml_route_publishes_the_retained_owner(
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(
+        NO_IMPORT_SOURCE,
+        document_iri=DOCUMENT_IRI,
+        options=_options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("guarded public RDF/XML route crossed the Python parser")
+    with (
+        patch(
+            "pyowl_core.backends.parser._NativeBackendDriver.select",
+            autospec=True,
+            return_value="native",
+        ),
+        patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected),
+    ):
+        selected = cast(
+            Any,
+            load_snapshot(
+                NO_IMPORT_SOURCE,
+                document_iri=DOCUMENT_IRI,
+                options=_options(BackendPreference.NATIVE),
+            ),
+        )
+
+    owner = selected._native_snapshot_state.owner.handle._owner_v2
+    counters = owner._publication_counters_v2()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+    assert type(owner) is cast(Any, extension)._NativeSnapshotHandle
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.root.axioms == reference.root.axioms
+    assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert counters.parser_bytes == len(NO_IMPORT_SOURCE)
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
+
+
 def test_rdfxml_capability_remains_absent_and_public_dispatch_does_not_fallback(
     extension: NativeTestExtension,
 ) -> None:

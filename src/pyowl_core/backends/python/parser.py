@@ -88,6 +88,21 @@ class _BackendDriver(Protocol):
         materialize_document: bool,
     ) -> _ParsedPayloadResult: ...
 
+    def parse_rdfxml(
+        self,
+        data: bytes,
+        *,
+        document_iri: IRI | None,
+        limits: ParseLimits,
+        cancellation_token: CancellationToken | None,
+        allow_partial_rdf_mapping: bool,
+        allow_swrl: bool,
+        retain_native_storage: bool,
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        require_empty_imports: bool,
+    ) -> _ParsedPayloadResult: ...
+
     def publish_retained_functional(
         self,
         summary: bytes,
@@ -103,6 +118,24 @@ class _BackendDriver(Protocol):
         cancellation_token: CancellationToken | None,
         load_started: float,
         root_parse_started: float,
+    ) -> OntologySnapshot: ...
+
+    def publish_retained_rdfxml(
+        self,
+        summary: bytes,
+        *,
+        parsed_native_storage: object,
+        phase_timings: tuple[tuple[str, float], ...],
+        payload: SourcePayload,
+        detection: FormatDetection,
+        document_iri: IRI | None,
+        media_type: str | None,
+        options: LoadOptions,
+        resolver: ImportResolver | None,
+        cancellation_token: CancellationToken | None,
+        load_started: float,
+        root_parse_started: float,
+        allow_partial_rdf_mapping: bool,
     ) -> OntologySnapshot: ...
 
     def decode_functional(
@@ -256,20 +289,39 @@ class PythonParser:
                 or backend_driver is None
             ):
                 raise AssertionError("retained native result has no publication context")
-            snapshot = backend_driver.publish_retained_functional(
-                parsed_result.native_summary,
-                parsed_native_storage=parsed_result.native_storage,
-                phase_timings=parsed_result.phase_timings,
-                payload=payload,
-                detection=detection,
-                document_iri=effective_iri,
-                media_type=media_type,
-                options=selected_options,
-                resolver=retained_resolver,
-                cancellation_token=cancellation_token,
-                load_started=retained_load_started,
-                root_parse_started=retained_root_parse_started,
-            )
+            if detection.format is DocumentFormat.FUNCTIONAL:
+                snapshot = backend_driver.publish_retained_functional(
+                    parsed_result.native_summary,
+                    parsed_native_storage=parsed_result.native_storage,
+                    phase_timings=parsed_result.phase_timings,
+                    payload=payload,
+                    detection=detection,
+                    document_iri=effective_iri,
+                    media_type=media_type,
+                    options=selected_options,
+                    resolver=retained_resolver,
+                    cancellation_token=cancellation_token,
+                    load_started=retained_load_started,
+                    root_parse_started=retained_root_parse_started,
+                )
+            elif detection.format is DocumentFormat.RDF_XML:
+                snapshot = backend_driver.publish_retained_rdfxml(
+                    parsed_result.native_summary,
+                    parsed_native_storage=parsed_result.native_storage,
+                    phase_timings=parsed_result.phase_timings,
+                    payload=payload,
+                    detection=detection,
+                    document_iri=effective_iri,
+                    media_type=media_type,
+                    options=selected_options,
+                    resolver=retained_resolver,
+                    cancellation_token=cancellation_token,
+                    load_started=retained_load_started,
+                    root_parse_started=retained_root_parse_started,
+                    allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+                )
+            else:
+                raise AssertionError("retained native result has an unsupported document format")
             return _ParsedDocumentResult(None, snapshot=snapshot)
         if parsed_result.native_encoded is not None:
             if backend_driver is None:
@@ -556,6 +608,21 @@ def _parse_payload(
                 )
             )
         if format is DocumentFormat.RDF_XML:
+            if backend == "native":
+                if backend_driver is None:
+                    raise AssertionError("native selection has no backend driver")
+                return backend_driver.parse_rdfxml(
+                    data,
+                    document_iri=document_iri,
+                    limits=limits,
+                    cancellation_token=cancellation_token,
+                    allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+                    allow_swrl=allow_swrl,
+                    retain_native_storage=retain_native_storage,
+                    collect_provenance=collect_provenance,
+                    preserve_source_map=preserve_source_map,
+                    require_empty_imports=require_empty_imports,
+                )
             return _ParsedPayloadResult(
                 parse_rdfxml(
                     data,

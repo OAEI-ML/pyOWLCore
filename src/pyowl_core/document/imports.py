@@ -336,7 +336,12 @@ def _prepare_retained_native_root(options: LoadOptions) -> bool:
     return (
         options.backend in {BackendPreference.AUTO, BackendPreference.NATIVE}
         and not options.validate_owl2_dl
-        and options.format in {None, DocumentFormat.FUNCTIONAL}
+        and options.format
+        in {
+            None,
+            DocumentFormat.FUNCTIONAL,
+            DocumentFormat.RDF_XML,
+        }
     )
 
 
