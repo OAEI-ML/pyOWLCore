@@ -1609,6 +1609,140 @@ def test_rdf_mapping_rejects_ambiguous_detached_datatype_complement() -> None:
     assert raised.value.code == "RDF_MAPPING_CARDINALITY"
 
 
+def test_rdf_mapping_consumes_detached_data_enumeration() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdfs:Datatype rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first>one</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 4
+    assert document.rdf_mapping_report.consumed_triples == 4
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert len(document.axioms) == 0
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        f"""
+  <rdf:Description rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first>one</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+        f"""
+  <rdfs:Datatype rdf:about="urn:range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first>one</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+        f"""
+  <owl:DataRange rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </owl:DataRange>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first>one</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+    ),
+)
+def test_rdf_mapping_rejects_unestablished_detached_data_enumeration(body: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        f"""
+  <rdfs:Datatype rdf:nodeID="range">
+    <owl:oneOf rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdfs:Datatype>
+""",
+        f"""
+  <rdfs:Datatype rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:resource="urn:value"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+        f"""
+  <rdfs:Datatype rdf:nodeID="range">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#DataRange"/>
+    <owl:oneOf rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first>one</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+    ),
+)
+def test_rdf_mapping_rejects_invalid_detached_data_enumeration(body: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
+def test_rdf_mapping_rejects_ambiguous_detached_data_enumeration() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdfs:Datatype rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="left"/>
+    <owl:oneOf rdf:nodeID="right"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="left">
+    <rdf:first>left</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="right">
+    <rdf:first>right</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_CARDINALITY"
+
+
 def test_rdf_mapping_enforces_the_distinct_ontology_annotation_limit() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
