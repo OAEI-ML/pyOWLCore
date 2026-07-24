@@ -343,6 +343,38 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     )
     assert structural_bridge["boundary_successes"] == 1
     assert structural_bridge["scope"]
+    finalization_bridge = sweep["retained_finalization_bridge"]
+    assert finalization_bridge["allocation_checkpoints"] == 2
+    assert (
+        finalization_bridge["injected_failures"]
+        == finalization_bridge["allocation_checkpoints"]
+    )
+    assert finalization_bridge["boundary_successes"] == 1
+    assert finalization_bridge["scope"]
+    retained_view_bridge = sweep["retained_view_layout_bridge"]
+    view_operations = {
+        operation["name"]: operation for operation in retained_view_bridge["operations"]
+    }
+    assert {
+        name: operation["allocation_checkpoints"]
+        for name, operation in view_operations.items()
+    } == {
+        "signature": 15,
+        "ontology-identity": 10,
+        "axiom-type": 13,
+        "axiom-type-binding": 2,
+        "axiom-type-canonical-sizes": 1,
+        "axiom-type-page": 1,
+    }
+    assert retained_view_bridge["allocation_checkpoints"] == sum(
+        operation["allocation_checkpoints"] for operation in view_operations.values()
+    )
+    assert (
+        retained_view_bridge["injected_failures"]
+        == retained_view_bridge["allocation_checkpoints"]
+    )
+    assert retained_view_bridge["boundary_successes"] == len(view_operations)
+    assert retained_view_bridge["scope"]
     index_bridge = sweep["index_bridge"]
     assert index_bridge["allocation_checkpoints"] == 13
     assert index_bridge["injected_failures"] == index_bridge["allocation_checkpoints"]
@@ -367,6 +399,8 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + rdfxml_bridge["allocation_checkpoints"]
         + preparation_bridge["allocation_checkpoints"]
         + structural_bridge["allocation_checkpoints"]
+        + finalization_bridge["allocation_checkpoints"]
+        + retained_view_bridge["allocation_checkpoints"]
         + index_bridge["allocation_checkpoints"]
         + foundation_bridge["allocation_checkpoints"]
     )
@@ -383,6 +417,8 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + rdfxml_bridge["boundary_successes"]
         + preparation_bridge["boundary_successes"]
         + structural_bridge["boundary_successes"]
+        + finalization_bridge["boundary_successes"]
+        + retained_view_bridge["boundary_successes"]
         + index_bridge["boundary_successes"]
         + foundation_bridge["boundary_successes"]
     )
@@ -421,6 +457,11 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         release["native_retained_structural_python_bridge_allocation_failures"]
         == "local-pass"
     )
+    assert (
+        release["native_retained_finalization_python_bridge_allocation_failures"]
+        == "local-pass"
+    )
+    assert release["native_retained_view_layout_allocation_failures"] == "local-pass"
     assert release["native_index_python_bridge_allocation_failures"] == "local-pass"
     assert release["native_foundation_python_bridge_allocation_failures"] == "local-pass"
     assert release["end_to_end_allocation_failure_matrix"] == "not-run"
