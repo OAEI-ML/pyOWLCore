@@ -417,6 +417,9 @@ def retained_view_layout_bridge_extension(
         "_retained_signature_layout_bridge_allocation_probe_v1",
         "_retained_identity_layout_bridge_allocation_probe_v1",
         "_retained_axiom_type_layout_bridge_allocation_probe_v1",
+        "_retained_axiom_type_binding_bridge_allocation_probe_v1",
+        "_retained_axiom_type_sizes_bridge_allocation_probe_v1",
+        "_retained_axiom_type_page_bridge_allocation_probe_v1",
     )
     missing = tuple(name for name in required if not hasattr(extension, name))
     if missing:
@@ -452,6 +455,16 @@ def test_retained_view_layout_bridge_failures_publish_no_layout(
     )
     config = bytearray(native._encode_config(ParseLimits(), None, verify=False))
     original_config = bytes(config)
+    axiom_layout, _axiom_allocations = (
+        extension._retained_axiom_type_layout_bridge_allocation_probe_v1(
+            owner,
+            "closure",
+            None,
+            memoryview(config),
+            None,
+        )
+    )
+    first_tag = cast(tuple[int, ...], cast(tuple[object, ...], axiom_layout)[0])[0]
     cases: tuple[tuple[str, Any, tuple[object, ...], int, int], ...] = (
         (
             "signature",
@@ -473,6 +486,36 @@ def test_retained_view_layout_bridge_failures_publish_no_layout(
             (owner, "closure", None, memoryview(config)),
             13,
             6,
+        ),
+        (
+            "axiom-type-binding",
+            extension._retained_axiom_type_binding_bridge_allocation_probe_v1,
+            (owner, "closure", None, memoryview(config)),
+            2,
+            2,
+        ),
+        (
+            "axiom-type-canonical-sizes",
+            extension._retained_axiom_type_sizes_bridge_allocation_probe_v1,
+            (owner, "closure", None, memoryview(config)),
+            1,
+            2,
+        ),
+        (
+            "axiom-type-page",
+            extension._retained_axiom_type_page_bridge_allocation_probe_v1,
+            (
+                owner,
+                "closure",
+                None,
+                memoryview(config),
+                first_tag,
+                0,
+                64,
+                1 << 20,
+            ),
+            1,
+            3,
         ),
     )
 

@@ -159,6 +159,37 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[object, int]: ...
 
+    def _retained_axiom_type_binding_bridge_allocation_probe_v1(
+        self,
+        handle: object,
+        scope: str,
+        document_ordinal: int | None,
+        config: object,
+        fail_after: int | None = None,
+    ) -> tuple[object, int]: ...
+
+    def _retained_axiom_type_sizes_bridge_allocation_probe_v1(
+        self,
+        handle: object,
+        scope: str,
+        document_ordinal: int | None,
+        config: object,
+        fail_after: int | None = None,
+    ) -> tuple[object, int]: ...
+
+    def _retained_axiom_type_page_bridge_allocation_probe_v1(
+        self,
+        handle: object,
+        scope: str,
+        document_ordinal: int | None,
+        config: object,
+        tag: int,
+        start: int,
+        max_rows: int,
+        max_bytes: int,
+        fail_after: int | None = None,
+    ) -> tuple[object, int]: ...
+
 
 def load_extension() -> NativeTestExtension:
     """Load an installed extension or an explicitly supplied developer build."""

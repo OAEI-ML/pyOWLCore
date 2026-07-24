@@ -140,6 +140,18 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
             _retained_axiom_type_layout_bridge_allocation_probe_v1,
             _module
         )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_axiom_type_binding_bridge_allocation_probe_v1,
+            _module
+        )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_axiom_type_sizes_bridge_allocation_probe_v1,
+            _module
+        )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_axiom_type_page_bridge_allocation_probe_v1,
+            _module
+        )?)?;
     }
     Ok(())
 }
@@ -364,17 +376,14 @@ type PyRetainedAxiomTypeLayoutV1 = (
 
 #[pymethods]
 impl NativeRetainedAxiomTypeIndexV1 {
-    fn _binding_v1<'py>(&self, py: Python<'py>) -> (Py<PyBytes>, Py<PyBytes>) {
-        let (root_table_sha256, effective_root_table_sha256) =
-            self.storage.retained_axiom_type_binding_v1();
-        (
-            PyBytes::new(py, root_table_sha256).unbind(),
-            PyBytes::new(py, effective_root_table_sha256).unbind(),
-        )
+    fn _binding_v1<'py>(&self, py: Python<'py>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        retained_axiom_type_binding_to_python(py, self, &mut allocations)
     }
 
     fn _canonical_sizes_v1<'py>(&self, py: Python<'py>) -> PyResult<Py<PyTuple>> {
-        Ok(PyTuple::new(py, self.index.canonical_sizes().iter().copied())?.unbind())
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        retained_axiom_type_sizes_to_python(py, self, &mut allocations)
     }
 
     fn _layout_v1<'py>(&self, py: Python<'py>) -> PyResult<PyRetainedAxiomTypeLayoutV1> {
@@ -408,13 +417,50 @@ impl NativeRetainedAxiomTypeIndexV1 {
                 Some(interrupt),
             )
         })?;
-        let rows = PyTuple::new(
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        retained_axiom_type_page_to_python(
             py,
-            page.rows.iter().map(|row| PyBytes::new(py, row).unbind()),
-        )?
-        .unbind();
-        Ok((rows, page.total_count, page.next_cursor))
+            &page.rows,
+            page.total_count,
+            page.next_cursor,
+            &mut allocations,
+        )
     }
+}
+
+fn retained_axiom_type_binding_to_python<'py>(
+    py: Python<'py>,
+    owner: &NativeRetainedAxiomTypeIndexV1,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+    let (root_table_sha256, effective_root_table_sha256) =
+        owner.storage.retained_axiom_type_binding_v1();
+    allocations.checkpoint()?;
+    let root_table_sha256 = PyBytes::new(py, root_table_sha256).unbind();
+    allocations.checkpoint()?;
+    let effective_root_table_sha256 = PyBytes::new(py, effective_root_table_sha256).unbind();
+    Ok((root_table_sha256, effective_root_table_sha256))
+}
+
+fn retained_axiom_type_sizes_to_python<'py>(
+    py: Python<'py>,
+    owner: &NativeRetainedAxiomTypeIndexV1,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Py<PyTuple>> {
+    allocations.checkpoint()?;
+    Ok(PyTuple::new(py, owner.index.canonical_sizes().iter().copied())?.unbind())
+}
+
+fn retained_axiom_type_page_to_python<'py>(
+    py: Python<'py>,
+    rows: &[Vec<u8>],
+    total_count: u64,
+    next_cursor: Option<u64>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<(Py<PyTuple>, u64, Option<u64>)> {
+    allocations.checkpoint()?;
+    let rows = PyTuple::new(py, rows.iter().map(|row| PyBytes::new(py, row).unbind()))?.unbind();
+    Ok((rows, total_count, next_cursor))
 }
 
 fn retained_axiom_type_layout_to_python<'py>(
@@ -557,6 +603,100 @@ fn _retained_axiom_type_layout_bridge_allocation_probe_v1<'py>(
     );
     let layout = retained_axiom_type_layout_to_python(py, &owner, &mut allocations)?;
     Ok((layout, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, fail_after=None))]
+fn _retained_axiom_type_binding_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<((Py<PyBytes>, Py<PyBytes>), u64)> {
+    let owner = _retained_axiom_type_index_v1(py, handle, scope, document_ordinal, config, None)?;
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-view layout bridge allocation failure",
+    );
+    let binding = retained_axiom_type_binding_to_python(py, &owner, &mut allocations)?;
+    Ok((binding, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, fail_after=None))]
+fn _retained_axiom_type_sizes_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyTuple>, u64)> {
+    let owner = _retained_axiom_type_index_v1(py, handle, scope, document_ordinal, config, None)?;
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-view layout bridge allocation failure",
+    );
+    let sizes = retained_axiom_type_sizes_to_python(py, &owner, &mut allocations)?;
+    Ok((sizes, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    handle,
+    scope,
+    document_ordinal,
+    config,
+    tag,
+    start,
+    max_rows,
+    max_bytes,
+    fail_after=None
+))]
+fn _retained_axiom_type_page_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    tag: u16,
+    start: u64,
+    max_rows: u32,
+    max_bytes: u64,
+    fail_after: Option<u64>,
+) -> PyResult<((Py<PyTuple>, u64, Option<u64>), u64)> {
+    let owner = _retained_axiom_type_index_v1(py, handle, scope, document_ordinal, config, None)?;
+    let limits = crate::limits_from_python(config)?;
+    let index = Arc::clone(&owner.index);
+    let page = crate::run_detached(py, move |interrupt| {
+        index.constructor_page(
+            tag,
+            start,
+            max_rows,
+            max_bytes,
+            &limits,
+            crate::cancel::Cancellation::with_duration(None),
+            Some(interrupt),
+        )
+    })?;
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-view layout bridge allocation failure",
+    );
+    let output = retained_axiom_type_page_to_python(
+        py,
+        &page.rows,
+        page.total_count,
+        page.next_cursor,
+        &mut allocations,
+    )?;
+    Ok((output, allocations.count()))
 }
 
 /// Exercise raw document-owner selection without relaxing the snapshot
