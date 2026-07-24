@@ -654,6 +654,27 @@ impl FrozenTypedFacadeFixture {
 }
 
 impl TypedFacadeReadFixture {
+    /// Build and consume the direct encoded structural columns selected by
+    /// this owner role while allocation injection is armed.
+    pub fn encoded_columns(&self) -> Result<[u64; 12], Failure> {
+        let columns = self.storage.encoded_structural_columns(
+            self.coordinate.scope,
+            self.coordinate.document_ordinal,
+            self.raw_document_owner,
+            &Limits::default(),
+            self.cancellation.clone(),
+            None,
+        )?;
+        let buffers = columns.buffers().named();
+        let mut summary = [0_u64; 12];
+        for (index, (_name, buffer)) in buffers.iter().enumerate() {
+            summary[index] = u64::try_from(buffer.len())
+                .map_err(|_| NativeError::limit("native allocator encoded buffer exceeds u64"))?;
+        }
+        summary[11] = u64::from(crc32c(buffers[10].1));
+        Ok(summary)
+    }
+
     /// Allocate and encode one bounded page, returning an allocation-free
     /// correctness and counter summary.
     pub fn page(&self) -> Result<[u64; 10], Failure> {

@@ -374,6 +374,7 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
     );
 
     let mut effective_page_baseline = None;
+    let mut effective_encoded_columns_baseline = None;
     for prepare in [
         ComponentEncodingFixture::prepare_typed_facade_reads
             as fn(&ComponentEncodingFixture) -> Result<TypedFacadeReadFixture, Failure>,
@@ -436,9 +437,47 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
         })
         .expect("first non-failing typed facade contains boundary must match");
         assert_eq!(boundary_typed_contains, baseline_typed_contains);
+
+        let typed_encoded_columns =
+            prepare(&component).expect("typed encoded-column fixture must prepare");
+        let (baseline_typed_encoded_columns, typed_encoded_column_allocations) =
+            count_allocations(|| typed_encoded_columns.encoded_columns());
+        let baseline_typed_encoded_columns =
+            baseline_typed_encoded_columns.expect("typed encoded-column baseline must publish");
+        assert!(baseline_typed_encoded_columns[..11]
+            .iter()
+            .any(|length| *length > 0));
+        if let Some(expected) = effective_encoded_columns_baseline {
+            assert_eq!(baseline_typed_encoded_columns, expected);
+        } else {
+            effective_encoded_columns_baseline = Some(baseline_typed_encoded_columns);
+        }
+        assert!(typed_encoded_column_allocations > 1);
+
+        for fail_after in 0..typed_encoded_column_allocations {
+            let typed_encoded_columns = prepare(&component)
+                .expect("typed encoded-column fixture must prepare for rejection");
+            let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+                typed_encoded_columns.encoded_columns()
+            }));
+            assert!(failure.message.contains("allocation failed"));
+        }
+        let typed_encoded_columns =
+            prepare(&component).expect("typed encoded-column boundary fixture must prepare");
+        let boundary_typed_encoded_columns =
+            fail_allocation(typed_encoded_column_allocations, || {
+                typed_encoded_columns.encoded_columns()
+            })
+            .expect("first non-failing typed encoded-column boundary must publish");
+        assert_eq!(
+            boundary_typed_encoded_columns,
+            baseline_typed_encoded_columns
+        );
     }
     let baseline_typed_page =
         effective_page_baseline.expect("effective typed facade page baseline must exist");
+    let baseline_typed_encoded_columns = effective_encoded_columns_baseline
+        .expect("effective typed encoded-column baseline must exist");
 
     let typed_raw_page =
         ComponentEncodingFixture::prepare_typed_facade_raw_reads(&canonical, &effective_canonical)
@@ -506,6 +545,43 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
     })
     .expect("first non-failing typed raw facade contains boundary must match");
     assert_eq!(boundary_typed_raw_contains, baseline_typed_raw_contains);
+
+    let typed_raw_encoded_columns =
+        ComponentEncodingFixture::prepare_typed_facade_raw_reads(&canonical, &effective_canonical)
+            .expect("typed raw encoded-column fixture must prepare");
+    let (baseline_typed_raw_encoded_columns, typed_raw_encoded_column_allocations) =
+        count_allocations(|| typed_raw_encoded_columns.encoded_columns());
+    let baseline_typed_raw_encoded_columns =
+        baseline_typed_raw_encoded_columns.expect("typed raw encoded-column baseline must publish");
+    assert_eq!(
+        baseline_typed_raw_encoded_columns,
+        baseline_typed_encoded_columns
+    );
+    assert!(typed_raw_encoded_column_allocations > 1);
+
+    for fail_after in 0..typed_raw_encoded_column_allocations {
+        let typed_raw_encoded_columns = ComponentEncodingFixture::prepare_typed_facade_raw_reads(
+            &canonical,
+            &effective_canonical,
+        )
+        .expect("typed raw encoded-column fixture must prepare for rejection");
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+            typed_raw_encoded_columns.encoded_columns()
+        }));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let typed_raw_encoded_columns =
+        ComponentEncodingFixture::prepare_typed_facade_raw_reads(&canonical, &effective_canonical)
+            .expect("typed raw encoded-column boundary fixture must prepare");
+    let boundary_typed_raw_encoded_columns =
+        fail_allocation(typed_raw_encoded_column_allocations, || {
+            typed_raw_encoded_columns.encoded_columns()
+        })
+        .expect("first non-failing typed raw encoded-column boundary must publish");
+    assert_eq!(
+        boundary_typed_raw_encoded_columns,
+        baseline_typed_raw_encoded_columns
+    );
 
     let typed_axiom_type = component
         .prepare_typed_facade_indexes()
