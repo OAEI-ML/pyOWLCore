@@ -19,11 +19,12 @@ from pyowl_core import (
 from pyowl_core.backends import native
 from pyowl_core.backends.native_handoff_v2 import (
     NativeFacadeCollectionV2,
+    NativeFacadeContainsRequestV2,
     NativeFacadePageRequestV2,
     NativeFacadeScopeV2,
 )
 from pyowl_core.backends.native_ingestion import _publish_structural_snapshot_v2
-from pyowl_core.model import StructuralNode, constructor_spec
+from pyowl_core.model import IRI, Class, Declaration, StructuralNode, constructor_spec
 from tests.generated.model.fixtures import model_fixtures
 from tests.native.foundation._support import NativeTestExtension, load_extension
 from tests.native.publication_handoff._support_v2 import (
@@ -434,6 +435,8 @@ def retained_view_layout_bridge_extension(
         "_retained_document_attestation_bridge_allocation_probe_v1",
         "_retained_snapshot_page_bridge_allocation_probe_v1",
         "_retained_document_page_bridge_allocation_probe_v1",
+        "_retained_snapshot_contains_bridge_allocation_probe_v1",
+        "_retained_document_contains_bridge_allocation_probe_v1",
         "_retained_signature_layout_bridge_allocation_probe_v1",
         "_retained_identity_layout_bridge_allocation_probe_v1",
         "_retained_axiom_type_layout_bridge_allocation_probe_v1",
@@ -873,6 +876,154 @@ def test_retained_page_bridge_failures_publish_no_partial_result_or_counters(
         assert document._publication_counters_v2() == after_boundary
 
     document._publication_close_v2()
+    selected.close()
+    assert selected.closed
+
+
+def test_retained_contains_bridge_failures_publish_no_partial_counters(
+    retained_view_layout_bridge_extension: NativeTestExtension,
+) -> None:
+    extension = cast(Any, retained_view_layout_bridge_extension)
+    selected = cast(
+        Any,
+        load_snapshot(
+            b"Ontology(<urn:allocation:contains> "
+            b"Declaration(Class(<urn:allocation:contains:A>)))",
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.NATIVE,
+            ),
+        ),
+    )
+    typed_snapshot = object.__getattribute__(
+        selected._native_snapshot_state.owner.handle,
+        "_owner_v2",
+    )
+    typed_document = typed_snapshot._publication_document_v2(0)
+    typed_bound = typed_snapshot._publication_attestation_v2().max_facade_row_bytes
+
+    values, collections, summary = _validated_fixture()
+    preimages = fingerprint_preimages(values)
+    evidence = fingerprint_evidence(values, preimages)
+    published = publication(collections, values=values, preimages=preimages)
+    retained_snapshot = extension._publication_fixture_v2(
+        published.handle.attestation,
+        collections,
+        documents=published.documents,
+        report=published.report,
+        root_document_key=published.root_document_key,
+        load_options=published.load_options,
+        capability_bits=published.capability_bits,
+        fingerprint_evidence=evidence,
+        fingerprint_preimages=preimages,
+        facade_cardinality_summary=published.facade_cardinality_summary,
+        owl2_dl_report_summary=summary,
+    )
+    retained_document = retained_snapshot._publication_document_v2(0)
+    retained_bound = (
+        retained_snapshot._publication_attestation_v2().max_facade_row_bytes
+    )
+
+    def request(canonical: bytes, max_row_bytes: int) -> NativeFacadeContainsRequestV2:
+        return NativeFacadeContainsRequestV2(
+            collection=NativeFacadeCollectionV2.AXIOMS,
+            scope=NativeFacadeScopeV2.DOCUMENT,
+            document_ordinal=0,
+            canonical=canonical,
+            max_row_bytes=max_row_bytes,
+        )
+
+    typed_hit = request(
+        canonical_bytes(
+            Declaration(Class(IRI("urn:allocation:contains:A"))),
+        ),
+        typed_bound,
+    )
+    typed_miss = request(
+        canonical_bytes(
+            Declaration(Class(IRI("urn:allocation:contains:missing"))),
+        ),
+        typed_bound,
+    )
+    retained_hit = request(
+        canonical_bytes(Declaration(Class(IRI("urn:handoff:Class")))),
+        retained_bound,
+    )
+    retained_miss = request(
+        canonical_bytes(Declaration(Class(IRI("urn:handoff:missing")))),
+        retained_bound,
+    )
+    cases = (
+        (
+            extension._retained_snapshot_contains_bridge_allocation_probe_v1,
+            typed_snapshot,
+            typed_snapshot,
+            typed_document,
+            typed_hit,
+            True,
+        ),
+        (
+            extension._retained_document_contains_bridge_allocation_probe_v1,
+            typed_document,
+            typed_snapshot,
+            typed_document,
+            typed_miss,
+            False,
+        ),
+        (
+            extension._retained_snapshot_contains_bridge_allocation_probe_v1,
+            retained_snapshot,
+            retained_snapshot,
+            retained_document,
+            retained_hit,
+            True,
+        ),
+        (
+            extension._retained_document_contains_bridge_allocation_probe_v1,
+            retained_document,
+            retained_snapshot,
+            retained_document,
+            retained_miss,
+            False,
+        ),
+    )
+    for probe, owner, snapshot_owner, document_owner, contains_request, expected in cases:
+        before = snapshot_owner._publication_counters_v2()
+        found, allocations = probe(owner, contains_request, None)
+        assert found is expected
+        assert allocations == 2
+        after_success = snapshot_owner._publication_counters_v2()
+        assert after_success.contains_requests == before.contains_requests + 1
+        assert after_success.contains_hits == before.contains_hits + int(expected)
+        assert document_owner._publication_counters_v2() == after_success
+
+        for fail_after in range(allocations):
+            with pytest.raises(
+                MemoryError,
+                match=r"^injected native retained-contains bridge allocation failure$",
+            ):
+                probe(owner, contains_request, fail_after)
+            assert snapshot_owner._publication_counters_v2() == after_success
+            assert document_owner._publication_counters_v2() == after_success
+            assert snapshot_owner._publication_closed_v2() is False
+            assert document_owner._publication_closed_v2() is False
+
+        boundary_found, boundary_allocations = probe(
+            owner,
+            contains_request,
+            allocations,
+        )
+        assert boundary_found is expected
+        assert boundary_allocations == allocations
+        after_boundary = snapshot_owner._publication_counters_v2()
+        assert after_boundary.contains_requests == after_success.contains_requests + 1
+        assert after_boundary.contains_hits == after_success.contains_hits + int(expected)
+        assert document_owner._publication_counters_v2() == after_boundary
+
+    retained_document._publication_close_v2()
+    retained_snapshot._publication_close_v2()
+    typed_document._publication_close_v2()
     selected.close()
     assert selected.closed
 

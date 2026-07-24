@@ -130,6 +130,23 @@ impl NativeDocumentHandle {
             allocations,
         )
     }
+
+    pub(crate) fn contains_with_allocations(
+        &self,
+        py: Python<'_>,
+        request: &Bound<'_, PyAny>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<bool> {
+        let storage = self.require_v2()?;
+        self.require_open_v2(py, "native V2 document handle is closed")?;
+        storage.contains_with_allocations(
+            py,
+            request,
+            true,
+            Some(self.document_ordinal),
+            allocations,
+        )
+    }
 }
 
 #[pymethods]
@@ -174,9 +191,8 @@ impl NativeDocumentHandle {
         py: Python<'_>,
         request: &Bound<'_, PyAny>,
     ) -> PyResult<bool> {
-        let storage = self.require_v2()?;
-        self.require_open_v2(py, "native V2 document handle is closed")?;
-        storage.contains(py, request, true, Some(self.document_ordinal))
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.contains_with_allocations(py, request, &mut allocations)
     }
 
     fn _publication_counters_v2(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -298,6 +314,17 @@ impl NativeSnapshotHandle {
         self.require_open_v2(py, "native V2 snapshot handle is closed")?;
         storage.page_to_python_with_allocations(py, request, false, None, allocations)
     }
+
+    pub(crate) fn contains_with_allocations(
+        &self,
+        py: Python<'_>,
+        request: &Bound<'_, PyAny>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<bool> {
+        let storage = self.require_v2()?;
+        self.require_open_v2(py, "native V2 snapshot handle is closed")?;
+        storage.contains_with_allocations(py, request, false, None, allocations)
+    }
 }
 
 #[pymethods]
@@ -346,9 +373,8 @@ impl NativeSnapshotHandle {
         py: Python<'_>,
         request: &Bound<'_, PyAny>,
     ) -> PyResult<bool> {
-        let storage = self.require_v2()?;
-        self.require_open_v2(py, "native V2 snapshot handle is closed")?;
-        storage.contains(py, request, false, None)
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.contains_with_allocations(py, request, &mut allocations)
     }
 
     fn _publication_counters_v2(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {

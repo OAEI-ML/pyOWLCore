@@ -170,6 +170,16 @@ def _retained_document_page_bridge_allocation_probe_v1(
     request: NativeFacadePageRequestV2,
     fail_after: int | None = None,
 ) -> tuple[NativeFacadePageV2, int]: ...
+def _retained_snapshot_contains_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    request: NativeFacadeContainsRequestV2,
+    fail_after: int | None = None,
+) -> tuple[bool, int]: ...
+def _retained_document_contains_bridge_allocation_probe_v1(
+    handle: _NativeDocumentHandle,
+    request: NativeFacadeContainsRequestV2,
+    fail_after: int | None = None,
+) -> tuple[bool, int]: ...
 def _encoded_structural_workspace_allocation_probe_v1(
     handle: _NativeSnapshotHandle,
     scope: object,

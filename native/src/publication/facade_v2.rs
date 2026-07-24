@@ -998,17 +998,22 @@ impl PublicationStorageV2 {
         Ok(page)
     }
 
-    pub(super) fn contains(
+    pub(crate) fn contains_with_allocations(
         &self,
         py: Python<'_>,
         request: &Bound<'_, PyAny>,
         raw_document_owner: bool,
         fixed_document_ordinal: Option<u64>,
+        allocations: &mut crate::BridgeAllocationProbe,
     ) -> PyResult<bool> {
+        allocations.checkpoint()?;
         let handoff = py.import(HANDOFF_MODULE)?;
         require_exact_type(&handoff, "NativeFacadeContainsRequestV2", request)?;
-        let selected =
-            ContainsRequestV2::from_python(request, self.attestation.max_facade_row_bytes)?;
+        let selected = ContainsRequestV2::from_python(
+            request,
+            self.attestation.max_facade_row_bytes,
+            allocations,
+        )?;
         self.validate_request(
             selected.coordinate,
             selected.max_row_bytes,
@@ -2349,7 +2354,11 @@ struct ContainsRequestV2 {
 }
 
 impl ContainsRequestV2 {
-    fn from_python(value: &Bound<'_, PyAny>, attested_max_row_bytes: u64) -> PyResult<Self> {
+    fn from_python(
+        value: &Bound<'_, PyAny>,
+        attested_max_row_bytes: u64,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<Self> {
         // The Python dataclass is frozen only by convention: object.__setattr__
         // can still corrupt an exact instance. Read and bind the scalar limit
         // before inspecting or allocating attacker-controlled canonical data.
@@ -2405,6 +2414,7 @@ impl ContainsRequestV2 {
             include_builtins: true,
         };
         let mut owned = Vec::new();
+        allocations.checkpoint()?;
         owned
             .try_reserve_exact(bytes.len())
             .map_err(|_| PyMemoryError::new_err("native V2 contains allocation failed"))?;
@@ -4926,7 +4936,8 @@ request = handoff.NativeFacadeContainsRequestV2(
                 .try_into()
                 .map_err(|_| PyRuntimeError::new_err("canonical row length exceeds u64"))?;
 
-            let validated = ContainsRequestV2::from_python(&request, row_bound)?;
+            let mut allocations = crate::BridgeAllocationProbe::disabled();
+            let validated = ContainsRequestV2::from_python(&request, row_bound, &mut allocations)?;
             assert_eq!(validated.canonical.len() as u64, row_bound);
             assert_eq!(
                 globals
@@ -4943,7 +4954,7 @@ object.__setattr__(request, "canonical", canonical[:-1] + bytes([canonical[-1] ^
             )
             .expect("static Python mutation");
             py.run(mutate.as_c_str(), Some(&globals), None)?;
-            let error = ContainsRequestV2::from_python(&request, row_bound)
+            let error = ContainsRequestV2::from_python(&request, row_bound, &mut allocations)
                 .expect_err("mutated exact request must fail closed");
             assert!(error
                 .to_string()
@@ -4956,8 +4967,9 @@ object.__setattr__(request, "canonical", canonical[:-1] + bytes([canonical[-1] ^
                 1
             );
 
-            let wrong_bound = ContainsRequestV2::from_python(&request, row_bound + 1)
-                .expect_err("row-bound mismatch must precede canonical work");
+            let wrong_bound =
+                ContainsRequestV2::from_python(&request, row_bound + 1, &mut allocations)
+                    .expect_err("row-bound mismatch must precede canonical work");
             assert!(wrong_bound.to_string().contains("row bound"));
             globals.get_item("handoff")?.unwrap().setattr(
                 "decode_canonical",

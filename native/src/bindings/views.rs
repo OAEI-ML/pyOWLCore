@@ -192,6 +192,14 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
             _retained_document_page_bridge_allocation_probe_v1,
             _module
         )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_snapshot_contains_bridge_allocation_probe_v1,
+            _module
+        )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_document_contains_bridge_allocation_probe_v1,
+            _module
+        )?)?;
     }
     Ok(())
 }
@@ -814,6 +822,40 @@ fn _retained_document_page_bridge_allocation_probe_v1<'py>(
     );
     let page = handle.page_to_python_with_allocations(py, request, &mut allocations)?;
     Ok((page, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, request, fail_after=None))]
+fn _retained_snapshot_contains_bridge_allocation_probe_v1(
+    py: Python<'_>,
+    handle: PyRef<'_, NativeSnapshotHandle>,
+    request: &Bound<'_, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(bool, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-contains bridge allocation failure",
+    );
+    let found = handle.contains_with_allocations(py, request, &mut allocations)?;
+    Ok((found, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, request, fail_after=None))]
+fn _retained_document_contains_bridge_allocation_probe_v1(
+    py: Python<'_>,
+    handle: PyRef<'_, NativeDocumentHandle>,
+    request: &Bound<'_, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(bool, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-contains bridge allocation failure",
+    );
+    let found = handle.contains_with_allocations(py, request, &mut allocations)?;
+    Ok((found, allocations.count()))
 }
 
 #[cfg(feature = "test-hooks")]
