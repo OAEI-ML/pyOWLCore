@@ -219,7 +219,7 @@ pub(crate) fn parse_retained(
     preserve_source_map: bool,
     record_unresolved: bool,
     require_empty_imports: bool,
-    materialize_document: bool,
+    _materialize_document: bool,
 ) -> NativeResult<RetainedParseOutcome> {
     let parse_started = Instant::now();
     let parsed = functional::parse_functional(
@@ -236,8 +236,7 @@ pub(crate) fn parse_retained(
         });
     let contains_anonymous = retained::contains_anonymous(&parsed, &limits)?;
     let requires_full_result = import_diagnostics_exceed_publication_limit
-        || (require_empty_imports && !parsed.imports.is_empty())
-        || materialize_document;
+        || (require_empty_imports && !parsed.imports.is_empty());
     let encode_started = Instant::now();
     let (encoded, metadata, rows, effective_rows) = if requires_full_result {
         let encoded = parsed.encode(session)?;

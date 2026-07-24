@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -33,7 +34,12 @@ from pyowl_core import (
     load_snapshot,
 )
 from pyowl_core.backends import native, native_handoff_v2, native_ingestion
-from pyowl_core.exceptions import BackendProtocolError, ResourceLimitError
+from pyowl_core.exceptions import (
+    BackendProtocolError,
+    BackendUnavailableError,
+    NativeBackendUnavailableWarning,
+    ResourceLimitError,
+)
 from pyowl_core.model import canonical_bytes
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
 from tests.native.foundation._support import NativeTestExtension, load_extension
@@ -51,6 +57,11 @@ AUTO_SOURCE = (
 )
 ROOT = Path(__file__).parents[3]
 RUNNER = Path(__file__).with_name("_retained_load_runner.py")
+
+
+class _UnreadableFunctional(io.BytesIO):
+    def read(self, size: int | None = -1, /) -> bytes:
+        raise AssertionError("unsupported forced-native validation consumed its source")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -990,16 +1001,20 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
     )
     assert source_mapped.capabilities.backend == "native"
 
-    ineligible = load_snapshot(
-        SOURCE,
-        options=LoadOptions(
-            format=DocumentFormat.FUNCTIONAL,
-            imports=ImportPolicy.IGNORE,
-            backend=BackendPreference.NATIVE,
-            collect_provenance=True,
-            validate_owl2_dl=True,
-        ),
-    )
+    from pyowl_core.backends import dispatch
+
+    dispatch._reset_warnings_for_tests()
+    with pytest.warns(NativeBackendUnavailableWarning, match="OWL 2 DL"):
+        ineligible = load_snapshot(
+            SOURCE,
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.AUTO,
+                collect_provenance=True,
+                validate_owl2_dl=True,
+            ),
+        )
     assert ineligible.capabilities.backend == "python"
 
     imported = load_snapshot(
@@ -1007,7 +1022,7 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
         options=LoadOptions(
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.RESOLVE_LOCAL,
-            backend=BackendPreference.NATIVE,
+            backend=BackendPreference.AUTO,
             preserve_source_map=True,
             collect_provenance=True,
             validate_owl2_dl=True,
@@ -1027,6 +1042,27 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
     assert extension.INGESTION_FEATURES == ()
     assert "retained-structural-snapshot-v2" not in extension.FEATURES
     assert not imported.capabilities.encoded_view_schemas
+
+
+def test_forced_native_validation_is_rejected_before_source_acquisition() -> None:
+    source = _UnreadableFunctional(SOURCE)
+
+    with pytest.raises(
+        BackendUnavailableError,
+        match="validate-owl2-dl-v1",
+    ) as raised:
+        load_snapshot(
+            source,
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.NATIVE,
+                validate_owl2_dl=True,
+            ),
+        )
+
+    assert raised.value.code == "NATIVE_CAPABILITY_UNAVAILABLE"
+    assert source.tell() == 0
 
 
 @pytest.mark.parametrize("cancel_phase", ("entry", "canonical-row"))
@@ -1312,6 +1348,11 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         options=options(BackendPreference.PYTHON),
         resolver=MappingResolver(sources),
     )
+
+    def unexpected_decode(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("retained Functional closure crossed the complete model decoder")
+
+    monkeypatch.setattr(native, "_decode_parsed_functional", unexpected_decode)
     sequential = SnapshotLoader(
         acquisition_cache=AcquisitionCache(),
         document_cache=ParsedDocumentCache(),

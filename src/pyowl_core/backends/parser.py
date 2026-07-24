@@ -35,6 +35,23 @@ class _NativeBackendDriver:
 
     __slots__ = ()
 
+    def preflight_validation(
+        self,
+        preference: BackendPreference,
+    ) -> bool:
+        """Select complete validation before source acquisition."""
+
+        from pyowl_core.backends.dispatch import select_backend
+
+        return (
+            select_backend(
+                preference,
+                capability="validate-owl2-dl-v1",
+                operation="OWL 2 DL validated document load",
+            ).backend
+            == "python"
+        )
+
     def select(
         self,
         preference: BackendPreference,

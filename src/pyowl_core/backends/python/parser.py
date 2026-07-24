@@ -68,6 +68,11 @@ class _ParsedDocumentResult:
 class _BackendDriver(Protocol):
     """Backend-aware operations injected outside the pure Python package."""
 
+    def preflight_validation(
+        self,
+        preference: BackendPreference,
+    ) -> bool: ...
+
     def select(
         self,
         preference: BackendPreference,
@@ -231,8 +236,16 @@ class PythonParser:
         preselected_backend: str | None = None
         if (
             backend_driver is not None
+            and selected_options.validate_owl2_dl
+            and selected_options.backend is not BackendPreference.PYTHON
+            and backend_driver.preflight_validation(selected_options.backend)
+        ):
+            preselected_backend = "python"
+        if (
+            backend_driver is not None
             and selected_options.backend is BackendPreference.NATIVE
             and forced is not None
+            and preselected_backend is None
         ):
             # An explicitly formatted forced-native request has enough
             # information to prove capability before opening or reading the
@@ -289,6 +302,23 @@ class PythonParser:
                 )
             )
         )
+        materialize_functional_closure = (
+            not publish_native_document
+            and detection.format is DocumentFormat.FUNCTIONAL
+            and selected_backend == "native"
+            and (
+                materialize_native_document
+                or selected_options.imports
+                in {ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT}
+                or (
+                    selected_options.imports is ImportPolicy.RECORD_UNRESOLVED
+                    and retained_resolver is not None
+                )
+            )
+        )
+        materialize_structural_closure = (
+            materialize_rdfxml_closure or materialize_functional_closure
+        )
         retain_payload_storage = retain_native_storage or publish_rdfxml_document
         parsed_result = _parse_payload(
             payload.data,
@@ -306,6 +336,7 @@ class PythonParser:
             require_empty_imports=(
                 detection.format is not DocumentFormat.RDF_XML
                 and not publish_rdfxml_document
+                and not materialize_functional_closure
                 and (
                     selected_options.imports
                     in {ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT}
@@ -328,9 +359,7 @@ class PythonParser:
             ):
                 raise AssertionError("retained native result has no publication context")
             publication_storage = parsed_result.native_storage
-            if (
-                materialize_rdfxml_closure
-            ):
+            if materialize_structural_closure:
                 publication_storage = backend_driver.fork_retained_storage(
                     parsed_result.native_storage,
                     limits=selected_options.limits,
@@ -338,7 +367,7 @@ class PythonParser:
                 )
             publication_options = (
                 replace(selected_options, imports=ImportPolicy.IGNORE)
-                if publish_rdfxml_document or materialize_rdfxml_closure
+                if publish_rdfxml_document or materialize_structural_closure
                 else selected_options
             )
             if detection.format is DocumentFormat.FUNCTIONAL:
@@ -376,14 +405,28 @@ class PythonParser:
                 raise AssertionError("retained native result has an unsupported document format")
             if publish_rdfxml_document:
                 return _ParsedDocumentResult(snapshot.root)
-            if materialize_rdfxml_closure:
+            if materialize_structural_closure:
                 if not materialize_native_document and not snapshot.root.direct_imports:
                     close_snapshot = getattr(snapshot, "close", None)
                     if callable(close_snapshot):
                         close_snapshot()
-                    return _ParsedDocumentResult(
-                        None,
-                        snapshot=backend_driver.publish_retained_rdfxml(
+                    if detection.format is DocumentFormat.FUNCTIONAL:
+                        root_snapshot = backend_driver.publish_retained_functional(
+                            parsed_result.native_summary,
+                            parsed_native_storage=parsed_result.native_storage,
+                            phase_timings=parsed_result.phase_timings,
+                            payload=payload,
+                            detection=detection,
+                            document_iri=effective_iri,
+                            media_type=media_type,
+                            options=selected_options,
+                            resolver=retained_resolver,
+                            cancellation_token=cancellation_token,
+                            load_started=retained_load_started,
+                            root_parse_started=retained_root_parse_started,
+                        )
+                    else:
+                        root_snapshot = backend_driver.publish_retained_rdfxml(
                             parsed_result.native_summary,
                             parsed_native_storage=parsed_result.native_storage,
                             phase_timings=parsed_result.phase_timings,
@@ -397,7 +440,10 @@ class PythonParser:
                             load_started=retained_load_started,
                             root_parse_started=retained_root_parse_started,
                             allow_partial_rdf_mapping=allow_partial_rdf_mapping,
-                        ),
+                        )
+                    return _ParsedDocumentResult(
+                        None,
+                        snapshot=root_snapshot,
                     )
                 return _ParsedDocumentResult(
                     snapshot.root,
