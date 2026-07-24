@@ -1502,6 +1502,51 @@ def test_rdf_mapping_consumes_detached_class_complement() -> None:
     assert len(document.axioms) == 1
 
 
+@pytest.mark.parametrize("target", ("Thing", "Nothing"))
+def test_rdf_mapping_consumes_detached_builtin_class_complement(
+    target: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <owl:Class rdf:nodeID="complement">
+    <owl:complementOf rdf:resource="{OWL_NAMESPACE}{target}"/>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 2
+    assert document.rdf_mapping_report.consumed_triples == 2
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert not document.axioms
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        OWL_NAMESPACE + "Class",
+        OWL_NAMESPACE + "real",
+        OWL_NAMESPACE + "Thingy",
+    ),
+)
+def test_rdf_mapping_rejects_near_builtin_class_complement(target: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <owl:Class rdf:nodeID="complement">
+    <owl:complementOf rdf:resource="{target}"/>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
 @pytest.mark.parametrize(
     "body",
     (
@@ -1620,6 +1665,60 @@ def test_rdf_mapping_consumes_detached_named_class_boolean(
     assert document.rdf_mapping_report.unconsumed == ()
     assert len(tuple(document.iter_axioms(m.Declaration))) == len(members)
     assert len(document.axioms) == len(members)
+
+
+@pytest.mark.parametrize("operator", ("intersectionOf", "unionOf"))
+def test_rdf_mapping_consumes_detached_builtin_named_class_boolean(
+    operator: str,
+) -> None:
+    items = "".join(
+        f'<rdf:Description rdf:about="{OWL_NAMESPACE}{target}"/>'
+        for target in ("Thing", "Nothing")
+    )
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <owl:Class rdf:nodeID="expression">
+    <owl:{operator} rdf:parseType="Collection">{items}</owl:{operator}>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 6
+    assert document.rdf_mapping_report.consumed_triples == 6
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert not document.axioms
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        OWL_NAMESPACE + "Class",
+        OWL_NAMESPACE + "real",
+        OWL_NAMESPACE + "Thingy",
+    ),
+)
+def test_rdf_mapping_rejects_near_builtin_named_class_boolean(
+    target: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <owl:Class rdf:nodeID="expression">
+    <owl:intersectionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="{OWL_NAMESPACE}Thing"/>
+      <rdf:Description rdf:about="{target}"/>
+    </owl:intersectionOf>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
 
 
 @pytest.mark.parametrize(

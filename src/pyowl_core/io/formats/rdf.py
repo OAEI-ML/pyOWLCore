@@ -453,8 +453,14 @@ class RDFMapper:
             if not isinstance(first, RDFIRI):
                 return False
             if expected_kind not in self.kinds.get(first.value, set()) and not (
-                expected_kind is m.EntityKind.DATATYPE
-                and first.value in _BUILTIN_DATATYPES
+                (
+                    expected_kind is m.EntityKind.CLASS
+                    and first.value in _BUILTIN_CLASSES
+                )
+                or (
+                    expected_kind is m.EntityKind.DATATYPE
+                    and first.value in _BUILTIN_DATATYPES
+                )
             ):
                 return False
             rest = rests[0]
@@ -471,7 +477,10 @@ class RDFMapper:
                 triple in self.consumed
                 or not isinstance(triple.subject, RDFBlank)
                 or not isinstance(triple.object, RDFIRI)
-                or m.EntityKind.CLASS not in self.kinds.get(triple.object.value, set())
+                or (
+                    m.EntityKind.CLASS not in self.kinds.get(triple.object.value, set())
+                    and triple.object.value not in _BUILTIN_CLASSES
+                )
             ):
                 continue
             marker = Triple(
@@ -2431,6 +2440,7 @@ _SWRL_INDIVIDUAL_ATOM_METADATA = {
     SWRL + "argument1",
     SWRL + "argument2",
 }
+_BUILTIN_CLASSES = frozenset({OWL + "Thing", OWL + "Nothing"})
 _BUILTIN_DATATYPES = frozenset(
     {
         RDFS + "Literal",

@@ -120,6 +120,7 @@ const OWL_DEPRECATED: &str = "http://www.w3.org/2002/07/owl#deprecated";
 const OWL_ANNOTATED_SOURCE: &str = "http://www.w3.org/2002/07/owl#annotatedSource";
 const OWL_ANNOTATED_PROPERTY: &str = "http://www.w3.org/2002/07/owl#annotatedProperty";
 const OWL_ANNOTATED_TARGET: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
+const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 const SWRL_IMP: &str = "http://www.w3.org/2003/11/swrl#Imp";
 const SWRL_BODY: &str = "http://www.w3.org/2003/11/swrl#body";
@@ -3280,6 +3281,10 @@ fn has_kind(kinds: &[KindRecord<'_>], value: &str, kind: &str) -> bool {
         .any(|record| record.iri == value && record.kind == kind)
 }
 
+fn is_builtin_class(value: &str) -> bool {
+    matches!(value, OWL_THING | OWL_NOTHING)
+}
+
 fn is_builtin_datatype(value: &str) -> bool {
     matches!(
         value,
@@ -3536,7 +3541,10 @@ fn established_named_list<'graph>(
                 break;
             }
         }
-        if !established && !(expected_kind == "datatype" && is_builtin_datatype(member)) {
+        if !established
+            && !((expected_kind == "class" && is_builtin_class(member))
+                || (expected_kind == "datatype" && is_builtin_datatype(member)))
+        {
             return Ok(false);
         }
         match rest {
@@ -3563,7 +3571,7 @@ fn consume_detached_class_complements<'view, 'graph>(
         else {
             continue;
         };
-        if !has_kind(kinds, target, "class") {
+        if !has_kind(kinds, target, "class") && !is_builtin_class(target) {
             continue;
         }
         let mut marker_present = false;
@@ -10017,11 +10025,31 @@ mod tests {
             document.mapping.consumed_triples,
         );
 
+        for target in [OWL_THING, OWL_NOTHING] {
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"complement\"><owl:complementOf rdf:resource=\"{target}\"/></owl:Class></rdf:RDF>"
+            );
+            let document =
+                mapped(source.as_bytes(), None).expect("built-in class complement operand");
+            assert!(document.axioms.is_empty());
+            assert_eq!(document.mapping.total_triples, 2);
+            assert_eq!(
+                document.mapping.total_triples,
+                document.mapping.consumed_triples,
+            );
+        }
+
         let markerless = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><rdf:Description rdf:nodeID=\"complement\"><owl:complementOf rdf:resource=\"urn:C\"/></rdf:Description></rdf:RDF>"
         );
         let undeclared = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"complement\"><owl:complementOf rdf:resource=\"urn:undeclared\"/></owl:Class></rdf:RDF>"
+        );
+        let wrong_kind = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"complement\"><owl:complementOf rdf:resource=\"{OWL_REAL}\"/></owl:Class></rdf:RDF>"
+        );
+        let near_builtin = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"complement\"><owl:complementOf rdf:resource=\"{OWL}Thingy\"/></owl:Class></rdf:RDF>"
         );
         let anonymous = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><owl:Class rdf:nodeID=\"complement\"><owl:complementOf rdf:nodeID=\"anonymous\"/></owl:Class></rdf:RDF>"
@@ -10029,7 +10057,14 @@ mod tests {
         let cyclic = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"/><owl:Class rdf:nodeID=\"left\"><owl:complementOf rdf:nodeID=\"right\"/></owl:Class><owl:Class rdf:nodeID=\"right\"><owl:complementOf rdf:nodeID=\"left\"/></owl:Class></rdf:RDF>"
         );
-        for incomplete in [markerless, undeclared, anonymous, cyclic] {
+        for incomplete in [
+            markerless,
+            undeclared,
+            wrong_kind,
+            near_builtin,
+            anonymous,
+            cyclic,
+        ] {
             assert_eq!(
                 mapped(incomplete.as_bytes(), None).unwrap_err().code,
                 "NATIVE_RDF_MAPPING_INCOMPLETE",
@@ -10129,6 +10164,17 @@ mod tests {
             assert_eq!(named.axioms.len(), 4);
             assert_eq!(named.mapping.total_triples, 8);
             assert_eq!(named.mapping.total_triples, named.mapping.consumed_triples,);
+
+            let builtins = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"expression\"><owl:{local_name} rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"{OWL_THING}\"/><rdf:Description rdf:about=\"{OWL_NOTHING}\"/></owl:{local_name}></owl:Class></rdf:RDF>"
+            );
+            let builtins = mapped(builtins.as_bytes(), None).expect("built-in class operands");
+            assert!(builtins.axioms.is_empty());
+            assert_eq!(builtins.mapping.total_triples, 6);
+            assert_eq!(
+                builtins.mapping.total_triples,
+                builtins.mapping.consumed_triples,
+            );
         }
 
         let markerless = format!(
@@ -10136,6 +10182,12 @@ mod tests {
         );
         let undeclared = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:undeclared\"/></owl:intersectionOf></owl:Class></rdf:RDF>"
+        );
+        let wrong_kind = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"{OWL_THING}\"/><rdf:Description rdf:about=\"{OWL_REAL}\"/></owl:intersectionOf></owl:Class></rdf:RDF>"
+        );
+        let near_builtin = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"{OWL_THING}\"/><rdf:Description rdf:about=\"{OWL}Thingy\"/></owl:intersectionOf></owl:Class></rdf:RDF>"
         );
         let forked = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:about=\"urn:B\"/><owl:Class rdf:nodeID=\"expression\"><owl:intersectionOf rdf:nodeID=\"values\"/></owl:Class><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:resource=\"urn:A\"/><rdf:first rdf:resource=\"urn:B\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
@@ -10146,7 +10198,15 @@ mod tests {
         let restriction = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:A\"/><owl:Class rdf:nodeID=\"expression\"><rdf:type rdf:resource=\"{OWL_RESTRICTION}\"/><owl:intersectionOf rdf:nodeID=\"values\"/></owl:Class><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:resource=\"urn:A\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description></rdf:RDF>"
         );
-        for incomplete in [markerless, undeclared, forked, cyclic, restriction] {
+        for incomplete in [
+            markerless,
+            undeclared,
+            wrong_kind,
+            near_builtin,
+            forked,
+            cyclic,
+            restriction,
+        ] {
             assert_eq!(
                 mapped(incomplete.as_bytes(), None).unwrap_err().code,
                 "NATIVE_RDF_MAPPING_INCOMPLETE",
