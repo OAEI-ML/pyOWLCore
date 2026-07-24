@@ -21,6 +21,12 @@ from pyowl_core.backends.native_ingestion import _publish_structural_snapshot_v2
 from pyowl_core.model import StructuralNode, constructor_spec
 from tests.generated.model.fixtures import model_fixtures
 from tests.native.foundation._support import NativeTestExtension, load_extension
+from tests.native.publication_handoff._support_v2 import (
+    fingerprint_evidence,
+    fingerprint_preimages,
+    publication,
+)
+from tests.native.publication_handoff.test_owl2_dl_v2 import _validated_fixture
 from tests.unit.wire.conftest import snapshot
 
 
@@ -419,6 +425,8 @@ def retained_view_layout_bridge_extension(
         "_retained_axiom_type_index_bridge_allocation_probe_v1",
         "_retained_snapshot_counters_bridge_allocation_probe_v1",
         "_retained_document_counters_bridge_allocation_probe_v1",
+        "_retained_snapshot_attestation_bridge_allocation_probe_v1",
+        "_retained_document_attestation_bridge_allocation_probe_v1",
         "_retained_signature_layout_bridge_allocation_probe_v1",
         "_retained_identity_layout_bridge_allocation_probe_v1",
         "_retained_axiom_type_layout_bridge_allocation_probe_v1",
@@ -656,6 +664,104 @@ def test_retained_counter_bridge_failures_publish_no_partial_result(
         assert snapshot._publication_counters_v2() == expected
         assert document._publication_counters_v2() == expected
 
+    document._publication_close_v2()
+    selected.close()
+    assert selected.closed
+
+
+def test_retained_attestation_bridge_failures_publish_no_partial_result(
+    retained_view_layout_bridge_extension: NativeTestExtension,
+) -> None:
+    extension = cast(Any, retained_view_layout_bridge_extension)
+    selected = cast(
+        Any,
+        load_snapshot(
+            b"Ontology(<urn:allocation:attestation> "
+            b"Declaration(Class(<urn:allocation:attestation:A>)))",
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.NATIVE,
+            ),
+        ),
+    )
+    snapshot = object.__getattribute__(
+        selected._native_snapshot_state.owner.handle,
+        "_owner_v2",
+    )
+    document = snapshot._publication_document_v2(0)
+    expected = snapshot._publication_attestation_v2()
+    assert expected.owl2_dl_report_summary is None
+
+    values, collections, summary = _validated_fixture()
+    preimages = fingerprint_preimages(values)
+    evidence = fingerprint_evidence(values, preimages)
+    published = publication(collections, values=values, preimages=preimages)
+    validated_snapshot = extension._publication_fixture_v2(
+        published.handle.attestation,
+        collections,
+        documents=published.documents,
+        report=published.report,
+        root_document_key=published.root_document_key,
+        load_options=published.load_options,
+        capability_bits=published.capability_bits,
+        fingerprint_evidence=evidence,
+        fingerprint_preimages=preimages,
+        facade_cardinality_summary=published.facade_cardinality_summary,
+        owl2_dl_report_summary=summary,
+    )
+    validated_document = validated_snapshot._publication_document_v2(0)
+    validated_expected = validated_snapshot._publication_attestation_v2()
+    assert validated_expected.owl2_dl_report_summary == summary
+
+    owner_sets = (
+        (snapshot, document, expected, 42),
+        (validated_snapshot, validated_document, validated_expected, 55),
+    )
+    for snapshot_owner, document_owner, expected_attestation, expected_allocations in owner_sets:
+        expected_counters = snapshot_owner._publication_counters_v2()
+        assert document_owner._publication_attestation_v2() == expected_attestation
+
+        cases = (
+            (
+                extension._retained_snapshot_attestation_bridge_allocation_probe_v1,
+                snapshot_owner,
+            ),
+            (
+                extension._retained_document_attestation_bridge_allocation_probe_v1,
+                document_owner,
+            ),
+        )
+        for probe, owner in cases:
+            attestation, allocations = probe(owner, None)
+            assert attestation == expected_attestation
+            assert allocations == expected_allocations
+
+            for fail_after in range(allocations):
+                with pytest.raises(
+                    MemoryError,
+                    match=r"^injected native retained-attestation bridge allocation failure$",
+                ):
+                    probe(owner, fail_after)
+                assert (
+                    snapshot_owner._publication_attestation_v2() == expected_attestation
+                )
+                assert (
+                    document_owner._publication_attestation_v2() == expected_attestation
+                )
+                assert snapshot_owner._publication_counters_v2() == expected_counters
+                assert document_owner._publication_counters_v2() == expected_counters
+                assert snapshot_owner._publication_closed_v2() is False
+                assert document_owner._publication_closed_v2() is False
+
+            boundary_attestation, boundary_allocations = probe(owner, allocations)
+            assert boundary_attestation == expected_attestation
+            assert boundary_allocations == allocations
+            assert snapshot_owner._publication_attestation_v2() == expected_attestation
+            assert document_owner._publication_attestation_v2() == expected_attestation
+
+    validated_document._publication_close_v2()
+    validated_snapshot._publication_close_v2()
     document._publication_close_v2()
     selected.close()
     assert selected.closed

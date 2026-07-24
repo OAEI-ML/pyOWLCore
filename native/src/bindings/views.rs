@@ -176,6 +176,14 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
             _retained_document_counters_bridge_allocation_probe_v1,
             _module
         )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_snapshot_attestation_bridge_allocation_probe_v1,
+            _module
+        )?)?;
+        _module.add_function(wrap_pyfunction!(
+            _retained_document_attestation_bridge_allocation_probe_v1,
+            _module
+        )?)?;
     }
     Ok(())
 }
@@ -732,6 +740,38 @@ fn _retained_document_counters_bridge_allocation_probe_v1<'py>(
     );
     let counters = handle.counters_to_python_with_allocations(py, &mut allocations)?;
     Ok((counters, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, fail_after=None))]
+fn _retained_snapshot_attestation_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyAny>, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-attestation bridge allocation failure",
+    );
+    let attestation = handle.attestation_to_python_with_allocations(py, &mut allocations)?;
+    Ok((attestation, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, fail_after=None))]
+fn _retained_document_attestation_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeDocumentHandle>,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyAny>, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native retained-attestation bridge allocation failure",
+    );
+    let attestation = handle.attestation_to_python_with_allocations(py, &mut allocations)?;
+    Ok((attestation, allocations.count()))
 }
 
 #[cfg(feature = "test-hooks")]

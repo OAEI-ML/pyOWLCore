@@ -152,6 +152,14 @@ def _retained_document_counters_bridge_allocation_probe_v1(
     handle: _NativeDocumentHandle,
     fail_after: int | None = None,
 ) -> tuple[NativeFacadeCountersV2, int]: ...
+def _retained_snapshot_attestation_bridge_allocation_probe_v1(
+    handle: _NativeSnapshotHandle,
+    fail_after: int | None = None,
+) -> tuple[NativeSnapshotAttestationV2, int]: ...
+def _retained_document_attestation_bridge_allocation_probe_v1(
+    handle: _NativeDocumentHandle,
+    fail_after: int | None = None,
+) -> tuple[NativeSnapshotAttestationV2, int]: ...
 def _encoded_structural_workspace_allocation_probe_v1(
     handle: _NativeSnapshotHandle,
     scope: object,

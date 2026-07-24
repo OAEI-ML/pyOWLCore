@@ -104,6 +104,15 @@ impl NativeDocumentHandle {
         self.require_v2()?
             .counters_to_python_with_allocations(py, allocations)
     }
+
+    pub(crate) fn attestation_to_python_with_allocations(
+        &self,
+        py: Python<'_>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<Py<PyAny>> {
+        self.require_v2()?
+            .attestation_to_python_with_allocations(py, allocations)
+    }
 }
 
 #[pymethods]
@@ -120,7 +129,8 @@ impl NativeDocumentHandle {
     }
 
     fn _publication_attestation_v2(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.require_v2()?.attestation_to_python(py)
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.attestation_to_python_with_allocations(py, &mut allocations)
     }
 
     fn _publication_closed_v2(&self) -> PyResult<bool> {
@@ -252,6 +262,15 @@ impl NativeSnapshotHandle {
         self.require_v2()?
             .counters_to_python_with_allocations(py, allocations)
     }
+
+    pub(crate) fn attestation_to_python_with_allocations(
+        &self,
+        py: Python<'_>,
+        allocations: &mut crate::BridgeAllocationProbe,
+    ) -> PyResult<Py<PyAny>> {
+        self.require_v2()?
+            .attestation_to_python_with_allocations(py, allocations)
+    }
 }
 
 #[pymethods]
@@ -272,7 +291,8 @@ impl NativeSnapshotHandle {
     }
 
     fn _publication_attestation_v2(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.require_v2()?.attestation_to_python(py)
+        let mut allocations = crate::BridgeAllocationProbe::disabled();
+        self.attestation_to_python_with_allocations(py, &mut allocations)
     }
 
     fn _publication_closed_v2(&self) -> PyResult<bool> {
