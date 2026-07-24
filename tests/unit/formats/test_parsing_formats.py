@@ -29,6 +29,49 @@ ONTOLOGY = "https://example.org/w3c-derived"
 CLASS = ONTOLOGY + "#C"
 RDF_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema#"
+RDFS_NAMESPACE = "http://www.w3.org/2000/01/rdf-schema#"
+OWL_NAMESPACE = "http://www.w3.org/2002/07/owl#"
+OWL2_BUILTIN_DATATYPES = (
+    RDFS_NAMESPACE + "Literal",
+    RDF_NAMESPACE + "PlainLiteral",
+    RDF_NAMESPACE + "XMLLiteral",
+    OWL_NAMESPACE + "real",
+    OWL_NAMESPACE + "rational",
+    *(
+        XSD_NAMESPACE + local
+        for local in (
+            "anyURI",
+            "base64Binary",
+            "boolean",
+            "byte",
+            "dateTime",
+            "dateTimeStamp",
+            "decimal",
+            "double",
+            "float",
+            "hexBinary",
+            "int",
+            "integer",
+            "language",
+            "long",
+            "Name",
+            "NCName",
+            "negativeInteger",
+            "NMTOKEN",
+            "nonNegativeInteger",
+            "nonPositiveInteger",
+            "normalizedString",
+            "positiveInteger",
+            "short",
+            "string",
+            "token",
+            "unsignedByte",
+            "unsignedInt",
+            "unsignedLong",
+            "unsignedShort",
+        )
+    ),
+)
 
 FUNCTIONAL = f"Ontology(<{ONTOLOGY}> Declaration(Class(<{CLASS}>)))".encode()
 OWL_XML = f"""\
@@ -2403,6 +2446,67 @@ def test_rdf_mapping_consumes_detached_datatype_restriction(
     assert len(document.axioms) == 1
 
 
+@pytest.mark.parametrize("base", OWL2_BUILTIN_DATATYPES)
+def test_rdf_mapping_consumes_detached_builtin_datatype_restriction(base: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}"
+         xmlns:xsd="{XSD_NAMESPACE}">
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="{base}"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet">
+    <xsd:minInclusive>1</xsd:minInclusive>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 6
+    assert document.rdf_mapping_report.consumed_triples == 6
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert not document.axioms
+
+
+@pytest.mark.parametrize(
+    "base",
+    (
+        XSD_NAMESPACE + "duration",
+        XSD_NAMESPACE + "anyType",
+        RDF_NAMESPACE + "langString",
+        OWL_NAMESPACE + "realNumber",
+        RDFS_NAMESPACE + "Datatype",
+    ),
+)
+def test_rdf_mapping_rejects_near_builtin_datatype_restriction(base: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}"
+         xmlns:xsd="{XSD_NAMESPACE}">
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="{base}"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet">
+    <xsd:minInclusive>1</xsd:minInclusive>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
 @pytest.mark.parametrize(
     ("body", "code"),
     (
@@ -2436,18 +2540,6 @@ def test_rdf_mapping_consumes_detached_datatype_restriction(
             """
   <rdfs:Datatype rdf:nodeID="expression">
     <owl:onDatatype rdf:resource="urn:undeclared"/>
-    <owl:withRestrictions rdf:parseType="Collection">
-      <rdf:Description rdf:nodeID="facet"/>
-    </owl:withRestrictions>
-  </rdfs:Datatype>
-  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
-""",
-            "RDF_MAPPING_INCOMPLETE",
-        ),
-        (
-            f"""
-  <rdfs:Datatype rdf:nodeID="expression">
-    <owl:onDatatype rdf:resource="{XSD_NAMESPACE}integer"/>
     <owl:withRestrictions rdf:parseType="Collection">
       <rdf:Description rdf:nodeID="facet"/>
     </owl:withRestrictions>

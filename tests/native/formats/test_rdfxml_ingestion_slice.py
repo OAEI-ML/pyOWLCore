@@ -28,6 +28,51 @@ from tools.security.mutations import mutations
 W3C_RDFXML_SOURCE = (
     Path(__file__).parents[2] / "data" / "corpus" / "w3c" / "rdfxml" / "minimal.rdf"
 ).read_bytes()
+RDF_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+RDFS_NAMESPACE = "http://www.w3.org/2000/01/rdf-schema#"
+OWL_NAMESPACE = "http://www.w3.org/2002/07/owl#"
+XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema#"
+OWL2_BUILTIN_DATATYPES = (
+    RDFS_NAMESPACE + "Literal",
+    RDF_NAMESPACE + "PlainLiteral",
+    RDF_NAMESPACE + "XMLLiteral",
+    OWL_NAMESPACE + "real",
+    OWL_NAMESPACE + "rational",
+    *(
+        XSD_NAMESPACE + local
+        for local in (
+            "anyURI",
+            "base64Binary",
+            "boolean",
+            "byte",
+            "dateTime",
+            "dateTimeStamp",
+            "decimal",
+            "double",
+            "float",
+            "hexBinary",
+            "int",
+            "integer",
+            "language",
+            "long",
+            "Name",
+            "NCName",
+            "negativeInteger",
+            "NMTOKEN",
+            "nonNegativeInteger",
+            "nonPositiveInteger",
+            "normalizedString",
+            "positiveInteger",
+            "short",
+            "string",
+            "token",
+            "unsignedByte",
+            "unsignedInt",
+            "unsignedLong",
+            "unsignedShort",
+        )
+    ),
+)
 
 
 def _rdf_attribute_spelling_source(prefix: str) -> bytes:
@@ -1441,6 +1486,81 @@ def test_detached_inverse_property_expression_matches_python(
     assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
+@pytest.mark.parametrize("base", OWL2_BUILTIN_DATATYPES)
+def test_detached_builtin_datatype_restriction_matches_python(
+    extension: NativeTestExtension,
+    base: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'
+ xmlns:xsd='{XSD_NAMESPACE}'>
+ <rdfs:Datatype rdf:nodeID='expression'>
+  <owl:onDatatype rdf:resource='{base}'/>
+  <owl:withRestrictions rdf:parseType='Collection'>
+   <rdf:Description rdf:nodeID='facet'/>
+  </owl:withRestrictions>
+ </rdfs:Datatype>
+ <rdf:Description rdf:nodeID='facet'>
+  <xsd:minInclusive>1</xsd:minInclusive>
+ </rdf:Description>
+</rdf:RDF>""".encode()
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+    assert python.rdf_mapping_report.conformant
+    assert not python.axioms
+    assert observed.axioms == ()
+    assert observed.total_triples == observed.consumed_triples == 6
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == 0
+    assert attestation.rdf_mapping_report_count == 1
+    assert extension.INGESTION_FEATURES == ()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
+@pytest.mark.parametrize(
+    "base",
+    (
+        XSD_NAMESPACE + "duration",
+        XSD_NAMESPACE + "anyType",
+        RDF_NAMESPACE + "langString",
+        OWL_NAMESPACE + "realNumber",
+        RDFS_NAMESPACE + "Datatype",
+    ),
+)
+def test_near_builtin_datatype_restriction_rejection_matches_python(
+    extension: NativeTestExtension,
+    base: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'
+ xmlns:xsd='{XSD_NAMESPACE}'>
+ <rdfs:Datatype rdf:nodeID='expression'>
+  <owl:onDatatype rdf:resource='{base}'/>
+  <owl:withRestrictions rdf:parseType='Collection'>
+   <rdf:Description rdf:nodeID='facet'/>
+  </owl:withRestrictions>
+ </rdfs:Datatype>
+ <rdf:Description rdf:nodeID='facet'>
+  <xsd:minInclusive>1</xsd:minInclusive>
+ </rdf:Description>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(PyOWLCoreError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_INCOMPLETE"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_INCOMPLETE"
+
+
 @pytest.mark.parametrize(
     ("body", "python_code", "native_code"),
     (
@@ -2649,19 +2769,6 @@ def test_detached_datatype_restriction_matches_python(
             """
  <rdfs:Datatype rdf:nodeID='expression'>
   <owl:onDatatype rdf:resource='urn:undeclared'/>
-  <owl:withRestrictions rdf:parseType='Collection'>
-   <rdf:Description rdf:nodeID='facet'/>
-  </owl:withRestrictions>
- </rdfs:Datatype>
- <rdf:Description rdf:nodeID='facet'><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
-""",
-            "RDF_MAPPING_INCOMPLETE",
-            "NATIVE_RDF_MAPPING_INCOMPLETE",
-        ),
-        (
-            """
- <rdfs:Datatype rdf:nodeID='expression'>
-  <owl:onDatatype rdf:resource='http://www.w3.org/2001/XMLSchema#integer'/>
   <owl:withRestrictions rdf:parseType='Collection'>
    <rdf:Description rdf:nodeID='facet'/>
   </owl:withRestrictions>

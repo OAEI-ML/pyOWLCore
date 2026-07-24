@@ -561,7 +561,10 @@ class RDFMapper:
                 triple in self.consumed
                 or not isinstance(triple.subject, RDFBlank)
                 or not isinstance(triple.object, RDFIRI)
-                or m.EntityKind.DATATYPE not in self.kinds.get(triple.object.value, set())
+                or (
+                    m.EntityKind.DATATYPE not in self.kinds.get(triple.object.value, set())
+                    and triple.object.value not in _BUILTIN_DATATYPES
+                )
             ):
                 continue
             marker = Triple(
@@ -2423,6 +2426,49 @@ _SWRL_INDIVIDUAL_ATOM_METADATA = {
     SWRL + "argument1",
     SWRL + "argument2",
 }
+_BUILTIN_DATATYPES = frozenset(
+    {
+        RDFS + "Literal",
+        RDF + "PlainLiteral",
+        RDF + "XMLLiteral",
+        OWL + "real",
+        OWL + "rational",
+        *(
+            XSD + local
+            for local in (
+                "anyURI",
+                "base64Binary",
+                "boolean",
+                "byte",
+                "dateTime",
+                "dateTimeStamp",
+                "decimal",
+                "double",
+                "float",
+                "hexBinary",
+                "int",
+                "integer",
+                "language",
+                "long",
+                "Name",
+                "NCName",
+                "negativeInteger",
+                "NMTOKEN",
+                "nonNegativeInteger",
+                "nonPositiveInteger",
+                "normalizedString",
+                "positiveInteger",
+                "short",
+                "string",
+                "token",
+                "unsignedByte",
+                "unsignedInt",
+                "unsignedLong",
+                "unsignedShort",
+            )
+        ),
+    }
+)
 _BUILTIN_ANNOTATION_PROPERTIES = {
     RDFS + "label",
     RDFS + "comment",

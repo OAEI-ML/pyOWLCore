@@ -53,14 +53,18 @@ const RDF_ABOUT_EACH: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#aboutEa
 const RDF_ABOUT_EACH_PREFIX: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#aboutEachPrefix";
 const RDF_BAG_ID: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#bagID";
 const RDF_PROPERTY: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property";
+const RDF_PLAIN_LITERAL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral";
 const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
 const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
 const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 const RDFS_CLASS: &str = "http://www.w3.org/2000/01/rdf-schema#Class";
 const RDFS_DATATYPE: &str = "http://www.w3.org/2000/01/rdf-schema#Datatype";
+const RDFS_LITERAL: &str = "http://www.w3.org/2000/01/rdf-schema#Literal";
 const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
 const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
 const OWL_VERSION_IRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
+const OWL_RATIONAL: &str = "http://www.w3.org/2002/07/owl#rational";
+const OWL_REAL: &str = "http://www.w3.org/2002/07/owl#real";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
@@ -3276,6 +3280,48 @@ fn has_kind(kinds: &[KindRecord<'_>], value: &str, kind: &str) -> bool {
         .any(|record| record.iri == value && record.kind == kind)
 }
 
+fn is_builtin_datatype(value: &str) -> bool {
+    matches!(
+        value,
+        RDFS_LITERAL | RDF_PLAIN_LITERAL | RDF_XML_LITERAL | OWL_REAL | OWL_RATIONAL
+    ) || value
+        .strip_prefix("http://www.w3.org/2001/XMLSchema#")
+        .is_some_and(|local| {
+            matches!(
+                local,
+                "anyURI"
+                    | "base64Binary"
+                    | "boolean"
+                    | "byte"
+                    | "dateTime"
+                    | "dateTimeStamp"
+                    | "decimal"
+                    | "double"
+                    | "float"
+                    | "hexBinary"
+                    | "int"
+                    | "integer"
+                    | "language"
+                    | "long"
+                    | "Name"
+                    | "NCName"
+                    | "negativeInteger"
+                    | "NMTOKEN"
+                    | "nonNegativeInteger"
+                    | "nonPositiveInteger"
+                    | "normalizedString"
+                    | "positiveInteger"
+                    | "short"
+                    | "string"
+                    | "token"
+                    | "unsignedByte"
+                    | "unsignedInt"
+                    | "unsignedLong"
+                    | "unsignedShort"
+            )
+        })
+}
+
 fn consume_detached_inverse_property_expressions<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
     consumed: &mut [bool],
@@ -3676,7 +3722,7 @@ fn consume_detached_datatype_restrictions<'view, 'graph>(
         else {
             continue;
         };
-        if !has_kind(kinds, target, "datatype") {
+        if !has_kind(kinds, target, "datatype") && !is_builtin_datatype(target) {
             continue;
         }
         let mut marker_present = false;
@@ -10247,14 +10293,22 @@ mod tests {
             duplicate_facet.mapping.consumed_triples,
         );
 
+        let builtin = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"{xsd}integer\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        let builtin = mapped(builtin.as_bytes(), None).expect("built-in datatype restriction");
+        assert!(builtin.axioms.is_empty());
+        assert_eq!(builtin.mapping.total_triples, 6);
+        assert_eq!(
+            builtin.mapping.total_triples,
+            builtin.mapping.consumed_triples,
+        );
+
         let markerless = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdf:Description rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdf:Description><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
         );
         let undeclared = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:undeclared\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
-        );
-        let builtin = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"{xsd}integer\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
         );
         let empty = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:resource=\"{RDF_NIL}\"/></rdfs:Datatype></rdf:RDF>"
@@ -10271,7 +10325,6 @@ mod tests {
         for incomplete in [
             markerless,
             undeclared,
-            builtin,
             empty,
             missing_literal,
             forked,
@@ -10279,6 +10332,22 @@ mod tests {
         ] {
             assert_eq!(
                 mapped(incomplete.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            );
+        }
+
+        for near_builtin in [
+            format!("{xsd}duration"),
+            format!("{xsd}anyType"),
+            format!("{RDF}langString"),
+            format!("{OWL}realNumber"),
+            RDFS_DATATYPE.to_owned(),
+        ] {
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"{near_builtin}\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(source.as_bytes(), None).unwrap_err().code,
                 "NATIVE_RDF_MAPPING_INCOMPLETE",
             );
         }
