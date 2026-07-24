@@ -373,10 +373,12 @@ type PyRetainedAxiomTypeLayoutV1 = (
     Py<PyTuple>,
     Py<PyDict>,
 );
+type PyRetainedAxiomTypeBindingV1 = (Py<PyBytes>, Py<PyBytes>);
+type PyRetainedAxiomTypePageV1 = (Py<PyTuple>, u64, Option<u64>);
 
 #[pymethods]
 impl NativeRetainedAxiomTypeIndexV1 {
-    fn _binding_v1<'py>(&self, py: Python<'py>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+    fn _binding_v1<'py>(&self, py: Python<'py>) -> PyResult<PyRetainedAxiomTypeBindingV1> {
         let mut allocations = crate::BridgeAllocationProbe::disabled();
         retained_axiom_type_binding_to_python(py, self, &mut allocations)
     }
@@ -402,7 +404,7 @@ impl NativeRetainedAxiomTypeIndexV1 {
         max_bytes: u64,
         config: &Bound<'py, PyAny>,
         cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
-    ) -> PyResult<(Py<PyTuple>, u64, Option<u64>)> {
+    ) -> PyResult<PyRetainedAxiomTypePageV1> {
         let limits = crate::limits_from_python(config)?;
         let cancellation = crate::cancellation_or_default(cancel);
         let index = Arc::clone(&self.index);
@@ -432,7 +434,7 @@ fn retained_axiom_type_binding_to_python<'py>(
     py: Python<'py>,
     owner: &NativeRetainedAxiomTypeIndexV1,
     allocations: &mut crate::BridgeAllocationProbe,
-) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+) -> PyResult<PyRetainedAxiomTypeBindingV1> {
     let (root_table_sha256, effective_root_table_sha256) =
         owner.storage.retained_axiom_type_binding_v1();
     allocations.checkpoint()?;
@@ -457,7 +459,7 @@ fn retained_axiom_type_page_to_python<'py>(
     total_count: u64,
     next_cursor: Option<u64>,
     allocations: &mut crate::BridgeAllocationProbe,
-) -> PyResult<(Py<PyTuple>, u64, Option<u64>)> {
+) -> PyResult<PyRetainedAxiomTypePageV1> {
     allocations.checkpoint()?;
     let rows = PyTuple::new(py, rows.iter().map(|row| PyBytes::new(py, row).unbind()))?.unbind();
     Ok((rows, total_count, next_cursor))
@@ -615,7 +617,7 @@ fn _retained_axiom_type_binding_bridge_allocation_probe_v1<'py>(
     document_ordinal: Option<u64>,
     config: &Bound<'py, PyAny>,
     fail_after: Option<u64>,
-) -> PyResult<((Py<PyBytes>, Py<PyBytes>), u64)> {
+) -> PyResult<(PyRetainedAxiomTypeBindingV1, u64)> {
     let owner = _retained_axiom_type_index_v1(py, handle, scope, document_ordinal, config, None)?;
     let mut allocations = crate::BridgeAllocationProbe::configured(
         fail_after,
@@ -670,7 +672,7 @@ fn _retained_axiom_type_page_bridge_allocation_probe_v1<'py>(
     max_rows: u32,
     max_bytes: u64,
     fail_after: Option<u64>,
-) -> PyResult<((Py<PyTuple>, u64, Option<u64>), u64)> {
+) -> PyResult<(PyRetainedAxiomTypePageV1, u64)> {
     let owner = _retained_axiom_type_index_v1(py, handle, scope, document_ordinal, config, None)?;
     let limits = crate::limits_from_python(config)?;
     let index = Arc::clone(&owner.index);
