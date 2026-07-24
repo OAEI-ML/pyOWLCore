@@ -56,8 +56,8 @@ pub(crate) fn encoded_fixture_handle_v2() -> NativeResult<NativeSnapshotHandle> 
 pub(crate) fn typed_structural_handle_v2(
     attestation: &pyo3::Bound<'_, pyo3::types::PyAny>,
     storage: TypedFacadeStorageV2,
-    origin_rows: Option<Vec<Vec<u8>>>,
-    raw_origin_rows: Option<Vec<Vec<u8>>>,
+    origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+    raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
     source_map: Option<TypedSourceMapRowsV2>,
     rdf_report: Option<TypedRdfReportRowsV2>,
     parser_bytes: u64,

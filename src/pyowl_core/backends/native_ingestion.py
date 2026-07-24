@@ -1519,7 +1519,7 @@ def retain_native_snapshot_v2(
     single_document = (
         len(snapshot.documents) == 1 and snapshot.load_options.imports is ImportPolicy.IGNORE
     )
-    retained_closure = len(snapshot.documents) > 1 and not snapshot.load_options.collect_provenance
+    retained_closure = len(snapshot.documents) > 1
     if common_ineligible or not (single_document or retained_closure):
         return snapshot
     extension = native.require("parse-functional-v1")
@@ -1968,7 +1968,7 @@ def _publish_structural_closure_snapshot_v2(
     extension: native._Extension,
     cancellation_token: CancellationToken | None,
 ) -> OntologySnapshot:
-    """Publish a provenance-disabled Functional closure through one typed arena."""
+    """Publish a resolver-built Functional closure through one typed arena."""
 
     from dataclasses import fields
 
@@ -1989,8 +1989,10 @@ def _publish_structural_closure_snapshot_v2(
         NativeFacadeCollectionV2,
         NativeFacadeScopeV2,
         NativeFingerprintEvidenceV2,
+        NativeOriginRowV2,
         NativeSignatureKindV2,
         _seal_native_snapshot_owner_v2,
+        encode_native_auxiliary_row_v2,
         freeze_native_snapshot_publication_v2,
         native_snapshot_content_digests_v2,
         native_snapshot_publication_attestation_v2,
@@ -2007,7 +2009,7 @@ def _publish_structural_closure_snapshot_v2(
     from pyowl_core.document.snapshot import AxiomScope
     from pyowl_core.model import canonical_bytes
 
-    if snapshot.load_options.collect_provenance or len(snapshot.documents) < 2:
+    if len(snapshot.documents) < 2:
         raise AssertionError("retained closure publication received an ineligible snapshot")
     records = snapshot.import_manifest.documents
     if len(records) != len(snapshot.documents):
@@ -2052,6 +2054,72 @@ def _publish_structural_closure_snapshot_v2(
         tuple(canonical_bytes(value) for value in snapshot.iter_axioms()),
         tuple(canonical_bytes(value) for value in snapshot.iter_extensions()),
     )
+    raw_origin_documents: tuple[tuple[bytes, ...], ...] = ()
+    effective_origin_documents: tuple[tuple[bytes, ...], ...] = ()
+    closure_origin_rows: tuple[bytes, ...] = ()
+    if snapshot.load_options.collect_provenance:
+        raw_tables: list[tuple[bytes, ...]] = []
+        for record, document in zip(records, snapshot.documents, strict=True):
+            if document.origin_index is None:
+                return snapshot
+            raw_items: list[tuple[bytes, bytes]] = []
+            for digest, occurrences in document.origin_index.entries.items():
+                for occurrence in occurrences:
+                    origin = NativeOriginRowV2(
+                        digest=digest,
+                        document_key=record.document_key,
+                        occurrence=occurrence.occurrence,
+                        span=occurrence.span,
+                    )
+                    collection, encoded = encode_native_auxiliary_row_v2(
+                        origin,
+                        max_row_bytes=snapshot.load_options.limits.max_wire_bytes,
+                    )
+                    if collection is not NativeFacadeCollectionV2.ORIGIN_ENTRIES:
+                        raise AssertionError(collection)
+                    raw_items.append((digest, encoded))
+            raw_items.sort(key=lambda item: item[0])
+            raw_tables.append(tuple(item[1] for item in raw_items))
+        raw_origin_documents = tuple(raw_tables)
+
+        ordinals_by_key = {record.document_key: ordinal for ordinal, record in enumerate(records)}
+        effective_items: list[list[tuple[bytes, bytes, int, bytes]]] = [[] for _record in records]
+        for digest, occurrences in snapshot.origin_index.entries.items():
+            for occurrence in occurrences:
+                ordinal = ordinals_by_key.get(occurrence.document_key)
+                if ordinal is None:
+                    return snapshot
+                origin = NativeOriginRowV2(
+                    digest=digest,
+                    document_key=occurrence.document_key,
+                    occurrence=occurrence.occurrence,
+                    span=occurrence.span,
+                )
+                collection, encoded = encode_native_auxiliary_row_v2(
+                    origin,
+                    max_row_bytes=snapshot.load_options.limits.max_wire_bytes,
+                )
+                if collection is not NativeFacadeCollectionV2.ORIGIN_ENTRIES:
+                    raise AssertionError(collection)
+                effective_items[ordinal].append(
+                    (
+                        digest,
+                        occurrence.document_key.encode("utf-8"),
+                        occurrence.occurrence,
+                        encoded,
+                    )
+                )
+        for items in effective_items:
+            items.sort()
+            if len({item[3] for item in items}) != len(items):
+                return snapshot
+        effective_origin_documents = tuple(
+            tuple(item[3] for item in items) for items in effective_items
+        )
+        closure_items = sorted(item for items in effective_items for item in items)
+        closure_origin_rows = tuple(item[3] for item in closure_items)
+        if len(set(closure_origin_rows)) != len(closure_origin_rows):
+            return snapshot
 
     document_diagnostics = tuple(
         tuple(freeze_native_diagnostic_publication_v1(value) for value in document.diagnostics)
@@ -2070,15 +2138,20 @@ def _publish_structural_closure_snapshot_v2(
             axiom_count=len(raw_rows[1]),
             extension_count=len(raw_rows[2]),
             source_map_entry_count=0,
-            origin_entry_count=0,
+            origin_entry_count=len(raw_origins),
             rdf_mapping_conformant=None,
             rdf_mapping_report_sha256=None,
         )
-        for record, document, diagnostics, raw_rows in zip(
+        for record, document, diagnostics, raw_rows, raw_origins in zip(
             records,
             snapshot.documents,
             document_diagnostics,
             raw_documents,
+            (
+                raw_origin_documents
+                if snapshot.load_options.collect_provenance
+                else ((),) * len(records)
+            ),
             strict=True,
         )
     )
@@ -2105,7 +2178,7 @@ def _publish_structural_closure_snapshot_v2(
         owl2_dl_conforms=None,
         owl2_dl_report_sha256=None,
     )
-    capability_bits = 7
+    capability_bits = 7 | (16 if snapshot.load_options.collect_provenance else 0)
     import_manifest = freeze_native_import_manifest_publication_v1(snapshot.import_manifest)
     sidecars = NativeDiagnosticReferenceSidecarsV2(
         snapshot=tuple(_diagnostic_reference_kinds(value) for value in diagnostics),
@@ -2125,19 +2198,28 @@ def _publish_structural_closure_snapshot_v2(
                 effective_annotation_count=len(rows[0]),
                 effective_axiom_count=len(rows[1]),
                 effective_extension_count=len(rows[2]),
-                effective_origin_count=0,
+                effective_origin_count=len(origin_rows),
                 raw_source_prefix_count=0,
                 rdf_unconsumed_triple_count=0,
                 rdf_rule_count=0,
                 rdf_diagnostic_count=0,
             )
-            for record, rows in zip(records, effective_documents, strict=True)
+            for record, rows, origin_rows in zip(
+                records,
+                effective_documents,
+                (
+                    effective_origin_documents
+                    if snapshot.load_options.collect_provenance
+                    else ((),) * len(records)
+                ),
+                strict=True,
+            )
         ),
         closure=NativeClosureFacadeCardinalitiesV2(
             effective_annotation_count=len(closure_rows[0]),
             effective_axiom_count=len(closure_rows[1]),
             effective_extension_count=len(closure_rows[2]),
-            effective_origin_count=0,
+            effective_origin_count=len(closure_origin_rows),
         ),
     )
     collections: dict[
@@ -2186,8 +2268,28 @@ def _publish_structural_closure_snapshot_v2(
                 True,
             )
         ] = values
+    if snapshot.load_options.collect_provenance:
+        for ordinal, values in enumerate(effective_origin_documents):
+            collections[
+                (
+                    NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+                    NativeFacadeScopeV2.DOCUMENT,
+                    ordinal,
+                    NativeSignatureKindV2.ALL,
+                    True,
+                )
+            ] = values
+        collections[
+            (
+                NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+                NativeFacadeScopeV2.CLOSURE,
+                None,
+                NativeSignatureKindV2.ALL,
+                True,
+            )
+        ] = closure_origin_rows
     raw_collections = None
-    if raw_documents != effective_documents:
+    if raw_documents != effective_documents or raw_origin_documents != effective_origin_documents:
         raw_collections = dict(collections)
         for ordinal, rows in enumerate(raw_documents):
             for collection, values in zip(
@@ -2202,6 +2304,17 @@ def _publish_structural_closure_snapshot_v2(
                 raw_collections[
                     (
                         collection,
+                        NativeFacadeScopeV2.DOCUMENT,
+                        ordinal,
+                        NativeSignatureKindV2.ALL,
+                        True,
+                    )
+                ] = values
+        if snapshot.load_options.collect_provenance:
+            for ordinal, values in enumerate(raw_origin_documents):
+                raw_collections[
+                    (
+                        NativeFacadeCollectionV2.ORIGIN_ENTRIES,
                         NativeFacadeScopeV2.DOCUMENT,
                         ordinal,
                         NativeSignatureKindV2.ALL,
@@ -2268,6 +2381,9 @@ def _publish_structural_closure_snapshot_v2(
             *(len(row) for document in effective_documents for rows in document for row in rows),
             *(len(row) for document in raw_documents for rows in document for row in rows),
             *(len(row) for rows in closure_rows for row in rows),
+            *(len(row) for rows in effective_origin_documents for row in rows),
+            *(len(row) for rows in raw_origin_documents for row in rows),
+            *(len(row) for row in closure_origin_rows),
         )
     )
     content = native_snapshot_content_digests_v2(
@@ -2310,12 +2426,24 @@ def _publish_structural_closure_snapshot_v2(
             extension,
             lambda: selected_extension._retain_structural_snapshot_v2(
                 raw_documents,
-                None,
+                (
+                    raw_origin_documents
+                    if raw_origin_documents != effective_origin_documents
+                    else effective_origin_documents
+                )
+                if snapshot.load_options.collect_provenance
+                else None,
                 attestation,
                 config,
                 cancel,
-                effective_documents=(effective_documents if raw_collections is not None else None),
-                effective_origins=None,
+                effective_documents=(
+                    effective_documents if raw_documents != effective_documents else None
+                ),
+                effective_origins=(
+                    effective_origin_documents
+                    if raw_origin_documents != effective_origin_documents
+                    else None
+                ),
                 effective_document_ordinals=topology,
                 closure_document_ordinals=closure_ordinals,
             ),

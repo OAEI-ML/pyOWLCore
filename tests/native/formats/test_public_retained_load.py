@@ -960,6 +960,7 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.RESOLVE_LOCAL,
             backend=BackendPreference.NATIVE,
+            preserve_source_map=True,
             collect_provenance=True,
         ),
         resolver=MappingResolver(
@@ -979,9 +980,11 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
     assert not imported.capabilities.encoded_view_schemas
 
 
+@pytest.mark.parametrize("collect_provenance", (False, True))
 def test_resolved_functional_diamond_retains_one_native_closure_owner(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
+    collect_provenance: bool,
 ) -> None:
     root = (
         b"Ontology(<urn:retained-closure:root> "
@@ -1010,7 +1013,7 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.RESOLVE_LOCAL,
             backend=backend,
-            collect_provenance=False,
+            collect_provenance=collect_provenance,
         )
 
     reference = load_snapshot(
@@ -1065,7 +1068,15 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     assert encode_snapshot(selected) == encode_snapshot(reference)
 
     assert len(cast(tuple[object, ...], captured["documents"])) == 4
-    assert captured["origins"] is None
+    reference_origin_rows = sum(
+        len(occurrences) for occurrences in reference.origin_index.entries.values()
+    )
+    if collect_provenance:
+        captured_origins = cast(tuple[tuple[bytes, ...], ...], captured["origins"])
+        assert len(captured_origins) == 4
+        assert sum(len(rows) for rows in captured_origins) == reference_origin_rows
+    else:
+        assert captured["origins"] is None
     assert captured["effective_origins"] is None
     assert captured["effective_document_ordinals"] == ((0,), (1,), (2,), (3,))
     assert captured["closure_document_ordinals"] == (0, 1, 2, 3)
@@ -1075,7 +1086,7 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     counters = cast(Any, raw_owner)._publication_counters_v2()
     assert counters.retained_document_tables == 4
     assert counters.canonical_input_rows == 4
-    assert counters.retained_origin_rows == 0
+    assert counters.retained_origin_rows == (2 * reference_origin_rows if collect_provenance else 0)
     assert counters.publication_structural_rows_copied == 0
     assert counters.publication_structural_bytes_copied == 0
 
@@ -1096,9 +1107,11 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     assert decode_root_canonical_bytes(encoded.buffers) == expected
 
 
+@pytest.mark.parametrize("collect_provenance", (False, True))
 def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
+    collect_provenance: bool,
 ) -> None:
     root = (
         b"Ontology(<urn:retained-cycle:a> Import(<urn:retained-cycle:b>) "
@@ -1118,7 +1131,7 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
             format=DocumentFormat.FUNCTIONAL,
             imports=ImportPolicy.RESOLVE_LOCAL,
             backend=backend,
-            collect_provenance=False,
+            collect_provenance=collect_provenance,
         )
 
     reference = load_snapshot(
@@ -1138,6 +1151,7 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
         **keywords: object,
     ) -> object:
         captured["documents"] = documents
+        captured["origins"] = origins
         captured.update(keywords)
         return retained(
             documents,
@@ -1167,6 +1181,7 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     assert selected.structural_fingerprint == reference.structural_fingerprint
     assert selected.logical_fingerprint == reference.logical_fingerprint
     assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
     assert encode_snapshot(selected) == encode_snapshot(reference)
     assert captured["effective_documents"] is not None
     assert captured["effective_document_ordinals"] == ((0,), (1,))
@@ -1178,6 +1193,26 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     )
     assert raw_rows[0] != raw_rows[1]
     assert captured["effective_documents"] != captured["documents"]
+    if collect_provenance:
+        raw_origins = cast(tuple[tuple[bytes, ...], ...], captured["origins"])
+        effective_origins = cast(
+            tuple[tuple[bytes, ...], ...],
+            captured["effective_origins"],
+        )
+        assert len(raw_origins) == len(effective_origins) == 2
+        effective_origin_count = sum(len(rows) for rows in effective_origins)
+        assert effective_origin_count == sum(
+            len(occurrences) for occurrences in reference.origin_index.entries.values()
+        )
+        handle = cast(Any, selected)._native_snapshot_state.owner.handle
+        raw_owner = object.__getattribute__(handle, "_owner_v2")
+        counters = cast(Any, raw_owner)._publication_counters_v2()
+        assert counters.retained_origin_rows == (
+            sum(len(rows) for rows in raw_origins) + 2 * effective_origin_count
+        )
+    else:
+        assert captured["origins"] is None
+        assert captured["effective_origins"] is None
     effective_rows = tuple(
         tuple(
             canonical_bytes(value)

@@ -1213,6 +1213,16 @@ impl PublicationStorageV2 {
         origin_rows: Option<Vec<Vec<u8>>>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
+        let origin_rows = origin_rows
+            .map(|rows| {
+                let mut documents = Vec::new();
+                documents.try_reserve_exact(1).map_err(|_| {
+                    NativeError::limit("typed V2 origin document-table allocation failed")
+                })?;
+                documents.push(rows);
+                Ok(documents)
+            })
+            .transpose()?;
         Self::from_typed_structural_parts(
             attestation,
             typed_structural,
@@ -1227,8 +1237,8 @@ impl PublicationStorageV2 {
     pub(super) fn from_typed_structural_with_auxiliary(
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
-        origin_rows: Option<Vec<Vec<u8>>>,
-        raw_origin_rows: Option<Vec<Vec<u8>>>,
+        origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+        raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
         source_map: Option<TypedSourceMapRowsV2>,
         rdf_report: Option<TypedRdfReportRowsV2>,
         parser_bytes: u64,
@@ -1247,8 +1257,8 @@ impl PublicationStorageV2 {
     fn from_typed_structural_parts(
         attestation: NativeSnapshotAttestationV2,
         typed_structural: TypedFacadeStorageV2,
-        origin_rows: Option<Vec<Vec<u8>>>,
-        raw_origin_rows: Option<Vec<Vec<u8>>>,
+        origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+        raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
         source_map: Option<TypedSourceMapRowsV2>,
         rdf_report: Option<TypedRdfReportRowsV2>,
         parser_bytes: u64,
@@ -1270,15 +1280,20 @@ impl PublicationStorageV2 {
             ));
         }
         let origins = origin_rows.unwrap_or_default();
-        let origin_count = u64::try_from(origins.len())
-            .map_err(|_| NativeError::limit("typed V2 origin count exceeds u64"))?;
-        let raw_origin_count = raw_origin_rows.as_ref().map_or(Ok(origin_count), |rows| {
-            u64::try_from(rows.len())
-                .map_err(|_| NativeError::limit("typed V2 raw origin count exceeds u64"))
-        })?;
+        let origin_count = origin_row_count_v2(&origins)?;
+        let raw_origin_count = raw_origin_rows
+            .as_ref()
+            .map_or(Ok(origin_count), |rows| origin_row_count_v2(rows))?;
         let origin_maximum = origins
             .iter()
-            .chain(raw_origin_rows.as_deref().unwrap_or_default())
+            .flatten()
+            .chain(
+                raw_origin_rows
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .flatten(),
+            )
             .try_fold(1_u64, |maximum, row| {
                 if row.len() < 32 {
                     return Err(NativeError::protocol(
@@ -1326,9 +1341,9 @@ impl PublicationStorageV2 {
                 "typed V2 owner attests unsupported auxiliary collections",
             ));
         }
-        if (retains_origins || retained_source.present) && attestation.document_count != 1 {
+        if retained_source.present && attestation.document_count != 1 {
             return Err(NativeError::protocol(
-                "typed V2 auxiliary attachment currently requires one document",
+                "typed V2 source-map attachment currently requires one document",
             ));
         }
         if parser_bytes != 0 && parser_bytes != attestation.total_source_bytes {
@@ -1339,7 +1354,11 @@ impl PublicationStorageV2 {
         let typed_structural = Arc::new(typed_structural);
         let mut initial = typed_initial_counters(&typed_structural, &attestation)?;
         initial[PARSER_BYTES] = parser_bytes;
-        let mut retained_origins = retain_origin_tables_v2(origins, raw_origin_rows)?;
+        let mut retained_origins = if retains_origins {
+            retain_origin_tables_v2(origins, raw_origin_rows, attestation.document_count)?
+        } else {
+            RetainedOriginTablesV2::default()
+        };
         retained_origins
             .effective_tables
             .extend(retained_source.effective_tables);
@@ -1435,7 +1454,8 @@ impl PublicationStorageV2 {
         Ok(Arc::new(Self {
             attestation,
             effective_tables: retained_origins.effective_tables,
-            raw_document_tables: (!retained_origins.raw_document_tables.is_empty())
+            raw_document_tables: retained_origins
+                .raw_document_override
                 .then_some(retained_origins.raw_document_tables),
             typed_structural: Some(typed_structural),
             counters: CounterStateV2::new(initial),
@@ -1886,6 +1906,7 @@ fn retain_source_tables_v2(
 struct RetainedOriginTablesV2 {
     effective_tables: Vec<FacadeTableV2>,
     raw_document_tables: Vec<FacadeTableV2>,
+    raw_document_override: bool,
     row_count: u64,
     payload_bytes: u64,
     metadata_bytes: u64,
@@ -1899,84 +1920,115 @@ struct RetainedOriginPayloadV2 {
 }
 
 fn retain_origin_tables_v2(
-    rows: Vec<Vec<u8>>,
-    raw_document_rows: Option<Vec<Vec<u8>>>,
+    rows: Vec<Vec<Vec<u8>>>,
+    raw_document_rows: Option<Vec<Vec<Vec<u8>>>>,
+    document_count: u64,
 ) -> NativeResult<RetainedOriginTablesV2> {
-    validate_origin_digest_groups(&rows)?;
-    if let Some(raw) = raw_document_rows.as_deref() {
-        validate_origin_digest_groups(raw)?;
+    let raw_document_override = raw_document_rows.is_some();
+    let expected_document_count = usize::try_from(document_count)
+        .map_err(|_| NativeError::limit("typed V2 document count exceeds usize"))?;
+    if rows.len() != expected_document_count
+        || raw_document_rows
+            .as_ref()
+            .is_some_and(|raw| raw.len() != expected_document_count)
+    {
+        return Err(NativeError::protocol(
+            "typed V2 origin document tables diverge from the structural owner",
+        ));
     }
-    let effective_count = u64::try_from(rows.len())
-        .map_err(|_| NativeError::limit("typed V2 effective origin count exceeds u64"))?;
+    for document_rows in &rows {
+        validate_effective_origin_rows_v2(document_rows)?;
+    }
+    if let Some(raw) = raw_document_rows.as_deref() {
+        for document_rows in raw {
+            validate_raw_origin_rows_v2(document_rows)?;
+        }
+        for (effective, raw) in rows.iter().zip(raw) {
+            if let (Some(effective_key), Some(raw_key)) = (
+                origin_document_key_v2(effective)?,
+                origin_document_key_v2(raw)?,
+            ) {
+                if effective_key != raw_key {
+                    return Err(NativeError::protocol(
+                        "typed V2 raw and effective origin tables name different documents",
+                    ));
+                }
+            }
+        }
+    }
+    let effective_count = origin_row_count_v2(&rows)?;
     let raw_count = raw_document_rows
         .as_ref()
-        .map_or(Ok(effective_count), |raw| {
-            u64::try_from(raw.len())
-                .map_err(|_| NativeError::limit("typed V2 raw origin count exceeds u64"))
-        })?;
-    let row_count = effective_count
-        .checked_mul(2)
-        .and_then(|count| {
-            raw_document_rows
-                .as_ref()
-                .map_or(Some(count), |_| count.checked_add(raw_count))
-        })
-        .ok_or_else(|| NativeError::limit("typed V2 origin row count overflow"))?;
-
-    let effective = retain_origin_payload_v2(rows)?;
-    let raw = raw_document_rows
-        .map(retain_origin_payload_v2)
-        .transpose()?;
-    let mut payload_bytes = effective.payload_bytes;
-    let mut metadata_bytes = effective.metadata_bytes;
-    if let Some(raw) = &raw {
-        payload_bytes = checked_add(payload_bytes, raw.payload_bytes)?;
-        metadata_bytes = checked_add(metadata_bytes, raw.metadata_bytes)?;
-    }
-
-    let document_rows = effective.rows;
+        .map_or(Ok(effective_count), |raw| origin_row_count_v2(raw))?;
     let mut closure_rows = Vec::new();
     closure_rows
-        .try_reserve_exact(document_rows.len())
+        .try_reserve_exact(
+            usize::try_from(effective_count)
+                .map_err(|_| NativeError::limit("typed V2 origin count exceeds usize"))?,
+        )
         .map_err(|_| NativeError::limit("typed V2 origin closure allocation failed"))?;
+    let mut metadata_bytes = u64::try_from(
+        closure_rows
+            .capacity()
+            .checked_mul(size_of::<Arc<Vec<u8>>>())
+            .ok_or_else(|| NativeError::limit("typed V2 origin closure size overflow"))?,
+    )
+    .map_err(|_| NativeError::limit("typed V2 origin closure size exceeds u64"))?;
+    let mut payload_bytes = 0_u64;
+
+    let effective_table_count = rows
+        .iter()
+        .filter(|document_rows| !document_rows.is_empty())
+        .count()
+        + usize::from(effective_count != 0);
+    let mut effective_tables = Vec::new();
+    effective_tables
+        .try_reserve_exact(effective_table_count)
+        .map_err(|_| NativeError::limit("typed V2 origin table allocation failed"))?;
     metadata_bytes = checked_add(
         metadata_bytes,
         u64::try_from(
-            closure_rows
+            effective_tables
                 .capacity()
-                .checked_mul(size_of::<Arc<Vec<u8>>>())
-                .ok_or_else(|| NativeError::limit("typed V2 origin closure size overflow"))?,
+                .checked_mul(size_of::<FacadeTableV2>())
+                .ok_or_else(|| NativeError::limit("typed V2 origin table size overflow"))?,
         )
-        .map_err(|_| NativeError::limit("typed V2 origin closure size exceeds u64"))?,
+        .map_err(|_| NativeError::limit("typed V2 origin table size exceeds u64"))?,
     )?;
-    closure_rows.extend(document_rows.iter().cloned());
 
-    let mut effective_tables = Vec::new();
-    if !document_rows.is_empty() {
-        effective_tables
-            .try_reserve_exact(2)
-            .map_err(|_| NativeError::limit("typed V2 origin table allocation failed"))?;
-        metadata_bytes = checked_add(
-            metadata_bytes,
-            u64::try_from(
-                effective_tables
-                    .capacity()
-                    .checked_mul(size_of::<FacadeTableV2>())
-                    .ok_or_else(|| NativeError::limit("typed V2 origin table size overflow"))?,
-            )
-            .map_err(|_| NativeError::limit("typed V2 origin table size exceeds u64"))?,
-        )?;
+    for (ordinal, document_rows) in rows.into_iter().enumerate() {
+        let retained = retain_origin_payload_v2(document_rows)?;
+        payload_bytes = checked_add(payload_bytes, retained.payload_bytes)?;
+        metadata_bytes = checked_add(metadata_bytes, retained.metadata_bytes)?;
+        closure_rows.extend(retained.rows.iter().cloned());
+        if retained.rows.is_empty() {
+            continue;
+        }
         effective_tables.push(FacadeTableV2 {
             coordinate: CoordinateV2 {
                 collection: CollectionV2::OriginEntries,
                 scope: ScopeV2::Document,
-                document_ordinal: Some(0),
+                document_ordinal: Some(
+                    u64::try_from(ordinal)
+                        .map_err(|_| NativeError::limit("typed V2 origin ordinal exceeds u64"))?,
+                ),
                 signature_kind: SignatureKindV2::All,
                 include_builtins: true,
             },
-            rows: document_rows,
+            rows: retained.rows,
             source_identity: 0,
         });
+    }
+    closure_rows.sort_unstable_by(compare_valid_origin_rows_v2);
+    if closure_rows
+        .windows(2)
+        .any(|pair| compare_valid_origin_rows_v2(&pair[0], &pair[1]).is_ge())
+    {
+        return Err(NativeError::protocol(
+            "typed V2 effective origin rows are not globally unique",
+        ));
+    }
+    if !closure_rows.is_empty() {
         effective_tables.push(FacadeTableV2 {
             coordinate: CoordinateV2 {
                 collection: CollectionV2::OriginEntries,
@@ -1988,14 +2040,14 @@ fn retain_origin_tables_v2(
             rows: closure_rows,
             source_identity: 0,
         });
-        effective_tables.sort_unstable_by_key(|table| table.coordinate);
-        reject_duplicate_coordinates(&effective_tables)?;
     }
+    effective_tables.sort_unstable_by_key(|table| table.coordinate);
+    reject_duplicate_coordinates(&effective_tables)?;
 
     let mut raw_document_tables = Vec::new();
-    if let Some(raw) = raw {
+    if let Some(raw_documents) = raw_document_rows {
         raw_document_tables
-            .try_reserve_exact(1)
+            .try_reserve_exact(raw_documents.len())
             .map_err(|_| NativeError::limit("typed V2 raw origin table allocation failed"))?;
         metadata_bytes = checked_add(
             metadata_bytes,
@@ -2007,35 +2059,194 @@ fn retain_origin_tables_v2(
             )
             .map_err(|_| NativeError::limit("typed V2 raw origin table size exceeds u64"))?,
         )?;
-        raw_document_tables.push(FacadeTableV2 {
-            coordinate: CoordinateV2 {
-                collection: CollectionV2::OriginEntries,
-                scope: ScopeV2::Document,
-                document_ordinal: Some(0),
-                signature_kind: SignatureKindV2::All,
-                include_builtins: true,
-            },
-            rows: raw.rows,
-            source_identity: 0,
-        });
+        for (ordinal, document_rows) in raw_documents.into_iter().enumerate() {
+            let retained = retain_origin_payload_v2(document_rows)?;
+            payload_bytes = checked_add(payload_bytes, retained.payload_bytes)?;
+            metadata_bytes = checked_add(metadata_bytes, retained.metadata_bytes)?;
+            raw_document_tables.push(FacadeTableV2 {
+                coordinate: CoordinateV2 {
+                    collection: CollectionV2::OriginEntries,
+                    scope: ScopeV2::Document,
+                    document_ordinal: Some(u64::try_from(ordinal).map_err(|_| {
+                        NativeError::limit("typed V2 raw origin ordinal exceeds u64")
+                    })?),
+                    signature_kind: SignatureKindV2::All,
+                    include_builtins: true,
+                },
+                rows: retained.rows,
+                source_identity: 0,
+            });
+        }
     }
+    let row_count = effective_count
+        .checked_add(effective_count)
+        .and_then(|count| {
+            if raw_document_override {
+                count.checked_add(raw_count)
+            } else {
+                Some(count)
+            }
+        })
+        .ok_or_else(|| NativeError::limit("typed V2 origin row count overflow"))?;
     Ok(RetainedOriginTablesV2 {
         effective_tables,
         raw_document_tables,
+        raw_document_override,
         row_count,
         payload_bytes,
         metadata_bytes,
     })
 }
 
-fn validate_origin_digest_groups(rows: &[Vec<u8>]) -> NativeResult<()> {
-    if rows
-        .windows(2)
-        .any(|pair| pair[0].get(..32) > pair[1].get(..32))
-    {
+fn origin_row_count_v2(rows: &[Vec<Vec<u8>>]) -> NativeResult<u64> {
+    rows.iter().try_fold(0_u64, |count, document_rows| {
+        let document_count = u64::try_from(document_rows.len())
+            .map_err(|_| NativeError::limit("typed V2 origin row count exceeds u64"))?;
+        count
+            .checked_add(document_count)
+            .ok_or_else(|| NativeError::limit("typed V2 origin row count overflow"))
+    })
+}
+
+#[derive(Clone, Copy)]
+struct OriginOrderKeyV2<'a> {
+    digest: &'a [u8],
+    document_key: &'a [u8],
+    occurrence: u64,
+    encoded: &'a [u8],
+}
+
+fn origin_order_key_v2(row: &[u8]) -> NativeResult<OriginOrderKeyV2<'_>> {
+    const DIGEST_BYTES: usize = 32;
+    const TEXT_LENGTH_BYTES: usize = 4;
+    const OCCURRENCE_BYTES: usize = 8;
+    const SPAN_MASK_BYTES: usize = 1;
+    let text_length_end = DIGEST_BYTES
+        .checked_add(TEXT_LENGTH_BYTES)
+        .ok_or_else(|| NativeError::limit("typed V2 origin offset overflow"))?;
+    let text_length_bytes: [u8; TEXT_LENGTH_BYTES] = row
+        .get(DIGEST_BYTES..text_length_end)
+        .ok_or_else(|| NativeError::protocol("typed V2 retained origin row is truncated"))?
+        .try_into()
+        .map_err(|_| NativeError::protocol("typed V2 retained origin text length is malformed"))?;
+    let text_length = usize::try_from(u32::from_le_bytes(text_length_bytes))
+        .map_err(|_| NativeError::limit("typed V2 origin document key exceeds usize"))?;
+    let document_key_end = text_length_end
+        .checked_add(text_length)
+        .ok_or_else(|| NativeError::limit("typed V2 origin document-key offset overflow"))?;
+    let document_key = row
+        .get(text_length_end..document_key_end)
+        .ok_or_else(|| NativeError::protocol("typed V2 retained origin row is truncated"))?;
+    if document_key.is_empty() || std::str::from_utf8(document_key).is_err() {
         return Err(NativeError::protocol(
-            "typed V2 retained origin digest groups are not ordered",
+            "typed V2 retained origin document key is invalid",
         ));
+    }
+    let occurrence_end = document_key_end
+        .checked_add(OCCURRENCE_BYTES)
+        .ok_or_else(|| NativeError::limit("typed V2 origin occurrence offset overflow"))?;
+    let occurrence_bytes: [u8; OCCURRENCE_BYTES] = row
+        .get(document_key_end..occurrence_end)
+        .ok_or_else(|| NativeError::protocol("typed V2 retained origin row is truncated"))?
+        .try_into()
+        .map_err(|_| NativeError::protocol("typed V2 retained origin occurrence is malformed"))?;
+    let span_mask = *row
+        .get(occurrence_end)
+        .ok_or_else(|| NativeError::protocol("typed V2 retained origin span is truncated"))?;
+    let coordinate_count = if span_mask == 0 {
+        0
+    } else {
+        if span_mask & 0xc0 != 0x80 {
+            return Err(NativeError::protocol(
+                "typed V2 retained origin span mask is invalid",
+            ));
+        }
+        usize::try_from((span_mask & 0x3f).count_ones())
+            .map_err(|_| NativeError::limit("typed V2 origin span count exceeds usize"))?
+    };
+    let expected_end = occurrence_end
+        .checked_add(SPAN_MASK_BYTES)
+        .and_then(|offset| offset.checked_add(coordinate_count.checked_mul(8)?))
+        .ok_or_else(|| NativeError::limit("typed V2 origin span offset overflow"))?;
+    if expected_end != row.len() {
+        return Err(NativeError::protocol(
+            "typed V2 retained origin span is malformed",
+        ));
+    }
+    Ok(OriginOrderKeyV2 {
+        digest: &row[..DIGEST_BYTES],
+        document_key,
+        occurrence: u64::from_le_bytes(occurrence_bytes),
+        encoded: row,
+    })
+}
+
+fn compare_origin_order_keys_v2(
+    left: OriginOrderKeyV2<'_>,
+    right: OriginOrderKeyV2<'_>,
+) -> std::cmp::Ordering {
+    left.digest
+        .cmp(right.digest)
+        .then_with(|| left.document_key.cmp(right.document_key))
+        .then_with(|| left.occurrence.cmp(&right.occurrence))
+        .then_with(|| left.encoded.cmp(right.encoded))
+}
+
+fn compare_valid_origin_rows_v2(left: &Arc<Vec<u8>>, right: &Arc<Vec<u8>>) -> std::cmp::Ordering {
+    let left = origin_order_key_v2(left)
+        .expect("validated typed V2 origin row must retain its canonical order key");
+    let right = origin_order_key_v2(right)
+        .expect("validated typed V2 origin row must retain its canonical order key");
+    compare_origin_order_keys_v2(left, right)
+}
+
+fn origin_document_key_v2(rows: &[Vec<u8>]) -> NativeResult<Option<&[u8]>> {
+    rows.first()
+        .map(|row| origin_order_key_v2(row).map(|key| key.document_key))
+        .transpose()
+}
+
+fn validate_effective_origin_rows_v2(rows: &[Vec<u8>]) -> NativeResult<()> {
+    let document_key = origin_document_key_v2(rows)?;
+    for row in rows {
+        let key = origin_order_key_v2(row)?;
+        if Some(key.document_key) != document_key {
+            return Err(NativeError::protocol(
+                "typed V2 effective origin table names multiple documents",
+            ));
+        }
+    }
+    for pair in rows.windows(2) {
+        if compare_origin_order_keys_v2(
+            origin_order_key_v2(&pair[0])?,
+            origin_order_key_v2(&pair[1])?,
+        )
+        .is_ge()
+        {
+            return Err(NativeError::protocol(
+                "typed V2 effective origin rows are not ascending unique",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_raw_origin_rows_v2(rows: &[Vec<u8>]) -> NativeResult<()> {
+    let document_key = origin_document_key_v2(rows)?;
+    let mut previous_digest: Option<&[u8]> = None;
+    for row in rows {
+        let key = origin_order_key_v2(row)?;
+        if Some(key.document_key) != document_key {
+            return Err(NativeError::protocol(
+                "typed V2 raw origin table names multiple documents",
+            ));
+        }
+        if previous_digest.is_some_and(|previous| previous > key.digest) {
+            return Err(NativeError::protocol(
+                "typed V2 retained origin digest groups are not ordered",
+            ));
+        }
+        previous_digest = Some(key.digest);
     }
     Ok(())
 }
@@ -3929,6 +4140,24 @@ mod tests {
         (storage, canonical)
     }
 
+    fn typed_two_document_owner() -> TypedFacadeStorageV2 {
+        let first = typed_declaration("urn:typed:first");
+        let second = typed_declaration("urn:typed:second");
+        let limits = Limits::default();
+        let mut builder =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("typed builder");
+        builder
+            .add_document(&[], std::slice::from_ref(&first), &[])
+            .expect("first document");
+        builder
+            .add_document(&[], std::slice::from_ref(&second), &[])
+            .expect("second document");
+        builder
+            .freeze(&[vec![0], vec![1]], &[0, 1])
+            .expect("two-document owner")
+    }
+
     fn coordinate(
         collection: CollectionV2,
         scope: ScopeV2,
@@ -3941,6 +4170,19 @@ mod tests {
             signature_kind: SignatureKindV2::All,
             include_builtins: true,
         }
+    }
+
+    fn origin_row(digest: u8, document_key: &str, occurrence: u64) -> Vec<u8> {
+        let mut row = vec![digest; 32];
+        row.extend(
+            u32::try_from(document_key.len())
+                .expect("origin document key length")
+                .to_le_bytes(),
+        );
+        row.extend(document_key.as_bytes());
+        row.extend(occurrence.to_le_bytes());
+        row.push(0);
+        row
     }
 
     #[test]
@@ -4047,7 +4289,7 @@ mod tests {
     #[test]
     fn typed_structural_owner_retains_one_shared_origin_table() {
         let (typed, canonical) = typed_structural_owner();
-        let origin = vec![0x42; 96];
+        let origin = origin_row(0x42, "d1:test", 0);
         let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
         attestation.capability_bits |= 16;
         attestation.origin_entry_count = 1;
@@ -4081,8 +4323,8 @@ mod tests {
     #[test]
     fn typed_structural_owner_retains_distinct_raw_and_effective_origin_tables() {
         let (typed, canonical) = typed_structural_owner();
-        let effective_origin = vec![0x42; 96];
-        let raw_origin = vec![0x24; 96];
+        let effective_origin = origin_row(0x42, "d1:test", 0);
+        let raw_origin = origin_row(0x24, "d1:test", 0);
         let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
         attestation.capability_bits |= 16;
         attestation.origin_entry_count = 1;
@@ -4093,8 +4335,8 @@ mod tests {
         let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
             attestation,
             typed,
-            Some(vec![effective_origin.clone()]),
-            Some(vec![raw_origin.clone()]),
+            Some(vec![vec![effective_origin.clone()]]),
+            Some(vec![vec![raw_origin.clone()]]),
             None,
             None,
             0,
@@ -4129,7 +4371,7 @@ mod tests {
     #[test]
     fn typed_structural_owner_retains_an_explicit_empty_raw_origin_override() {
         let (typed, canonical) = typed_structural_owner();
-        let effective_origin = vec![0x42; 96];
+        let effective_origin = origin_row(0x42, "d1:test", 0);
         let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
         attestation.capability_bits |= 16;
         attestation.origin_entry_count = 0;
@@ -4137,8 +4379,8 @@ mod tests {
         let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
             attestation,
             typed,
-            Some(vec![effective_origin.clone()]),
-            Some(Vec::new()),
+            Some(vec![vec![effective_origin.clone()]]),
+            Some(vec![Vec::new()]),
             None,
             None,
             0,
@@ -4166,6 +4408,142 @@ mod tests {
             effective_origin.len() as u64
         );
         validate_retained_total(&counters).expect("empty raw origin override counters");
+    }
+
+    #[test]
+    fn typed_structural_owner_routes_multi_document_origin_tables() {
+        let typed = typed_two_document_owner();
+        let first_low = origin_row(0x20, "d1:first", 0);
+        let first_high = origin_row(0x40, "d1:first", 1);
+        let second_low = origin_row(0x10, "d1:second", 0);
+        let second_middle = origin_row(0x20, "d1:second", 1);
+        let raw_first = origin_row(0x20, "d1:first", 7);
+        let raw_second = origin_row(0x10, "d1:second", 3);
+        let effective = vec![
+            vec![first_low.clone(), first_high.clone()],
+            vec![second_low.clone(), second_middle.clone()],
+        ];
+        let raw = vec![
+            vec![raw_first.clone(), raw_first.clone()],
+            vec![raw_second.clone()],
+        ];
+        let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
+        attestation.document_count = 2;
+        attestation.import_edge_count = 1;
+        attestation.stored_axiom_count = 2;
+        attestation.effective_axiom_count = 2;
+        attestation.capability_bits |= 16;
+        attestation.origin_entry_count = 3;
+        attestation.root_document_key = Box::from("d1:first");
+        attestation.max_facade_row_bytes = typed.maximum_row_bytes().max(
+            effective
+                .iter()
+                .chain(&raw)
+                .flatten()
+                .map(Vec::len)
+                .max()
+                .expect("origin rows") as u64,
+        );
+        let storage = PublicationStorageV2::from_typed_structural_with_auxiliary(
+            attestation,
+            typed,
+            Some(effective),
+            Some(raw),
+            None,
+            None,
+            0,
+        )
+        .expect("multi-document origins");
+
+        let first = storage.rows(
+            coordinate(CollectionV2::OriginEntries, ScopeV2::Document, Some(0)),
+            false,
+        );
+        let second = storage.rows(
+            coordinate(CollectionV2::OriginEntries, ScopeV2::Document, Some(1)),
+            false,
+        );
+        let closure = storage.rows(
+            coordinate(CollectionV2::OriginEntries, ScopeV2::Closure, None),
+            false,
+        );
+        let raw_first_rows = storage.rows(
+            coordinate(CollectionV2::OriginEntries, ScopeV2::Document, Some(0)),
+            true,
+        );
+        assert_eq!(
+            first.iter().map(|row| row.as_slice()).collect::<Vec<_>>(),
+            vec![first_low.as_slice(), first_high.as_slice()]
+        );
+        assert_eq!(
+            second.iter().map(|row| row.as_slice()).collect::<Vec<_>>(),
+            vec![second_low.as_slice(), second_middle.as_slice()]
+        );
+        assert_eq!(
+            closure.iter().map(|row| row.as_slice()).collect::<Vec<_>>(),
+            vec![
+                second_low.as_slice(),
+                first_low.as_slice(),
+                second_middle.as_slice(),
+                first_high.as_slice(),
+            ]
+        );
+        assert!(Arc::ptr_eq(&second[0], &closure[0]));
+        assert!(Arc::ptr_eq(&first[0], &closure[1]));
+        assert_eq!(raw_first_rows.len(), 2);
+        assert_eq!(raw_first_rows[0].as_slice(), raw_first);
+        assert_eq!(raw_first_rows[1].as_slice(), raw_first);
+        assert!(!Arc::ptr_eq(&raw_first_rows[0], &raw_first_rows[1]));
+        let counters = storage.counters.snapshot();
+        assert_eq!(counters[RETAINED_ROW_FIRST + 5], 11);
+        assert_eq!(
+            counters[RETAINED_ORIGIN_BYTES],
+            u64::try_from(
+                first_low.len()
+                    + first_high.len()
+                    + second_low.len()
+                    + second_middle.len()
+                    + raw_first.len() * 2
+                    + raw_second.len()
+            )
+            .expect("origin payload bytes")
+        );
+        validate_retained_total(&counters).expect("multi-document origin owner counters");
+    }
+
+    #[test]
+    fn multi_document_origin_tables_reject_topology_order_and_codec_drift() {
+        assert!(
+            retain_origin_tables_v2(vec![vec![origin_row(0x20, "d1:first", 0)]], None, 2).is_err()
+        );
+        assert!(retain_origin_tables_v2(
+            vec![
+                vec![
+                    origin_row(0x40, "d1:first", 0),
+                    origin_row(0x20, "d1:first", 1),
+                ],
+                Vec::new(),
+            ],
+            None,
+            2,
+        )
+        .is_err());
+
+        let duplicate = origin_row(0x20, "d1:first", 0);
+        assert!(
+            retain_origin_tables_v2(vec![vec![duplicate.clone()], vec![duplicate]], None, 2,)
+                .is_err()
+        );
+        assert!(retain_origin_tables_v2(
+            vec![vec![origin_row(0x20, "d1:first", 0)], Vec::new()],
+            Some(vec![vec![origin_row(0x20, "d1:second", 0)], Vec::new(),]),
+            2,
+        )
+        .is_err());
+
+        let mut malformed = origin_row(0x20, "d1:first", 0);
+        malformed.push(0);
+        assert!(retain_origin_tables_v2(vec![vec![malformed], Vec::new()], None, 2).is_err());
     }
 
     #[test]

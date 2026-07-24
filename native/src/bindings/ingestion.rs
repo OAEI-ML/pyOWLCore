@@ -679,6 +679,16 @@ fn finalize_parsed_structural_snapshot_v2_with_allocations<'py>(
         )
     })?;
     validate_prepared_attestation(py, prepared, attestation, allocations)?;
+    let mut origin_documents = prepared
+        .origin_rows
+        .as_ref()
+        .map(|_| empty_origin_document_table(allocations))
+        .transpose()?;
+    let mut raw_origin_documents = prepared
+        .raw_origin_rows
+        .as_ref()
+        .map(|_| empty_origin_document_table(allocations))
+        .transpose()?;
     allocations.checkpoint()?;
     let parser_bytes = parsed.parser_bytes;
     let storage = parsed.storage.take().ok_or_else(|| {
@@ -694,11 +704,23 @@ fn finalize_parsed_structural_snapshot_v2_with_allocations<'py>(
     parsed.prepared_summary = None;
     let source_map = prepared.source_map;
     let rdf_report = prepared.rdf_report.map(|report| report.rows);
+    if let Some(rows) = prepared.origin_rows {
+        origin_documents
+            .as_mut()
+            .expect("origin document table was preallocated")
+            .push(rows);
+    }
+    if let Some(rows) = prepared.raw_origin_rows {
+        raw_origin_documents
+            .as_mut()
+            .expect("raw origin document table was preallocated")
+            .push(rows);
+    }
     crate::publication::typed_structural_handle_v2(
         attestation,
         storage,
-        prepared.origin_rows,
-        prepared.raw_origin_rows,
+        origin_documents,
+        raw_origin_documents,
         source_map,
         rdf_report,
         parser_bytes,
@@ -927,30 +949,6 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
             })?;
         enforce_retained_boundary(external_bytes, &limits)?;
     }
-    let owned_origins = if origins.is_none() {
-        None
-    } else {
-        Some(owned_origin_rows(
-            py,
-            origins,
-            &limits,
-            &cancellation,
-            &mut external_bytes,
-            allocations,
-        )?)
-    };
-    let owned_effective_origins = effective_origins
-        .map(|value| {
-            owned_origin_rows(
-                py,
-                value,
-                &limits,
-                &cancellation,
-                &mut external_bytes,
-                allocations,
-            )
-        })
-        .transpose()?;
     let (effective_document_ordinals, closure_document_ordinals, topology_bytes) =
         owned_closure_topology(
             py,
@@ -967,6 +965,32 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
         ))
     })?;
     enforce_retained_boundary(external_bytes, &limits)?;
+    let owned_origins = if origins.is_none() {
+        None
+    } else {
+        Some(owned_origin_document_rows(
+            py,
+            origins,
+            owned_documents.len(),
+            &limits,
+            &cancellation,
+            &mut external_bytes,
+            allocations,
+        )?)
+    };
+    let owned_effective_origins = effective_origins
+        .map(|value| {
+            owned_origin_document_rows(
+                py,
+                value,
+                owned_documents.len(),
+                &limits,
+                &cancellation,
+                &mut external_bytes,
+                allocations,
+            )
+        })
+        .transpose()?;
     let owned_effective_documents = owned_effective_documents.map(|(rows, _bytes)| rows);
     let (storage, retained_origins, raw_origins) = crate::run_detached(py, move |interrupt| {
         let mut builder = TypedFacadeBuilderV2::new(
@@ -1440,6 +1464,100 @@ fn owned_origin_rows(
         owned.push(copied);
     }
     Ok(owned)
+}
+
+fn owned_origin_document_rows(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    document_count: usize,
+    limits: &Limits,
+    cancellation: &crate::cancel::Cancellation,
+    total_bytes: &mut usize,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Vec<Vec<Vec<u8>>>> {
+    if !value.get_type().is(py.get_type::<PyTuple>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "native origin document tables must be an exact tuple",
+        ));
+    }
+    let tables = value.cast::<PyTuple>()?;
+    let flat_single_document =
+        tables.is_empty() || tables.get_item(0)?.get_type().is(py.get_type::<PyBytes>());
+    if flat_single_document {
+        if document_count != 1 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "flat native origin rows require one structural document",
+            ));
+        }
+        let rows = owned_origin_rows(py, value, limits, cancellation, total_bytes, allocations)?;
+        return single_origin_document_table(rows, allocations);
+    }
+    if tables.len() != document_count {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "native origin document-table count must match structural documents",
+        ));
+    }
+    let total_rows = tables.iter().try_fold(0_u64, |count, table| {
+        if !table.get_type().is(py.get_type::<PyTuple>()) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native origin document tables must contain exact tuples",
+            ));
+        }
+        count
+            .checked_add(u64::try_from(table.cast::<PyTuple>()?.len()).map_err(|_| {
+                crate::python_error(NativeError::limit("native origin row count exceeds u64"))
+            })?)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::limit("native origin row count overflow"))
+            })
+    })?;
+    if total_rows > limits.max_origin_entries {
+        return Err(crate::python_error(NativeError::limit(
+            "native origin row count exceeds configured limits",
+        )));
+    }
+    let mut owned = Vec::new();
+    if !tables.is_empty() {
+        allocations.checkpoint()?;
+    }
+    owned.try_reserve_exact(tables.len()).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native origin document-table allocation failed",
+        ))
+    })?;
+    for table in tables {
+        owned.push(owned_origin_rows(
+            py,
+            &table,
+            limits,
+            cancellation,
+            total_bytes,
+            allocations,
+        )?);
+    }
+    Ok(owned)
+}
+
+fn single_origin_document_table(
+    rows: Vec<Vec<u8>>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Vec<Vec<Vec<u8>>>> {
+    let mut documents = empty_origin_document_table(allocations)?;
+    documents.push(rows);
+    Ok(documents)
+}
+
+fn empty_origin_document_table(
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Vec<Vec<Vec<u8>>>> {
+    allocations.checkpoint()?;
+    let mut documents = Vec::new();
+    documents.try_reserve_exact(1).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native origin document-table allocation failed",
+        ))
+    })?;
+    Ok(documents)
 }
 
 /// Bounded observability hook for the unadvertised first WP16 slice.

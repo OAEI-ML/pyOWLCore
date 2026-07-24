@@ -1461,7 +1461,7 @@ def test_retained_finalization_bridge_failures_preserve_prepared_storage(
 
     parsed, summary = prepared_storage()
     handle, allocations = probe(parsed, summary, attestation, None)
-    assert allocations == 2
+    assert allocations == 3
     assert handle._publication_closed_v2() is False
     handle._publication_close_v2()
     assert request == original_request
@@ -1599,7 +1599,7 @@ def test_retained_structural_bridge_allocations_fail_before_owner_publication(
         effective_documents=effective_documents,
         effective_origins=effective_origins,
     )
-    assert allocations == 20
+    assert allocations == 22
     assert handle._publication_closed_v2() is False
     handle._publication_close_v2()
     assert documents == original_documents
@@ -1608,6 +1608,8 @@ def test_retained_structural_bridge_allocations_fail_before_owner_publication(
 
     duplicated_documents = (*cast(tuple[object, ...], documents),) * 2
     duplicated_effective = (*cast(tuple[object, ...], effective_documents),) * 2
+    duplicated_origin_tables = (cast(tuple[bytes, ...], origins),) * 2
+    duplicated_effective_origin_tables = (cast(tuple[bytes, ...], effective_origins),) * 2
     with pytest.raises(
         ValueError,
         match=r"^native multi-document retention requires explicit closure topology$",
@@ -1650,11 +1652,11 @@ def test_retained_structural_bridge_allocations_fail_before_owner_publication(
     with pytest.raises(extension._NativeError) as topology_error:
         probe(
             duplicated_documents,
-            origins,
+            duplicated_origin_tables,
             attestation,
             memoryview(config),
             effective_documents=duplicated_effective,
-            effective_origins=effective_origins,
+            effective_origins=duplicated_effective_origin_tables,
             effective_document_ordinals=((0,), (0,)),
             closure_document_ordinals=(0, 1),
         )
