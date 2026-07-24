@@ -587,6 +587,46 @@ def test_functional_source_map_stays_in_parser_owned_storage_until_access(
     assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
+@pytest.mark.parametrize("imports", tuple(ImportPolicy))
+@pytest.mark.parametrize("collect_provenance", [False, True])
+def test_detected_functional_source_map_stays_owner_first_across_options(
+    monkeypatch: pytest.MonkeyPatch,
+    imports: ImportPolicy,
+    collect_provenance: bool,
+) -> None:
+    source = (
+        b"Prefix(ex:=<urn:retained-detected-source:>) "
+        b"Ontology(<urn:retained-detected-source> "
+        b"Declaration(Class(ex:C)) SubClassOf(ex:C ex:D))"
+    )
+    options = LoadOptions(
+        imports=imports,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=collect_provenance,
+        preserve_source_map=True,
+    )
+    reference = load_snapshot(
+        source,
+        options=replace(options, backend=BackendPreference.PYTHON),
+    )
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("detected source-map load crossed the complete model decoder")
+
+    monkeypatch.setattr(native, "_decode_parsed_functional", unexpected)
+    selected = load_snapshot(source, options=options)
+    ingestion = cast(Any, selected)._native_ingestion_counters_v2()
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.capabilities.backend == "native"
+    assert selected.root.source_map == reference.root.source_map
+    assert selected.root.origin_index == reference.root.origin_index
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert ingestion.parser_result_bytes_scanned == 0
+    assert ingestion.eager_structural_objects_materialized == 0
+
+
 def test_language_tagged_source_map_stays_owner_first_with_exact_lexical_rows(
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,

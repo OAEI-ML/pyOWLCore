@@ -337,7 +337,6 @@ def _prepare_retained_native_root(options: LoadOptions) -> bool:
         options.backend in {BackendPreference.AUTO, BackendPreference.NATIVE}
         and not options.validate_owl2_dl
         and options.format in {None, DocumentFormat.FUNCTIONAL}
-        and (not options.preserve_source_map or options.format is DocumentFormat.FUNCTIONAL)
     )
 
 
