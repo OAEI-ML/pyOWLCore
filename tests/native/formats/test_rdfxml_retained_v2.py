@@ -1246,7 +1246,7 @@ def test_private_provenance_rows_match_python_and_remain_native_until_access() -
     assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
-def test_private_source_map_matches_python_with_empty_prefixes_and_language_details(
+def test_private_source_map_matches_python_with_prefixes_and_language_details(
     extension: NativeTestExtension,
 ) -> None:
     def options(backend: BackendPreference) -> LoadOptions:
@@ -1284,19 +1284,23 @@ def test_private_source_map_matches_python_with_empty_prefixes_and_language_deta
     assert reference.root.source_map is not None
     assert handle.attestation.capability_bits == 47
     assert before.retained_source_map_rows == 5
-    assert before.retained_source_prefix_rows == 0
+    assert before.retained_source_prefix_rows == 3
     assert before.source_map_rows_emitted == 0
     assert before.source_prefix_rows_emitted == 0
     assert before_python.auxiliary_rows_decoded == 0
     assert "parse-rdfxml-v1" not in extension.FEATURES
 
     assert selected.root.source_map == reference.root.source_map
-    assert dict(selected.root.source_map.prefixes) == {}
+    assert dict(selected.root.source_map.prefixes) == {
+        "owl": "http://www.w3.org/2002/07/owl#",
+        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+        "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    }
     assert encode_snapshot(selected) == encode_snapshot(reference)
     after = raw_owner._publication_counters_v2()
     after_python = selected._native_python_counters()
     assert after.source_map_rows_emitted > before.source_map_rows_emitted
-    assert after.source_prefix_rows_emitted == 0
+    assert after.source_prefix_rows_emitted >= 3
     assert after_python.auxiliary_rows_decoded > before_python.auxiliary_rows_decoded
 
 
@@ -1334,7 +1338,8 @@ def test_private_source_map_preserves_every_constructor_occurrence_order() -> No
     assert selected.root.source_map is not None
     assert reference.root.source_map is not None
     assert selected.root.source_map == reference.root.source_map
-    assert dict(selected.root.source_map.prefixes) == {}
+    assert dict(selected.root.source_map.prefixes) == dict(reference.root.source_map.prefixes)
+    assert selected.root.source_map.prefixes
     assert counters.retained_source_map_rows == sum(
         len(occurrences) for occurrences in reference.root.source_map.entries.values()
     )
@@ -1384,9 +1389,10 @@ def test_private_source_map_and_provenance_match_under_default_combination() -> 
     assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
-def test_private_source_map_accepts_zero_entries_and_zero_prefixes() -> None:
+def test_private_source_map_accepts_zero_entries_with_prefixes() -> None:
     source = (
-        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/>'
+        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+        b'xmlns="urn:default:"/>'
     )
 
     def options(backend: BackendPreference) -> LoadOptions:
@@ -1412,9 +1418,55 @@ def test_private_source_map_accepts_zero_entries_and_zero_prefixes() -> None:
     assert selected.root.source_map == reference.root.source_map
     assert selected.root.source_map is not None
     assert dict(selected.root.source_map.entries) == {}
-    assert dict(selected.root.source_map.prefixes) == {}
+    assert dict(selected.root.source_map.prefixes) == {
+        "": "urn:default:",
+        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    }
     assert counters.retained_source_map_rows == 0
-    assert counters.retained_source_prefix_rows == 0
+    assert counters.retained_source_prefix_rows == 2
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_private_source_map_prefix_rebindings_match_python_and_stay_canonical() -> None:
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:e="urn:first:"
+         xmlns:xml="http://www.w3.org/XML/1998/namespace"
+         xmlns="urn:default:">
+  <owl:Class xmlns:e="urn:second:" xmlns="" rdf:about="urn:C"/>
+</rdf:RDF>
+"""
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            preserve_source_map=True,
+        )
+
+    reference = load_snapshot(source, options=options(BackendPreference.PYTHON))
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            source,
+            options=options(BackendPreference.NATIVE),
+            document_iri=None,
+        ),
+    )
+    raw_owner = selected._native_snapshot_state.owner.handle._owner_v2
+    before = raw_owner._publication_counters_v2()
+
+    assert selected.root.source_map == reference.root.source_map
+    assert selected.root.source_map is not None
+    assert dict(selected.root.source_map.prefixes) == {
+        "e": "urn:second:",
+        "owl": "http://www.w3.org/2002/07/owl#",
+        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+        "xml": "http://www.w3.org/XML/1998/namespace",
+    }
+    assert before.retained_source_prefix_rows == 4
     assert encode_snapshot(selected) == encode_snapshot(reference)
 
 

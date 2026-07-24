@@ -75,6 +75,7 @@ def parse_rdfxml(
     )
     depth = 0
     prefix_count = 0
+    prefixes: dict[str, str] = {}
     has_reserved_xml_prefix = False
     root: ET.Element | None = None
     try:
@@ -86,7 +87,11 @@ def parse_rdfxml(
                 if event == "start-ns":
                     prefix_count += 1
                     context.limits.enforce("max_prefixes", prefix_count)
-                    prefix, _namespace_iri = cast(tuple[str, str], payload)
+                    prefix, namespace_iri = cast(tuple[str, str], payload)
+                    if namespace_iri:
+                        prefixes[prefix] = namespace_iri
+                    else:
+                        prefixes.pop(prefix, None)
                     has_reserved_xml_prefix = (
                         has_reserved_xml_prefix
                         or (
@@ -148,6 +153,7 @@ def parse_rdfxml(
         mapped.annotations,
         mapped.axioms,
         mapped.extensions,
+        tuple(sorted(prefixes.items())),
         occurrences=mapped.occurrences,
         rdf_mapping_report=mapped.rdf_mapping_report,
         decoded_codepoint_length=len(text),

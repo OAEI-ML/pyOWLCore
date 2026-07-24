@@ -595,6 +595,12 @@ struct Frame {
     role: FrameRole,
 }
 
+struct ParsedGraph {
+    triples: Vec<Triple>,
+    language_spellings: Vec<String>,
+    source_prefixes: Vec<(String, String)>,
+}
+
 struct GraphParser<'text, 'session, 'guard> {
     stream: XmlStream<'text>,
     session: &'session mut Session<'guard>,
@@ -608,6 +614,7 @@ struct GraphParser<'text, 'session, 'guard> {
     root_closed: bool,
     xml_literal_capture: Option<XmlLiteralCapture>,
     language_spellings: Vec<String>,
+    source_prefixes: Vec<(String, String)>,
     preserve_source_map: bool,
 }
 
@@ -642,11 +649,12 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             root_closed: false,
             xml_literal_capture: None,
             language_spellings: Vec::new(),
+            source_prefixes: Vec::new(),
             preserve_source_map,
         })
     }
 
-    fn parse(mut self) -> NativeResult<(Vec<Triple>, Vec<String>)> {
+    fn parse(mut self) -> NativeResult<ParsedGraph> {
         while let Some(event) = self.stream.next(self.session)? {
             match event {
                 XmlEvent::Start(value) => {
@@ -666,7 +674,13 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         // Duplicate RDF triples collapse deterministically before mapping.
         self.triples.sort_unstable();
         self.triples.dedup();
-        Ok((self.triples, self.language_spellings))
+        self.source_prefixes
+            .sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+        Ok(ParsedGraph {
+            triples: self.triples,
+            language_spellings: self.language_spellings,
+            source_prefixes: self.source_prefixes,
+        })
     }
 
     fn start(&mut self, event: StartEvent) -> NativeResult<()> {
@@ -715,6 +729,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     self.session.limits().value(LimitKey::MaxPrefixes),
                     "native XML namespace declarations exceed max_prefixes",
                 )?;
+                self.retain_source_prefix(prefix, &attribute.value)?;
                 let binding = NamespaceBinding {
                     prefix: owned_text(prefix, self.session)?,
                     iri: owned_text(&attribute.value, self.session)?,
@@ -870,6 +885,35 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             language,
             role,
         });
+        Ok(())
+    }
+
+    fn retain_source_prefix(&mut self, prefix: &str, iri: &str) -> NativeResult<()> {
+        if !self.preserve_source_map {
+            return Ok(());
+        }
+        let mut selected = None;
+        for (index, (candidate, _value)) in self.source_prefixes.iter().enumerate() {
+            self.session.step(1)?;
+            if candidate == prefix {
+                selected = Some(index);
+                break;
+            }
+        }
+        if iri.is_empty() {
+            if let Some(index) = selected {
+                self.source_prefixes.remove(index);
+            }
+            return Ok(());
+        }
+        let value = owned_text(iri, self.session)?;
+        if let Some(index) = selected {
+            self.source_prefixes[index].1 = value;
+            return Ok(());
+        }
+        let prefix = owned_text(prefix, self.session)?;
+        reserve_vec_item(&mut self.source_prefixes, self.session)?;
+        self.source_prefixes.push((prefix, value));
         Ok(())
     }
 
@@ -2080,17 +2124,18 @@ pub(super) fn parse_and_map_timed(
     preserve_source_map: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<(CanonicalDocument, u64)> {
-    let (triples, language_spellings, decoded_codepoints) =
+    let (graph, decoded_codepoints) =
         parse_graph_source(source, document_iri, preserve_source_map, session)?;
     let mapping_started = Instant::now();
-    let document = map_graph(
-        triples,
+    let mut document = map_graph(
+        graph.triples,
         decoded_codepoints,
         allow_swrl,
         capture_occurrences,
-        language_spellings,
+        graph.language_spellings,
         session,
     )?;
+    document.source_prefixes = graph.source_prefixes;
     let mapping_ns = u64::try_from(mapping_started.elapsed().as_nanos())
         .map_err(|_| NativeError::limit("native RDF mapping phase time exceeds u64"))?;
     Ok((document, mapping_ns))
@@ -2101,7 +2146,7 @@ fn parse_graph_source(
     document_iri: Option<&str>,
     preserve_source_map: bool,
     session: &mut Session<'_>,
-) -> NativeResult<(Vec<Triple>, Vec<String>, u64)> {
+) -> NativeResult<(ParsedGraph, u64)> {
     let (text, decoded_codepoints, source_encoding) = decode_xml(source, session)?;
     let utf8_bom =
         source_encoding == XmlSourceEncoding::Utf8 && source.starts_with(&[0xef, 0xbb, 0xbf]);
@@ -2111,7 +2156,7 @@ fn parse_graph_source(
         &text
     };
     let decoded_codepoints = decoded_codepoints.saturating_sub(u64::from(utf8_bom));
-    let (triples, language_spellings) = GraphParser::new(
+    let graph = GraphParser::new(
         text,
         document_iri,
         source_encoding,
@@ -2119,7 +2164,7 @@ fn parse_graph_source(
         session,
     )?
     .parse()?;
-    Ok((triples, language_spellings, decoded_codepoints))
+    Ok((graph, decoded_codepoints))
 }
 
 #[cfg(feature = "test-hooks")]
@@ -2128,9 +2173,9 @@ pub(super) fn parse_graph_observation(
     document_iri: Option<&str>,
     session: &mut Session<'_>,
 ) -> NativeResult<Vec<u8>> {
-    let (mut triples, _, _) = parse_graph_source(source, document_iri, false, session)?;
-    triples.sort_unstable();
-    encode_graph_observation(&triples, session)
+    let (mut graph, _) = parse_graph_source(source, document_iri, false, session)?;
+    graph.triples.sort_unstable();
+    encode_graph_observation(&graph.triples, session)
 }
 
 #[cfg(feature = "test-hooks")]
@@ -2891,6 +2936,7 @@ fn map_graph(
         extensions,
         occurrences,
         language_spellings,
+        source_prefixes: Vec::new(),
         source_sha256: [0; 32],
         byte_length: 0,
         decoded_codepoints,
@@ -7356,12 +7402,44 @@ mod tests {
         Ok(
             GraphParser::new(source, None, XmlSourceEncoding::Utf8, false, &mut session)?
                 .parse()?
-                .0,
+                .triples,
         )
     }
 
     fn graph(source: &str) -> NativeResult<Vec<Triple>> {
         graph_with_limits(source, &Limits::default())
+    }
+
+    #[test]
+    fn retained_source_prefixes_track_rebindings_and_undeclarations() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" \
+             xmlns:e=\"urn:first:\" xmlns:xml=\"{XML}\" xmlns=\"urn:default:\">\
+             <owl:Class xmlns:e=\"urn:second:\" xmlns=\"\" rdf:about=\"urn:C\"/>\
+             </rdf:RDF>"
+        );
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len()).expect("bounded session");
+        let prefixes = GraphParser::new(&source, None, XmlSourceEncoding::Utf8, true, &mut session)
+            .expect("graph parser")
+            .parse()
+            .expect("RDF/XML graph")
+            .source_prefixes;
+
+        assert_eq!(
+            prefixes,
+            vec![
+                ("e".to_owned(), "urn:second:".to_owned()),
+                ("owl".to_owned(), OWL.to_owned()),
+                ("rdf".to_owned(), RDF.to_owned()),
+                ("xml".to_owned(), XML.to_owned()),
+            ],
+        );
     }
 
     fn utf16_bytes(source: &str, little_endian: bool, bom: bool) -> Vec<u8> {

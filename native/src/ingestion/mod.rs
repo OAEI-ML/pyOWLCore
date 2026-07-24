@@ -41,6 +41,7 @@ pub(super) struct CanonicalDocument {
     pub(super) extensions: Vec<Vec<u8>>,
     pub(super) occurrences: Vec<CanonicalOccurrence>,
     pub(super) language_spellings: Vec<String>,
+    pub(super) source_prefixes: Vec<(String, String)>,
     pub(super) source_sha256: [u8; 32],
     pub(super) byte_length: u64,
     pub(super) decoded_codepoints: u64,
@@ -253,6 +254,7 @@ pub(crate) fn parse_rdfxml_retained_v2(
         document.mapping.occurrence_count,
         &document.occurrences,
         std::mem::take(&mut document.language_spellings),
+        std::mem::take(&mut document.source_prefixes),
         collect_provenance || preserve_source_map,
         preserve_source_map,
         contains_anonymous,
@@ -476,7 +478,7 @@ mod tests {
                 .source_map
                 .as_ref()
                 .map(|source| source.prefixes.len()),
-            Some(0),
+            Some(2),
         );
         assert_eq!(
             prepared

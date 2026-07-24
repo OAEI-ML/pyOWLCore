@@ -780,6 +780,35 @@ def test_rdfxml_namespace_declarations_enforce_the_prefix_limit() -> None:
     assert raised.value.limit == "max_prefixes"
 
 
+def test_rdfxml_source_map_retains_effective_namespace_bindings() -> None:
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:e="urn:first:"
+         xmlns:xml="http://www.w3.org/XML/1998/namespace"
+         xmlns="urn:default:">
+  <owl:Class xmlns:e="urn:second:" xmlns="" rdf:about="urn:C"/>
+</rdf:RDF>
+"""
+
+    document = parse_document(
+        source,
+        format="rdfxml",
+        options=LoadOptions(
+            backend=BackendPreference.PYTHON,
+            preserve_source_map=True,
+        ),
+    )
+
+    assert document.source_map is not None
+    assert dict(document.source_map.prefixes) == {
+        "e": "urn:second:",
+        "owl": "http://www.w3.org/2002/07/owl#",
+        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+        "xml": "http://www.w3.org/XML/1998/namespace",
+    }
+
+
 @pytest.mark.parametrize(
     ("document", "expanded_iri_bytes"),
     (
