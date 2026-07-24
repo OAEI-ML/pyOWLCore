@@ -2055,6 +2055,292 @@ def test_rdf_mapping_rejects_ambiguous_detached_object_enumeration() -> None:
     assert raised.value.code == "RDF_MAPPING_CARDINALITY"
 
 
+@pytest.mark.parametrize(
+    ("operator", "members"),
+    (
+        ("intersectionOf", ("A", "B")),
+        ("unionOf", ("A", "B")),
+        ("intersectionOf", ("A", "A")),
+        ("unionOf", ("A", "A")),
+    ),
+)
+def test_rdf_mapping_consumes_detached_named_data_boolean(
+    operator: str,
+    members: tuple[str, ...],
+) -> None:
+    declared = tuple(sorted(set(members)))
+    declarations = "".join(
+        f'<rdfs:Datatype rdf:about="urn:{member}"/>' for member in declared
+    )
+    items = "".join(
+        f'<rdf:Description rdf:about="urn:{member}"/>' for member in members
+    )
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  {declarations}
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:{operator} rdf:parseType="Collection">{items}</owl:{operator}>
+  </rdfs:Datatype>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    expected_triples = len(declared) + 2 + 2 * len(members)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == expected_triples
+    assert document.rdf_mapping_report.consumed_triples == expected_triples
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert len(tuple(document.iter_axioms(m.Declaration))) == len(declared)
+    assert len(document.axioms) == len(declared)
+
+
+@pytest.mark.parametrize(
+    ("body", "code"),
+    (
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:about="urn:B"/>
+  <rdf:Description rdf:nodeID="expression">
+    <owl:intersectionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="urn:A"/>
+      <rdf:Description rdf:about="urn:B"/>
+    </owl:intersectionOf>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:about="urn:B"/>
+  <rdfs:Datatype rdf:about="urn:expression">
+    <owl:unionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="urn:A"/>
+      <rdf:Description rdf:about="urn:B"/>
+    </owl:unionOf>
+  </rdfs:Datatype>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:intersectionOf rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdfs:Datatype>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:unionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="urn:A"/>
+    </owl:unionOf>
+  </rdfs:Datatype>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:intersectionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="urn:A"/>
+      <rdf:Description rdf:about="urn:undeclared"/>
+    </owl:intersectionOf>
+  </rdfs:Datatype>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:intersectionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="urn:A"/>
+      <rdf:Description rdf:nodeID="anonymous"/>
+    </owl:intersectionOf>
+  </rdfs:Datatype>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:intersectionOf rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:resource="urn:A"/>
+    <rdf:rest rdf:nodeID="tail"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="tail">
+    <rdf:first>literal</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:about="urn:B"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:intersectionOf rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:resource="urn:A"/>
+    <rdf:first rdf:resource="urn:B"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:intersectionOf rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:resource="urn:A"/>
+    <rdf:rest rdf:nodeID="values"/>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:about="urn:B"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#DataRange"/>
+    <owl:intersectionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="urn:A"/>
+      <rdf:Description rdf:about="urn:B"/>
+    </owl:intersectionOf>
+  </rdfs:Datatype>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:about="urn:B"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:intersectionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="urn:A"/>
+      <rdf:Description rdf:about="urn:B"/>
+    </owl:intersectionOf>
+    <owl:datatypeComplementOf rdf:resource="urn:A"/>
+  </rdfs:Datatype>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:about="urn:B"/>
+  <rdfs:Datatype rdf:nodeID="left-expression">
+    <owl:intersectionOf rdf:nodeID="left"/>
+  </rdfs:Datatype>
+  <rdfs:Datatype rdf:nodeID="right-expression">
+    <owl:unionOf rdf:nodeID="right"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="left">
+    <rdf:first rdf:resource="urn:A"/>
+    <rdf:rest rdf:nodeID="tail"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="right">
+    <rdf:first rdf:resource="urn:B"/>
+    <rdf:rest rdf:nodeID="tail"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="tail">
+    <rdf:first rdf:resource="urn:A"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:about="urn:B"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:intersectionOf rdf:nodeID="left"/>
+    <owl:intersectionOf rdf:nodeID="right"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="left">
+    <rdf:first rdf:resource="urn:A"/>
+    <rdf:rest rdf:nodeID="left-tail"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="left-tail">
+    <rdf:first rdf:resource="urn:B"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="right">
+    <rdf:first rdf:resource="urn:A"/>
+    <rdf:rest rdf:nodeID="right-tail"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="right-tail">
+    <rdf:first rdf:resource="urn:B"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+    ),
+)
+def test_rdf_mapping_preserves_detached_named_data_boolean_boundary(
+    body: str,
+    code: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises((OntologySyntaxError, UnsupportedSyntaxError)) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == code
+
+
+def test_detached_named_data_boolean_precheck_does_not_claim_invalid_lists() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdfs:Datatype rdf:about="urn:A"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:intersectionOf rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:resource="urn:A"/>
+    <rdf:rest rdf:nodeID="values"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    partial = PythonParser().parse(
+        source,
+        format="rdfxml",
+        document_iri=None,
+        options=PYTHON_OPTIONS,
+        allow_partial_rdf_mapping=True,
+    )
+    assert partial.rdf_mapping_report is not None
+    assert not partial.rdf_mapping_report.conformant
+    assert partial.rdf_mapping_report.total_triples == 5
+    assert partial.rdf_mapping_report.consumed_triples == 1
+    assert len(partial.rdf_mapping_report.unconsumed) == 4
+
+
 def test_rdf_mapping_consumes_detached_datatype_complement() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"

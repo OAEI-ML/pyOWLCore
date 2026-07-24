@@ -222,6 +222,7 @@ class RDFMapper:
         self._consume_detached_named_class_booleans()
         self._consume_detached_class_complements()
         self._consume_detached_object_enumerations()
+        self._consume_detached_named_data_booleans()
         self._consume_detached_data_complements()
         self._consume_detached_data_enumerations()
         self._consume_detached_owl1_data_enumerations()
@@ -397,7 +398,11 @@ class RDFMapper:
                 )
                 if marker in self.consumed or not self.graph.contains(marker):
                     continue
-                if not self._is_established_named_class_list(triple.object):
+                if not self._is_established_named_list(
+                    triple.object,
+                    m.EntityKind.CLASS,
+                    minimum_arity=1,
+                ):
                     continue
                 self.graph.one(triple.subject, predicate)
                 has_other_constructor = any(
@@ -419,7 +424,13 @@ class RDFMapper:
                     self._mapping_error("class boolean has conflicting constructors")
                 self._class_expression(triple.subject)
 
-    def _is_established_named_class_list(self, head: RDFTerm) -> bool:
+    def _is_established_named_list(
+        self,
+        head: RDFTerm,
+        expected_kind: m.EntityKind,
+        *,
+        minimum_arity: int,
+    ) -> bool:
         if not isinstance(head, RDFBlank):
             return False
         visited: set[RDFBlank] = set()
@@ -440,12 +451,12 @@ class RDFMapper:
             first = firsts[0]
             if (
                 not isinstance(first, RDFIRI)
-                or m.EntityKind.CLASS not in self.kinds.get(first.value, set())
+                or expected_kind not in self.kinds.get(first.value, set())
             ):
                 return False
             rest = rests[0]
             if isinstance(rest, RDFIRI) and rest.value == RDF + "nil":
-                return True
+                return length >= minimum_arity
             if not isinstance(rest, RDFBlank):
                 return False
             current = rest
@@ -499,6 +510,48 @@ class RDFMapper:
             if has_other_constructor:
                 self._mapping_error("object enumeration has conflicting constructors")
             self._class_expression(triple.subject)
+
+    def _consume_detached_named_data_booleans(self) -> None:
+        for predicate in (OWL + "intersectionOf", OWL + "unionOf"):
+            for triple in self.graph.find(predicate=predicate):
+                self.context.check()
+                if triple in self.consumed or not isinstance(triple.subject, RDFBlank):
+                    continue
+                marker = Triple(
+                    triple.subject,
+                    RDFIRI(RDF + "type"),
+                    RDFIRI(RDFS + "Datatype"),
+                )
+                if marker in self.consumed or not self.graph.contains(marker):
+                    continue
+                if not self._is_established_named_list(
+                    triple.object,
+                    m.EntityKind.DATATYPE,
+                    minimum_arity=2,
+                ):
+                    continue
+                self.graph.one(triple.subject, predicate)
+                has_other_constructor = any(
+                    candidate != predicate and self.graph.objects(triple.subject, candidate)
+                    for candidate in (
+                        OWL + "intersectionOf",
+                        OWL + "unionOf",
+                        OWL + "oneOf",
+                        OWL + "datatypeComplementOf",
+                        OWL + "onDatatype",
+                        OWL + "withRestrictions",
+                    )
+                )
+                has_compatibility_marker = self.graph.contains(
+                    Triple(
+                        triple.subject,
+                        RDFIRI(RDF + "type"),
+                        RDFIRI(OWL + "DataRange"),
+                    )
+                )
+                if has_other_constructor or has_compatibility_marker:
+                    self._mapping_error("data boolean has conflicting constructors or markers")
+                self._data_range(triple.subject)
 
     def _consume_detached_data_complements(self) -> None:
         for triple in self.graph.find(predicate=OWL + "datatypeComplementOf"):
