@@ -1829,6 +1829,63 @@ def test_builtin_property_special_axioms_match_python(
 
 
 @pytest.mark.parametrize(
+    "body",
+    (
+        (
+            f"<owl:onProperties rdf:resource='{RDF_NAMESPACE}nil'/>"
+            f"<owl:allValuesFrom rdf:resource='{XSD_NAMESPACE}string'/>"
+        ),
+        (
+            "<owl:onProperties rdf:parseType='Collection'>"
+            "<rdf:Description/>"
+            "</owl:onProperties>"
+            f"<owl:allValuesFrom rdf:resource='{XSD_NAMESPACE}string'/>"
+        ),
+        (
+            "<owl:onProperty rdf:resource='urn:p'/>"
+            f"<owl:onProperties rdf:resource='{RDF_NAMESPACE}nil'/>"
+            f"<owl:allValuesFrom rdf:resource='{XSD_NAMESPACE}string'/>"
+        ),
+        f"<owl:onProperties rdf:resource='{RDF_NAMESPACE}nil'/>",
+        (
+            f"<owl:onProperties rdf:resource='{RDF_NAMESPACE}nil'/>"
+            f"<owl:someValuesFrom rdf:resource='{XSD_NAMESPACE}string'/>"
+            f"<owl:allValuesFrom rdf:resource='{XSD_NAMESPACE}string'/>"
+        ),
+        (
+            "<owl:onProperties rdf:resource='urn:not-a-list'/>"
+            f"<owl:allValuesFrom rdf:resource='{XSD_NAMESPACE}string'/>"
+        ),
+        (
+            "<owl:onProperties rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:p'/>"
+            "</owl:onProperties>"
+            "<owl:allValuesFrom>literal</owl:allValuesFrom>"
+        ),
+    ),
+)
+def test_invalid_nary_data_restrictions_match_python(
+    extension: NativeTestExtension,
+    body: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <rdf:Description rdf:about='urn:C'>
+  <rdfs:subClassOf><owl:Restriction>{body}</owl:Restriction></rdfs:subClassOf>
+ </rdf:Description>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_UNSUPPORTED"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
     "assertion",
     (
         "<owl:topDataProperty rdf:resource='urn:j'/>",

@@ -1497,6 +1497,8 @@ class RDFMapper:
             self._mapping_error("restriction requires exactly one property selector")
         if on_properties is not None:
             properties = tuple(self._data_property_term(item) for item in self._list(on_properties))
+            if not properties:
+                self._mapping_error("n-ary data restriction requires at least one property")
             self._consume_only(term, OWL + "onProperties", on_properties)
             some = self.graph.one(term, OWL + "someValuesFrom")
             all_value = self.graph.one(term, OWL + "allValuesFrom")
