@@ -10,8 +10,8 @@ use crate::index::{
 use crate::limits::Limits;
 use crate::model::{
     prepare_encoded_structural_columns_from_tables_v1, Category, ComponentFieldRef, ComponentId,
-    EncodedRootKindV1, EncodedRootTableV1, FrozenComponentBuild, NativeComponentBuilder,
-    NativeComponentDigestIndex, PreparedEncodedStructuralColumnsV1,
+    EncodedRootKindV1, EncodedRootTableV1, FrozenComponentBuild, NativeComponentArena,
+    NativeComponentBuilder, NativeComponentDigestIndex, PreparedEncodedStructuralColumnsV1,
 };
 use crate::publication::{
     TypedFacadeCollectionV2, TypedFacadeCoordinateV2, TypedFacadePageRequestV2,
@@ -218,6 +218,27 @@ impl ComponentEncodingFixture {
         })
     }
 
+    /// Own one validated typed V2 table before allocation injection is armed,
+    /// leaving its production freeze and retained index construction pending.
+    pub fn prepare_typed_facade_freeze(&self) -> Result<TypedFacadeFreezeFixture, Failure> {
+        let coordinate = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+        let mut roots = Vec::new();
+        roots
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator typed root allocation failed"))?;
+        roots.push(self.identifiers[0]);
+        let mut tables = Vec::new();
+        tables
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator typed table allocation failed"))?;
+        tables.push(TypedFacadeTableV2::new(coordinate, roots));
+        Ok(TypedFacadeFreezeFixture {
+            arena: self.frozen.arena().clone(),
+            tables,
+            cancellation: self.cancellation.clone(),
+        })
+    }
+
     /// Prepare retained encoded-column metadata before allocation injection.
     ///
     /// The returned one-shot fixture isolates the production publication
@@ -284,6 +305,55 @@ pub struct TypedFacadeReadFixture {
     storage: TypedFacadeStorageV2,
     coordinate: TypedFacadeCoordinateV2,
     cancellation: Cancellation,
+}
+
+/// One typed V2 facade input whose production validation and retained index
+/// allocations have not yet run.
+pub struct TypedFacadeFreezeFixture {
+    arena: NativeComponentArena,
+    tables: Vec<TypedFacadeTableV2>,
+    cancellation: Cancellation,
+}
+
+impl TypedFacadeFreezeFixture {
+    /// Freeze the retained typed V2 owner while allocation injection is armed.
+    pub fn freeze(self) -> Result<FrozenTypedFacadeFixture, Failure> {
+        let storage = TypedFacadeStorageV2::freeze(
+            self.arena,
+            self.tables,
+            Vec::new(),
+            1,
+            Limits::default(),
+            self.cancellation,
+            None,
+        )?;
+        Ok(FrozenTypedFacadeFixture { storage })
+    }
+}
+
+/// One frozen typed V2 owner returned across the disarmed allocator boundary.
+pub struct FrozenTypedFacadeFixture {
+    storage: TypedFacadeStorageV2,
+}
+
+impl FrozenTypedFacadeFixture {
+    /// Observe frozen retained ownership and counters after allocation
+    /// injection has been disarmed.
+    pub fn summary(&self) -> Result<[u64; 8], Failure> {
+        let counters = self.storage.counters()?;
+        let structural = self.storage.structural_counts()?;
+        Ok([
+            self.storage
+                .retained_rows(TypedFacadeCollectionV2::Axioms)?,
+            counters.canonical_input_rows,
+            counters.retained_document_tables,
+            counters.retained_root_rows,
+            counters.retained_index_bytes,
+            counters.retained_owner_bytes,
+            structural.stored_axioms,
+            structural.effective_axioms,
+        ])
+    }
 }
 
 impl TypedFacadeReadFixture {

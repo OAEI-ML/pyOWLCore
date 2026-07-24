@@ -245,6 +245,39 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
             .expect("first non-failing retained axiom-type page boundary must encode");
     assert_eq!(boundary_axiom_type_page, baseline_axiom_type_page);
 
+    let typed_freeze = component
+        .prepare_typed_facade_freeze()
+        .expect("typed facade freeze fixture must prepare");
+    let (baseline_typed_freeze, typed_freeze_allocations) =
+        count_allocations(|| typed_freeze.freeze());
+    let baseline_typed_freeze =
+        baseline_typed_freeze.expect("typed facade freeze baseline must succeed");
+    let baseline_typed_freeze = baseline_typed_freeze
+        .summary()
+        .expect("typed facade freeze baseline must be observable");
+    assert_eq!(baseline_typed_freeze[0..4], [1, 1, 1, 1]);
+    assert!(baseline_typed_freeze[4] > 0);
+    assert!(baseline_typed_freeze[5] > baseline_typed_freeze[4]);
+    assert_eq!(baseline_typed_freeze[6..], [1, 0]);
+    assert!(typed_freeze_allocations > 1);
+
+    for fail_after in 0..typed_freeze_allocations {
+        let typed_freeze = component
+            .prepare_typed_facade_freeze()
+            .expect("typed facade freeze fixture must prepare for every rejection");
+        let failure =
+            typed_allocation_failure(fail_allocation(fail_after, || typed_freeze.freeze()));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let typed_freeze = component
+        .prepare_typed_facade_freeze()
+        .expect("typed facade freeze boundary fixture must prepare");
+    let boundary_typed_freeze = fail_allocation(typed_freeze_allocations, || typed_freeze.freeze())
+        .expect("first non-failing typed facade freeze boundary must succeed")
+        .summary()
+        .expect("typed facade freeze boundary must be observable");
+    assert_eq!(boundary_typed_freeze, baseline_typed_freeze);
+
     let typed_page = component
         .prepare_typed_facade_reads()
         .expect("typed facade page fixture must prepare");
