@@ -308,6 +308,40 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
         baseline_typed_builder_add.ordinal()
     );
 
+    let mut effective_canonical = canonical;
+    assert_eq!(effective_canonical[26], b's');
+    effective_canonical[26] = b'e';
+    let typed_builder_add_scoped = component
+        .prepare_typed_builder_add_scoped(&canonical, &effective_canonical)
+        .expect("typed scoped builder add fixture must prepare");
+    let (baseline_typed_builder_add_scoped, typed_builder_add_scoped_allocations) =
+        count_allocations(|| typed_builder_add_scoped.add_document());
+    let baseline_typed_builder_add_scoped =
+        baseline_typed_builder_add_scoped.expect("typed scoped builder add baseline must succeed");
+    assert_eq!(baseline_typed_builder_add_scoped.ordinal(), 0);
+    assert!(typed_builder_add_scoped_allocations > typed_builder_add_allocations);
+
+    for fail_after in 0..typed_builder_add_scoped_allocations {
+        let typed_builder_add_scoped = component
+            .prepare_typed_builder_add_scoped(&canonical, &effective_canonical)
+            .expect("typed scoped builder add fixture must prepare for every rejection");
+        typed_allocation_failure(fail_allocation(fail_after, || {
+            typed_builder_add_scoped.add_document()
+        }));
+    }
+    let typed_builder_add_scoped = component
+        .prepare_typed_builder_add_scoped(&canonical, &effective_canonical)
+        .expect("typed scoped builder add boundary fixture must prepare");
+    let boundary_typed_builder_add_scoped =
+        fail_allocation(typed_builder_add_scoped_allocations, || {
+            typed_builder_add_scoped.add_document()
+        })
+        .expect("first non-failing typed scoped builder add boundary must succeed");
+    assert_eq!(
+        boundary_typed_builder_add_scoped.ordinal(),
+        baseline_typed_builder_add_scoped.ordinal()
+    );
+
     let typed_page = component
         .prepare_typed_facade_reads()
         .expect("typed facade page fixture must prepare");

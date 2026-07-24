@@ -248,7 +248,29 @@ impl ComponentEncodingFixture {
         let builder =
             TypedFacadeBuilderV2::new(Limits::default(), self.cancellation.clone(), None, 0)?;
         let axioms = owned_single_row(canonical)?;
-        Ok(TypedBuilderAddFixture { builder, axioms })
+        Ok(TypedBuilderAddFixture {
+            builder,
+            axioms,
+            effective_axioms: None,
+        })
+    }
+
+    /// Prepare an empty typed V2 builder and own distinct raw/effective axiom
+    /// rows before allocation injection is armed.
+    pub fn prepare_typed_builder_add_scoped(
+        &self,
+        raw_canonical: &[u8],
+        effective_canonical: &[u8],
+    ) -> Result<TypedBuilderAddFixture, Failure> {
+        let builder =
+            TypedFacadeBuilderV2::new(Limits::default(), self.cancellation.clone(), None, 0)?;
+        let axioms = owned_single_row(raw_canonical)?;
+        let effective_axioms = owned_single_row(effective_canonical)?;
+        Ok(TypedBuilderAddFixture {
+            builder,
+            axioms,
+            effective_axioms: Some(effective_axioms),
+        })
     }
 
     /// Prepare retained encoded-column metadata before allocation injection.
@@ -331,12 +353,23 @@ pub struct TypedFacadeFreezeFixture {
 pub struct TypedBuilderAddFixture {
     builder: TypedFacadeBuilderV2,
     axioms: Vec<Vec<u8>>,
+    effective_axioms: Option<Vec<Vec<u8>>>,
 }
 
 impl TypedBuilderAddFixture {
     /// Add one document while allocation injection is armed.
     pub fn add_document(mut self) -> Result<PendingTypedBuilderFixture, Failure> {
-        let ordinal = self.builder.add_document(&[], &self.axioms, &[])?;
+        let ordinal = match &self.effective_axioms {
+            Some(effective_axioms) => self.builder.add_scoped_document(
+                &[],
+                &self.axioms,
+                &[],
+                &[],
+                effective_axioms,
+                &[],
+            )?,
+            None => self.builder.add_document(&[], &self.axioms, &[])?,
+        };
         Ok(PendingTypedBuilderFixture {
             _builder: self.builder,
             ordinal,
