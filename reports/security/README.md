@@ -35,20 +35,22 @@ through retained-component build, freeze, and encode for all 76 model
 constructors, plus the five explicit native wire validation/receipt allocation
 boundaries and 57 positive retained/temporary claims in the validated V2
 publication builder, plus 51 explicit backing-owner/slice/dictionary/counter
-publication checkpoints in the direct encoded-view Python bridge and 13 actual
-capacity-growth/owner checkpoints in its retained Rust encoded-column
+publication checkpoints in the snapshot-owner direct encoded-view Python
+bridge, the same 51 checkpoints through a raw document owner, and 13 actual
+capacity-growth/owner checkpoints in the retained Rust encoded-column
 workspace, plus 38 positive Functional parser session allocation-budget
 claims and 13 explicit Functional parser configuration/source/result Python-
 bridge checkpoints, 13 exact production retained Functional bridge checkpoints,
 plus nine retained RDF/XML configuration/document-IRI/source/result Python-
 bridge checkpoints and two retained structural preparation manifest/result
 Python-bridge checkpoints, 17 retained structural configuration/raw-effective-
-row/owner-publication checkpoints, two retained finalization checkpoints, 42
-retained signature/identity/axiom-type layout/binding/size/page checkpoints, 13 native index
-request/source/result Python-bridge checkpoints, and 39 canonical validation,
-wire validation, and wire roundtrip Python-bridge checkpoints. It covers
-20,987 checkpoints locally; the remaining bridge, process-allocator, and
-hosted-platform matrix stays open.
+row/owner-publication checkpoints, two retained finalization checkpoints, five
+retained signature/identity/axiom-type index-construction checkpoints, 42
+retained signature/identity/axiom-type layout/binding/size/page checkpoints, 13
+native index request/source/result Python-bridge checkpoints, and 39 canonical
+validation, wire validation, and wire roundtrip Python-bridge checkpoints. It
+covers 21,043 checkpoints locally; the remaining bridge, process-allocator,
+and hosted-platform matrix stays open.
 
 Run the ordinary bounded security lanes with:
 

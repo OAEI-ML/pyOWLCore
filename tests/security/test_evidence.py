@@ -299,6 +299,14 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert bridge["injected_failures"] == bridge["allocation_checkpoints"]
     assert bridge["boundary_successes"] == 1
     assert bridge["scope"]
+    document_bridge = sweep["encoded_document_view_bridge"]
+    assert document_bridge["allocation_checkpoints"] == 51
+    assert (
+        document_bridge["injected_failures"]
+        == document_bridge["allocation_checkpoints"]
+    )
+    assert document_bridge["boundary_successes"] == 1
+    assert document_bridge["scope"]
     workspace = sweep["encoded_view_workspace"]
     assert workspace["allocation_checkpoints"] == 13
     assert workspace["injected_failures"] == workspace["allocation_checkpoints"]
@@ -351,6 +359,31 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     )
     assert finalization_bridge["boundary_successes"] == 1
     assert finalization_bridge["scope"]
+    retained_index_bridge = sweep["retained_index_construction_bridge"]
+    retained_index_operations = {
+        operation["name"]: operation
+        for operation in retained_index_bridge["operations"]
+    }
+    assert {
+        name: operation["allocation_checkpoints"]
+        for name, operation in retained_index_operations.items()
+    } == {
+        "signature": 2,
+        "ontology-identity": 1,
+        "axiom-type": 2,
+    }
+    assert retained_index_bridge["allocation_checkpoints"] == sum(
+        operation["allocation_checkpoints"]
+        for operation in retained_index_operations.values()
+    )
+    assert (
+        retained_index_bridge["injected_failures"]
+        == retained_index_bridge["allocation_checkpoints"]
+    )
+    assert retained_index_bridge["boundary_successes"] == len(
+        retained_index_operations
+    )
+    assert retained_index_bridge["scope"]
     retained_view_bridge = sweep["retained_view_layout_bridge"]
     view_operations = {
         operation["name"]: operation for operation in retained_view_bridge["operations"]
@@ -392,6 +425,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + wire["allocation_checkpoints"]
         + publication["allocation_checkpoints"]
         + bridge["allocation_checkpoints"]
+        + document_bridge["allocation_checkpoints"]
         + workspace["allocation_checkpoints"]
         + parser["allocation_checkpoints"]
         + parser_bridge["allocation_checkpoints"]
@@ -400,6 +434,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + preparation_bridge["allocation_checkpoints"]
         + structural_bridge["allocation_checkpoints"]
         + finalization_bridge["allocation_checkpoints"]
+        + retained_index_bridge["allocation_checkpoints"]
         + retained_view_bridge["allocation_checkpoints"]
         + index_bridge["allocation_checkpoints"]
         + foundation_bridge["allocation_checkpoints"]
@@ -410,6 +445,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + wire["boundary_successes"]
         + publication["boundary_successes"]
         + bridge["boundary_successes"]
+        + document_bridge["boundary_successes"]
         + workspace["boundary_successes"]
         + parser["boundary_successes"]
         + parser_bridge["boundary_successes"]
@@ -418,6 +454,7 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
         + preparation_bridge["boundary_successes"]
         + structural_bridge["boundary_successes"]
         + finalization_bridge["boundary_successes"]
+        + retained_index_bridge["boundary_successes"]
         + retained_view_bridge["boundary_successes"]
         + index_bridge["boundary_successes"]
         + foundation_bridge["boundary_successes"]
@@ -438,6 +475,10 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     assert release["native_wire_validation_allocation_failures"] == "local-pass"
     assert release["retained_publication_allocation_failures"] == "local-pass"
     assert release["encoded_view_python_bridge_allocation_failures"] == "local-pass"
+    assert (
+        release["encoded_document_view_python_bridge_allocation_failures"]
+        == "local-pass"
+    )
     assert release["encoded_view_rust_workspace_allocation_failures"] == "local-pass"
     assert release["native_parser_session_allocation_failures"] == "local-pass"
     assert release["native_parser_python_bridge_allocation_failures"] == "local-pass"
@@ -459,6 +500,10 @@ def test_native_allocation_checkpoint_is_exact_and_fail_closed() -> None:
     )
     assert (
         release["native_retained_finalization_python_bridge_allocation_failures"]
+        == "local-pass"
+    )
+    assert (
+        release["native_retained_index_construction_allocation_failures"]
         == "local-pass"
     )
     assert release["native_retained_view_layout_allocation_failures"] == "local-pass"
