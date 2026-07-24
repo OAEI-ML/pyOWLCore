@@ -1197,28 +1197,46 @@ class RDFMapper:
                 self._claim_axiom_reifications(edge)
             ordered = tuple(sorted(component, key=_term_key))
             if kind == "class":
-                output.append(
-                    m.EquivalentClasses(
-                        m.CanonicalSet(map(self._class_expression, ordered)), annotations
+                expressions = m.CanonicalSet(map(self._class_expression, ordered))
+                if len(expressions) < 2:
+                    self._mapping_error(
+                        "equivalent-classes axiom requires at least two distinct members"
                     )
+                output.append(
+                    m.EquivalentClasses(expressions, annotations)
                 )
             elif kind == "same":
-                output.append(
-                    m.SameIndividual(
-                        m.CanonicalSet(map(self._individual_resource, ordered)), annotations
+                individuals = m.CanonicalSet(map(self._individual_resource, ordered))
+                if len(individuals) < 2:
+                    self._mapping_error(
+                        "same-individual axiom requires at least two distinct members"
                     )
+                output.append(
+                    m.SameIndividual(individuals, annotations)
                 )
             elif all(self._resource_iri(item) in self.data_kinds for item in ordered):
-                output.append(
-                    m.EquivalentDataProperties(
-                        m.CanonicalSet(map(self._data_property_term, ordered)), annotations
+                data_properties = m.CanonicalSet(
+                    map(self._data_property_term, ordered)
+                )
+                if len(data_properties) < 2:
+                    self._mapping_error(
+                        "equivalent-data-properties axiom requires at least two "
+                        "distinct members"
                     )
+                output.append(
+                    m.EquivalentDataProperties(data_properties, annotations)
                 )
             else:
-                output.append(
-                    m.EquivalentObjectProperties(
-                        m.CanonicalSet(map(self._object_property, ordered)), annotations
+                object_properties = m.CanonicalSet(
+                    map(self._object_property, ordered)
+                )
+                if len(object_properties) < 2:
+                    self._mapping_error(
+                        "equivalent-object-properties axiom requires at least two "
+                        "distinct members"
                     )
+                output.append(
+                    m.EquivalentObjectProperties(object_properties, annotations)
                 )
         return tuple(output)
 
@@ -1302,16 +1320,28 @@ class RDFMapper:
             value = m.SubObjectPropertyOf(chain, m.ObjectProperty(m.IRI(s.value)), annotations)
         elif p == OWL + "propertyDisjointWith" and isinstance(o, RDFIRI):
             if isinstance(s, RDFIRI) and s.value in self.data_kinds:
+                disjoint_data_properties = m.CanonicalSet(
+                    (m.DataProperty(m.IRI(s.value)), m.DataProperty(m.IRI(o.value)))
+                )
+                if len(disjoint_data_properties) < 2:
+                    self._mapping_error(
+                        "disjoint-data-properties axiom requires at least two "
+                        "distinct members"
+                    )
                 value = m.DisjointDataProperties(
-                    m.CanonicalSet(
-                        (m.DataProperty(m.IRI(s.value)), m.DataProperty(m.IRI(o.value)))
-                    ),
-                    annotations,
+                    disjoint_data_properties, annotations
                 )
             else:
+                disjoint_object_properties = m.CanonicalSet(
+                    (self._object_property(s), self._object_property(o))
+                )
+                if len(disjoint_object_properties) < 2:
+                    self._mapping_error(
+                        "disjoint-object-properties axiom requires at least two "
+                        "distinct members"
+                    )
                 value = m.DisjointObjectProperties(
-                    m.CanonicalSet((self._object_property(s), self._object_property(o))),
-                    annotations,
+                    disjoint_object_properties, annotations
                 )
         elif (
             p == OWL + "inverseOf"
@@ -1373,9 +1403,15 @@ class RDFMapper:
                 annotations,
             )
         elif p == OWL + "differentFrom" and not isinstance(o, RDFLiteral):
+            individuals = m.CanonicalSet(
+                (self._individual_resource(s), self._individual_resource(o))
+            )
+            if len(individuals) < 2:
+                self._mapping_error(
+                    "different-individuals axiom requires at least two distinct members"
+                )
             value = m.DifferentIndividuals(
-                m.CanonicalSet((self._individual_resource(s), self._individual_resource(o))),
-                annotations,
+                individuals, annotations
             )
         elif (
             p == RDF + "type"

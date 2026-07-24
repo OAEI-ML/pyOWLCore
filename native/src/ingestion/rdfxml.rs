@@ -5510,7 +5510,11 @@ fn map_equivalent_class_components<'view, 'graph>(
             )?);
         }
         session.finish()?;
-        let nodes = canonical_set(nodes, 2, None)?;
+        let nodes = rdf_mapping_canonical_set(
+            nodes,
+            2,
+            "native equivalent-classes axiom requires at least two distinct members",
+        )?;
         let annotations =
             component_annotations(&edge_indexes, source_triples, reifications, session)?;
         let axiom = build_node(62, [Field::Set(nodes), Field::Set(annotations)], session)?;
@@ -5736,7 +5740,11 @@ fn class_expression_axiom<'view, 'graph>(
             let mut properties = reserved_vec(2, session)?;
             properties.push(first);
             properties.push(second);
-            let properties = canonical_set(properties, 2, None)?;
+            let properties = rdf_mapping_canonical_set(
+                properties,
+                2,
+                "native disjoint-object-properties axiom requires at least two distinct members",
+            )?;
             build_node(
                 72,
                 [
@@ -5957,7 +5965,11 @@ fn map_equivalent_property_components<'view, 'graph>(
                 nodes.push(node);
             }
         }
-        let nodes = canonical_set(nodes, 2, None)?;
+        let nodes = rdf_mapping_canonical_set(
+            nodes,
+            2,
+            "native equivalent-properties axiom requires at least two distinct members",
+        )?;
         let annotations =
             component_annotations(&edge_indexes, source_triples, reifications, session)?;
         let axiom = build_node(tag, [Field::Set(nodes), Field::Set(annotations)], session)?;
@@ -6064,7 +6076,11 @@ fn map_same_individual_components<'view, 'graph>(
             nodes.push(expressions.decode_individual(member.as_term(), session)?);
         }
         session.finish()?;
-        let nodes = canonical_set(nodes, 2, None)?;
+        let nodes = rdf_mapping_canonical_set(
+            nodes,
+            2,
+            "native same-individual axiom requires at least two distinct members",
+        )?;
         let annotations =
             component_annotations(&edge_indexes, source_triples, reifications, session)?;
         let axiom = build_node(110, [Field::Set(nodes), Field::Set(annotations)], session)?;
@@ -6645,7 +6661,11 @@ fn assertion_axiom<'view, 'graph>(
         let mut individuals = reserved_vec(2, session)?;
         individuals.push(expressions.decode_individual(subject, session)?);
         individuals.push(expressions.decode_individual(object, session)?);
-        let individuals = canonical_set(individuals, 2, None)?;
+        let individuals = rdf_mapping_canonical_set(
+            individuals,
+            2,
+            "native different-individuals axiom requires at least two distinct members",
+        )?;
         return Ok(Some(build_node(
             111,
             [
@@ -6831,6 +6851,11 @@ fn named_axiom(
         }
         RDFS_SUB_PROPERTY_OF => {
             build_binary_named_axiom(70, "object_property", subject, object, annotations, session)?
+        }
+        OWL_PROPERTY_DISJOINT_WITH if subject == object => {
+            return Err(rdf_mapping_unsupported(
+                "native disjoint-properties axiom requires at least two distinct members",
+            ))
         }
         OWL_PROPERTY_DISJOINT_WITH if has_kind(kinds, subject, "data_property") => build_node(
             92,
@@ -8435,6 +8460,18 @@ fn rdf_mapping_cardinality(message: &'static str) -> NativeError {
 
 fn rdf_mapping_unsupported(message: &'static str) -> NativeError {
     NativeError::new("NATIVE_RDF_MAPPING_UNSUPPORTED", message)
+}
+
+fn rdf_mapping_canonical_set(
+    values: Vec<Node>,
+    minimum: usize,
+    message: &'static str,
+) -> NativeResult<Vec<Node>> {
+    let values = canonical_set(values, 0, None)?;
+    if values.len() < minimum {
+        return Err(rdf_mapping_unsupported(message));
+    }
+    Ok(values)
 }
 
 fn rdf_axiom_reification(message: &'static str) -> NativeError {
@@ -12096,7 +12133,10 @@ mod tests {
             let reflexive = format!(
                 "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:about=\"urn:a\"><owl:{predicate} rdf:resource=\"urn:a\"/></rdf:Description></rdf:RDF>"
             );
-            assert!(mapped(reflexive.as_bytes(), None).is_err());
+            assert_eq!(
+                mapped(reflexive.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
         }
     }
 
@@ -12280,6 +12320,22 @@ mod tests {
             inverse_document.mapping.total_triples,
             inverse_document.mapping.consumed_triples,
         );
+
+        for body in [
+            "<owl:Class rdf:about=\"urn:C\"><owl:equivalentClass rdf:resource=\"urn:C\"/></owl:Class>",
+            "<owl:ObjectProperty rdf:about=\"urn:p\"><owl:equivalentProperty rdf:resource=\"urn:p\"/></owl:ObjectProperty>",
+            "<owl:ObjectProperty rdf:about=\"urn:p\"><owl:propertyDisjointWith rdf:resource=\"urn:p\"/></owl:ObjectProperty>",
+            "<owl:DatatypeProperty rdf:about=\"urn:p\"><owl:equivalentProperty rdf:resource=\"urn:p\"/></owl:DatatypeProperty>",
+            "<owl:DatatypeProperty rdf:about=\"urn:p\"><owl:propertyDisjointWith rdf:resource=\"urn:p\"/></owl:DatatypeProperty>",
+        ] {
+            let reflexive = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\">{body}</rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(reflexive.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
+        }
     }
 
     #[test]

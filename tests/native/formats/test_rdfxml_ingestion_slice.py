@@ -1474,6 +1474,83 @@ def test_undersized_list_backed_axioms_match_python(
     (
         (
             "<owl:Class rdf:about='urn:C'>"
+            "<owl:equivalentClass rdf:resource='urn:C'/>"
+            "</owl:Class>"
+        ),
+        (
+            "<rdf:Description rdf:about='urn:i'>"
+            f"<rdf:type rdf:resource='{OWL_NAMESPACE}NamedIndividual'/>"
+            "<owl:sameAs rdf:resource='urn:i'/>"
+            "</rdf:Description>"
+        ),
+        (
+            "<rdf:Description rdf:about='urn:i'>"
+            f"<rdf:type rdf:resource='{OWL_NAMESPACE}NamedIndividual'/>"
+            "<owl:differentFrom rdf:resource='urn:i'/>"
+            "</rdf:Description>"
+        ),
+        (
+            "<owl:ObjectProperty rdf:about='urn:p'>"
+            "<owl:equivalentProperty rdf:resource='urn:p'/>"
+            "</owl:ObjectProperty>"
+        ),
+        (
+            "<owl:ObjectProperty rdf:about='urn:p'>"
+            "<owl:propertyDisjointWith rdf:resource='urn:p'/>"
+            "</owl:ObjectProperty>"
+        ),
+        (
+            "<owl:DatatypeProperty rdf:about='urn:p'>"
+            "<owl:equivalentProperty rdf:resource='urn:p'/>"
+            "</owl:DatatypeProperty>"
+        ),
+        (
+            "<owl:DatatypeProperty rdf:about='urn:p'>"
+            "<owl:propertyDisjointWith rdf:resource='urn:p'/>"
+            "</owl:DatatypeProperty>"
+        ),
+    ),
+)
+def test_degenerate_binary_set_axioms_match_python(
+    extension: NativeTestExtension,
+    body: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ {body}
+</rdf:RDF>""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_UNSUPPORTED"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_UNSUPPORTED"
+
+
+def test_self_disjoint_class_rewrite_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <owl:Class rdf:about='urn:C'>
+  <owl:disjointWith rdf:resource='urn:C'/>
+ </owl:Class>
+</rdf:RDF>""".encode()
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert m.SubClassOf(m.Class(m.IRI("urn:C")), m.OWL_NOTHING) in python.axioms
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        (
+            "<owl:Class rdf:about='urn:C'>"
             "<rdf:type rdf:resource='http://www.w3.org/2000/01/rdf-schema#Class'/>"
             "</owl:Class>"
         ),

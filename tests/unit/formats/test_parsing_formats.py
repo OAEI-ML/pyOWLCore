@@ -1428,6 +1428,75 @@ def test_rdf_mapping_rejects_undersized_list_backed_axioms(
     (
         (
             '<owl:Class rdf:about="urn:C">'
+            '<owl:equivalentClass rdf:resource="urn:C"/>'
+            "</owl:Class>"
+        ),
+        (
+            '<rdf:Description rdf:about="urn:i">'
+            f'<rdf:type rdf:resource="{OWL_NAMESPACE}NamedIndividual"/>'
+            '<owl:sameAs rdf:resource="urn:i"/>'
+            "</rdf:Description>"
+        ),
+        (
+            '<rdf:Description rdf:about="urn:i">'
+            f'<rdf:type rdf:resource="{OWL_NAMESPACE}NamedIndividual"/>'
+            '<owl:differentFrom rdf:resource="urn:i"/>'
+            "</rdf:Description>"
+        ),
+        (
+            '<owl:ObjectProperty rdf:about="urn:p">'
+            '<owl:equivalentProperty rdf:resource="urn:p"/>'
+            "</owl:ObjectProperty>"
+        ),
+        (
+            '<owl:ObjectProperty rdf:about="urn:p">'
+            '<owl:propertyDisjointWith rdf:resource="urn:p"/>'
+            "</owl:ObjectProperty>"
+        ),
+        (
+            '<owl:DatatypeProperty rdf:about="urn:p">'
+            '<owl:equivalentProperty rdf:resource="urn:p"/>'
+            "</owl:DatatypeProperty>"
+        ),
+        (
+            '<owl:DatatypeProperty rdf:about="urn:p">'
+            '<owl:propertyDisjointWith rdf:resource="urn:p"/>'
+            "</owl:DatatypeProperty>"
+        ),
+    ),
+)
+def test_rdf_mapping_rejects_degenerate_binary_set_axioms(body: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  {body}
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
+def test_rdf_mapping_retains_self_disjoint_class_rewrite() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <owl:Class rdf:about="urn:C">
+    <owl:disjointWith rdf:resource="urn:C"/>
+  </owl:Class>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert m.SubClassOf(m.Class(m.IRI("urn:C")), m.OWL_NOTHING) in document.axioms
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        (
+            '<owl:Class rdf:about="urn:C">'
             '<rdf:type rdf:resource="http://www.w3.org/2000/01/rdf-schema#Class"/>'
             "</owl:Class>"
         ),
