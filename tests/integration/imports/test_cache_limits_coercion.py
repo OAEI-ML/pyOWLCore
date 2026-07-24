@@ -109,6 +109,34 @@ def test_diamond_uses_acquisition_and_document_caches_once(monkeypatch: pytest.M
     assert snapshot.report.document_cache_hits >= 1
 
 
+def test_document_cache_identity_keeps_parse_limits_fail_closed() -> None:
+    root = functional("urn:root", imports=("urn:child",))
+    child = functional(
+        "urn:child",
+        body=('AnnotationAssertion(:p :subject "long")',),
+    )
+    resolver = MappingResolver({"urn:child": child})
+    loader = SnapshotLoader(
+        acquisition_cache=AcquisitionCache(),
+        document_cache=ParsedDocumentCache(),
+    )
+    default_options = load_options(ImportPolicy.RESOLVE_LOCAL)
+
+    first = loader.load(root, options=default_options, resolver=resolver)
+    assert first.report.document_cache_hits == 0
+
+    strict_options = load_options(
+        ImportPolicy.RESOLVE_LOCAL,
+        limits=replace(ParseLimits(), max_literal_bytes=1),
+    )
+    with pytest.raises(ResourceLimitError) as strict:
+        loader.load(root, options=strict_options, resolver=resolver)
+    assert strict.value.limit == "max_literal_bytes"
+
+    repeated = loader.load(root, options=default_options, resolver=resolver)
+    assert repeated.report.document_cache_hits == 1
+
+
 class _CrashingDocumentCache(ParsedDocumentCache):
     def publish(self, key: tuple[object, ...], document: object) -> object:
         del key, document

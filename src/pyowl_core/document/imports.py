@@ -1120,6 +1120,7 @@ def _parsed_document_context(
             parser_options.backend.value,
             parser_options.preserve_source_map,
             parser_options.collect_provenance,
+            parser_options.limits,
         ),
     )
 
