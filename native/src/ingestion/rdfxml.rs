@@ -4981,7 +4981,12 @@ fn map_all_different<'view, 'graph>(
             individuals,
             consumed: collection_consumed,
         } = expressions.decode_individual_collection(head, session)?;
-        let individuals = canonical_set(individuals, 2, None)?;
+        let individuals = canonical_set(individuals, 0, None)?;
+        if individuals.len() < 2 {
+            return Err(rdf_mapping_unsupported(
+                "native owl:AllDifferent requires at least two distinct members",
+            ));
+        }
         let annotations = annotations_on_structural_node(
             triple.subject,
             &[RDF_TYPE, OWL_MEMBERS, OWL_DISTINCT_MEMBERS],
@@ -5046,7 +5051,7 @@ fn map_all_disjoint_collections<'view, 'graph>(
                 consumed,
             } = expressions.decode_class_collection(head, session)?;
             let raw_length = raw_expressions.len();
-            let mut expressions_set = canonical_set(raw_expressions, 1, None)?;
+            let mut expressions_set = canonical_set(raw_expressions, 0, None)?;
             let axiom = if raw_length >= 2 && expressions_set.len() == 1 {
                 build_node(
                     61,
@@ -5060,6 +5065,11 @@ fn map_all_disjoint_collections<'view, 'graph>(
                     session,
                 )?
             } else {
+                if expressions_set.len() < 2 {
+                    return Err(rdf_mapping_unsupported(
+                        "native all-disjoint class axiom requires at least two members",
+                    ));
+                }
                 let expressions_set = canonical_set(expressions_set, 2, None)?;
                 build_node(
                     63,
@@ -5074,7 +5084,12 @@ fn map_all_disjoint_collections<'view, 'graph>(
                 consumed,
                 data_properties,
             } = expressions.decode_property_collection(head, session)?;
-            let properties = canonical_set(properties, 2, None)?;
+            let properties = canonical_set(properties, 0, None)?;
+            if properties.len() < 2 {
+                return Err(rdf_mapping_unsupported(
+                    "native all-disjoint property axiom requires at least two distinct members",
+                ));
+            }
             let tag = if data_properties { 92 } else { 72 };
             (
                 build_node(
@@ -8411,6 +8426,10 @@ fn rdf_mapping_type() -> NativeError {
 
 fn rdf_mapping_cardinality(message: &'static str) -> NativeError {
     NativeError::new("NATIVE_RDF_MAPPING_CARDINALITY", message)
+}
+
+fn rdf_mapping_unsupported(message: &'static str) -> NativeError {
+    NativeError::new("NATIVE_RDF_MAPPING_UNSUPPORTED", message)
 }
 
 fn rdf_axiom_reification(message: &'static str) -> NativeError {
@@ -12318,7 +12337,10 @@ mod tests {
             let invalid = format!(
                 "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"axiom\"><rdf:type rdf:resource=\"{OWL}AllDifferent\"/><owl:distinctMembers rdf:parseType=\"Collection\">{members}</owl:distinctMembers></rdf:Description></rdf:RDF>"
             );
-            assert!(mapped(invalid.as_bytes(), None).is_err());
+            assert_eq!(
+                mapped(invalid.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
         }
 
         let missing = format!(
@@ -12468,11 +12490,29 @@ mod tests {
             .iter()
             .any(|value| value == expected_duplicate.as_bytes()));
 
-        for kind in [OWL_ALL_DISJOINT_CLASSES, OWL_ALL_DISJOINT_PROPERTIES] {
-            let single = format!(
-                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><rdf:type rdf:resource=\"{kind}\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:only\"/></owl:members></rdf:Description></rdf:RDF>"
+        for (kind, members) in [
+            (OWL_ALL_DISJOINT_CLASSES, ""),
+            (
+                OWL_ALL_DISJOINT_CLASSES,
+                "<rdf:Description rdf:about=\"urn:only\"/>",
+            ),
+            (OWL_ALL_DISJOINT_PROPERTIES, ""),
+            (
+                OWL_ALL_DISJOINT_PROPERTIES,
+                "<rdf:Description rdf:about=\"urn:only\"/>",
+            ),
+            (
+                OWL_ALL_DISJOINT_PROPERTIES,
+                "<rdf:Description rdf:about=\"urn:only\"/><rdf:Description rdf:about=\"urn:only\"/>",
+            ),
+        ] {
+            let invalid = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description><rdf:type rdf:resource=\"{kind}\"/><owl:members rdf:parseType=\"Collection\">{members}</owl:members></rdf:Description></rdf:RDF>"
             );
-            assert!(mapped(single.as_bytes(), None).is_err());
+            assert_eq!(
+                mapped(invalid.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
         }
     }
 

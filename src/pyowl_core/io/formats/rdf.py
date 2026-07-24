@@ -948,25 +948,51 @@ class RDFMapper:
                 members = self._list(cast(RDFTerm, head))
                 annotations = self._annotations_on_node(node, {RDF + "type", predicate})
                 if kind == OWL + "AllDisjointClasses":
+                    expressions = tuple(self._class_expression(item) for item in members)
+                    if len(expressions) < 2:
+                        self._mapping_error(
+                            "all-disjoint class axiom requires at least two members"
+                        )
                     collection_value: m.AxiomNode = _disjoint_classes(
-                        tuple(self._class_expression(item) for item in members),
-                        annotations,
+                        expressions, annotations
                     )
                 elif kind == OWL + "AllDifferent":
+                    individuals = m.CanonicalSet(
+                        self._individual_resource(item) for item in members
+                    )
+                    if len(individuals) < 2:
+                        self._mapping_error(
+                            "different-individuals axiom requires at least two "
+                            "distinct members"
+                        )
                     collection_value = m.DifferentIndividuals(
-                        m.CanonicalSet(self._individual_resource(item) for item in members),
+                        individuals,
                         annotations,
                     )
                 else:
                     if all(self._resource_iri(item) in self.data_kinds for item in members):
+                        data_properties = m.CanonicalSet(
+                            self._data_property_term(item) for item in members
+                        )
+                        if len(data_properties) < 2:
+                            self._mapping_error(
+                                "all-disjoint property axiom requires at least two "
+                                "distinct members"
+                            )
                         collection_value = m.DisjointDataProperties(
-                            m.CanonicalSet(self._data_property_term(item) for item in members),
-                            annotations,
+                            data_properties, annotations
                         )
                     else:
+                        object_properties = m.CanonicalSet(
+                            self._object_property(item) for item in members
+                        )
+                        if len(object_properties) < 2:
+                            self._mapping_error(
+                                "all-disjoint property axiom requires at least two "
+                                "distinct members"
+                            )
                         collection_value = m.DisjointObjectProperties(
-                            m.CanonicalSet(self._object_property(item) for item in members),
-                            annotations,
+                            object_properties, annotations
                         )
                 self._consume_subject(node)
                 values.append(collection_value)

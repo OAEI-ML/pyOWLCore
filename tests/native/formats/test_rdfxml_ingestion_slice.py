@@ -1829,6 +1829,68 @@ def test_builtin_property_special_axioms_match_python(
 
 
 @pytest.mark.parametrize(
+    ("kind", "predicate", "members"),
+    (
+        ("AllDifferent", "distinctMembers", ""),
+        (
+            "AllDifferent",
+            "distinctMembers",
+            "<rdf:Description rdf:about='urn:only'/>",
+        ),
+        (
+            "AllDifferent",
+            "distinctMembers",
+            (
+                "<rdf:Description rdf:about='urn:only'/>"
+                "<rdf:Description rdf:about='urn:only'/>"
+            ),
+        ),
+        ("AllDisjointClasses", "members", ""),
+        (
+            "AllDisjointClasses",
+            "members",
+            "<rdf:Description rdf:about='urn:only'/>",
+        ),
+        ("AllDisjointProperties", "members", ""),
+        (
+            "AllDisjointProperties",
+            "members",
+            "<rdf:Description rdf:about='urn:only'/>",
+        ),
+        (
+            "AllDisjointProperties",
+            "members",
+            (
+                "<rdf:Description rdf:about='urn:only'/>"
+                "<rdf:Description rdf:about='urn:only'/>"
+            ),
+        ),
+    ),
+)
+def test_undersized_special_axiom_collections_match_python(
+    extension: NativeTestExtension,
+    kind: str,
+    predicate: str,
+    members: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <rdf:Description rdf:nodeID='axiom'>
+  <rdf:type rdf:resource='{OWL_NAMESPACE}{kind}'/>
+  <owl:{predicate} rdf:parseType='Collection'>{members}</owl:{predicate}>
+ </rdf:Description>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_UNSUPPORTED"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
     "body",
     (
         (

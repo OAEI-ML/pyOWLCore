@@ -1839,6 +1839,67 @@ def test_rdf_mapping_classifies_builtin_properties_in_special_axioms() -> None:
 
 
 @pytest.mark.parametrize(
+    ("kind", "predicate", "members"),
+    (
+        ("AllDifferent", "distinctMembers", ""),
+        (
+            "AllDifferent",
+            "distinctMembers",
+            '<rdf:Description rdf:about="urn:only"/>',
+        ),
+        (
+            "AllDifferent",
+            "distinctMembers",
+            (
+                '<rdf:Description rdf:about="urn:only"/>'
+                '<rdf:Description rdf:about="urn:only"/>'
+            ),
+        ),
+        ("AllDisjointClasses", "members", ""),
+        (
+            "AllDisjointClasses",
+            "members",
+            '<rdf:Description rdf:about="urn:only"/>',
+        ),
+        ("AllDisjointProperties", "members", ""),
+        (
+            "AllDisjointProperties",
+            "members",
+            '<rdf:Description rdf:about="urn:only"/>',
+        ),
+        (
+            "AllDisjointProperties",
+            "members",
+            (
+                '<rdf:Description rdf:about="urn:only"/>'
+                '<rdf:Description rdf:about="urn:only"/>'
+            ),
+        ),
+    ),
+)
+def test_rdf_mapping_rejects_undersized_special_axiom_collections(
+    kind: str,
+    predicate: str,
+    members: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <rdf:Description rdf:nodeID="axiom">
+    <rdf:type rdf:resource="{OWL_NAMESPACE}{kind}"/>
+    <owl:{predicate} rdf:parseType="Collection">
+      {members}
+    </owl:{predicate}>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
     "body",
     (
         (
