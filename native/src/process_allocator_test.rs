@@ -219,36 +219,74 @@ impl ComponentEncodingFixture {
         })
     }
 
-    /// Prepare a production typed V2 document owner with both its axiom and
+    /// Prepare a production typed V2 owner with document/raw/closure axiom and
     /// complete signature root tables before allocation injection is armed.
     pub fn prepare_typed_facade_indexes(&self) -> Result<TypedFacadeIndexFixture, Failure> {
-        let axiom_coordinate =
+        let document_axiom_coordinate =
             TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
-        let signature_coordinate =
+        let document_signature_coordinate =
             TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Signature, 0);
-        let mut axiom_roots = Vec::new();
-        axiom_roots
+        let closure_axiom_coordinate =
+            TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms);
+        let closure_signature_coordinate =
+            TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Signature);
+        let mut document_axiom_roots = Vec::new();
+        document_axiom_roots
             .try_reserve_exact(1)
             .map_err(|_| NativeError::limit("native allocator typed axiom root failed"))?;
-        axiom_roots.push(self.identifiers[0]);
-        let mut signature_roots = Vec::new();
-        signature_roots
+        document_axiom_roots.push(self.identifiers[0]);
+        let mut raw_axiom_roots = Vec::new();
+        raw_axiom_roots
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator raw typed axiom root failed"))?;
+        raw_axiom_roots.push(self.identifiers[0]);
+        let mut closure_axiom_roots = Vec::new();
+        closure_axiom_roots
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator closure typed axiom root failed"))?;
+        closure_axiom_roots.push(self.identifiers[0]);
+        let mut document_signature_roots = Vec::new();
+        document_signature_roots
             .try_reserve_exact(1)
             .map_err(|_| NativeError::limit("native allocator typed signature root failed"))?;
-        signature_roots.push(self.entities[0]);
+        document_signature_roots.push(self.entities[0]);
+        let mut closure_signature_roots = Vec::new();
+        closure_signature_roots.try_reserve_exact(1).map_err(|_| {
+            NativeError::limit("native allocator closure typed signature root failed")
+        })?;
+        closure_signature_roots.push(self.entities[0]);
         let mut tables = Vec::new();
         tables
-            .try_reserve_exact(2)
+            .try_reserve_exact(4)
             .map_err(|_| NativeError::limit("native allocator typed index tables failed"))?;
-        tables.push(TypedFacadeTableV2::new(axiom_coordinate, axiom_roots));
         tables.push(TypedFacadeTableV2::new(
-            signature_coordinate,
-            signature_roots,
+            document_axiom_coordinate,
+            document_axiom_roots,
+        ));
+        tables.push(TypedFacadeTableV2::new(
+            document_signature_coordinate,
+            document_signature_roots,
+        ));
+        tables.push(TypedFacadeTableV2::new(
+            closure_axiom_coordinate,
+            closure_axiom_roots,
+        ));
+        tables.push(TypedFacadeTableV2::new(
+            closure_signature_coordinate,
+            closure_signature_roots,
+        ));
+        let mut raw_document_tables = Vec::new();
+        raw_document_tables
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator raw typed index table failed"))?;
+        raw_document_tables.push(TypedFacadeTableV2::new(
+            document_axiom_coordinate,
+            raw_axiom_roots,
         ));
         let storage = TypedFacadeStorageV2::freeze(
             self.frozen.arena().clone(),
             tables,
-            Vec::new(),
+            raw_document_tables,
             1,
             Limits::default(),
             self.cancellation.clone(),
@@ -657,10 +695,31 @@ impl TypedFacadeIndexFixture {
     /// Build and consume the typed V2 retained axiom-type index while
     /// allocation injection is armed.
     pub fn build_axiom_type_index(&self) -> Result<[u64; 5], Failure> {
+        self.build_selected_axiom_type_index(TypedFacadeScopeV2::Document, Some(0), false)
+    }
+
+    /// Build and consume the raw document retained axiom-type index while
+    /// allocation injection is armed.
+    pub fn build_raw_axiom_type_index(&self) -> Result<[u64; 5], Failure> {
+        self.build_selected_axiom_type_index(TypedFacadeScopeV2::Document, Some(0), true)
+    }
+
+    /// Build and consume the closure retained axiom-type index while allocation
+    /// injection is armed.
+    pub fn build_closure_axiom_type_index(&self) -> Result<[u64; 5], Failure> {
+        self.build_selected_axiom_type_index(TypedFacadeScopeV2::Closure, None, false)
+    }
+
+    fn build_selected_axiom_type_index(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+        raw_document_owner: bool,
+    ) -> Result<[u64; 5], Failure> {
         let index = self.storage.axiom_type_index(
-            TypedFacadeScopeV2::Document,
-            Some(0),
-            false,
+            scope,
+            document_ordinal,
+            raw_document_owner,
             &Limits::default(),
             self.cancellation.clone(),
             None,
@@ -678,9 +737,23 @@ impl TypedFacadeIndexFixture {
     /// Build and consume the typed V2 retained signature index while
     /// allocation injection is armed.
     pub fn build_signature_index(&self) -> Result<[u64; 6], Failure> {
+        self.build_selected_signature_index(TypedFacadeScopeV2::Document, Some(0))
+    }
+
+    /// Build and consume the closure retained signature index while allocation
+    /// injection is armed.
+    pub fn build_closure_signature_index(&self) -> Result<[u64; 6], Failure> {
+        self.build_selected_signature_index(TypedFacadeScopeV2::Closure, None)
+    }
+
+    fn build_selected_signature_index(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+    ) -> Result<[u64; 6], Failure> {
         let index = self.storage.signature_index(
-            TypedFacadeScopeV2::Document,
-            Some(0),
+            scope,
+            document_ordinal,
             &Limits::default(),
             self.cancellation.clone(),
             None,

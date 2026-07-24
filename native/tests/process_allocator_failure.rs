@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use _native::process_allocator_test::{
     wire_validation_receipt, ComponentBuildFixture, ComponentEncodingFixture, Failure,
-    WireValidationFixture,
+    TypedFacadeIndexFixture, WireValidationFixture,
 };
 
 const DISARMED: u8 = 0;
@@ -553,6 +553,72 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
     })
     .expect("first non-failing typed facade signature boundary must build");
     assert_eq!(boundary_typed_signature, baseline_typed_signature);
+
+    for operation in [
+        TypedFacadeIndexFixture::build_raw_axiom_type_index
+            as fn(&TypedFacadeIndexFixture) -> Result<[u64; 5], Failure>,
+        TypedFacadeIndexFixture::build_closure_axiom_type_index,
+    ] {
+        let typed_axiom_type = component
+            .prepare_typed_facade_indexes()
+            .expect("typed scoped axiom-type fixture must prepare");
+        let (baseline_typed_axiom_type, typed_axiom_type_allocations) =
+            count_allocations(|| operation(&typed_axiom_type));
+        let baseline_typed_axiom_type =
+            baseline_typed_axiom_type.expect("typed scoped axiom-type baseline must build");
+        assert_eq!(baseline_typed_axiom_type, baseline_axiom_type);
+        assert!(typed_axiom_type_allocations > 1);
+
+        for fail_after in 0..typed_axiom_type_allocations {
+            let typed_axiom_type = component
+                .prepare_typed_facade_indexes()
+                .expect("typed scoped axiom-type fixture must prepare for every rejection");
+            let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+                operation(&typed_axiom_type)
+            }));
+            assert!(failure.message.contains("allocation failed"));
+        }
+        let typed_axiom_type = component
+            .prepare_typed_facade_indexes()
+            .expect("typed scoped axiom-type boundary fixture must prepare");
+        let boundary_typed_axiom_type = fail_allocation(typed_axiom_type_allocations, || {
+            operation(&typed_axiom_type)
+        })
+        .expect("first non-failing typed scoped axiom-type boundary must build");
+        assert_eq!(boundary_typed_axiom_type, baseline_typed_axiom_type);
+    }
+
+    let typed_closure_signature = component
+        .prepare_typed_facade_indexes()
+        .expect("typed closure signature fixture must prepare");
+    let (baseline_typed_closure_signature, typed_closure_signature_allocations) =
+        count_allocations(|| typed_closure_signature.build_closure_signature_index());
+    let baseline_typed_closure_signature =
+        baseline_typed_closure_signature.expect("typed closure signature baseline must build");
+    assert_eq!(baseline_typed_closure_signature, baseline_signature);
+    assert!(typed_closure_signature_allocations > 1);
+
+    for fail_after in 0..typed_closure_signature_allocations {
+        let typed_closure_signature = component
+            .prepare_typed_facade_indexes()
+            .expect("typed closure signature fixture must prepare for every rejection");
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+            typed_closure_signature.build_closure_signature_index()
+        }));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let typed_closure_signature = component
+        .prepare_typed_facade_indexes()
+        .expect("typed closure signature boundary fixture must prepare");
+    let boundary_typed_closure_signature =
+        fail_allocation(typed_closure_signature_allocations, || {
+            typed_closure_signature.build_closure_signature_index()
+        })
+        .expect("first non-failing typed closure signature boundary must build");
+    assert_eq!(
+        boundary_typed_closure_signature,
+        baseline_typed_closure_signature
+    );
 
     let (baseline_prepared, preparation_allocations) =
         count_allocations(|| component.prepare_encoded_columns());
