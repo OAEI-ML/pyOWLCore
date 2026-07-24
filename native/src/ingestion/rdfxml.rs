@@ -3156,6 +3156,7 @@ fn consume_owl1_redundant_types(
                     OWL_OBJECT_PROPERTY,
                     OWL_FUNCTIONAL_PROPERTY,
                     OWL_INVERSE_FUNCTIONAL_PROPERTY,
+                    OWL_SYMMETRIC_PROPERTY,
                     OWL_TRANSITIVE_PROPERTY,
                     OWL_DATATYPE_PROPERTY,
                     OWL_ANNOTATION_PROPERTY,
@@ -8970,7 +8971,7 @@ mod tests {
     #[test]
     fn owl1_declarations_redundant_types_and_deprecation_map_exactly() {
         let source = format!(
-            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"><rdf:type rdf:resource=\"{RDFS_CLASS}\"/></owl:Class><owl:ObjectProperty rdf:about=\"urn:p\"><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></owl:ObjectProperty><owl:OntologyProperty rdf:about=\"urn:ap\"><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></owl:OntologyProperty><rdf:Description rdf:about=\"urn:inverse\"><rdf:type rdf:resource=\"{OWL_INVERSE_FUNCTIONAL_PROPERTY}\"/><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></rdf:Description><rdf:Description rdf:about=\"urn:symmetric\"><rdf:type rdf:resource=\"{OWL_SYMMETRIC_PROPERTY}\"/></rdf:Description><rdf:Description rdf:about=\"urn:transitive\"><rdf:type rdf:resource=\"{OWL_TRANSITIVE_PROPERTY}\"/><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></rdf:Description><owl:Class rdf:about=\"urn:Old\"><rdf:type rdf:resource=\"{OWL_DEPRECATED_CLASS}\"/></owl:Class></rdf:RDF>"
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:C\"><rdf:type rdf:resource=\"{RDFS_CLASS}\"/></owl:Class><owl:ObjectProperty rdf:about=\"urn:p\"><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></owl:ObjectProperty><owl:OntologyProperty rdf:about=\"urn:ap\"><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></owl:OntologyProperty><rdf:Description rdf:about=\"urn:inverse\"><rdf:type rdf:resource=\"{OWL_INVERSE_FUNCTIONAL_PROPERTY}\"/><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></rdf:Description><rdf:Description rdf:about=\"urn:symmetric\"><rdf:type rdf:resource=\"{OWL_SYMMETRIC_PROPERTY}\"/><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></rdf:Description><rdf:Description rdf:about=\"urn:transitive\"><rdf:type rdf:resource=\"{OWL_TRANSITIVE_PROPERTY}\"/><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></rdf:Description><owl:Class rdf:about=\"urn:Old\"><rdf:type rdf:resource=\"{OWL_DEPRECATED_CLASS}\"/></owl:Class></rdf:RDF>"
         );
         let document = mapped(source.as_bytes(), None).expect("OWL 1 declarations");
         let declaration = |kind: &'static str, value: &str| {
@@ -9059,6 +9060,7 @@ mod tests {
             document.mapping.total_triples,
             document.mapping.consumed_triples,
         );
+        assert_eq!(document.mapping.total_triples, 14);
 
         for unsupported in [RDFS_CLASS, RDF_PROPERTY] {
             let source = format!(
@@ -9069,6 +9071,13 @@ mod tests {
                 "NATIVE_RDF_MAPPING_INCOMPLETE",
             );
         }
+        let wrong_kind = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:NamedIndividual rdf:about=\"urn:x\"><rdf:type rdf:resource=\"{RDF_PROPERTY}\"/></owl:NamedIndividual></rdf:RDF>"
+        );
+        assert_eq!(
+            mapped(wrong_kind.as_bytes(), None).unwrap_err().code,
+            "NATIVE_RDF_MAPPING_INCOMPLETE",
+        );
     }
 
     #[test]

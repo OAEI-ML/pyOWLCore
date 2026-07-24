@@ -1303,6 +1303,7 @@ def test_rdf_mapping_maps_owl1_declarations_characteristics_and_deprecation() ->
   </rdf:Description>
   <rdf:Description rdf:about="urn:symmetric">
     <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#SymmetricProperty"/>
+    <rdf:type rdf:resource="{RDF_NAMESPACE}Property"/>
   </rdf:Description>
   <rdf:Description rdf:about="urn:transitive">
     <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#TransitiveProperty"/>
@@ -1315,6 +1316,11 @@ def test_rdf_mapping_maps_owl1_declarations_characteristics_and_deprecation() ->
 """.encode()
 
     document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 14
+    assert document.rdf_mapping_report.consumed_triples == 14
+    assert document.rdf_mapping_report.unconsumed == ()
     assert len(tuple(document.iter_axioms(m.Declaration))) == 7
     assert (
         m.InverseFunctionalObjectProperty(m.ObjectProperty(m.IRI("urn:inverse")))
@@ -1331,6 +1337,21 @@ def test_rdf_mapping_maps_owl1_declarations_characteristics_and_deprecation() ->
         ),
     ) in document.axioms
     assert len(document.axioms) == 11
+
+
+def test_rdf_mapping_rejects_owl1_property_marker_on_a_nonproperty() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:NamedIndividual rdf:about="urn:i">
+    <rdf:type rdf:resource="{RDF_NAMESPACE}Property"/>
+  </owl:NamedIndividual>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
 
 
 def test_rdf_mapping_does_not_duplicate_explicit_inferred_declaration() -> None:

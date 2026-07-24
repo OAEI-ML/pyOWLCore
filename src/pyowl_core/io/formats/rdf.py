@@ -305,6 +305,7 @@ class RDFMapper:
                 OWL + "ObjectProperty",
                 OWL + "FunctionalProperty",
                 OWL + "InverseFunctionalProperty",
+                OWL + "SymmetricProperty",
                 OWL + "TransitiveProperty",
                 OWL + "DatatypeProperty",
                 OWL + "AnnotationProperty",

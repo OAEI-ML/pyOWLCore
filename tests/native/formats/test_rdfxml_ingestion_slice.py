@@ -1350,6 +1350,7 @@ def test_owl1_declarations_characteristics_and_deprecation_match_python(
  </rdf:Description>
  <rdf:Description rdf:about='urn:symmetric'>
   <rdf:type rdf:resource='http://www.w3.org/2002/07/owl#SymmetricProperty'/>
+  <rdf:type rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#Property'/>
  </rdf:Description>
  <rdf:Description rdf:about='urn:transitive'>
   <rdf:type rdf:resource='http://www.w3.org/2002/07/owl#TransitiveProperty'/>
@@ -1360,11 +1361,39 @@ def test_owl1_declarations_characteristics_and_deprecation_match_python(
  </owl:Class>
 </rdf:RDF>"""
 
-    _owner, observed = _ingest(extension, source)
+    owner, observed = _ingest(extension, source)
     python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+    assert python.rdf_mapping_report.conformant
     assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
     assert len(observed.axioms) == 11
-    assert observed.total_triples == observed.consumed_triples
+    assert observed.total_triples == observed.consumed_triples == 14
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == len(python.axioms)
+    assert attestation.rdf_mapping_report_count == 1
+    assert extension.INGESTION_FEATURES == ()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
+def test_owl1_property_marker_on_a_nonproperty_remains_incomplete(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'>
+ <owl:NamedIndividual rdf:about='urn:i'>
+  <rdf:type rdf:resource='http://www.w3.org/1999/02/22-rdf-syntax-ns#Property'/>
+ </owl:NamedIndividual>
+</rdf:RDF>"""
+
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_INCOMPLETE"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_INCOMPLETE"
 
 
 def test_explicit_inferred_declaration_deduplication_matches_python(
