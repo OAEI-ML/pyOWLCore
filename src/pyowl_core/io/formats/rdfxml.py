@@ -336,7 +336,12 @@ class RDFXMLGraphParser:
                 # RDF/XML 1.1 parseTypeOther is defined to behave exactly like
                 # parseType="Literal" without emitting value-specific triples.
                 lexical = (element.text or "") + "".join(
-                    ET.tostring(child, encoding="unicode") for child in element
+                    ET.tostring(
+                        child,
+                        encoding="unicode",
+                        short_empty_elements=False,
+                    )
+                    for child in element
                 )
                 self._enforce_literal_size(lexical)
                 triple = self._add(subject, predicate, RDFLiteral(lexical, RDF + "XMLLiteral"))

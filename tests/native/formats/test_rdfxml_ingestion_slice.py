@@ -1776,7 +1776,7 @@ def test_canonical_swrl_atom_limit_matches_python(
             "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
             "<rdfs:comment rdf:parseType='Literal'><e:x/></rdfs:comment>"
             "</owl:Class></rdf:RDF>",
-            28,
+            34,
         ),
     ),
 )

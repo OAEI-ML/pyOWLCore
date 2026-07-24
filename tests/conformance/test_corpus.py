@@ -39,7 +39,7 @@ POSITIVE = {
 
 def test_provenance_hashes_and_generated_locks_are_current() -> None:
     artifacts = validate_manifest()
-    assert len(artifacts) == 17
+    assert len(artifacts) == 335
     assert CORPUS_LOCK.read_text(encoding="utf-8") == render_lock(artifacts)
     assert COVERAGE_LOCK.read_text(encoding="utf-8") == render_coverage()
 

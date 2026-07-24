@@ -13,7 +13,7 @@
     ]
   },
   "corpus": {
-    "artifacts": 17,
+    "artifacts": 335,
     "categories": [
       "errata-identity",
       "hostile-rdf",
@@ -27,9 +27,10 @@
       "positive-rdfxml",
       "positive-turtle",
       "provenance-ledger",
-      "tool-provenance"
+      "tool-provenance",
+      "upstream-rdfxml-parity-evidence"
     ],
-    "provenance_sha256": "d102f86cc9c2163295b74ee8b7773ce5a28fa03322c5da026e544a0820afd3af"
+    "provenance_sha256": "c0b8d56b5deb11a8d9ca050b3c312710b28d9e80340787c50cd2ffbd05ce3190"
   },
   "deviations": {
     "count": 0,

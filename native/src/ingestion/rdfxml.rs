@@ -1783,10 +1783,13 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             self.append_xml_literal_piece(output, "\"")?;
         }
         if matches!(events.get(*cursor), Some(XmlLiteralEvent::End)) {
-            self.append_xml_literal_piece(output, " />")?;
+            self.append_xml_literal_piece(output, ">")?;
             *cursor = cursor
                 .checked_add(1)
                 .ok_or_else(|| NativeError::limit("native XML literal cursor overflow"))?;
+            self.append_xml_literal_piece(output, "</")?;
+            self.append_xml_literal_name(output, name, namespaces)?;
+            self.append_xml_literal_piece(output, ">")?;
             return Ok(());
         }
         self.append_xml_literal_piece(output, ">")?;
@@ -2077,6 +2080,28 @@ pub(super) fn parse_and_map_timed(
     preserve_source_map: bool,
     session: &mut Session<'_>,
 ) -> NativeResult<(CanonicalDocument, u64)> {
+    let (triples, language_spellings, decoded_codepoints) =
+        parse_graph_source(source, document_iri, preserve_source_map, session)?;
+    let mapping_started = Instant::now();
+    let document = map_graph(
+        triples,
+        decoded_codepoints,
+        allow_swrl,
+        capture_occurrences,
+        language_spellings,
+        session,
+    )?;
+    let mapping_ns = u64::try_from(mapping_started.elapsed().as_nanos())
+        .map_err(|_| NativeError::limit("native RDF mapping phase time exceeds u64"))?;
+    Ok((document, mapping_ns))
+}
+
+fn parse_graph_source(
+    source: &[u8],
+    document_iri: Option<&str>,
+    preserve_source_map: bool,
+    session: &mut Session<'_>,
+) -> NativeResult<(Vec<Triple>, Vec<String>, u64)> {
     let (text, decoded_codepoints, source_encoding) = decode_xml(source, session)?;
     let utf8_bom =
         source_encoding == XmlSourceEncoding::Utf8 && source.starts_with(&[0xef, 0xbb, 0xbf]);
@@ -2094,18 +2119,174 @@ pub(super) fn parse_and_map_timed(
         session,
     )?
     .parse()?;
-    let mapping_started = Instant::now();
-    let document = map_graph(
-        triples,
-        decoded_codepoints,
-        allow_swrl,
-        capture_occurrences,
-        language_spellings,
-        session,
-    )?;
-    let mapping_ns = u64::try_from(mapping_started.elapsed().as_nanos())
-        .map_err(|_| NativeError::limit("native RDF mapping phase time exceeds u64"))?;
-    Ok((document, mapping_ns))
+    Ok((triples, language_spellings, decoded_codepoints))
+}
+
+#[cfg(feature = "test-hooks")]
+pub(super) fn parse_graph_observation(
+    source: &[u8],
+    document_iri: Option<&str>,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<u8>> {
+    let (mut triples, _, _) = parse_graph_source(source, document_iri, false, session)?;
+    triples.sort_unstable();
+    encode_graph_observation(&triples, session)
+}
+
+#[cfg(feature = "test-hooks")]
+fn encode_graph_observation(
+    triples: &[Triple],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<u8>> {
+    const MAGIC: &[u8; 8] = b"PYRXGRF1";
+
+    let size = graph_observation_size(triples)?;
+    if u64::try_from(size).map_or(true, |size| {
+        size > session.limits().value(LimitKey::MaxTemporaryBytes)
+    }) {
+        return Err(NativeError::limit(
+            "native RDF/XML graph observation exceeds max_temporary_bytes",
+        ));
+    }
+    session.reserve_bytes(size)?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native RDF/XML graph observation allocation failed"))?;
+    output.extend_from_slice(MAGIC);
+    output.extend_from_slice(&1_u16.to_le_bytes());
+    output.extend_from_slice(&0_u16.to_le_bytes());
+    output.extend_from_slice(
+        &u64::try_from(triples.len())
+            .map_err(|_| NativeError::limit("native RDF/XML graph triple count exceeds u64"))?
+            .to_le_bytes(),
+    );
+    for triple in triples {
+        encode_graph_resource(&triple.subject, &mut output)?;
+        encode_graph_frame(&triple.predicate, &mut output)?;
+        encode_graph_term(&triple.object, &mut output)?;
+    }
+    if output.len() != size {
+        return Err(NativeError::protocol(
+            "native RDF/XML graph observation size ledger diverged",
+        ));
+    }
+    Ok(output)
+}
+
+#[cfg(feature = "test-hooks")]
+fn graph_observation_size(triples: &[Triple]) -> NativeResult<usize> {
+    let mut size = checked_graph_observation_add(8, 2 + 2 + 8)?;
+    for triple in triples {
+        size = checked_graph_observation_add(size, graph_resource_size(&triple.subject)?)?;
+        size = checked_graph_observation_add(size, graph_frame_size(&triple.predicate)?)?;
+        size = checked_graph_observation_add(size, graph_term_size(&triple.object)?)?;
+    }
+    Ok(size)
+}
+
+#[cfg(feature = "test-hooks")]
+fn graph_resource_size(value: &Resource) -> NativeResult<usize> {
+    let value = match value {
+        Resource::Iri(value) | Resource::Blank(value) => value,
+    };
+    checked_graph_observation_add(1, graph_frame_size(value)?)
+}
+
+#[cfg(feature = "test-hooks")]
+fn graph_term_size(value: &Term) -> NativeResult<usize> {
+    match value {
+        Term::Iri(value) | Term::Blank(value) => {
+            checked_graph_observation_add(1, graph_frame_size(value)?)
+        }
+        Term::Literal {
+            lexical,
+            datatype,
+            language,
+        } => {
+            let mut size = checked_graph_observation_add(1, graph_frame_size(lexical)?)?;
+            size = checked_graph_observation_add(size, graph_optional_size(datatype.as_deref())?)?;
+            checked_graph_observation_add(size, graph_optional_size(language.as_deref())?)
+        }
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+fn graph_optional_size(value: Option<&str>) -> NativeResult<usize> {
+    match value {
+        Some(value) => checked_graph_observation_add(1, graph_frame_size(value)?),
+        None => Ok(1),
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+fn graph_frame_size(value: &str) -> NativeResult<usize> {
+    checked_graph_observation_add(8, value.len())
+}
+
+#[cfg(feature = "test-hooks")]
+fn checked_graph_observation_add(left: usize, right: usize) -> NativeResult<usize> {
+    left.checked_add(right)
+        .ok_or_else(|| NativeError::limit("native RDF/XML graph observation size overflow"))
+}
+
+#[cfg(feature = "test-hooks")]
+fn encode_graph_resource(value: &Resource, output: &mut Vec<u8>) -> NativeResult<()> {
+    let (tag, value) = match value {
+        Resource::Iri(value) => (0_u8, value),
+        Resource::Blank(value) => (1_u8, value),
+    };
+    output.push(tag);
+    encode_graph_frame(value, output)
+}
+
+#[cfg(feature = "test-hooks")]
+fn encode_graph_term(value: &Term, output: &mut Vec<u8>) -> NativeResult<()> {
+    match value {
+        Term::Iri(value) => {
+            output.push(0);
+            encode_graph_frame(value, output)
+        }
+        Term::Blank(value) => {
+            output.push(1);
+            encode_graph_frame(value, output)
+        }
+        Term::Literal {
+            lexical,
+            datatype,
+            language,
+        } => {
+            output.push(2);
+            encode_graph_frame(lexical, output)?;
+            encode_graph_optional(datatype.as_deref(), output)?;
+            encode_graph_optional(language.as_deref(), output)
+        }
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+fn encode_graph_optional(value: Option<&str>, output: &mut Vec<u8>) -> NativeResult<()> {
+    match value {
+        Some(value) => {
+            output.push(1);
+            encode_graph_frame(value, output)
+        }
+        None => {
+            output.push(0);
+            Ok(())
+        }
+    }
+}
+
+#[cfg(feature = "test-hooks")]
+fn encode_graph_frame(value: &str, output: &mut Vec<u8>) -> NativeResult<()> {
+    output.extend_from_slice(
+        &u64::try_from(value.len())
+            .map_err(|_| NativeError::limit("native RDF/XML graph frame length exceeds u64"))?
+            .to_le_bytes(),
+    );
+    output.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 fn decode_xml(
@@ -7424,7 +7605,7 @@ mod tests {
             iri_resource("urn:s"),
             "urn:e:p",
             Term::Literal {
-                lexical: "root<ns0:box xmlns:ns0=\"urn:x:\" xmlns:ns1=\"urn:y:\" z=\"2\" a=\"1\" xml:base=\"../\"><ns1:item ns0:attr=\"&quot;\">hi &amp;</ns1:item>tail&lt;</ns0:box>between<ns0:empty xmlns:ns0=\"urn:x:\" />suffix".to_owned(),
+                lexical: "root<ns0:box xmlns:ns0=\"urn:x:\" xmlns:ns1=\"urn:y:\" z=\"2\" a=\"1\" xml:base=\"../\"><ns1:item ns0:attr=\"&quot;\">hi &amp;</ns1:item>tail&lt;</ns0:box>between<ns0:empty xmlns:ns0=\"urn:x:\"></ns0:empty>suffix".to_owned(),
                 datatype: Some(RDF_XML_LITERAL.to_owned()),
                 language: None,
             },

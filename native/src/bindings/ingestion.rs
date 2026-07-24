@@ -92,6 +92,8 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     )?)?;
     #[cfg(feature = "test-hooks")]
     _module.add_function(wrap_pyfunction!(_ingest_rdfxml_slice_v1, _module)?)?;
+    #[cfg(feature = "test-hooks")]
+    _module.add_function(wrap_pyfunction!(_parse_rdfxml_graph_v1, _module)?)?;
     Ok(())
 }
 
@@ -1261,6 +1263,43 @@ fn _ingest_rdfxml_slice_v1<'py>(
     })?;
     let observation = PyBytes::new(py, &outcome.observation).unbind();
     Ok((outcome.publication.into_handle(), observation))
+}
+
+/// Test-only RDF graph observation for the locked W3C RDF/XML manifest.
+///
+/// Production retained ingestion never crosses this proportional graph seam.
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (source, document_iri, config, cancel=None))]
+fn _parse_rdfxml_graph_v1<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    document_iri: Option<&Bound<'py, PyAny>>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<Py<PyBytes>> {
+    let limits = crate::limits_from_python(config)?;
+    let cancellation = crate::cancellation_or_default(cancel);
+    let document_iri = owned_document_iri(py, document_iri, &limits)?;
+    let document_iri_size = document_iri.as_ref().map_or(0, String::len);
+    let owned = owned_source(py, source, document_iri_size, &limits, &cancellation)?;
+    let input_size = owned.len();
+    let accounted_input =
+        accounted_input_bytes(input_size, document_iri_size).map_err(crate::python_error)?;
+    let encoded = crate::run_detached(py, move |interrupt| {
+        let mut guard = Guard::with_interrupt(
+            cancellation,
+            limits.deadline,
+            limits.cancellation_stride,
+            interrupt,
+        );
+        let mut session = Session::new(&mut guard, &limits, accounted_input)?;
+        let encoded =
+            engine::parse_rdfxml_graph_test_adapter(&owned, document_iri.as_deref(), &mut session)?;
+        session.finish()?;
+        Ok(encoded)
+    })?;
+    Ok(PyBytes::new(py, &encoded).unbind())
 }
 
 #[cfg(feature = "test-hooks")]

@@ -327,6 +327,23 @@ pub(super) fn ingest_rdfxml_v1_test_adapter(
     })
 }
 
+#[cfg(feature = "test-hooks")]
+pub(super) fn parse_rdfxml_graph_test_adapter(
+    source: &[u8],
+    document_iri: Option<&str>,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<u8>> {
+    check_source(source, session)?;
+    if let Some(iri) = document_iri {
+        check_iri(
+            iri,
+            session,
+            "native RDF/XML document IRI exceeds max_iri_bytes",
+        )?;
+    }
+    rdfxml::parse_graph_observation(source, document_iri, session)
+}
+
 fn check_source(source: &[u8], session: &Session<'_>) -> NativeResult<()> {
     let size = u64::try_from(source.len())
         .map_err(|_| NativeError::limit("native RDF/XML source length exceeds u64"))?;

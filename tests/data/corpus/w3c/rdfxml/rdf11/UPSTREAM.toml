@@ -1,0 +1,11 @@
+schema = 1
+repository = "https://github.com/w3c/rdf-tests.git"
+revision = "3d0b0613d0177d25aad7ec60e88df2338f461516"
+upstream_path = "rdf/rdf11/rdf-xml"
+upstream_tree = "92e606ab2efa865ba89510bef6650a5fd03f2728"
+file_count = 317
+aggregate_domain = "pyowl-core:w3c-rdfxml-corpus:v1"
+aggregate_sha256 = "d10676e0219e5dd174d3f5f0451dee929549d056a7e9622b4b978af34e335ed0"
+license_expression = "W3C-Test-Suite OR BSD-3-Clause"
+selected_license = "BSD-3-Clause"
+license_file = "THIRD_PARTY_LICENSES/W3C-RDF-tests-BSD-3-Clause.txt"

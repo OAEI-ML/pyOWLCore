@@ -621,7 +621,7 @@ def test_rdfxml_ignores_reserved_xml_attribute_names() -> None:
         m.XSD_STRING,
     )
     assert annotations["http://www.w3.org/2000/01/rdf-schema#comment"] == m.Literal(
-        '<ns0:mark xmlns:ns0="urn:xml-attribute:" xml:trace="literal" />',
+        '<ns0:mark xmlns:ns0="urn:xml-attribute:" xml:trace="literal"></ns0:mark>',
         m.Datatype(m.IRI(RDF_NAMESPACE + "XMLLiteral")),
     )
     assert document.rdf_mapping_report is not None
@@ -1634,7 +1634,7 @@ def test_rdf_mapping_enforces_canonical_swrl_atom_limit() -> None:
             "<rdf:RDF {namespaces}><owl:Class rdf:about='urn:C'>"
             "<rdfs:comment rdf:parseType='Literal'><e:x/></rdfs:comment>"
             "</owl:Class></rdf:RDF>",
-            28,
+            34,
         ),
     ),
 )
