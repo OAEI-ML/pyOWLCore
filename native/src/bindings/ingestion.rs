@@ -805,7 +805,7 @@ fn validate_prepared_attestation(
 ///
 /// This private, unadvertised bridge lets the narrowly eligible public
 /// forced-native load path retain its structural roots in the typed owner. It
-/// accepts canonical roots, their attested origin rows, and an explicit
+/// accepts canonical roots, optional attested origin rows, and an explicit
 /// document/closure topology, while publishing no format capability.
 #[pyfunction]
 #[pyo3(signature = (
@@ -927,14 +927,18 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
             })?;
         enforce_retained_boundary(external_bytes, &limits)?;
     }
-    let owned_origins = owned_origin_rows(
-        py,
-        origins,
-        &limits,
-        &cancellation,
-        &mut external_bytes,
-        allocations,
-    )?;
+    let owned_origins = if origins.is_none() {
+        None
+    } else {
+        Some(owned_origin_rows(
+            py,
+            origins,
+            &limits,
+            &cancellation,
+            &mut external_bytes,
+            allocations,
+        )?)
+    };
     let owned_effective_origins = effective_origins
         .map(|value| {
             owned_origin_rows(
@@ -992,9 +996,15 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
                 builder.add_document(&document[0], &document[1], &document[2])?;
             }
         }
-        let (effective, raw) = match owned_effective_origins {
-            Some(effective) => (effective, Some(owned_origins)),
-            None => (owned_origins, None),
+        let (effective, raw) = match (owned_origins, owned_effective_origins) {
+            (Some(raw), Some(effective)) => (Some(effective), Some(raw)),
+            (Some(effective), None) => (Some(effective), None),
+            (None, None) => (None, None),
+            (None, Some(_)) => {
+                return Err(NativeError::protocol(
+                    "native effective origins require a raw origin table",
+                ));
+            }
         };
         Ok((
             builder.freeze(&effective_document_ordinals, &closure_document_ordinals)?,
@@ -1006,7 +1016,7 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
     crate::publication::typed_structural_handle_v2(
         attestation,
         storage,
-        Some(retained_origins),
+        retained_origins,
         raw_origins,
         None,
         None,

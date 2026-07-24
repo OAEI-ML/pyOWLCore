@@ -337,7 +337,7 @@ def _retained_axiom_type_page_bridge_allocation_probe_v1(
 ) -> tuple[tuple[tuple[bytes, ...], int, int | None], int]: ...
 def _retain_structural_snapshot_v2(
     documents: object,
-    origins: object,
+    origins: object | None,
     attestation: NativeSnapshotAttestationV2,
     config: object,
     cancel: _Cancellation | None = None,
@@ -349,7 +349,7 @@ def _retain_structural_snapshot_v2(
 ) -> _NativeSnapshotHandle: ...
 def _retained_structural_bridge_allocation_probe_v2(
     documents: object,
-    origins: object,
+    origins: object | None,
     attestation: NativeSnapshotAttestationV2,
     config: object,
     fail_after: int | None = None,

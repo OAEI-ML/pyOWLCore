@@ -93,7 +93,7 @@ class NativeTestExtension(Protocol):
     def _retained_structural_bridge_allocation_probe_v2(
         self,
         documents: object,
-        origins: object,
+        origins: object | None,
         attestation: object,
         config: object,
         fail_after: int | None = None,

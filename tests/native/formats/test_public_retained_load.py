@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from pyowl_core import (
+    AxiomScope,
     BackendPreference,
     DocumentFormat,
     EncodedStructuralView,
@@ -976,6 +977,219 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
     assert extension.INGESTION_FEATURES == ()
     assert "retained-structural-snapshot-v2" not in extension.FEATURES
     assert not imported.capabilities.encoded_view_schemas
+
+
+def test_resolved_functional_diamond_retains_one_native_closure_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-closure:root> "
+        b"Import(<urn:retained-closure:left>) "
+        b"Import(<urn:retained-closure:right>) "
+        b"Declaration(Class(<urn:retained-closure:Root>)))"
+    )
+    sources: dict[str, Any] = {
+        "urn:retained-closure:left": (
+            b"Ontology(<urn:retained-closure:left> "
+            b"Import(<urn:retained-closure:leaf>) "
+            b"Declaration(Class(<urn:retained-closure:Left>)))"
+        ),
+        "urn:retained-closure:right": (
+            b"Ontology(<urn:retained-closure:right> "
+            b"Import(<urn:retained-closure:leaf>) "
+            b"Declaration(Class(<urn:retained-closure:Right>)))"
+        ),
+        "urn:retained-closure:leaf": (
+            b"Ontology(<urn:retained-closure:leaf> Declaration(Class(<urn:retained-closure:Leaf>)))"
+        ),
+    }
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RESOLVE_LOCAL,
+            backend=backend,
+            collect_provenance=False,
+        )
+
+    reference = load_snapshot(
+        root,
+        options=options(BackendPreference.PYTHON),
+        resolver=MappingResolver(sources),
+    )
+    retained = cast(Any, extension)._retain_structural_snapshot_v2
+    captured: dict[str, object] = {}
+
+    def capture(
+        documents: object,
+        origins: object,
+        attestation: object,
+        config: object,
+        cancel: object,
+        **keywords: object,
+    ) -> object:
+        captured["documents"] = documents
+        captured["origins"] = origins
+        captured.update(keywords)
+        return retained(
+            documents,
+            origins,
+            attestation,
+            config,
+            cancel,
+            **keywords,
+        )
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_retain_structural_snapshot_v2",
+        capture,
+    )
+    selected = load_snapshot(
+        root,
+        options=options(BackendPreference.NATIVE),
+        resolver=MappingResolver(sources),
+    )
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.capabilities.backend == "native"
+    assert not selected.capabilities.encoded_view_schemas
+    assert len(selected.documents) == len(reference.documents) == 4
+    assert len(selected.import_manifest.edges) == 4
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+    assert len(cast(tuple[object, ...], captured["documents"])) == 4
+    assert captured["origins"] is None
+    assert captured["effective_origins"] is None
+    assert captured["effective_document_ordinals"] == ((0,), (1,), (2,), (3,))
+    assert captured["closure_document_ordinals"] == (0, 1, 2, 3)
+
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    counters = cast(Any, raw_owner)._publication_counters_v2()
+    assert counters.retained_document_tables == 4
+    assert counters.canonical_input_rows == 4
+    assert counters.retained_origin_rows == 0
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
+
+    scalar_error = AssertionError("closure encoded view crossed scalar traversal")
+    with (
+        patch.object(type(selected), "iter_axioms", side_effect=scalar_error),
+        patch.object(type(selected), "iter_extensions", side_effect=scalar_error),
+        patch.object(type(selected), "ontology_annotations", side_effect=scalar_error),
+        patch.object(type(selected), "signature", side_effect=scalar_error),
+    ):
+        encoded = selected.view(EncodedStructuralView)
+    expected = tuple((2, canonical_bytes(value)) for value in reference.iter_axioms())
+    assert decode_root_canonical_bytes(encoded.buffers) == expected
+    assert encoded.owner is selected
+    assert len({id(value.obj) for value in encoded.buffers.values()}) == 1
+    selected.close()
+    assert selected.closed
+    assert decode_root_canonical_bytes(encoded.buffers) == expected
+
+
+def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-cycle:a> Import(<urn:retained-cycle:b>) "
+        b"ClassAssertion(<urn:retained-cycle:C> _:person))"
+    )
+    child = (
+        b"Ontology(<urn:retained-cycle:b> Import(<urn:retained-cycle:a>) "
+        b"ClassAssertion(<urn:retained-cycle:C> _:person))"
+    )
+    sources: dict[str, Any] = {
+        "urn:retained-cycle:a": root,
+        "urn:retained-cycle:b": child,
+    }
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RESOLVE_LOCAL,
+            backend=backend,
+            collect_provenance=False,
+        )
+
+    reference = load_snapshot(
+        root,
+        options=options(BackendPreference.PYTHON),
+        resolver=MappingResolver(sources),
+    )
+    retained = cast(Any, extension)._retain_structural_snapshot_v2
+    captured: dict[str, object] = {}
+
+    def capture(
+        documents: object,
+        origins: object,
+        attestation: object,
+        config: object,
+        cancel: object,
+        **keywords: object,
+    ) -> object:
+        captured["documents"] = documents
+        captured.update(keywords)
+        return retained(
+            documents,
+            origins,
+            attestation,
+            config,
+            cancel,
+            **keywords,
+        )
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_retain_structural_snapshot_v2",
+        capture,
+    )
+    selected = load_snapshot(
+        root,
+        options=options(BackendPreference.NATIVE),
+        resolver=MappingResolver(sources),
+    )
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert len(selected.documents) == len(reference.documents) == 2
+    assert len(selected.import_manifest.edges) == 2
+    assert all(edge.status is ImportStatus.RESOLVED for edge in selected.import_manifest.edges)
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert captured["effective_documents"] is not None
+    assert captured["effective_document_ordinals"] == ((0,), (1,))
+    assert captured["closure_document_ordinals"] == (0, 1)
+
+    raw_rows = tuple(
+        tuple(canonical_bytes(value) for value in document.axioms)
+        for document in selected.documents
+    )
+    assert raw_rows[0] != raw_rows[1]
+    assert captured["effective_documents"] != captured["documents"]
+    effective_rows = tuple(
+        tuple(
+            canonical_bytes(value)
+            for value in selected.iter_axioms(
+                scope=AxiomScope.DOCUMENT,
+                document_key=record.document_key,
+            )
+        )
+        for record in selected.import_manifest.documents
+    )
+    assert effective_rows[0] != effective_rows[1]
+    assert len(tuple(selected.iter_axioms())) == 2
 
 
 def test_eligible_owner_construction_failure_propagates_without_fallback(

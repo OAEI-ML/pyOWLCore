@@ -1504,18 +1504,36 @@ def retain_native_snapshot_v2(
 
     from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy
 
-    if (
+    common_ineligible = (
         snapshot.load_options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
-        or len(snapshot.documents) != 1
-        or snapshot.load_options.imports is not ImportPolicy.IGNORE
-        or snapshot.root.provenance.backend != "native"
-        or snapshot.root.provenance.format is not DocumentFormat.FUNCTIONAL
+        or not snapshot.documents
         or snapshot.load_options.preserve_source_map
         or snapshot.load_options.validate_owl2_dl
-        or snapshot.root.rdf_mapping_report is not None
-    ):
+        or any(
+            document.provenance.backend != "native"
+            or document.provenance.format is not DocumentFormat.FUNCTIONAL
+            or document.rdf_mapping_report is not None
+            for document in snapshot.documents
+        )
+    )
+    single_document = (
+        len(snapshot.documents) == 1 and snapshot.load_options.imports is ImportPolicy.IGNORE
+    )
+    retained_closure = len(snapshot.documents) > 1 and not snapshot.load_options.collect_provenance
+    if common_ineligible or not (single_document or retained_closure):
         return snapshot
     extension = native.require("parse-functional-v1")
+    if retained_closure:
+        if not callable(getattr(extension, "_retain_structural_snapshot_v2", None)):
+            raise BackendProtocolError(
+                "native closure has no retained publication boundary",
+                code="NATIVE_INGESTION_REGISTRATION",
+            )
+        return _publish_structural_closure_snapshot_v2(
+            snapshot,
+            extension,
+            cancellation_token,
+        )
     if parsed_native_storage is None:
         if snapshot.load_options.backend is BackendPreference.AUTO:
             return snapshot
@@ -1942,6 +1960,388 @@ def _publish_structural_snapshot_v2(
         _wire_structural_aliases=(
             _WIRE_STRUCTURAL_ALIAS_SEAL_V1 if raw_collections is None else None
         ),
+    )
+
+
+def _publish_structural_closure_snapshot_v2(
+    snapshot: OntologySnapshot,
+    extension: native._Extension,
+    cancellation_token: CancellationToken | None,
+) -> OntologySnapshot:
+    """Publish a provenance-disabled Functional closure through one typed arena."""
+
+    from dataclasses import fields
+
+    from pyowl_core.backends.native_handoff import (
+        NativeDocumentPublicationV1,
+        NativeLoadReportPublicationV1,
+        freeze_native_diagnostic_publication_v1,
+        freeze_native_import_manifest_publication_v1,
+        freeze_native_provenance_publication_v1,
+    )
+    from pyowl_core.backends.native_handoff_v2 import (
+        NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2,
+        NATIVE_SNAPSHOT_PUBLICATION_VERSION_V2,
+        NativeClosureFacadeCardinalitiesV2,
+        NativeDiagnosticReferenceSidecarsV2,
+        NativeDocumentFacadeCardinalitiesV2,
+        NativeFacadeCardinalitySummaryV2,
+        NativeFacadeCollectionV2,
+        NativeFacadeScopeV2,
+        NativeFingerprintEvidenceV2,
+        NativeSignatureKindV2,
+        _seal_native_snapshot_owner_v2,
+        freeze_native_snapshot_publication_v2,
+        native_snapshot_content_digests_v2,
+        native_snapshot_publication_attestation_v2,
+    )
+    from pyowl_core.document.fingerprint import (
+        document_fingerprint_bytes,
+        logical_fingerprint_bytes,
+        signature_fingerprint_bytes,
+        snapshot_structural_fingerprint_bytes,
+    )
+    from pyowl_core.document.native_storage import (
+        ontology_snapshot_from_native_publication_v2,
+    )
+    from pyowl_core.document.snapshot import AxiomScope
+    from pyowl_core.model import canonical_bytes
+
+    if snapshot.load_options.collect_provenance or len(snapshot.documents) < 2:
+        raise AssertionError("retained closure publication received an ineligible snapshot")
+    records = snapshot.import_manifest.documents
+    if len(records) != len(snapshot.documents):
+        raise AssertionError("retained closure records are not aligned")
+
+    raw_documents = tuple(
+        (
+            tuple(canonical_bytes(value) for value in document.ontology_annotations),
+            tuple(canonical_bytes(value) for value in document.axioms),
+            tuple(canonical_bytes(value) for value in document.extension_components),
+        )
+        for document in snapshot.documents
+    )
+    effective_documents = tuple(
+        (
+            tuple(
+                canonical_bytes(value)
+                for value in snapshot.ontology_annotations(
+                    scope=AxiomScope.DOCUMENT,
+                    document_key=record.document_key,
+                )
+            ),
+            tuple(
+                canonical_bytes(value)
+                for value in snapshot.iter_axioms(
+                    scope=AxiomScope.DOCUMENT,
+                    document_key=record.document_key,
+                )
+            ),
+            tuple(
+                canonical_bytes(value)
+                for value in snapshot.iter_extensions(
+                    scope=AxiomScope.DOCUMENT,
+                    document_key=record.document_key,
+                )
+            ),
+        )
+        for record in records
+    )
+    closure_rows = (
+        tuple(canonical_bytes(value) for value in snapshot.ontology_annotations()),
+        tuple(canonical_bytes(value) for value in snapshot.iter_axioms()),
+        tuple(canonical_bytes(value) for value in snapshot.iter_extensions()),
+    )
+
+    document_diagnostics = tuple(
+        tuple(freeze_native_diagnostic_publication_v1(value) for value in document.diagnostics)
+        for document in snapshot.documents
+    )
+    documents = tuple(
+        NativeDocumentPublicationV1(
+            document_key=record.document_key,
+            ontology_id=document.ontology_id,
+            document_iri=document.document_iri,
+            direct_imports=document.direct_imports,
+            provenance=freeze_native_provenance_publication_v1(document.provenance),
+            document_fingerprint=document.document_fingerprint,
+            diagnostics=diagnostics,
+            ontology_annotation_count=len(raw_rows[0]),
+            axiom_count=len(raw_rows[1]),
+            extension_count=len(raw_rows[2]),
+            source_map_entry_count=0,
+            origin_entry_count=0,
+            rdf_mapping_conformant=None,
+            rdf_mapping_report_sha256=None,
+        )
+        for record, document, diagnostics, raw_rows in zip(
+            records,
+            snapshot.documents,
+            document_diagnostics,
+            raw_documents,
+            strict=True,
+        )
+    )
+    diagnostics = tuple(
+        freeze_native_diagnostic_publication_v1(value) for value in snapshot.diagnostics
+    )
+    report = NativeLoadReportPublicationV1(
+        backend="native",
+        api_version=snapshot.report.api_version,
+        model_schema=snapshot.report.model_schema,
+        document_count=len(documents),
+        total_source_bytes=snapshot.report.total_source_bytes,
+        effective_axiom_count=len(closure_rows[1]),
+        resolution_attempts=snapshot.report.resolution_attempts,
+        acquisition_cache_hits=snapshot.report.acquisition_cache_hits,
+        document_cache_hits=snapshot.report.document_cache_hits,
+        timings=tuple(
+            sorted(snapshot.report.timings.items(), key=lambda item: item[0].encode("utf-8"))
+        ),
+        structural_fingerprint=snapshot.structural_fingerprint,
+        logical_fingerprint=snapshot.logical_fingerprint,
+        signature_fingerprint=snapshot.signature_fingerprint,
+        owl2_dl_validated=False,
+        owl2_dl_conforms=None,
+        owl2_dl_report_sha256=None,
+    )
+    capability_bits = 7
+    import_manifest = freeze_native_import_manifest_publication_v1(snapshot.import_manifest)
+    sidecars = NativeDiagnosticReferenceSidecarsV2(
+        snapshot=tuple(_diagnostic_reference_kinds(value) for value in diagnostics),
+        documents=tuple(
+            tuple(_diagnostic_reference_kinds(value) for value in values)
+            for values in document_diagnostics
+        ),
+        import_edges=tuple(
+            None if edge.diagnostic is None else _diagnostic_reference_kinds(edge.diagnostic)
+            for edge in import_manifest.edges
+        ),
+    )
+    facade_summary = NativeFacadeCardinalitySummaryV2(
+        documents=tuple(
+            NativeDocumentFacadeCardinalitiesV2(
+                document_key=record.document_key,
+                effective_annotation_count=len(rows[0]),
+                effective_axiom_count=len(rows[1]),
+                effective_extension_count=len(rows[2]),
+                effective_origin_count=0,
+                raw_source_prefix_count=0,
+                rdf_unconsumed_triple_count=0,
+                rdf_rule_count=0,
+                rdf_diagnostic_count=0,
+            )
+            for record, rows in zip(records, effective_documents, strict=True)
+        ),
+        closure=NativeClosureFacadeCardinalitiesV2(
+            effective_annotation_count=len(closure_rows[0]),
+            effective_axiom_count=len(closure_rows[1]),
+            effective_extension_count=len(closure_rows[2]),
+            effective_origin_count=0,
+        ),
+    )
+    collections: dict[
+        tuple[
+            NativeFacadeCollectionV2,
+            NativeFacadeScopeV2,
+            int | None,
+            NativeSignatureKindV2,
+            bool,
+        ],
+        tuple[bytes, ...],
+    ] = {
+        (
+            collection,
+            NativeFacadeScopeV2.DOCUMENT,
+            ordinal,
+            NativeSignatureKindV2.ALL,
+            True,
+        ): values
+        for ordinal, rows in enumerate(effective_documents)
+        for collection, values in zip(
+            (
+                NativeFacadeCollectionV2.ONTOLOGY_ANNOTATIONS,
+                NativeFacadeCollectionV2.AXIOMS,
+                NativeFacadeCollectionV2.EXTENSIONS,
+            ),
+            rows,
+            strict=True,
+        )
+    }
+    for collection, values in zip(
+        (
+            NativeFacadeCollectionV2.ONTOLOGY_ANNOTATIONS,
+            NativeFacadeCollectionV2.AXIOMS,
+            NativeFacadeCollectionV2.EXTENSIONS,
+        ),
+        closure_rows,
+        strict=True,
+    ):
+        collections[
+            (
+                collection,
+                NativeFacadeScopeV2.CLOSURE,
+                None,
+                NativeSignatureKindV2.ALL,
+                True,
+            )
+        ] = values
+    raw_collections = None
+    if raw_documents != effective_documents:
+        raw_collections = dict(collections)
+        for ordinal, rows in enumerate(raw_documents):
+            for collection, values in zip(
+                (
+                    NativeFacadeCollectionV2.ONTOLOGY_ANNOTATIONS,
+                    NativeFacadeCollectionV2.AXIOMS,
+                    NativeFacadeCollectionV2.EXTENSIONS,
+                ),
+                rows,
+                strict=True,
+            ):
+                raw_collections[
+                    (
+                        collection,
+                        NativeFacadeScopeV2.DOCUMENT,
+                        ordinal,
+                        NativeSignatureKindV2.ALL,
+                        True,
+                    )
+                ] = values
+
+    structural_documents = tuple(
+        (
+            record.document_key,
+            snapshot.ontology_annotations(
+                scope=AxiomScope.DOCUMENT,
+                document_key=record.document_key,
+            ),
+            tuple(
+                snapshot.iter_axioms(
+                    scope=AxiomScope.DOCUMENT,
+                    document_key=record.document_key,
+                )
+            ),
+            tuple(
+                snapshot.iter_extensions(
+                    scope=AxiomScope.DOCUMENT,
+                    document_key=record.document_key,
+                )
+            ),
+        )
+        for record in records
+    )
+    preimages = (
+        *(document_fingerprint_bytes(document) for document in snapshot.documents),
+        snapshot_structural_fingerprint_bytes(
+            snapshot.import_manifest,
+            structural_documents,
+        ),
+        logical_fingerprint_bytes(
+            tuple(snapshot.iter_axioms()),
+            tuple(snapshot.iter_extensions()),
+        ),
+        signature_fingerprint_bytes(snapshot.signature(), include_builtins=True),
+    )
+    fingerprints = (
+        *(document.document_fingerprint for document in snapshot.documents),
+        report.structural_fingerprint,
+        report.logical_fingerprint,
+        report.signature_fingerprint,
+    )
+    tags = (*((1,) * len(documents)), 2, 3, 4)
+    evidence = tuple(
+        NativeFingerprintEvidenceV2(
+            tag=tag,
+            document_key=(documents[ordinal].document_key if tag == 1 else None),
+            preimage_byte_length=len(preimage),
+            fingerprint_schema=fingerprint.schema,
+            digest=hashlib.sha256(preimage).digest(),
+        )
+        for ordinal, (tag, preimage, fingerprint) in enumerate(
+            zip(tags, preimages, fingerprints, strict=True)
+        )
+    )
+    max_facade_row_bytes = max(
+        (
+            1,
+            *(len(row) for document in effective_documents for rows in document for row in rows),
+            *(len(row) for document in raw_documents for rows in document for row in rows),
+            *(len(row) for rows in closure_rows for row in rows),
+        )
+    )
+    content = native_snapshot_content_digests_v2(
+        documents=documents,
+        report=report,
+        root_document_key=snapshot.root_document_key,
+        load_options=snapshot.load_options,
+        capability_bits=capability_bits,
+        collections=collections,
+        fingerprint_evidence=evidence,
+        fingerprint_preimages=preimages,
+        owl2_dl_report_summary=None,
+        facade_cardinality_summary=facade_summary,
+        raw_document_collections=raw_collections,
+    )
+    attestation = native_snapshot_publication_attestation_v2(
+        documents=documents,
+        import_manifest=import_manifest,
+        root_document_key=snapshot.root_document_key,
+        load_options=snapshot.load_options,
+        diagnostics=diagnostics,
+        diagnostic_reference_sidecars=sidecars,
+        facade_cardinality_summary=facade_summary,
+        report=report,
+        capability_bits=capability_bits,
+        content_digests=content,
+        max_facade_row_bytes=max_facade_row_bytes,
+        owl2_dl_report_summary=None,
+    )
+    topology = tuple((ordinal,) for ordinal in range(len(documents)))
+    closure_ordinals = tuple(range(len(documents)))
+    with native._relay(extension, snapshot.load_options.limits, cancellation_token) as cancel:
+        selected_extension = cast(_RetainedStructuralExtension, extension)
+        config = native._encode_config(
+            snapshot.load_options.limits,
+            cancellation_token,
+            verify=False,
+        )
+        raw_owner = native._call(
+            extension,
+            lambda: selected_extension._retain_structural_snapshot_v2(
+                raw_documents,
+                None,
+                attestation,
+                config,
+                cancel,
+                effective_documents=(effective_documents if raw_collections is not None else None),
+                effective_origins=None,
+                effective_document_ordinals=topology,
+                closure_document_ordinals=closure_ordinals,
+            ),
+        )
+    publication_values: dict[str, object] = {
+        "version": NATIVE_SNAPSHOT_PUBLICATION_VERSION_V2,
+        "ledger_sha256": NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2,
+        "handle": _seal_native_snapshot_owner_v2(raw_owner),
+        "documents": documents,
+        "import_manifest": import_manifest,
+        "root_document_key": snapshot.root_document_key,
+        "load_options": snapshot.load_options,
+        "diagnostics": diagnostics,
+        "diagnostic_reference_sidecars": sidecars,
+        "facade_cardinality_summary": facade_summary,
+        "report": report,
+        "capability_bits": capability_bits,
+        "max_facade_row_bytes": max_facade_row_bytes,
+        "owl2_dl_report_summary": None,
+    }
+    for field in fields(content):
+        publication_values[field.name] = getattr(content, field.name)
+    publication = freeze_native_snapshot_publication_v2(publication_values)
+    return ontology_snapshot_from_native_publication_v2(
+        publication,
+        _wire_structural_aliases=None,
     )
 
 
