@@ -155,6 +155,56 @@ def test_direct_bridge_allocation_checkpoints_fail_before_publication(
     handle._publication_close_v2()
 
 
+def test_direct_document_bridge_allocations_fail_before_publication(
+    extension: NativeTestExtension,
+) -> None:
+    probe = getattr(
+        extension,
+        "_encoded_structural_document_bridge_allocation_probe_v1",
+        None,
+    )
+    if not callable(probe):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail(
+                "selected native test-hooks artifact lacks the document bridge probe"
+            )
+        pytest.skip("selected native artifact lacks the document bridge allocation hook")
+    invoke = cast(Any, probe)
+    handle = cast(Any, extension)._encoded_structural_fixture_v1()
+    document = handle._publication_document_v2(0)
+    before = handle._publication_counters_v2().encoded_view_requests
+
+    buffers, counters, allocations = invoke(document, _config(), None)
+    assert allocations == 51
+    _assert_direct_buffers(buffers, counters)
+    expected = canonical_bytes(Declaration(Class(IRI("urn:encoded-view:fixture"))))
+    assert decode_root_canonical_bytes(buffers) == ((2, expected),)
+    after_baseline = handle._publication_counters_v2().encoded_view_requests
+    assert after_baseline == before + 1
+
+    for fail_after in range(allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native encoded-view bridge allocation failure$",
+        ):
+            invoke(document, _config(), fail_after)
+        assert handle._publication_counters_v2().encoded_view_requests == after_baseline
+        assert handle._publication_closed_v2() is False
+        assert document._publication_closed_v2() is False
+
+    boundary_buffers, boundary_counters, boundary_allocations = invoke(
+        document,
+        _config(),
+        allocations,
+    )
+    assert boundary_allocations == allocations
+    _assert_direct_buffers(boundary_buffers, boundary_counters)
+    assert decode_root_canonical_bytes(boundary_buffers) == ((2, expected),)
+    assert handle._publication_counters_v2().encoded_view_requests == after_baseline + 1
+    document._publication_close_v2()
+    handle._publication_close_v2()
+
+
 def test_direct_workspace_allocation_checkpoints_fail_before_publication(
     extension: NativeTestExtension,
 ) -> None:

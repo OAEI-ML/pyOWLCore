@@ -125,6 +125,10 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
             _module
         )?)?;
         _module.add_function(wrap_pyfunction!(
+            _encoded_structural_document_bridge_allocation_probe_v1,
+            _module
+        )?)?;
+        _module.add_function(wrap_pyfunction!(
             _encoded_structural_workspace_allocation_probe_v1,
             _module
         )?)?;
@@ -932,6 +936,33 @@ fn _encoded_structural_bridge_allocation_probe_v1<'py>(
         selected_scope,
         document_ordinal,
         false,
+        &limits,
+        crate::cancel::Cancellation::with_duration(None),
+        &mut allocations,
+    )?;
+    Ok((buffers, counters, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (handle, config, fail_after=None))]
+fn _encoded_structural_document_bridge_allocation_probe_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeDocumentHandle>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyDict>, Py<PyDict>, u64)> {
+    let limits = crate::limits_from_python(config)?;
+    let document_ordinal = handle.document_ordinal();
+    let storage = handle.encoded_storage_v2(py)?;
+    drop(handle);
+    let mut allocations = EncodedBridgeAllocationProbe::configured(fail_after);
+    let (buffers, counters) = encoded_columns_to_python_with_allocations(
+        py,
+        storage.as_ref(),
+        TypedFacadeScopeV2::Document,
+        Some(document_ordinal),
+        true,
         &limits,
         crate::cancel::Cancellation::with_duration(None),
         &mut allocations,
