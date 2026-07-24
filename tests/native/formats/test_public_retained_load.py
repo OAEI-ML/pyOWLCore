@@ -2190,6 +2190,10 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
         "resolve_local": 0,
         "resolve_strict": 0,
     }
+    assert observed["closure_matrix_cases"] == 16
+    assert observed["closure_matrix_parity"] is True
+    assert observed["closure_matrix_snapshot_types"] == ["_NativeOntologySnapshot"]
+    assert observed["closure_matrix_document_counts"] == [4]
     assert observed["ingestion_features"] == []
     assert observed["view_features"] == []
     assert observed["encoded_view_schemas"] == {}

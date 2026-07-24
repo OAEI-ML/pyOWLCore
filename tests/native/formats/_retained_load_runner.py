@@ -25,8 +25,10 @@ def main() -> None:
         EncodedStructuralView,
         ImportPolicy,
         LoadOptions,
+        MappingResolver,
         OntologyDelta,
         OntologySyntaxError,
+        ParseLimits,
         SnapshotInUseError,
         UnresolvedImportWarning,
         apply_delta,
@@ -88,8 +90,10 @@ def main() -> None:
     def unexpected_model_decode(*_arguments: object, **_keywords: object) -> object:
         raise AssertionError("installed retained path crossed the complete model decoder")
 
+    real_model_decode = native._decode_parsed_functional
     native._decode_parsed_functional = unexpected_model_decode  # type: ignore[assignment]
     selected = load_snapshot(source, options=options(BackendPreference.NATIVE))
+    native._decode_parsed_functional = real_model_decode  # type: ignore[assignment]
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
     raw_owner = object.__getattribute__(handle, "_owner_v2")
     if type(raw_owner) is not cast(Any, extension)._NativeSnapshotHandle:
@@ -470,6 +474,159 @@ def main() -> None:
         )
         empty_selected.close()
 
+    closure_root = (
+        b"Ontology(<urn:retained-installed-closure:root> "
+        b"Import(<urn:retained-installed-closure:left>) "
+        b"Import(<urn:retained-installed-closure:right>) "
+        b"Declaration(Class(<urn:retained-installed-closure:Root>)))"
+    )
+    closure_sources = {
+        "urn:retained-installed-closure:left": (
+            b"Ontology(<urn:retained-installed-closure:left> "
+            b"Import(<urn:retained-installed-closure:leaf>) "
+            b"ClassAssertion(<urn:retained-installed-closure:C> _:person))"
+        ),
+        "urn:retained-installed-closure:right": (
+            b"Ontology(<urn:retained-installed-closure:right> "
+            b"Import(<urn:retained-installed-closure:leaf>) "
+            b"ClassAssertion(<urn:retained-installed-closure:C> _:person))"
+        ),
+        "urn:retained-installed-closure:leaf": (
+            b"Ontology(<urn:retained-installed-closure:leaf> "
+            b"Declaration(Class(<urn:retained-installed-closure:Leaf>)))"
+        ),
+    }
+    closure_matrix_cases = 0
+    closure_matrix_parity = True
+    closure_matrix_types: set[str] = set()
+    closure_matrix_document_counts: set[int] = set()
+
+    def closure_options(
+        backend: BackendPreference,
+        workers: int,
+        *,
+        policy: ImportPolicy,
+        collect_provenance: bool,
+        preserve_source_map: bool,
+    ) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=policy,
+            backend=backend,
+            collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
+            limits=replace(
+                ParseLimits(),
+                max_concurrent_fetches=workers,
+            ),
+        )
+
+    for policy in (ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT):
+        for collect_provenance in (False, True):
+            for preserve_source_map in (False, True):
+                for document_iri in (
+                    None,
+                    pyowl_core.IRI("urn:retained-installed-closure:document"),
+                ):
+                    reference_closure = load_snapshot(
+                        closure_root,
+                        document_iri=document_iri,
+                        options=closure_options(
+                            BackendPreference.PYTHON,
+                            3,
+                            policy=policy,
+                            collect_provenance=collect_provenance,
+                            preserve_source_map=preserve_source_map,
+                        ),
+                        resolver=MappingResolver(closure_sources),
+                    )
+                    sequential_closure = load_snapshot(
+                        closure_root,
+                        document_iri=document_iri,
+                        options=closure_options(
+                            BackendPreference.NATIVE,
+                            1,
+                            policy=policy,
+                            collect_provenance=collect_provenance,
+                            preserve_source_map=preserve_source_map,
+                        ),
+                        resolver=MappingResolver(closure_sources),
+                    )
+                    parallel_closure = load_snapshot(
+                        closure_root,
+                        document_iri=document_iri,
+                        options=closure_options(
+                            BackendPreference.NATIVE,
+                            3,
+                            policy=policy,
+                            collect_provenance=collect_provenance,
+                            preserve_source_map=preserve_source_map,
+                        ),
+                        resolver=MappingResolver(closure_sources),
+                    )
+                    closure_handle = cast(
+                        Any,
+                        parallel_closure,
+                    )._native_snapshot_state.owner.handle
+                    closure_owner = object.__getattribute__(closure_handle, "_owner_v2")
+                    closure_counters = closure_owner._publication_counters_v2()
+                    closure_reference_wire = encode_snapshot(reference_closure)
+                    closure_sequential_wire = encode_snapshot(sequential_closure)
+                    closure_parallel_wire = encode_snapshot(parallel_closure)
+                    case_parity = (
+                        type(closure_owner) is cast(Any, extension)._NativeSnapshotHandle
+                        and type(sequential_closure).__name__ == "_NativeOntologySnapshot"
+                        and type(parallel_closure).__name__ == "_NativeOntologySnapshot"
+                        and len(reference_closure.documents)
+                        == len(sequential_closure.documents)
+                        == len(parallel_closure.documents)
+                        == 4
+                        and reference_closure.import_manifest
+                        == sequential_closure.import_manifest
+                        == parallel_closure.import_manifest
+                        and reference_closure.report.diagnostics
+                        == sequential_closure.report.diagnostics
+                        == parallel_closure.report.diagnostics
+                        and reference_closure.structural_fingerprint
+                        == sequential_closure.structural_fingerprint
+                        == parallel_closure.structural_fingerprint
+                        and reference_closure.logical_fingerprint
+                        == sequential_closure.logical_fingerprint
+                        == parallel_closure.logical_fingerprint
+                        and reference_closure.signature_fingerprint
+                        == sequential_closure.signature_fingerprint
+                        == parallel_closure.signature_fingerprint
+                        and reference_closure.origin_index
+                        == sequential_closure.origin_index
+                        == parallel_closure.origin_index
+                        and tuple(
+                            document.source_map
+                            for document in reference_closure.documents
+                        )
+                        == tuple(
+                            document.source_map
+                            for document in sequential_closure.documents
+                        )
+                        == tuple(
+                            document.source_map
+                            for document in parallel_closure.documents
+                        )
+                        and closure_reference_wire
+                        == closure_sequential_wire
+                        == closure_parallel_wire
+                        and closure_counters.retained_document_tables == 4
+                        and closure_counters.publication_structural_rows_copied == 0
+                        and closure_counters.publication_structural_bytes_copied == 0
+                    )
+                    closure_matrix_parity = closure_matrix_parity and case_parity
+                    closure_matrix_cases += 1
+                    closure_matrix_types.add(type(parallel_closure).__name__)
+                    closure_matrix_document_counts.add(len(parallel_closure.documents))
+                    sequential_closure.close()
+                    parallel_closure.close()
+    if not closure_matrix_parity:
+        raise AssertionError("installed retained Functional closure matrix diverged")
+
     auto_source = (
         b"Ontology(<urn:retained-auto-installed> "
         b"Import(<urn:retained-auto-installed:ignored>) "
@@ -637,6 +794,10 @@ def main() -> None:
                 "empty_closure_parity": empty_closure_parity,
                 "empty_closure_parser_result_bytes": empty_closure_parser_result_bytes,
                 "empty_closure_snapshot_types": empty_closure_snapshot_types,
+                "closure_matrix_cases": closure_matrix_cases,
+                "closure_matrix_document_counts": sorted(closure_matrix_document_counts),
+                "closure_matrix_parity": closure_matrix_parity,
+                "closure_matrix_snapshot_types": sorted(closure_matrix_types),
                 "fingerprint_parity": (
                     selected.structural_fingerprint == reference.structural_fingerprint
                     and selected.logical_fingerprint == reference.logical_fingerprint
