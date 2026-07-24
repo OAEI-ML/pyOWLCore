@@ -45,7 +45,12 @@ from pyowl_core.io.formats.rdfxml import parse_rdfxml
 from pyowl_core.io.source import acquire_source
 from tests.conformance._support import every_constructor_document
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
-from tests.native.formats.test_rdfxml_ingestion_slice import SWRL_SOURCE, W3C_RDFXML_SOURCE
+from tests.native.formats.test_rdfxml_ingestion_slice import (
+    LEGACY_UNQUALIFIED_RDF_ATTRIBUTE_SOURCE,
+    QUALIFIED_RDF_ATTRIBUTE_SOURCE,
+    SWRL_SOURCE,
+    W3C_RDFXML_SOURCE,
+)
 from tests.native.foundation._support import NativeTestExtension, load_extension
 
 SOURCE = b"""\
@@ -1787,6 +1792,73 @@ def test_forbidden_property_element_attributes_publish_no_retained_owner(
         "xmlns:e='urn:e:'><rdf:Description rdf:about='urn:s'>"
         f"<e:p {object_attribute}rdf:{local}='value'/>"
         "</rdf:Description></rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(OntologySyntaxError) as native_error:
+        native._parse_rdfxml_retained_v2(source, document_iri=None)
+    assert native_error.value.code == "RDFXML_SYNTAX"
+
+
+def test_legacy_unqualified_attributes_publish_from_retained_owner(
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(
+        QUALIFIED_RDF_ATTRIBUTE_SOURCE,
+        document_iri=DOCUMENT_IRI,
+        options=_options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("legacy RDF attributes crossed the Python RDF/XML parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(
+            Any,
+            _retained_snapshot(LEGACY_UNQUALIFIED_RDF_ATTRIBUTE_SOURCE),
+        )
+
+    owner = selected._native_snapshot_state.owner.handle._owner_v2
+    counters = owner._publication_counters_v2()
+    assert type(owner) is cast(Any, extension)._NativeSnapshotHandle
+    assert selected.root.axioms == reference.root.axioms
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert counters.parser_bytes == len(LEGACY_UNQUALIFIED_RDF_ATTRIBUTE_SOURCE)
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
+
+
+@pytest.mark.parametrize(
+    "element",
+    (
+        "<owl:Class rdf:about='urn:C' about='urn:D'/>",
+        "<owl:Class rdf:ID='C' ID='D'/>",
+        (
+            "<rdf:Description rdf:about='urn:C' "
+            "rdf:type='http://www.w3.org/2002/07/owl#Class' "
+            "type='http://www.w3.org/2002/07/owl#Class'/>"
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'><rdfs:subClassOf "
+            "rdf:resource='urn:D' resource='urn:E'/></owl:Class>"
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'><owl:intersectionOf "
+            "rdf:parseType='Collection' parseType='Collection'/></owl:Class>"
+        ),
+    ),
+)
+def test_qualified_and_legacy_attribute_aliases_publish_no_retained_owner(
+    element: str,
+) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' xml:base='urn:legacy'>"
+        f"{element}</rdf:RDF>"
     ).encode()
 
     with pytest.raises(OntologySyntaxError) as python_error:

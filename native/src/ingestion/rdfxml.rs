@@ -723,15 +723,16 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                 self.namespaces.push(binding);
             }
         }
-        self.validate_expanded_attribute_uniqueness(&event.attributes)?;
+        let captures_xml_literal = matches!(
+            self.frames.last().map(|frame| &frame.role),
+            Some(FrameRole::XmlLiteralProperty { .. } | FrameRole::XmlLiteralElement)
+        );
+        self.validate_expanded_attribute_uniqueness(&event.attributes, !captures_xml_literal)?;
         let expanded_name = self.expand(&event.name, false)?;
         if expanded_name.starts_with(XINCLUDE) {
             return Err(xml_forbidden());
         }
-        if matches!(
-            self.frames.last().map(|frame| &frame.role),
-            Some(FrameRole::XmlLiteralProperty { .. } | FrameRole::XmlLiteralElement)
-        ) {
+        if captures_xml_literal {
             self.capture_xml_literal_start(&event.name, &expanded_name, &event.attributes)?;
             return self.push_frame(
                 event.name,
@@ -959,7 +960,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             if is_reserved_xml_attribute(attribute) {
                 continue;
             }
-            let predicate = self.expand(&attribute.name, true)?;
+            let predicate = self.expand_rdf_attribute(&attribute.name)?;
             if ignored.contains(&predicate.as_str()) {
                 continue;
             }
@@ -1015,7 +1016,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             if is_reserved_xml_attribute(attribute) {
                 continue;
             }
-            let expanded = self.expand(&attribute.name, true)?;
+            let expanded = self.expand_rdf_attribute(&attribute.name)?;
             if matches!(
                 expanded.as_str(),
                 RDF_ID
@@ -1934,6 +1935,14 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         Ok(expanded)
     }
 
+    fn expand_rdf_attribute(&mut self, raw: &str) -> NativeResult<String> {
+        if let Some((_, expanded)) = legacy_unqualified_rdf_attribute(raw) {
+            owned_text(expanded, self.session)
+        } else {
+            self.expand(raw, true)
+        }
+    }
+
     fn attribute<'c>(
         &mut self,
         attributes: &'c [Attribute],
@@ -1947,7 +1956,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             if namespace != XML && is_reserved_xml_attribute(attribute) {
                 continue;
             }
-            let expanded = self.expand(&attribute.name, true)?;
+            let expanded = self.expand_rdf_attribute(&attribute.name)?;
             if expanded_name_matches(&expanded, namespace, local) {
                 return Ok(Some(&attribute.value));
             }
@@ -1967,7 +1976,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             if is_reserved_xml_attribute(attribute) {
                 continue;
             }
-            let expanded = self.expand(&attribute.name, true)?;
+            let expanded = self.expand_rdf_attribute(&attribute.name)?;
             if !allowed
                 .iter()
                 .any(|(namespace, local)| expanded_name_matches(&expanded, namespace, local))
@@ -1981,13 +1990,15 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
     fn validate_expanded_attribute_uniqueness(
         &mut self,
         attributes: &[Attribute],
+        rdf_semantics: bool,
     ) -> NativeResult<()> {
+        let mut legacy_attributes = [false; 5];
         let count = attributes
             .iter()
             .filter(|attribute| attribute.name != "xmlns" && !attribute.name.starts_with("xmlns:"))
             .count();
         let metadata = count
-            .checked_mul(std::mem::size_of::<String>())
+            .checked_mul(std::mem::size_of::<(String, bool)>())
             .ok_or_else(|| NativeError::limit("native XML attribute accounting overflow"))?;
         self.session.reserve_bytes(metadata)?;
         let mut expanded = Vec::new();
@@ -1998,10 +2009,29 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
                 continue;
             }
-            expanded.push(self.expand(&attribute.name, true)?);
+            let reserved = is_reserved_xml_attribute(attribute);
+            if rdf_semantics && !reserved {
+                if let Some((index, _)) = legacy_unqualified_rdf_attribute(&attribute.name) {
+                    legacy_attributes[index] = true;
+                }
+            }
+            expanded.push((self.expand(&attribute.name, true)?, reserved));
         }
-        expanded.sort_unstable();
-        if expanded.windows(2).any(|pair| pair[0] == pair[1]) {
+        expanded.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        if expanded.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(xml_syntax());
+        }
+        if rdf_semantics
+            && legacy_attributes
+                .into_iter()
+                .zip([RDF_ID, RDF_ABOUT, RDF_RESOURCE, RDF_PARSE_TYPE, RDF_TYPE])
+                .any(|(present, target)| {
+                    present
+                        && expanded
+                            .iter()
+                            .any(|(value, reserved)| !reserved && value == target)
+                })
+        {
             return Err(xml_syntax());
         }
         Ok(())
@@ -7025,6 +7055,17 @@ fn is_forbidden_rdf_property_attribute_iri(value: &str) -> bool {
         || is_old_syntax_iri(value)
 }
 
+fn legacy_unqualified_rdf_attribute(value: &str) -> Option<(usize, &'static str)> {
+    match value {
+        "ID" => Some((0, RDF_ID)),
+        "about" => Some((1, RDF_ABOUT)),
+        "resource" => Some((2, RDF_RESOURCE)),
+        "parseType" => Some((3, RDF_PARSE_TYPE)),
+        "type" => Some((4, RDF_TYPE)),
+        _ => None,
+    }
+}
+
 fn owned_text(value: &str, session: &mut Session<'_>) -> NativeResult<String> {
     session.reserve_bytes(value.len())?;
     let mut output = String::new();
@@ -7711,6 +7752,75 @@ mod tests {
                 assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
             }
         }
+    }
+
+    #[test]
+    fn legacy_unqualified_rdf_attributes_match_qualified_spelling() {
+        fn source(prefix: &str) -> String {
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\" xmlns:owl=\"http://www.w3.org/2002/07/owl#\" xml:base=\"urn:legacy\"><owl:Class {prefix}about=\"urn:C\"><rdfs:subClassOf {prefix}resource=\"urn:D\"/><owl:equivalentClass><owl:Class><owl:intersectionOf {prefix}parseType=\"Collection\"><owl:Class {prefix}about=\"urn:D\"/><owl:Class {prefix}about=\"urn:E\"/></owl:intersectionOf></owl:Class></owl:equivalentClass></owl:Class><owl:Class {prefix}ID=\"F\"/><rdf:Description {prefix}about=\"urn:G\" {prefix}type=\"http://www.w3.org/2002/07/owl#Class\"/></rdf:RDF>"
+            )
+        }
+
+        let qualified = graph(&source("rdf:")).expect("qualified RDF attributes");
+        let legacy = graph(&source("")).expect("legacy unqualified RDF attributes");
+
+        assert_eq!(legacy, qualified);
+        assert_eq!(legacy.len(), 13);
+
+        let reserved_alias = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"http://www.w3.org/2002/07/owl#\" xmlns:XmLrdf=\"{RDF}\"><owl:Class about=\"urn:C\" XmLrdf:about=\"urn:ignored\"/></rdf:RDF>"
+        );
+        assert_eq!(
+            graph(&reserved_alias).expect("legacy RDF attribute with ignored reserved alias"),
+            graph(&format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"http://www.w3.org/2002/07/owl#\"><owl:Class rdf:about=\"urn:C\"/></rdf:RDF>"
+            ))
+            .expect("qualified RDF attribute"),
+        );
+    }
+
+    #[test]
+    fn qualified_and_legacy_attribute_aliases_are_duplicates() {
+        let elements = [
+            "<owl:Class rdf:about=\"urn:C\" about=\"urn:D\"/>",
+            "<owl:Class rdf:ID=\"C\" ID=\"D\"/>",
+            "<rdf:Description rdf:about=\"urn:C\" rdf:type=\"http://www.w3.org/2002/07/owl#Class\" type=\"http://www.w3.org/2002/07/owl#Class\"/>",
+            "<owl:Class rdf:about=\"urn:C\"><rdfs:subClassOf rdf:resource=\"urn:D\" resource=\"urn:E\"/></owl:Class>",
+            "<owl:Class rdf:about=\"urn:C\"><owl:intersectionOf rdf:parseType=\"Collection\" parseType=\"Collection\"/></owl:Class>",
+        ];
+        for element in elements {
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\" xmlns:owl=\"http://www.w3.org/2002/07/owl#\" xml:base=\"urn:legacy\">{element}</rdf:RDF>"
+            );
+            assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
+        }
+    }
+
+    #[test]
+    fn unqualified_attributes_remain_distinct_inside_xml_literals() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"http://www.w3.org/2002/07/owl#\" xmlns:rdfs=\"http://www.w3.org/2000/01/rdf-schema#\"><owl:Ontology rdf:about=\"urn:o\"><rdfs:comment rdf:parseType=\"Literal\"><mark about=\"legacy\" rdf:about=\"qualified\"/></rdfs:comment></owl:Ontology></rdf:RDF>"
+        );
+        let parsed = graph(&source).expect("unqualified XML literal attributes");
+
+        assert!(parsed.iter().any(|triple| {
+            matches!(
+                &triple.object,
+                Term::Literal { lexical, datatype: Some(datatype), .. }
+                    if datatype == RDF_XML_LITERAL
+                        && lexical.contains("about=\"legacy\"")
+                        && lexical.contains("rdf:about=\"qualified\"")
+            )
+        }));
+    }
+
+    #[test]
+    fn other_unqualified_attributes_remain_forbidden() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"http://www.w3.org/2002/07/owl#\"><owl:Class rdf:about=\"urn:C\" label=\"value\"/></rdf:RDF>"
+        );
+        assert_eq!(graph(&source).unwrap_err().code, "NATIVE_RDFXML_SYNTAX");
     }
 
     #[test]
@@ -11280,16 +11390,26 @@ mod tests {
 
     #[test]
     fn duplicate_expanded_attributes_are_rejected_across_prefix_aliases() {
-        let source = br#"<rdf:RDF
-          xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-          xmlns:a="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-          xmlns:b="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-          <rdf:Description a:about="urn:a" b:about="urn:b"/>
-        </rdf:RDF>"#;
-        assert_eq!(
-            mapped(source, None).unwrap_err().code,
-            "NATIVE_RDFXML_SYNTAX",
-        );
+        for source in [
+            br#"<rdf:RDF
+              xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+              xmlns:a="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+              xmlns:b="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description a:about="urn:a" b:about="urn:b"/>
+            </rdf:RDF>"#
+                .as_slice(),
+            br#"<rdf:RDF
+              xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+              xmlns:XmLrdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+              <rdf:Description rdf:about="urn:a" XmLrdf:about="urn:b"/>
+            </rdf:RDF>"#
+                .as_slice(),
+        ] {
+            assert_eq!(
+                mapped(source, None).unwrap_err().code,
+                "NATIVE_RDFXML_SYNTAX",
+            );
+        }
     }
 
     #[test]

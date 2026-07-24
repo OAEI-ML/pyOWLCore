@@ -30,6 +30,33 @@ W3C_RDFXML_SOURCE = (
 ).read_bytes()
 
 
+def _rdf_attribute_spelling_source(prefix: str) -> bytes:
+    return f"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+ xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+ xmlns:owl="http://www.w3.org/2002/07/owl#" xml:base="urn:legacy">
+ <owl:Class {prefix}about="urn:C">
+  <rdfs:subClassOf {prefix}resource="urn:D"/>
+  <owl:equivalentClass>
+   <owl:Class>
+    <owl:intersectionOf {prefix}parseType="Collection">
+     <owl:Class {prefix}about="urn:D"/>
+     <owl:Class {prefix}about="urn:E"/>
+    </owl:intersectionOf>
+   </owl:Class>
+  </owl:equivalentClass>
+ </owl:Class>
+ <owl:Class {prefix}ID="F"/>
+ <rdf:Description {prefix}about="urn:G"
+  {prefix}type="http://www.w3.org/2002/07/owl#Class"/>
+</rdf:RDF>
+""".encode()
+
+
+QUALIFIED_RDF_ATTRIBUTE_SOURCE = _rdf_attribute_spelling_source("rdf:")
+LEGACY_UNQUALIFIED_RDF_ATTRIBUTE_SOURCE = _rdf_attribute_spelling_source("")
+
+
 @dataclass(frozen=True, slots=True)
 class _Observation:
     decoded_codepoints: int
@@ -643,6 +670,106 @@ def test_forbidden_property_element_attributes_fail_at_syntax_boundary(
         f"<e:p {object_attribute}rdf:{local}='value'/>"
         "</rdf:Description></rdf:RDF>"
     ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
+def test_legacy_unqualified_rdf_attributes_match_qualified_spelling(
+    extension: NativeTestExtension,
+) -> None:
+    qualified_owner, qualified = _ingest(extension, QUALIFIED_RDF_ATTRIBUTE_SOURCE)
+    legacy_owner, legacy = _ingest(extension, LEGACY_UNQUALIFIED_RDF_ATTRIBUTE_SOURCE)
+    python = parse_rdfxml(
+        LEGACY_UNQUALIFIED_RDF_ATTRIBUTE_SOURCE,
+        limits=ParseLimits(),
+        document_iri=None,
+    )
+
+    assert legacy.total_triples == qualified.total_triples
+    assert legacy.consumed_triples == qualified.consumed_triples
+    assert legacy.ontology_iri == qualified.ontology_iri
+    assert legacy.version_iri == qualified.version_iri
+    assert legacy.imports == qualified.imports
+    assert legacy.axioms == qualified.axioms
+    assert legacy.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert legacy.total_triples == legacy.consumed_triples == 13
+    assert type(legacy_owner) is type(qualified_owner)
+
+
+@pytest.mark.parametrize(
+    "element",
+    (
+        "<owl:Class rdf:about='urn:C' about='urn:D'/>",
+        "<owl:Class rdf:ID='C' ID='D'/>",
+        (
+            "<rdf:Description rdf:about='urn:C' "
+            "rdf:type='http://www.w3.org/2002/07/owl#Class' "
+            "type='http://www.w3.org/2002/07/owl#Class'/>"
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'><rdfs:subClassOf "
+            "rdf:resource='urn:D' resource='urn:E'/></owl:Class>"
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'><owl:intersectionOf "
+            "rdf:parseType='Collection' parseType='Collection'/></owl:Class>"
+        ),
+    ),
+)
+def test_qualified_and_legacy_attribute_aliases_fail_as_duplicates(
+    extension: NativeTestExtension,
+    element: str,
+) -> None:
+    source = (
+        "<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' xml:base='urn:legacy'>"
+        f"{element}</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
+def test_unqualified_attributes_remain_distinct_inside_xml_literals(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+ xmlns:owl="http://www.w3.org/2002/07/owl#"
+ xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#">
+ <owl:Ontology rdf:about="urn:o">
+  <rdfs:comment rdf:parseType="Literal"><mark about="legacy"
+   rdf:about="qualified"/></rdfs:comment>
+ </owl:Ontology>
+</rdf:RDF>
+"""
+
+    _owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 2
+
+
+def test_other_unqualified_attributes_remain_forbidden(
+    extension: NativeTestExtension,
+) -> None:
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+ xmlns:owl="http://www.w3.org/2002/07/owl#">
+ <owl:Class rdf:about="urn:C" label="value"/>
+</rdf:RDF>
+"""
 
     with pytest.raises(OntologySyntaxError) as python_error:
         parse_rdfxml(source, limits=ParseLimits(), document_iri=None)

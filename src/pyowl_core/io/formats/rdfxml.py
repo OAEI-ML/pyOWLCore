@@ -41,6 +41,7 @@ _RDF_CORE_SYNTAX_IRIS = frozenset(
     RDF + local for local in ("RDF", "ID", "about", "parseType", "resource", "nodeID", "datatype")
 )
 _RDF_OLD_SYNTAX_IRIS = frozenset(RDF + local for local in ("aboutEach", "aboutEachPrefix", "bagID"))
+_RDF_LEGACY_UNQUALIFIED_ATTRIBUTES = frozenset(("ID", "about", "resource", "parseType", "type"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +220,7 @@ class RDFXMLGraphParser:
             expanded_name = self._expanded(element.tag)
         if not _is_node_element_iri(expanded_name):
             self._syntax("RDF node element uses a reserved RDF name")
+        self._validate_attribute_uris(element)
         base = self._base(element, parent_base)
         language = element.get(f"{{{XML_NS}}}lang", parent_language)
         identities = [
@@ -258,16 +260,19 @@ class RDFXMLGraphParser:
         language: str | None,
     ) -> None:
         ignored = {
-            _tag(RDF, "about"),
-            _tag(RDF, "ID"),
-            _tag(RDF, "nodeID"),
-            f"{{{XML_NS}}}base",
-            f"{{{XML_NS}}}lang",
+            RDF + "about",
+            RDF + "ID",
+            RDF + "nodeID",
+            XML_NS + "base",
+            XML_NS + "lang",
         }
         for name, value in element.attrib.items():
-            if name in ignored or self._is_reserved_xml_attribute(element, name):
+            if self._is_reserved_xml_attribute(element, name):
                 continue
-            predicate = self._expanded(name)
+            predicate = self._expanded_attribute(name)
+            if predicate in ignored:
+                continue
+            self._validate_iri(predicate)
             if _is_forbidden_rdf_property_attribute_iri(predicate):
                 self._syntax("RDF node element uses a reserved property attribute")
             if predicate == RDF + "type":
@@ -293,6 +298,7 @@ class RDFXMLGraphParser:
         self.context.check()
         if not _is_property_element_iri(predicate):
             self._syntax("RDF property element uses a reserved RDF name")
+        self._validate_attribute_uris(element)
         base = self._base(element, parent_base)
         language = element.get(f"{{{XML_NS}}}lang", parent_language)
         resource = self._rdf_attribute(element, "resource")
@@ -385,7 +391,8 @@ class RDFXMLGraphParser:
         language: str | None,
     ) -> None:
         for name, value in self._non_syntax_attributes(element).items():
-            predicate = self._expanded(name)
+            predicate = self._expanded_attribute(name)
+            self._validate_iri(predicate)
             if predicate == RDF + "type":
                 self._add(subject, predicate, RDFIRI(self._resolve(value, base)))
             else:
@@ -399,26 +406,35 @@ class RDFXMLGraphParser:
 
     def _non_syntax_attributes(self, element: ET.Element) -> dict[str, str]:
         syntax = {
-            _tag(RDF, "resource"),
-            _tag(RDF, "nodeID"),
-            _tag(RDF, "parseType"),
-            _tag(RDF, "datatype"),
-            _tag(RDF, "ID"),
-            f"{{{XML_NS}}}base",
-            f"{{{XML_NS}}}lang",
+            RDF + "resource",
+            RDF + "nodeID",
+            RDF + "parseType",
+            RDF + "datatype",
+            RDF + "ID",
+            XML_NS + "base",
+            XML_NS + "lang",
         }
-        selected = {
-            key: value
-            for key, value in element.attrib.items()
-            if key not in syntax and not self._is_reserved_xml_attribute(element, key)
-        }
-        if any(
-            _namespace(name) == RDF
-            and _is_forbidden_rdf_property_attribute_iri(self._expanded(name))
-            for name in selected
-        ):
-            self._syntax("RDF property element uses a reserved property attribute")
+        selected: dict[str, str] = {}
+        for name, value in element.attrib.items():
+            if self._is_reserved_xml_attribute(element, name):
+                continue
+            expanded = self._expanded_attribute(name)
+            if expanded in syntax:
+                continue
+            if _is_forbidden_rdf_property_attribute_iri(expanded):
+                self._syntax("RDF property element uses a reserved property attribute")
+            selected[name] = value
         return selected
+
+    def _validate_attribute_uris(self, element: ET.Element) -> None:
+        seen: set[str] = set()
+        for name in element.attrib:
+            if self._is_reserved_xml_attribute(element, name):
+                continue
+            expanded = self._expanded_attribute(name)
+            if expanded in seen:
+                self._syntax("RDF/XML attributes expand to the same IRI")
+            seen.add(expanded)
 
     def _is_reserved_xml_attribute(self, element: ET.Element, name: str) -> bool:
         namespace = _namespace(name)
@@ -429,10 +445,19 @@ class RDFXMLGraphParser:
         )
 
     def _rdf_attribute(self, element: ET.Element, local: str) -> str | None:
-        name = _tag(RDF, local)
-        if name in self.reserved_xml_attributes.get(id(element), ()):
-            return None
-        return element.get(name)
+        names = [_tag(RDF, local)]
+        if local in _RDF_LEGACY_UNQUALIFIED_ATTRIBUTES:
+            names.append(local)
+        reserved = self.reserved_xml_attributes.get(id(element), ())
+        return next(
+            (
+                value
+                for name in names
+                if name not in reserved
+                if (value := element.get(name)) is not None
+            ),
+            None,
+        )
 
     def _collection(self, values: Sequence[RDFTerm]) -> RDFResource:
         if not values:
@@ -519,6 +544,9 @@ class RDFXMLGraphParser:
         result = _expanded(tag)
         self._validate_iri(result)
         return result
+
+    def _expanded_attribute(self, tag: str) -> str:
+        return _expanded_attribute(tag)
 
     def _validate_iri(self, value: str) -> None:
         self._enforce_iri_size(value)
@@ -739,6 +767,12 @@ def _expanded(tag: str) -> str:
         )
     namespace, local = tag[1:].split("}", 1)
     return namespace + local
+
+
+def _expanded_attribute(tag: str) -> str:
+    if tag in _RDF_LEGACY_UNQUALIFIED_ATTRIBUTES:
+        return RDF + tag
+    return _expanded(tag)
 
 
 def _is_node_element_iri(value: str) -> bool:

@@ -469,6 +469,83 @@ def test_rdfxml_forbidden_property_element_attributes_fail_at_syntax_boundary(
     assert raised.value.code == "RDFXML_SYNTAX"
 
 
+def test_rdfxml_legacy_unqualified_attributes_match_qualified_spelling() -> None:
+    def source(prefix: str) -> bytes:
+        return f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+ xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+ xmlns:owl="http://www.w3.org/2002/07/owl#" xml:base="urn:legacy">
+ <owl:Class {prefix}about="urn:C">
+  <rdfs:subClassOf {prefix}resource="urn:D"/>
+  <owl:equivalentClass>
+   <owl:Class>
+    <owl:intersectionOf {prefix}parseType="Collection">
+     <owl:Class {prefix}about="urn:D"/>
+     <owl:Class {prefix}about="urn:E"/>
+    </owl:intersectionOf>
+   </owl:Class>
+  </owl:equivalentClass>
+ </owl:Class>
+ <owl:Class {prefix}ID="F"/>
+ <rdf:Description {prefix}about="urn:G"
+  {prefix}type="http://www.w3.org/2002/07/owl#Class"/>
+</rdf:RDF>
+""".encode()
+
+    qualified = parse_document(source("rdf:"), format="rdfxml", options=PYTHON_OPTIONS)
+    legacy = parse_document(source(""), format="rdfxml", options=PYTHON_OPTIONS)
+
+    assert legacy == qualified
+    assert len(legacy.axioms) == 7
+
+
+@pytest.mark.parametrize(
+    "element",
+    (
+        "<owl:Class rdf:about='urn:C' about='urn:D'/>",
+        "<owl:Class rdf:ID='C' ID='D'/>",
+        (
+            "<rdf:Description rdf:about='urn:C' "
+            "rdf:type='http://www.w3.org/2002/07/owl#Class' "
+            "type='http://www.w3.org/2002/07/owl#Class'/>"
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'><rdfs:subClassOf "
+            "rdf:resource='urn:D' resource='urn:E'/></owl:Class>"
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'><owl:intersectionOf "
+            "rdf:parseType='Collection' parseType='Collection'/></owl:Class>"
+        ),
+    ),
+)
+def test_rdfxml_qualified_and_legacy_attribute_aliases_are_duplicates(
+    element: str,
+) -> None:
+    source = (
+        f"<rdf:RDF xmlns:rdf='{RDF_NAMESPACE}' "
+        "xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#' "
+        "xmlns:owl='http://www.w3.org/2002/07/owl#' xml:base='urn:legacy'>"
+        f"{element}</rdf:RDF>"
+    ).encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
+
+
+def test_rdfxml_other_unqualified_attributes_remain_forbidden() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}" xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Class rdf:about="urn:C" label="value"/>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDFXML_SYNTAX"
+
+
 @pytest.mark.parametrize(
     "document",
     (
