@@ -15,7 +15,7 @@ use crate::model::{
 };
 use crate::publication::{
     TypedFacadeBuilderV2, TypedFacadeCollectionV2, TypedFacadeCoordinateV2,
-    TypedFacadePageRequestV2, TypedFacadeStorageV2, TypedFacadeTableV2,
+    TypedFacadePageRequestV2, TypedFacadeScopeV2, TypedFacadeStorageV2, TypedFacadeTableV2,
 };
 use crate::wire::Validation;
 
@@ -215,6 +215,47 @@ impl ComponentEncodingFixture {
             storage,
             coordinate,
             raw_document_owner: false,
+            cancellation: self.cancellation.clone(),
+        })
+    }
+
+    /// Prepare a production typed V2 document owner with both its axiom and
+    /// complete signature root tables before allocation injection is armed.
+    pub fn prepare_typed_facade_indexes(&self) -> Result<TypedFacadeIndexFixture, Failure> {
+        let axiom_coordinate =
+            TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+        let signature_coordinate =
+            TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Signature, 0);
+        let mut axiom_roots = Vec::new();
+        axiom_roots
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator typed axiom root failed"))?;
+        axiom_roots.push(self.identifiers[0]);
+        let mut signature_roots = Vec::new();
+        signature_roots
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator typed signature root failed"))?;
+        signature_roots.push(self.entities[0]);
+        let mut tables = Vec::new();
+        tables
+            .try_reserve_exact(2)
+            .map_err(|_| NativeError::limit("native allocator typed index tables failed"))?;
+        tables.push(TypedFacadeTableV2::new(axiom_coordinate, axiom_roots));
+        tables.push(TypedFacadeTableV2::new(
+            signature_coordinate,
+            signature_roots,
+        ));
+        let storage = TypedFacadeStorageV2::freeze(
+            self.frozen.arena().clone(),
+            tables,
+            Vec::new(),
+            1,
+            Limits::default(),
+            self.cancellation.clone(),
+            None,
+        )?;
+        Ok(TypedFacadeIndexFixture {
+            storage,
             cancellation: self.cancellation.clone(),
         })
     }
@@ -446,6 +487,13 @@ pub struct TypedFacadeReadFixture {
     cancellation: Cancellation,
 }
 
+/// One typed V2 facade whose retained signature and axiom-type indexes have
+/// not yet been allocated.
+pub struct TypedFacadeIndexFixture {
+    storage: TypedFacadeStorageV2,
+    cancellation: Cancellation,
+}
+
 /// One typed V2 facade input whose production validation and retained index
 /// allocations have not yet run.
 pub struct TypedFacadeFreezeFixture {
@@ -601,6 +649,50 @@ impl TypedFacadeReadFixture {
             counters.contains_requests,
             counters.contains_hits,
             counters.canonical_encode_requests,
+        ])
+    }
+}
+
+impl TypedFacadeIndexFixture {
+    /// Build and consume the typed V2 retained axiom-type index while
+    /// allocation injection is armed.
+    pub fn build_axiom_type_index(&self) -> Result<[u64; 5], Failure> {
+        let index = self.storage.axiom_type_index(
+            TypedFacadeScopeV2::Document,
+            Some(0),
+            false,
+            &Limits::default(),
+            self.cancellation.clone(),
+            None,
+        )?;
+        let counters = index.counters();
+        Ok([
+            counters.axiom_rows,
+            counters.constructor_groups,
+            counters.category_groups,
+            counters.retained_buffer_bytes,
+            counters.complete_root_encode_calls,
+        ])
+    }
+
+    /// Build and consume the typed V2 retained signature index while
+    /// allocation injection is armed.
+    pub fn build_signature_index(&self) -> Result<[u64; 6], Failure> {
+        let index = self.storage.signature_index(
+            TypedFacadeScopeV2::Document,
+            Some(0),
+            &Limits::default(),
+            self.cancellation.clone(),
+            None,
+        )?;
+        let counters = index.counters();
+        Ok([
+            counters.structural_root_rows,
+            counters.entity_rows,
+            counters.referenced_links,
+            counters.nonannotation_links,
+            counters.declaration_links,
+            counters.complete_root_encode_calls,
         ])
     }
 }

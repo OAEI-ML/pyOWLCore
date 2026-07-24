@@ -498,6 +498,62 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
     .expect("first non-failing typed raw facade contains boundary must match");
     assert_eq!(boundary_typed_raw_contains, baseline_typed_raw_contains);
 
+    let typed_axiom_type = component
+        .prepare_typed_facade_indexes()
+        .expect("typed facade axiom-type fixture must prepare");
+    let (baseline_typed_axiom_type, typed_axiom_type_allocations) =
+        count_allocations(|| typed_axiom_type.build_axiom_type_index());
+    let baseline_typed_axiom_type =
+        baseline_typed_axiom_type.expect("typed facade axiom-type baseline must build");
+    assert_eq!(baseline_typed_axiom_type, baseline_axiom_type);
+    assert!(typed_axiom_type_allocations > 1);
+
+    for fail_after in 0..typed_axiom_type_allocations {
+        let typed_axiom_type = component
+            .prepare_typed_facade_indexes()
+            .expect("typed facade axiom-type fixture must prepare for every rejection");
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+            typed_axiom_type.build_axiom_type_index()
+        }));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let typed_axiom_type = component
+        .prepare_typed_facade_indexes()
+        .expect("typed facade axiom-type boundary fixture must prepare");
+    let boundary_typed_axiom_type = fail_allocation(typed_axiom_type_allocations, || {
+        typed_axiom_type.build_axiom_type_index()
+    })
+    .expect("first non-failing typed facade axiom-type boundary must build");
+    assert_eq!(boundary_typed_axiom_type, baseline_typed_axiom_type);
+
+    let typed_signature = component
+        .prepare_typed_facade_indexes()
+        .expect("typed facade signature fixture must prepare");
+    let (baseline_typed_signature, typed_signature_allocations) =
+        count_allocations(|| typed_signature.build_signature_index());
+    let baseline_typed_signature =
+        baseline_typed_signature.expect("typed facade signature baseline must build");
+    assert_eq!(baseline_typed_signature, baseline_signature);
+    assert!(typed_signature_allocations > 1);
+
+    for fail_after in 0..typed_signature_allocations {
+        let typed_signature = component
+            .prepare_typed_facade_indexes()
+            .expect("typed facade signature fixture must prepare for every rejection");
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+            typed_signature.build_signature_index()
+        }));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let typed_signature = component
+        .prepare_typed_facade_indexes()
+        .expect("typed facade signature boundary fixture must prepare");
+    let boundary_typed_signature = fail_allocation(typed_signature_allocations, || {
+        typed_signature.build_signature_index()
+    })
+    .expect("first non-failing typed facade signature boundary must build");
+    assert_eq!(boundary_typed_signature, baseline_typed_signature);
+
     let (baseline_prepared, preparation_allocations) =
         count_allocations(|| component.prepare_encoded_columns());
     let baseline_prepared = baseline_prepared.expect("encoded columns must prepare");
