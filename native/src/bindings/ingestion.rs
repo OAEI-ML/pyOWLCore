@@ -60,6 +60,11 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     )?)?;
     #[cfg(feature = "test-hooks")]
     _module.add_function(wrap_pyfunction!(
+        _merge_parsed_structural_bridge_allocation_probe_v2,
+        _module
+    )?)?;
+    #[cfg(feature = "test-hooks")]
+    _module.add_function(wrap_pyfunction!(
         _retained_structural_bridge_allocation_probe_v2,
         _module
     )?)?;
@@ -1122,7 +1127,88 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
     anonymous_scope_targets: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<NativeSnapshotHandle> {
     let mut allocations = crate::BridgeAllocationProbe::disabled();
-    let limits = crate::limits_from_python_with_allocations(config, &mut allocations)?;
+    merge_parsed_structural_snapshot_v2_with_allocations(
+        py,
+        parsed_documents,
+        origins,
+        attestation,
+        config,
+        cancel,
+        source_maps,
+        effective_origins,
+        effective_document_ordinals,
+        closure_document_ordinals,
+        anonymous_scope_targets,
+        &mut allocations,
+    )
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (
+    parsed_documents,
+    origins,
+    attestation,
+    config,
+    fail_after=None,
+    *,
+    source_maps=None,
+    effective_origins=None,
+    effective_document_ordinals=None,
+    closure_document_ordinals=None,
+    anonymous_scope_targets=None
+))]
+#[allow(clippy::too_many_arguments)]
+fn _merge_parsed_structural_bridge_allocation_probe_v2<'py>(
+    py: Python<'py>,
+    parsed_documents: &Bound<'py, PyAny>,
+    origins: &Bound<'py, PyAny>,
+    attestation: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+    source_maps: Option<&Bound<'py, PyAny>>,
+    effective_origins: Option<&Bound<'py, PyAny>>,
+    effective_document_ordinals: Option<&Bound<'py, PyAny>>,
+    closure_document_ordinals: Option<&Bound<'py, PyAny>>,
+    anonymous_scope_targets: Option<&Bound<'py, PyAny>>,
+) -> PyResult<(NativeSnapshotHandle, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native parsed-closure bridge allocation failure",
+    );
+    let handle = merge_parsed_structural_snapshot_v2_with_allocations(
+        py,
+        parsed_documents,
+        origins,
+        attestation,
+        config,
+        None,
+        source_maps,
+        effective_origins,
+        effective_document_ordinals,
+        closure_document_ordinals,
+        anonymous_scope_targets,
+        &mut allocations,
+    )?;
+    Ok((handle, allocations.count()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn merge_parsed_structural_snapshot_v2_with_allocations<'py>(
+    py: Python<'py>,
+    parsed_documents: &Bound<'py, PyAny>,
+    origins: &Bound<'py, PyAny>,
+    attestation: &Bound<'py, PyAny>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    source_maps: Option<&Bound<'py, PyAny>>,
+    effective_origins: Option<&Bound<'py, PyAny>>,
+    effective_document_ordinals: Option<&Bound<'py, PyAny>>,
+    closure_document_ordinals: Option<&Bound<'py, PyAny>>,
+    anonymous_scope_targets: Option<&Bound<'py, PyAny>>,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<NativeSnapshotHandle> {
+    let limits = crate::limits_from_python_with_allocations(config, allocations)?;
     let cancellation = crate::cancellation_or_default(cancel);
     if !parsed_documents.get_type().is(py.get_type::<PyTuple>()) {
         return Err(pyo3::exceptions::PyTypeError::new_err(
@@ -1198,7 +1284,7 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
             parsed_documents.len(),
             &limits,
             &cancellation,
-            &mut allocations,
+            allocations,
         )?;
     external_bytes = external_bytes.checked_add(topology_bytes).ok_or_else(|| {
         crate::python_error(NativeError::limit(
@@ -1210,7 +1296,7 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
         anonymous_scope_targets,
         parsed_documents,
         &cancellation,
-        &mut allocations,
+        allocations,
     )?;
     external_bytes = external_bytes
         .checked_add(anonymous_scope_bytes)
@@ -1230,7 +1316,7 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
             &limits,
             &cancellation,
             &mut external_bytes,
-            &mut allocations,
+            allocations,
         )?)
     };
     let owned_effective_origins = effective_origins
@@ -1242,7 +1328,7 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
                 &limits,
                 &cancellation,
                 &mut external_bytes,
-                &mut allocations,
+                allocations,
             )
         })
         .transpose()?;
@@ -1255,7 +1341,7 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
                 &limits,
                 &cancellation,
                 &mut external_bytes,
-                &mut allocations,
+                allocations,
             )
         })
         .transpose()?;

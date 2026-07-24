@@ -1701,6 +1701,227 @@ def test_retained_structural_bridge_allocations_fail_before_owner_publication(
     assert config == original_config
 
 
+@pytest.fixture(scope="module")
+def parsed_closure_bridge_extension(
+    extension: NativeTestExtension,
+) -> NativeTestExtension:
+    if not hasattr(extension, "_merge_parsed_structural_bridge_allocation_probe_v2"):
+        if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
+            pytest.fail(
+                "selected native test-hooks artifact lacks "
+                "_merge_parsed_structural_bridge_allocation_probe_v2"
+            )
+        pytest.skip("native parsed-closure bridge allocation hook is unavailable")
+    return extension
+
+
+def test_parsed_closure_bridge_allocations_fail_before_owner_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    parsed_closure_bridge_extension: NativeTestExtension,
+) -> None:
+    extension = cast(Any, parsed_closure_bridge_extension)
+    root = (
+        b"Ontology(<urn:allocation:parsed-closure:root> "
+        b"Import(<urn:allocation:parsed-closure:child>) "
+        b"Declaration(Class(<urn:allocation:parsed-closure:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:allocation:parsed-closure:child> "
+        b"Declaration(Class(<urn:allocation:parsed-closure:Child>)))"
+    )
+    parse = extension._parse_functional_retained_v2
+    merge = extension._merge_parsed_structural_snapshot_v2
+    parse_specs_by_owner: dict[
+        int,
+        tuple[bytes, bytes, bool, bool, bool, bool, bool],
+    ] = {}
+    captured: dict[str, object] = {}
+
+    def capture_parse(
+        source: object,
+        config: object,
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        record_unresolved: bool,
+        require_empty_imports: bool,
+        cancel: object | None = None,
+        *,
+        materialize_document: bool = False,
+    ) -> tuple[bytes, object, tuple[int, int, int, int]]:
+        result = cast(
+            tuple[bytes, object, tuple[int, int, int, int]],
+            parse(
+                source,
+                config,
+                collect_provenance,
+                preserve_source_map,
+                record_unresolved,
+                require_empty_imports,
+                cancel,
+                materialize_document=materialize_document,
+            ),
+        )
+        parse_specs_by_owner[id(result[1])] = (
+            bytes(cast(Any, source)),
+            bytes(cast(Any, config)),
+            collect_provenance,
+            preserve_source_map,
+            record_unresolved,
+            require_empty_imports,
+            materialize_document,
+        )
+        return result
+
+    def capture_merge(
+        parsed_documents: tuple[object, ...],
+        origins: object,
+        attestation: object,
+        config: object,
+        cancel: object | None = None,
+        *,
+        source_maps: object | None = None,
+        effective_origins: object | None = None,
+        effective_document_ordinals: object | None = None,
+        closure_document_ordinals: object | None = None,
+        anonymous_scope_targets: object | None = None,
+    ) -> object:
+        captured.update(
+            parse_specs=tuple(parse_specs_by_owner[id(item)] for item in parsed_documents),
+            origins=origins,
+            attestation=attestation,
+            config=bytes(cast(Any, config)),
+            source_maps=source_maps,
+            effective_origins=effective_origins,
+            effective_document_ordinals=effective_document_ordinals,
+            closure_document_ordinals=closure_document_ordinals,
+            anonymous_scope_targets=anonymous_scope_targets,
+        )
+        return merge(
+            parsed_documents,
+            origins,
+            attestation,
+            config,
+            cancel,
+            source_maps=source_maps,
+            effective_origins=effective_origins,
+            effective_document_ordinals=effective_document_ordinals,
+            closure_document_ordinals=closure_document_ordinals,
+            anonymous_scope_targets=anonymous_scope_targets,
+        )
+
+    monkeypatch.setattr(extension, "_parse_functional_retained_v2", capture_parse)
+    monkeypatch.setattr(extension, "_merge_parsed_structural_snapshot_v2", capture_merge)
+    selected = load_snapshot(
+        root,
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RESOLVE_LOCAL,
+            backend=BackendPreference.NATIVE,
+            collect_provenance=True,
+        ),
+        resolver=MappingResolver({"urn:allocation:parsed-closure:child": child}),
+    )
+    cast(Any, selected).close()
+    monkeypatch.setattr(extension, "_parse_functional_retained_v2", parse)
+    monkeypatch.setattr(extension, "_merge_parsed_structural_snapshot_v2", merge)
+
+    parse_specs = cast(
+        tuple[tuple[bytes, bytes, bool, bool, bool, bool, bool], ...],
+        captured["parse_specs"],
+    )
+    assert len(parse_specs) == 2
+    origins = captured["origins"]
+    attestation = captured["attestation"]
+    config = cast(bytes, captured["config"])
+    source_maps = captured["source_maps"]
+    effective_origins = captured["effective_origins"]
+    effective_document_ordinals = captured["effective_document_ordinals"]
+    closure_document_ordinals = captured["closure_document_ordinals"]
+    anonymous_scope_targets = captured["anonymous_scope_targets"]
+    assert source_maps is None
+    assert effective_origins is None
+    assert effective_document_ordinals is not None
+    assert closure_document_ordinals is not None
+    assert anonymous_scope_targets is not None
+
+    def parsed_documents() -> tuple[object, ...]:
+        retained: list[object] = []
+        for (
+            request,
+            parse_config,
+            collect_provenance,
+            preserve_source_map,
+            record_unresolved,
+            require_empty_imports,
+            materialize_document,
+        ) in parse_specs:
+            _summary, storage, _phases = parse(
+                memoryview(request),
+                memoryview(parse_config),
+                collect_provenance,
+                preserve_source_map,
+                record_unresolved,
+                require_empty_imports,
+                None,
+                materialize_document=materialize_document,
+            )
+            retained.append(storage)
+        return tuple(retained)
+
+    probe = extension._merge_parsed_structural_bridge_allocation_probe_v2
+    handle, allocations = probe(
+        parsed_documents(),
+        origins,
+        attestation,
+        memoryview(config),
+        None,
+        source_maps=source_maps,
+        effective_origins=effective_origins,
+        effective_document_ordinals=effective_document_ordinals,
+        closure_document_ordinals=closure_document_ordinals,
+        anonymous_scope_targets=anonymous_scope_targets,
+    )
+    assert allocations == 17
+    assert handle._publication_attestation_v2() == attestation
+    assert handle._publication_closed_v2() is False
+    handle._publication_close_v2()
+
+    for fail_after in range(allocations):
+        with pytest.raises(
+            MemoryError,
+            match=r"^injected native parsed-closure bridge allocation failure$",
+        ):
+            probe(
+                parsed_documents(),
+                origins,
+                attestation,
+                memoryview(config),
+                fail_after,
+                source_maps=source_maps,
+                effective_origins=effective_origins,
+                effective_document_ordinals=effective_document_ordinals,
+                closure_document_ordinals=closure_document_ordinals,
+                anonymous_scope_targets=anonymous_scope_targets,
+            )
+
+    boundary_handle, boundary_allocations = probe(
+        parsed_documents(),
+        origins,
+        attestation,
+        memoryview(config),
+        allocations,
+        source_maps=source_maps,
+        effective_origins=effective_origins,
+        effective_document_ordinals=effective_document_ordinals,
+        closure_document_ordinals=closure_document_ordinals,
+        anonymous_scope_targets=anonymous_scope_targets,
+    )
+    assert boundary_allocations == allocations
+    assert boundary_handle._publication_attestation_v2() == attestation
+    assert boundary_handle._publication_closed_v2() is False
+    boundary_handle._publication_close_v2()
+
+
 def test_retained_closure_source_map_allocations_fail_before_owner_publication(
     monkeypatch: pytest.MonkeyPatch,
     retained_structural_bridge_extension: NativeTestExtension,

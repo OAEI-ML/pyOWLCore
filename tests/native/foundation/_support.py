@@ -107,6 +107,21 @@ class NativeTestExtension(Protocol):
         anonymous_scope_targets: object | None = None,
     ) -> object: ...
 
+    def _merge_parsed_structural_bridge_allocation_probe_v2(
+        self,
+        parsed_documents: tuple[object, ...],
+        origins: object | None,
+        attestation: object,
+        config: object,
+        fail_after: int | None = None,
+        *,
+        source_maps: object | None = None,
+        effective_origins: object | None = None,
+        effective_document_ordinals: object | None = None,
+        closure_document_ordinals: object | None = None,
+        anonymous_scope_targets: object | None = None,
+    ) -> tuple[object, int]: ...
+
     def _rdfxml_retained_bridge_allocation_probe_v2(
         self,
         source: object,
