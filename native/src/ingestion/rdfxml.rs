@@ -2935,6 +2935,13 @@ fn map_graph(
         &mut expressions,
         session,
     )?;
+    consume_detached_datatype_restrictions(
+        &list_graph,
+        &mut consumed,
+        &kinds,
+        &mut expressions,
+        session,
+    )?;
     consume_detached_data_complements(
         &list_graph,
         &mut consumed,
@@ -3651,6 +3658,157 @@ fn consume_detached_named_data_booleans<'view, 'graph>(
         consume_collection_indexes(expression_consumed, consumed, session)?;
     }
     Ok(())
+}
+
+fn consume_detached_datatype_restrictions<'view, 'graph>(
+    triples: &'view [ListTriple<'graph>],
+    consumed: &mut [bool],
+    kinds: &[KindRecord<'graph>],
+    expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    for (index, triple) in triples.iter().enumerate() {
+        session.step(1)?;
+        if consumed[index] || triple.predicate != OWL_ON_DATATYPE {
+            continue;
+        }
+        let (ListResource::Blank(subject), ListTerm::Iri(target)) = (triple.subject, triple.object)
+        else {
+            continue;
+        };
+        if !has_kind(kinds, target, "datatype") {
+            continue;
+        }
+        let mut marker_present = false;
+        let mut on_datatype_targets = 0_usize;
+        let mut with_restrictions_targets = 0_usize;
+        for (candidate_index, candidate) in triples.iter().enumerate() {
+            session.step(1)?;
+            if candidate.subject != ListResource::Blank(subject) {
+                continue;
+            }
+            if candidate.predicate == RDF_TYPE
+                && candidate.object == ListTerm::Iri(RDFS_DATATYPE)
+                && !consumed[candidate_index]
+            {
+                marker_present = true;
+            }
+            if candidate.predicate == OWL_ON_DATATYPE {
+                on_datatype_targets = on_datatype_targets.checked_add(1).ok_or_else(|| {
+                    NativeError::limit("native detached datatype-restriction base count overflow")
+                })?;
+            }
+            if candidate.predicate == OWL_WITH_RESTRICTIONS {
+                with_restrictions_targets =
+                    with_restrictions_targets.checked_add(1).ok_or_else(|| {
+                        NativeError::limit(
+                            "native detached datatype-restriction facet-list count overflow",
+                        )
+                    })?;
+            }
+        }
+        if !marker_present {
+            continue;
+        }
+        let mut established_facets = false;
+        for candidate in triples {
+            session.step(1)?;
+            if candidate.subject == ListResource::Blank(subject)
+                && candidate.predicate == OWL_WITH_RESTRICTIONS
+                && established_facet_list(triples, candidate.object, session)?
+            {
+                established_facets = true;
+                break;
+            }
+        }
+        if !established_facets {
+            continue;
+        }
+        if on_datatype_targets > 1 || with_restrictions_targets > 1 {
+            return Err(rdf_mapping_cardinality(
+                "native detached datatype restriction has a repeated selector",
+            ));
+        }
+        let DecodedDataRange {
+            node: _,
+            consumed: expression_consumed,
+        } = expressions.decode_data_term(ListTerm::Blank(subject), session)?;
+        consume_collection_indexes(expression_consumed, consumed, session)?;
+    }
+    Ok(())
+}
+
+fn established_facet_list<'graph>(
+    triples: &[ListTriple<'graph>],
+    head: ListTerm<'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<bool> {
+    session.finish()?;
+    let ListTerm::Blank(mut current) = head else {
+        return Ok(false);
+    };
+    let mut visited = Vec::new();
+    loop {
+        let next_length = visited
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native detached facet list length overflow"))?;
+        enforce_usize(
+            next_length,
+            session.limits().value(LimitKey::MaxRdfListLength),
+            "native detached facet list exceeds max_rdf_list_length",
+        )?;
+        enforce_usize(
+            next_length,
+            session.limits().value(LimitKey::MaxSequenceArity),
+            "native detached facet list exceeds max_sequence_arity",
+        )?;
+        session
+            .step(u64::try_from(visited.len()).map_err(|_| {
+                NativeError::limit("native detached facet list work exceeds u64")
+            })?)?;
+        if visited.contains(&current) {
+            return Ok(false);
+        }
+        reserve_temporary_vec_item(&mut visited, session)?;
+        visited.push(current);
+
+        let mut first = None;
+        let mut rest = None;
+        for candidate in triples {
+            session.step(1)?;
+            if candidate.subject != ListResource::Blank(current) {
+                continue;
+            }
+            if candidate.predicate == RDF_FIRST && first.replace(candidate.object).is_some() {
+                return Ok(false);
+            }
+            if candidate.predicate == RDF_REST && rest.replace(candidate.object).is_some() {
+                return Ok(false);
+            }
+        }
+        let Some(ListTerm::Blank(facet)) = first else {
+            return Ok(false);
+        };
+        let mut has_literal_facet = false;
+        for candidate in triples {
+            session.step(1)?;
+            if candidate.subject == ListResource::Blank(facet)
+                && matches!(candidate.object, ListTerm::Literal(_))
+            {
+                has_literal_facet = true;
+                break;
+            }
+        }
+        if !has_literal_facet {
+            return Ok(false);
+        }
+        match rest {
+            Some(ListTerm::Iri(RDF_NIL)) => return Ok(true),
+            Some(ListTerm::Blank(next)) => current = next,
+            Some(ListTerm::Iri(_)) | Some(ListTerm::Literal(_)) | None => return Ok(false),
+        }
+    }
 }
 
 fn consume_detached_data_complements<'view, 'graph>(
@@ -10063,6 +10221,102 @@ mod tests {
     }
 
     #[test]
+    fn detached_datatype_restriction_requires_established_facets() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let xsd = "http://www.w3.org/2001/XMLSchema#";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive rdf:datatype=\"{xsd}integer\">1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("detached datatype restriction");
+        assert_eq!(document.axioms.len(), 1);
+        assert_eq!(document.mapping.total_triples, 7);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let duplicate_facet = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        let duplicate_facet =
+            mapped(duplicate_facet.as_bytes(), None).expect("repeated facet member");
+        assert_eq!(duplicate_facet.axioms.len(), 1);
+        assert_eq!(duplicate_facet.mapping.total_triples, 9);
+        assert_eq!(
+            duplicate_facet.mapping.total_triples,
+            duplicate_facet.mapping.consumed_triples,
+        );
+
+        let markerless = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdf:Description rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdf:Description><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        let undeclared = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:undeclared\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        let builtin = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"{xsd}integer\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        let empty = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:resource=\"{RDF_NIL}\"/></rdfs:Datatype></rdf:RDF>"
+        );
+        let missing_literal = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive rdf:resource=\"urn:value\"/></rdf:Description></rdf:RDF>"
+        );
+        let forked = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:nodeID=\"values\"/></rdfs:Datatype><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:nodeID=\"left\"/><rdf:first rdf:nodeID=\"right\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description><rdf:Description rdf:nodeID=\"left\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description><rdf:Description rdf:nodeID=\"right\"><xsd:maxExclusive>10</xsd:maxExclusive></rdf:Description></rdf:RDF>"
+        );
+        let cyclic = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:nodeID=\"values\"/></rdfs:Datatype><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:nodeID=\"facet\"/><rdf:rest rdf:nodeID=\"values\"/></rdf:Description><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        for incomplete in [
+            markerless,
+            undeclared,
+            builtin,
+            empty,
+            missing_literal,
+            forked,
+            cyclic,
+        ] {
+            assert_eq!(
+                mapped(incomplete.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            );
+        }
+
+        let duplicate_base = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:about=\"urn:E\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:onDatatype rdf:resource=\"urn:E\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        let duplicate_list = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:nodeID=\"left\"/><owl:withRestrictions rdf:nodeID=\"right\"/></rdfs:Datatype><rdf:Description rdf:nodeID=\"left\"><rdf:first rdf:nodeID=\"left-facet\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description><rdf:Description rdf:nodeID=\"right\"><rdf:first rdf:nodeID=\"right-facet\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/></rdf:Description><rdf:Description rdf:nodeID=\"left-facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description><rdf:Description rdf:nodeID=\"right-facet\"><xsd:maxExclusive>10</xsd:maxExclusive></rdf:Description></rdf:RDF>"
+        );
+        for cardinality in [duplicate_base, duplicate_list] {
+            assert_eq!(
+                mapped(cardinality.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_CARDINALITY",
+            );
+        }
+
+        let mixed_marker = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><rdf:type rdf:resource=\"{OWL}DataRange\"/><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        let conflict = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions><owl:datatypeComplementOf rdf:resource=\"urn:D\"/></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        let multiple_values = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:parseType=\"Collection\"><rdf:Description rdf:nodeID=\"facet\"/></owl:withRestrictions></rdfs:Datatype><rdf:Description rdf:nodeID=\"facet\"><xsd:minInclusive>1</xsd:minInclusive><xsd:maxExclusive>10</xsd:maxExclusive></rdf:Description></rdf:RDF>"
+        );
+        let ambiguous_role = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:xsd=\"{xsd}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:onDatatype rdf:resource=\"urn:D\"/><owl:withRestrictions rdf:nodeID=\"values\"/></rdfs:Datatype><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:nodeID=\"values\"/><rdf:rest rdf:resource=\"{RDF_NIL}\"/><xsd:minInclusive>1</xsd:minInclusive></rdf:Description></rdf:RDF>"
+        );
+        for unsupported in [mixed_marker, conflict, multiple_values, ambiguous_role] {
+            assert_eq!(
+                mapped(unsupported.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
+        }
+    }
+
+    #[test]
     fn detached_named_list_precheck_is_bounded_and_cancellable() {
         let graph = [
             ListTriple {
@@ -10184,6 +10438,85 @@ mod tests {
             )
             .unwrap_err()
             .code,
+            "NATIVE_DEADLINE",
+        );
+    }
+
+    #[test]
+    fn detached_facet_list_precheck_is_bounded_and_cancellable() {
+        let graph = [
+            ListTriple {
+                subject: ListResource::Blank("head"),
+                predicate: RDF_FIRST,
+                object: ListTerm::Blank("facet"),
+            },
+            ListTriple {
+                subject: ListResource::Blank("head"),
+                predicate: RDF_REST,
+                object: ListTerm::Iri(RDF_NIL),
+            },
+            ListTriple {
+                subject: ListResource::Blank("facet"),
+                predicate: "urn:minInclusive",
+                object: ListTerm::Literal("1"),
+            },
+        ];
+
+        let limits = Limits::default();
+        let mut semantic_guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut semantic_session =
+            Session::new(&mut semantic_guard, &limits, 0).expect("bounded session");
+        assert!(
+            established_facet_list(&graph, ListTerm::Blank("head"), &mut semantic_session,)
+                .expect("facet-list precheck")
+        );
+
+        let temporary_limits = limits_with(LimitKey::MaxTemporaryBytes, 1);
+        let mut temporary_guard = Guard::new(
+            Cancellation::with_duration(None),
+            temporary_limits.deadline,
+            temporary_limits.cancellation_stride,
+        );
+        let mut temporary_session =
+            Session::new(&mut temporary_guard, &temporary_limits, 0).expect("bounded session");
+        assert_eq!(
+            established_facet_list(&graph, ListTerm::Blank("head"), &mut temporary_session,)
+                .unwrap_err()
+                .code,
+            "NATIVE_WIRE_LIMIT",
+        );
+
+        let work_limits = limits_with(LimitKey::MaxCanonicalWork, 1);
+        let mut work_guard = Guard::new(
+            Cancellation::with_duration(None),
+            work_limits.deadline,
+            work_limits.cancellation_stride,
+        );
+        let mut work_session =
+            Session::new(&mut work_guard, &work_limits, 0).expect("bounded session");
+        assert_eq!(
+            established_facet_list(&graph, ListTerm::Blank("head"), &mut work_session)
+                .unwrap_err()
+                .code,
+            "NATIVE_WIRE_LIMIT",
+        );
+
+        let limits = Limits::default();
+        let mut cancelled_guard = Guard::new(
+            Cancellation::with_duration(Some(Duration::ZERO)),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut cancelled_session =
+            Session::new(&mut cancelled_guard, &limits, 0).expect("bounded session");
+        assert_eq!(
+            established_facet_list(&graph, ListTerm::Blank("head"), &mut cancelled_session)
+                .unwrap_err()
+                .code,
             "NATIVE_DEADLINE",
         );
     }

@@ -223,6 +223,7 @@ class RDFMapper:
         self._consume_detached_class_complements()
         self._consume_detached_object_enumerations()
         self._consume_detached_named_data_booleans()
+        self._consume_detached_datatype_restrictions()
         self._consume_detached_data_complements()
         self._consume_detached_data_enumerations()
         self._consume_detached_owl1_data_enumerations()
@@ -552,6 +553,81 @@ class RDFMapper:
                 if has_other_constructor or has_compatibility_marker:
                     self._mapping_error("data boolean has conflicting constructors or markers")
                 self._data_range(triple.subject)
+
+    def _consume_detached_datatype_restrictions(self) -> None:
+        for triple in self.graph.find(predicate=OWL + "onDatatype"):
+            self.context.check()
+            if (
+                triple in self.consumed
+                or not isinstance(triple.subject, RDFBlank)
+                or not isinstance(triple.object, RDFIRI)
+                or m.EntityKind.DATATYPE not in self.kinds.get(triple.object.value, set())
+            ):
+                continue
+            marker = Triple(
+                triple.subject,
+                RDFIRI(RDF + "type"),
+                RDFIRI(RDFS + "Datatype"),
+            )
+            if marker in self.consumed or not self.graph.contains(marker):
+                continue
+            restrictions = self.graph.objects(triple.subject, OWL + "withRestrictions")
+            if not any(self._is_established_facet_list(head) for head in restrictions):
+                continue
+            self.graph.one(triple.subject, OWL + "onDatatype")
+            self.graph.one(triple.subject, OWL + "withRestrictions")
+            has_other_constructor = any(
+                self.graph.objects(triple.subject, OWL + predicate)
+                for predicate in (
+                    "intersectionOf",
+                    "unionOf",
+                    "oneOf",
+                    "datatypeComplementOf",
+                )
+            )
+            has_compatibility_marker = self.graph.contains(
+                Triple(
+                    triple.subject,
+                    RDFIRI(RDF + "type"),
+                    RDFIRI(OWL + "DataRange"),
+                )
+            )
+            if has_other_constructor or has_compatibility_marker:
+                self._mapping_error(
+                    "datatype restriction has conflicting constructors or markers"
+                )
+            self._data_range(triple.subject)
+
+    def _is_established_facet_list(self, head: RDFTerm) -> bool:
+        if not isinstance(head, RDFBlank):
+            return False
+        visited: set[RDFBlank] = set()
+        current = head
+        length = 0
+        while True:
+            self.context.check()
+            length += 1
+            self.context.limits.enforce("max_rdf_list_length", length)
+            self.context.limits.enforce("max_sequence_arity", length)
+            if current in visited:
+                return False
+            visited.add(current)
+            firsts = self.graph.objects(current, RDF + "first")
+            rests = self.graph.objects(current, RDF + "rest")
+            if len(firsts) != 1 or len(rests) != 1:
+                return False
+            facet = firsts[0]
+            if not isinstance(facet, RDFBlank) or not any(
+                isinstance(candidate.object, RDFLiteral)
+                for candidate in self.graph.find(subject=facet)
+            ):
+                return False
+            rest = rests[0]
+            if isinstance(rest, RDFIRI) and rest.value == RDF + "nil":
+                return True
+            if not isinstance(rest, RDFBlank):
+                return False
+            current = rest
 
     def _consume_detached_data_complements(self) -> None:
         for triple in self.graph.find(predicate=OWL + "datatypeComplementOf"):
@@ -1580,6 +1656,7 @@ class RDFMapper:
                 for item in self._list(restrictions):
                     if not isinstance(item, RDFBlank):
                         self._mapping_error("facet restriction list item must be blank")
+                    self._claim(item, "facet")
                     candidates = [
                         triple
                         for triple in self.graph.find(subject=item)

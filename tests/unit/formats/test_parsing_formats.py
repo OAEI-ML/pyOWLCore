@@ -28,6 +28,7 @@ PYTHON_OPTIONS = LoadOptions(backend=BackendPreference.PYTHON)
 ONTOLOGY = "https://example.org/w3c-derived"
 CLASS = ONTOLOGY + "#C"
 RDF_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema#"
 
 FUNCTIONAL = f"Ontology(<{ONTOLOGY}> Declaration(Class(<{CLASS}>)))".encode()
 OWL_XML = f"""\
@@ -2339,6 +2340,453 @@ def test_detached_named_data_boolean_precheck_does_not_claim_invalid_lists() -> 
     assert partial.rdf_mapping_report.total_triples == 5
     assert partial.rdf_mapping_report.consumed_triples == 1
     assert len(partial.rdf_mapping_report.unconsumed) == 4
+
+
+@pytest.mark.parametrize(
+    ("members", "facet_definitions"),
+    (
+        (
+            ("lower",),
+            (("lower", "minInclusive", "1"),),
+        ),
+        (
+            ("lower", "upper"),
+            (
+                ("lower", "minInclusive", "1"),
+                ("upper", "maxExclusive", "10"),
+            ),
+        ),
+        (
+            ("lower", "lower"),
+            (("lower", "minInclusive", "1"),),
+        ),
+    ),
+)
+def test_rdf_mapping_consumes_detached_datatype_restriction(
+    members: tuple[str, ...],
+    facet_definitions: tuple[tuple[str, str, str], ...],
+) -> None:
+    items = "".join(
+        f'<rdf:Description rdf:nodeID="{member}"/>' for member in members
+    )
+    facets = "".join(
+        f"""\
+  <rdf:Description rdf:nodeID="{node}">
+    <xsd:{predicate} rdf:datatype="{XSD_NAMESPACE}integer">{lexical}</xsd:{predicate}>
+  </rdf:Description>
+"""
+        for node, predicate, lexical in facet_definitions
+    )
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:xsd="{XSD_NAMESPACE}">
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      {items}
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+{facets}</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    expected_triples = 4 + 2 * len(members) + len(facet_definitions)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == expected_triples
+    assert document.rdf_mapping_report.consumed_triples == expected_triples
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert len(tuple(document.iter_axioms(m.Declaration))) == 1
+    assert len(document.axioms) == 1
+
+
+@pytest.mark.parametrize(
+    ("body", "code"),
+    (
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdf:Description rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:about="urn:expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:undeclared"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="{XSD_NAMESPACE}integer"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <owl:Class rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:nodeID="base"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype>urn:D</owl:onDatatype>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+  </rdfs:Datatype>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdfs:Datatype>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:about="urn:facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:about="urn:facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first>facet</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet">
+    <xsd:minInclusive rdf:resource="urn:value"/>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:nodeID="left"/>
+    <rdf:first rdf:nodeID="right"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="left"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+  <rdf:Description rdf:nodeID="right"><xsd:maxExclusive>10</xsd:maxExclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:nodeID="facet"/>
+    <rdf:rest rdf:nodeID="values"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet">
+    <xsd:minInclusive>1</xsd:minInclusive>
+    <xsd:note rdf:resource="urn:extra"/>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_INCOMPLETE",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:about="urn:E"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:onDatatype rdf:resource="urn:E"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="left-facet"/>
+    </owl:withRestrictions>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="right-facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="left-facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+  <rdf:Description rdf:nodeID="right-facet">
+    <xsd:maxExclusive>10</xsd:maxExclusive>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <rdf:type rdf:resource="http://www.w3.org/2002/07/owl#DataRange"/>
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+    <owl:datatypeComplementOf rdf:resource="urn:D"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:parseType="Collection">
+      <rdf:Description rdf:nodeID="facet"/>
+    </owl:withRestrictions>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="facet">
+    <xsd:minInclusive>1</xsd:minInclusive>
+    <xsd:maxExclusive>10</xsd:maxExclusive>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="left-expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:nodeID="left"/>
+  </rdfs:Datatype>
+  <rdfs:Datatype rdf:nodeID="right-expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:nodeID="right"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="left">
+    <rdf:first rdf:nodeID="left-facet"/>
+    <rdf:rest rdf:nodeID="tail"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="right">
+    <rdf:first rdf:nodeID="right-facet"/>
+    <rdf:rest rdf:nodeID="tail"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="tail">
+    <rdf:first rdf:nodeID="tail-facet"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="left-facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+  <rdf:Description rdf:nodeID="right-facet"><xsd:minInclusive>2</xsd:minInclusive></rdf:Description>
+  <rdf:Description rdf:nodeID="tail-facet"><xsd:maxExclusive>10</xsd:maxExclusive></rdf:Description>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            f"""
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:nodeID="values"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+    <xsd:minInclusive>1</xsd:minInclusive>
+  </rdf:Description>
+""",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+    ),
+)
+def test_rdf_mapping_preserves_detached_datatype_restriction_boundary(
+    body: str,
+    code: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:xsd="{XSD_NAMESPACE}">{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises((OntologySyntaxError, UnsupportedSyntaxError)) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == code
+
+
+def test_detached_datatype_restriction_precheck_does_not_claim_invalid_lists() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:xsd="{XSD_NAMESPACE}">
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:onDatatype rdf:resource="urn:D"/>
+    <owl:withRestrictions rdf:nodeID="values"/>
+  </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:nodeID="facet"/>
+    <rdf:rest rdf:nodeID="values"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="facet"><xsd:minInclusive>1</xsd:minInclusive></rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    partial = PythonParser().parse(
+        source,
+        format="rdfxml",
+        document_iri=None,
+        options=PYTHON_OPTIONS,
+        allow_partial_rdf_mapping=True,
+    )
+    assert partial.rdf_mapping_report is not None
+    assert not partial.rdf_mapping_report.conformant
+    assert partial.rdf_mapping_report.total_triples == 7
+    assert partial.rdf_mapping_report.consumed_triples == 1
+    assert len(partial.rdf_mapping_report.unconsumed) == 6
 
 
 def test_rdf_mapping_consumes_detached_datatype_complement() -> None:
