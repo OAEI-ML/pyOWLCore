@@ -1366,7 +1366,7 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     )
     parse_retained = cast(Any, extension)._parse_functional_retained_v2
     parsed_sources: list[bytes] = []
-    materialized_sources: list[bytes] = []
+    full_result_sources: list[bytes] = []
     expected_sources = (root, *sources.values())
     parallel_sources = frozenset(
         (sources["urn:retained-closure:left"], sources["urn:retained-closure:right"])
@@ -1389,7 +1389,7 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     ) -> object:
         source = record_source(request)
         if keywords.get("materialize_document") is True:
-            materialized_sources.append(source)
+            full_result_sources.append(source)
         if source in parallel_sources:
             with parallel_thread_lock:
                 parallel_thread_ids.add(threading.get_ident())
@@ -1467,9 +1467,7 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     assert selected.report.document_cache_hits == 1
     assert len(parsed_sources) == len(expected_sources) == 4
     assert all(parsed_sources.count(source) == 1 for source in expected_sources)
-    assert len(materialized_sources) == len(sources) == 3
-    assert root not in materialized_sources
-    assert all(materialized_sources.count(source) == 1 for source in sources.values())
+    assert full_result_sources == []
     assert len(parallel_thread_ids) == len(parallel_sources) == 2
 
     parsed_documents = cast(tuple[object, ...], captured["parsed_documents"])
@@ -1559,6 +1557,63 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     selected.close()
     assert selected.closed
     assert decode_root_canonical_bytes(encoded.buffers) == expected
+
+
+def test_legacy_native_extension_without_fork_keeps_complete_closure_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-legacy:root> "
+        b"Import(<urn:retained-legacy:child>) "
+        b"Declaration(Class(<urn:retained-legacy:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-legacy:child> "
+        b"Declaration(Class(<urn:retained-legacy:Child>)))"
+    )
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RESOLVE_LOCAL,
+            backend=backend,
+            collect_provenance=True,
+        )
+
+    reference = load_snapshot(
+        root,
+        options=options(BackendPreference.PYTHON),
+        resolver=MappingResolver({"urn:retained-legacy:child": child}),
+    )
+    decode_calls = 0
+    decode_functional = native._decode_parsed_functional
+
+    def capture_decode(*arguments: object, **keywords: object) -> object:
+        nonlocal decode_calls
+        decode_calls += 1
+        return decode_functional(*arguments, **keywords)
+
+    def unexpected_fork(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("legacy Functional closure attempted parser-storage fork")
+
+    monkeypatch.setattr(
+        "pyowl_core.backends.parser._NativeBackendDriver.supports_retained_storage_fork",
+        lambda _self: False,
+    )
+    monkeypatch.setattr(native, "_fork_parsed_structural_storage_v2", unexpected_fork)
+    monkeypatch.setattr(native, "_decode_parsed_functional", capture_decode)
+    selected = load_snapshot(
+        root,
+        options=options(BackendPreference.NATIVE),
+        resolver=MappingResolver({"urn:retained-legacy:child": child}),
+    )
+
+    assert decode_calls > 0
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
 @pytest.mark.parametrize("collect_provenance", (False, True))

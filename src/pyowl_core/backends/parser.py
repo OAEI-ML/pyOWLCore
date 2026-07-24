@@ -35,6 +35,24 @@ class _NativeBackendDriver:
 
     __slots__ = ()
 
+    def supports_retained_storage_fork(self) -> bool:
+        """Report whether the paired extension can fork parser-owned storage."""
+
+        from pyowl_core.backends.native import _runtime
+
+        runtime = _runtime()
+        return bool(
+            runtime.probe.available
+            and runtime.extension is not None
+            and callable(
+                getattr(
+                    runtime.extension,
+                    "_fork_parsed_structural_storage_v2",
+                    None,
+                )
+            )
+        )
+
     def preflight_validation(
         self,
         preference: BackendPreference,

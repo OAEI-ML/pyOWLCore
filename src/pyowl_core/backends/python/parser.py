@@ -68,6 +68,8 @@ class _ParsedDocumentResult:
 class _BackendDriver(Protocol):
     """Backend-aware operations injected outside the pure Python package."""
 
+    def supports_retained_storage_fork(self) -> bool: ...
+
     def preflight_validation(
         self,
         preference: BackendPreference,
@@ -306,6 +308,8 @@ class PythonParser:
             not publish_native_document
             and detection.format is DocumentFormat.FUNCTIONAL
             and selected_backend == "native"
+            and backend_driver is not None
+            and backend_driver.supports_retained_storage_fork()
             and (
                 materialize_native_document
                 or selected_options.imports
@@ -346,7 +350,9 @@ class PythonParser:
                     )
                 )
             ),
-            materialize_native_document=materialize_native_document,
+            materialize_native_document=(
+                materialize_native_document and not materialize_functional_closure
+            ),
             backend_driver=backend_driver,
         )
         if parsed_result.native_summary is not None:
