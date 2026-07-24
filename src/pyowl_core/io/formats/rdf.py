@@ -1756,7 +1756,10 @@ class RDFMapper:
                 if compatibility_marker:
                     self._mapping_error("OWL 1 data range marker requires owl:oneOf")
                 facets: list[m.FacetRestriction] = []
-                for item in self._list(restrictions):
+                facet_items = self._list(restrictions)
+                if not facet_items:
+                    self._mapping_error("datatype restriction requires at least one facet")
+                for item in facet_items:
                     if not isinstance(item, RDFBlank):
                         self._mapping_error("facet restriction list item must be blank")
                     self._claim(item, "facet")

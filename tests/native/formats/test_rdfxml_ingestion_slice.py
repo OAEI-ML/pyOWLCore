@@ -1605,6 +1605,31 @@ def test_degenerate_named_class_constructors_match_python(
     assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_UNSUPPORTED"
 
 
+def test_empty_attached_datatype_restriction_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <owl:DatatypeProperty rdf:about='urn:d'>
+  <rdfs:range>
+   <rdfs:Datatype>
+    <owl:onDatatype rdf:resource='{XSD_NAMESPACE}integer'/>
+    <owl:withRestrictions rdf:resource='{RDF_NAMESPACE}nil'/>
+   </rdfs:Datatype>
+  </rdfs:range>
+ </owl:DatatypeProperty>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_UNSUPPORTED"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_UNSUPPORTED"
+
+
 @pytest.mark.parametrize(
     "body",
     (

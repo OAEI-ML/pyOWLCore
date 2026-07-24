@@ -1546,6 +1546,27 @@ def test_rdf_mapping_rejects_degenerate_named_class_constructors(body: str) -> N
     assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
 
 
+def test_rdf_mapping_rejects_empty_attached_datatype_restriction() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <owl:DatatypeProperty rdf:about="urn:d">
+    <rdfs:range>
+      <rdfs:Datatype>
+        <owl:onDatatype rdf:resource="{XSD_NAMESPACE}integer"/>
+        <owl:withRestrictions rdf:resource="{RDF_NAMESPACE}nil"/>
+      </rdfs:Datatype>
+    </rdfs:range>
+  </owl:DatatypeProperty>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
 @pytest.mark.parametrize(
     "body",
     (
