@@ -5239,7 +5239,12 @@ fn map_disjoint_unions<'view, 'graph>(
             expressions: members,
             consumed: collection_consumed,
         } = expressions.decode_class_collection(triple.object, session)?;
-        let members = canonical_set(members, 2, None)?;
+        let members = canonical_set(members, 0, None)?;
+        if members.len() < 2 {
+            return Err(rdf_mapping_unsupported(
+                "native disjoint-union axiom requires at least two distinct members",
+            ));
+        }
         let source_triple = source_triples.get(index).ok_or_else(|| {
             NativeError::protocol("native disjoint-union index exceeds source graph")
         })?;
@@ -12860,7 +12865,10 @@ mod tests {
             let invalid = format!(
                 "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:Defined\"><owl:disjointUnionOf rdf:parseType=\"Collection\">{members}</owl:disjointUnionOf></owl:Class></rdf:RDF>"
             );
-            assert!(mapped(invalid.as_bytes(), None).is_err());
+            assert_eq!(
+                mapped(invalid.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
         }
 
         let blank_class = format!(

@@ -1363,6 +1363,67 @@ def test_rdf_mapping_rejects_anonymous_owl1_named_enumeration_member() -> None:
 
 
 @pytest.mark.parametrize(
+    ("body", "code"),
+    (
+        (
+            '<owl:ObjectProperty rdf:about="urn:super">'
+            '<owl:propertyChainAxiom rdf:parseType="Collection"/>'
+            "</owl:ObjectProperty>",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            '<owl:ObjectProperty rdf:about="urn:super">'
+            '<owl:propertyChainAxiom rdf:parseType="Collection">'
+            '<rdf:Description rdf:about="urn:only"/>'
+            "</owl:propertyChainAxiom></owl:ObjectProperty>",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            '<owl:Class rdf:about="urn:C">'
+            '<owl:hasKey rdf:parseType="Collection"/>'
+            "</owl:Class>",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            '<owl:Class rdf:about="urn:C">'
+            '<owl:disjointUnionOf rdf:parseType="Collection"/>'
+            "</owl:Class>",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            '<owl:Class rdf:about="urn:C">'
+            '<owl:disjointUnionOf rdf:parseType="Collection">'
+            '<rdf:Description rdf:about="urn:only"/>'
+            "</owl:disjointUnionOf></owl:Class>",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            '<owl:Class rdf:about="urn:C">'
+            '<owl:disjointUnionOf rdf:parseType="Collection">'
+            '<rdf:Description rdf:about="urn:only"/>'
+            '<rdf:Description rdf:about="urn:only"/>'
+            "</owl:disjointUnionOf></owl:Class>",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+    ),
+)
+def test_rdf_mapping_rejects_undersized_list_backed_axioms(
+    body: str,
+    code: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  {body}
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises((OntologySyntaxError, UnsupportedSyntaxError)) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == code
+
+
+@pytest.mark.parametrize(
     "body",
     (
         (

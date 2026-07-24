@@ -1238,9 +1238,16 @@ class RDFMapper:
                 annotations,
             )
         elif p == OWL + "disjointUnionOf":
+            expressions = m.CanonicalSet(
+                self._class_expression(item) for item in self._list(o)
+            )
+            if len(expressions) < 2:
+                self._mapping_error(
+                    "disjoint-union axiom requires at least two distinct members"
+                )
             value = m.DisjointUnion(
                 self._class_resource(s),
-                m.CanonicalSet(self._class_expression(item) for item in self._list(o)),
+                expressions,
                 annotations,
             )
         elif (
@@ -1286,9 +1293,12 @@ class RDFMapper:
                     m.ObjectProperty(m.IRI(s.value)), m.ObjectProperty(m.IRI(o.value)), annotations
                 )
         elif p == OWL + "propertyChainAxiom" and isinstance(s, RDFIRI):
-            chain = m.ObjectPropertyChain(
-                tuple(self._object_property(item) for item in self._list(o))
-            )
+            properties = tuple(self._object_property(item) for item in self._list(o))
+            if len(properties) < 2:
+                self._mapping_cardinality(
+                    "object property chain requires at least two members"
+                )
+            chain = m.ObjectPropertyChain(properties)
             value = m.SubObjectPropertyOf(chain, m.ObjectProperty(m.IRI(s.value)), annotations)
         elif p == OWL + "propertyDisjointWith" and isinstance(o, RDFIRI):
             if isinstance(s, RDFIRI) and s.value in self.data_kinds:
@@ -1354,6 +1364,8 @@ class RDFMapper:
                 for item in members
                 if self._resource_iri(item) in self.data_kinds
             ]
+            if not object_properties and not data_properties:
+                self._mapping_cardinality("has-key axiom requires at least one property")
             value = m.HasKey(
                 self._class_expression(s),
                 m.CanonicalSet(object_properties),
@@ -1924,6 +1936,10 @@ class RDFMapper:
     @staticmethod
     def _mapping_error(message: str) -> NoReturn:
         raise UnsupportedSyntaxError(message, code="RDF_MAPPING_UNSUPPORTED")
+
+    @staticmethod
+    def _mapping_cardinality(message: str) -> NoReturn:
+        raise OntologySyntaxError(message, code="RDF_MAPPING_CARDINALITY")
 
     @staticmethod
     def _mapping_type(message: str) -> NoReturn:

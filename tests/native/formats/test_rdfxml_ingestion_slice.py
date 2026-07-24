@@ -1406,6 +1406,70 @@ def test_anonymous_owl1_named_enumeration_rejection_matches_python(
 
 
 @pytest.mark.parametrize(
+    ("body", "code"),
+    (
+        (
+            "<owl:ObjectProperty rdf:about='urn:super'>"
+            "<owl:propertyChainAxiom rdf:parseType='Collection'/>"
+            "</owl:ObjectProperty>",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            "<owl:ObjectProperty rdf:about='urn:super'>"
+            "<owl:propertyChainAxiom rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:only'/>"
+            "</owl:propertyChainAxiom></owl:ObjectProperty>",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'>"
+            "<owl:hasKey rdf:parseType='Collection'/>"
+            "</owl:Class>",
+            "RDF_MAPPING_CARDINALITY",
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'>"
+            "<owl:disjointUnionOf rdf:parseType='Collection'/>"
+            "</owl:Class>",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'>"
+            "<owl:disjointUnionOf rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:only'/>"
+            "</owl:disjointUnionOf></owl:Class>",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+        (
+            "<owl:Class rdf:about='urn:C'>"
+            "<owl:disjointUnionOf rdf:parseType='Collection'>"
+            "<rdf:Description rdf:about='urn:only'/>"
+            "<rdf:Description rdf:about='urn:only'/>"
+            "</owl:disjointUnionOf></owl:Class>",
+            "RDF_MAPPING_UNSUPPORTED",
+        ),
+    ),
+)
+def test_undersized_list_backed_axioms_match_python(
+    extension: NativeTestExtension,
+    body: str,
+    code: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ {body}
+</rdf:RDF>""".encode()
+
+    with pytest.raises((OntologySyntaxError, UnsupportedSyntaxError)) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == code
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_" + code
+
+
+@pytest.mark.parametrize(
     "body",
     (
         (
