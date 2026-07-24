@@ -221,6 +221,7 @@ class RDFMapper:
         self._consume_detached_class_complements()
         self._consume_detached_data_complements()
         self._consume_detached_data_enumerations()
+        self._consume_detached_owl1_data_enumerations()
         if self.unclaimed_axiom_reifications or self.unclaimed_nested_reifications:
             raise OntologySyntaxError(
                 "RDF reification targets an unsupported axiom or annotation mapping",
@@ -394,6 +395,31 @@ class RDFMapper:
             if marker in self.consumed or not self.graph.contains(marker):
                 continue
             self._data_range(triple.subject)
+
+    def _consume_detached_owl1_data_enumerations(self) -> None:
+        for marker in self.graph.find(
+            predicate=RDF + "type",
+            object=RDFIRI(OWL + "DataRange"),
+        ):
+            self.context.check()
+            if marker in self.consumed or not isinstance(marker.subject, RDFBlank):
+                continue
+            one_of = self.graph.one(marker.subject, OWL + "oneOf")
+            has_other_constructor = any(
+                self.graph.objects(marker.subject, OWL + predicate)
+                for predicate in (
+                    "intersectionOf",
+                    "unionOf",
+                    "datatypeComplementOf",
+                    "onDatatype",
+                    "withRestrictions",
+                )
+            )
+            if one_of is None and not has_other_constructor:
+                continue
+            if one_of is not None and has_other_constructor:
+                self._mapping_error("OWL 1 data range has conflicting constructors")
+            self._data_range(marker.subject)
 
     def _collect_axiom_annotations(self) -> None:
         annotation_nodes: dict[Triple, list[RDFResource]] = {}

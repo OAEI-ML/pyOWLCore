@@ -1654,15 +1654,6 @@ def test_rdf_mapping_consumes_detached_data_enumeration() -> None:
     <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
   </rdf:Description>
 """,
-        f"""
-  <owl:DataRange rdf:nodeID="range">
-    <owl:oneOf rdf:nodeID="values"/>
-  </owl:DataRange>
-  <rdf:Description rdf:nodeID="values">
-    <rdf:first>one</rdf:first>
-    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
-  </rdf:Description>
-""",
     ),
 )
 def test_rdf_mapping_rejects_unestablished_detached_data_enumeration(body: str) -> None:
@@ -1727,6 +1718,122 @@ def test_rdf_mapping_rejects_ambiguous_detached_data_enumeration() -> None:
     <owl:oneOf rdf:nodeID="left"/>
     <owl:oneOf rdf:nodeID="right"/>
   </rdfs:Datatype>
+  <rdf:Description rdf:nodeID="left">
+    <rdf:first>left</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="right">
+    <rdf:first>right</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_CARDINALITY"
+
+
+@pytest.mark.parametrize(
+    ("body", "total_triples"),
+    (
+        (
+            f"""
+  <owl:DataRange rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </owl:DataRange>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first>one</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+            4,
+        ),
+        (
+            f"""
+  <owl:DataRange rdf:nodeID="range">
+    <owl:oneOf rdf:resource="{RDF_NAMESPACE}nil"/>
+  </owl:DataRange>
+""",
+            2,
+        ),
+    ),
+)
+def test_rdf_mapping_consumes_detached_owl1_data_enumeration(
+    body: str,
+    total_triples: int,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == total_triples
+    assert document.rdf_mapping_report.consumed_triples == total_triples
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert len(document.axioms) == 0
+
+
+def test_rdf_mapping_rejects_named_detached_owl1_data_enumeration() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:DataRange rdf:about="urn:range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </owl:DataRange>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first>one</rdf:first>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        f"""
+  <owl:DataRange rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="values"/>
+  </owl:DataRange>
+  <rdf:Description rdf:nodeID="values">
+    <rdf:first rdf:resource="urn:value"/>
+    <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
+  </rdf:Description>
+""",
+        f"""
+  <owl:DataRange rdf:nodeID="range">
+    <owl:intersectionOf rdf:resource="{RDF_NAMESPACE}nil"/>
+  </owl:DataRange>
+""",
+    ),
+)
+def test_rdf_mapping_rejects_invalid_detached_owl1_data_enumeration(body: str) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_UNSUPPORTED"
+
+
+def test_rdf_mapping_rejects_ambiguous_detached_owl1_data_enumeration() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:DataRange rdf:nodeID="range">
+    <owl:oneOf rdf:nodeID="left"/>
+    <owl:oneOf rdf:nodeID="right"/>
+  </owl:DataRange>
   <rdf:Description rdf:nodeID="left">
     <rdf:first>left</rdf:first>
     <rdf:rest rdf:resource="{RDF_NAMESPACE}nil"/>
