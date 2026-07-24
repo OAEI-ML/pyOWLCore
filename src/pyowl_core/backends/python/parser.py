@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import time
 import xml.etree.ElementTree as ET
 from collections import defaultdict, deque
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -162,6 +163,7 @@ class PythonParser:
         allow_swrl: bool = False,
         cancellation_token: CancellationToken | None = None,
     ) -> OntologyDocument:
+        parse_started = time.monotonic()
         result = self._parse(
             source,
             format=format,
@@ -172,6 +174,9 @@ class PythonParser:
             allow_swrl=allow_swrl,
             cancellation_token=cancellation_token,
             retain_native_storage=False,
+            publish_native_document=True,
+            retained_load_started=parse_started,
+            retained_root_parse_started=parse_started,
             backend_driver=self._backend_driver(),
         )
         if result.document is None:
@@ -193,6 +198,7 @@ class PythonParser:
         allow_swrl: bool = False,
         cancellation_token: CancellationToken | None = None,
         retain_native_storage: bool,
+        publish_native_document: bool,
         materialize_native_document: bool = False,
         retained_resolver: ImportResolver | None = None,
         retained_load_started: float | None = None,
@@ -256,6 +262,12 @@ class PythonParser:
                 selected_options.backend,
                 detection.format,
             )
+        publish_rdfxml_document = (
+            publish_native_document
+            and detection.format is DocumentFormat.RDF_XML
+            and selected_backend == "native"
+        )
+        retain_payload_storage = retain_native_storage or publish_rdfxml_document
         parsed_result = _parse_payload(
             payload.data,
             detection.format,
@@ -265,16 +277,19 @@ class PythonParser:
             allow_partial_rdf_mapping=allow_partial_rdf_mapping,
             allow_swrl=allow_swrl,
             backend=selected_backend,
-            retain_native_storage=retain_native_storage,
+            retain_native_storage=retain_payload_storage,
             collect_provenance=selected_options.collect_provenance,
             preserve_source_map=selected_options.preserve_source_map,
             record_unresolved=(selected_options.imports is ImportPolicy.RECORD_UNRESOLVED),
             require_empty_imports=(
-                selected_options.imports
-                in {ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT}
-                or (
-                    selected_options.imports is ImportPolicy.RECORD_UNRESOLVED
-                    and retained_resolver is not None
+                not publish_rdfxml_document
+                and (
+                    selected_options.imports
+                    in {ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT}
+                    or (
+                        selected_options.imports is ImportPolicy.RECORD_UNRESOLVED
+                        and retained_resolver is not None
+                    )
                 )
             ),
             materialize_native_document=materialize_native_document,
@@ -282,13 +297,18 @@ class PythonParser:
         )
         if parsed_result.native_summary is not None:
             if (
-                not retain_native_storage
+                not retain_payload_storage
                 or parsed_result.native_storage is None
                 or retained_load_started is None
                 or retained_root_parse_started is None
                 or backend_driver is None
             ):
                 raise AssertionError("retained native result has no publication context")
+            publication_options = (
+                replace(selected_options, imports=ImportPolicy.IGNORE)
+                if publish_rdfxml_document
+                else selected_options
+            )
             if detection.format is DocumentFormat.FUNCTIONAL:
                 snapshot = backend_driver.publish_retained_functional(
                     parsed_result.native_summary,
@@ -298,7 +318,7 @@ class PythonParser:
                     detection=detection,
                     document_iri=effective_iri,
                     media_type=media_type,
-                    options=selected_options,
+                    options=publication_options,
                     resolver=retained_resolver,
                     cancellation_token=cancellation_token,
                     load_started=retained_load_started,
@@ -313,7 +333,7 @@ class PythonParser:
                     detection=detection,
                     document_iri=effective_iri,
                     media_type=media_type,
-                    options=selected_options,
+                    options=publication_options,
                     resolver=retained_resolver,
                     cancellation_token=cancellation_token,
                     load_started=retained_load_started,
@@ -322,6 +342,8 @@ class PythonParser:
                 )
             else:
                 raise AssertionError("retained native result has an unsupported document format")
+            if publish_rdfxml_document:
+                return _ParsedDocumentResult(snapshot.root)
             return _ParsedDocumentResult(None, snapshot=snapshot)
         if parsed_result.native_encoded is not None:
             if backend_driver is None:

@@ -266,6 +266,7 @@ def _parse_document_for_retained_load(
         options=options,
         cancellation_token=cancellation_token,
         retain_native_storage=True,
+        publish_native_document=False,
         retained_resolver=resolver,
         retained_load_started=load_started,
         retained_root_parse_started=root_parse_started,
@@ -292,6 +293,7 @@ def _parse_import_for_retained_load(
         media_type=media_type,
         cancellation_token=cancellation_token,
         retain_native_storage=True,
+        publish_native_document=False,
         materialize_native_document=True,
         backend_driver=_DRIVER,
     )

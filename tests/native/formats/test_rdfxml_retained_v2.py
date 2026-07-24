@@ -34,6 +34,7 @@ from pyowl_core import (
     encode_snapshot,
     load_snapshot,
     open_snapshot,
+    parse_document,
     render_document,
 )
 from pyowl_core.backends import native
@@ -1443,6 +1444,70 @@ def test_guarded_public_rdfxml_route_matrix_publishes_the_retained_owner(
     assert selected.signature_fingerprint == reference.signature_fingerprint
     assert encode_snapshot(selected) == encode_snapshot(reference)
     assert counters.parser_bytes == len(NO_IMPORT_SOURCE)
+    assert (counters.retained_origin_rows > 0) is collect_provenance
+    assert (counters.retained_source_map_rows > 0) is preserve_source_map
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
+
+
+@pytest.mark.parametrize(
+    ("collect_provenance", "preserve_source_map"),
+    ((False, False), (True, False), (False, True), (True, True)),
+)
+@pytest.mark.parametrize("imports", tuple(ImportPolicy))
+@pytest.mark.parametrize(
+    "preference",
+    (BackendPreference.NATIVE, BackendPreference.AUTO),
+)
+def test_guarded_public_rdfxml_document_matrix_retains_the_parser_owner(
+    extension: NativeTestExtension,
+    preference: BackendPreference,
+    imports: ImportPolicy,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+) -> None:
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=imports,
+            backend=backend,
+            collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
+        )
+
+    reference = parse_document(
+        SOURCE,
+        document_iri=DOCUMENT_IRI,
+        options=options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("guarded public RDF/XML document crossed the Python parser")
+    with (
+        patch(
+            "pyowl_core.backends.parser._NativeBackendDriver.select",
+            autospec=True,
+            return_value="native",
+        ),
+        patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected),
+    ):
+        selected = cast(
+            Any,
+            parse_document(
+                SOURCE,
+                document_iri=DOCUMENT_IRI,
+                options=options(preference),
+            ),
+        )
+
+    owner = selected._native_document_state.owner.handle._owner_v2
+    counters = owner._publication_counters_v2()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+    assert type(owner) is cast(Any, extension)._NativeDocumentHandle
+    assert type(selected).__name__ == "_NativeOntologyDocument"
+    assert selected == reference
+    assert selected.source_map == reference.source_map
+    assert selected.origin_index == reference.origin_index
+    assert selected.document_fingerprint == reference.document_fingerprint
+    assert counters.parser_bytes == len(SOURCE)
     assert (counters.retained_origin_rows > 0) is collect_provenance
     assert (counters.retained_source_map_rows > 0) is preserve_source_map
     assert counters.publication_structural_rows_copied == 0
