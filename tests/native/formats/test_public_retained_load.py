@@ -14,18 +14,21 @@ import pytest
 from pyowl_core import (
     AxiomScope,
     BackendPreference,
+    CancellationSource,
     DocumentFormat,
     EncodedStructuralView,
     ImportPolicy,
     ImportStatus,
     LoadOptions,
     MappingResolver,
+    OperationCancelledError,
+    ParseError,
     ParseLimits,
     UnresolvedImportWarning,
     encode_snapshot,
     load_snapshot,
 )
-from pyowl_core.backends import native, native_handoff_v2
+from pyowl_core.backends import native, native_handoff_v2, native_ingestion
 from pyowl_core.exceptions import BackendProtocolError, ResourceLimitError
 from pyowl_core.model import canonical_bytes
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
@@ -979,6 +982,119 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
     assert extension.INGESTION_FEATURES == ()
     assert "retained-structural-snapshot-v2" not in extension.FEATURES
     assert not imported.capabilities.encoded_view_schemas
+
+
+@pytest.mark.parametrize("cancel_phase", ("entry", "canonical-row"))
+def test_resolver_built_closure_cancellation_precedes_owner_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+    cancel_phase: str,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-cancel:root> Import(<urn:retained-cancel:child>) "
+        b"Declaration(Class(<urn:retained-cancel:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-cancel:child> "
+        b"Declaration(Class(<urn:retained-cancel:Child>)))"
+    )
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_LOCAL,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=True,
+        preserve_source_map=True,
+    )
+    real_retain = native_ingestion.retain_native_snapshot_v2
+    with patch.object(
+        native_ingestion,
+        "retain_native_snapshot_v2",
+        side_effect=lambda snapshot, **_keywords: snapshot,
+    ):
+        unpublished = load_snapshot(
+            root,
+            options=options,
+            resolver=MappingResolver({"urn:retained-cancel:child": child}),
+        )
+    assert len(unpublished.documents) == 2
+    assert all(document.provenance.backend == "native" for document in unpublished.documents)
+
+    owner_calls = 0
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        nonlocal owner_calls
+        owner_calls += 1
+        raise AssertionError("cancelled closure reached retained-owner construction")
+
+    monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", unexpected)
+    cancellation = CancellationSource()
+    if cancel_phase == "entry":
+        cancellation.cancel("resolver-built closure cancelled at publication entry")
+        with pytest.raises(OperationCancelledError, match="publication entry"):
+            real_retain(unpublished, cancellation_token=cancellation.token)
+    else:
+        import pyowl_core.model as model_module
+
+        canonical_rows = 0
+        real_canonical_bytes = model_module.canonical_bytes
+
+        def cancel_after_row(value: Any, *, limits: object | None = None) -> bytes:
+            nonlocal canonical_rows
+            encoded = real_canonical_bytes(value, limits=limits)
+            canonical_rows += 1
+            cancellation.cancel("resolver-built closure cancelled during canonical rows")
+            return encoded
+
+        with (
+            patch.object(model_module, "canonical_bytes", side_effect=cancel_after_row),
+            pytest.raises(OperationCancelledError, match="canonical rows"),
+        ):
+            real_retain(unpublished, cancellation_token=cancellation.token)
+        assert canonical_rows == 1
+
+    assert owner_calls == 0
+
+
+def test_resolver_built_closure_partial_parse_failure_publishes_no_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    owner_calls = 0
+
+    def unexpected(*_arguments: object, **_keywords: object) -> object:
+        nonlocal owner_calls
+        owner_calls += 1
+        raise AssertionError("partially parsed closure reached retained-owner construction")
+
+    monkeypatch.setattr(cast(Any, extension), "_retain_structural_snapshot_v2", unexpected)
+    root = (
+        b"Ontology(<urn:retained-partial:root> "
+        b"Import(<urn:retained-partial:good>) "
+        b"Import(<urn:retained-partial:malformed>) "
+        b"Declaration(Class(<urn:retained-partial:Root>)))"
+    )
+    resolver = MappingResolver(
+        {
+            "urn:retained-partial:good": (
+                b"Ontology(<urn:retained-partial:good> "
+                b"Declaration(Class(<urn:retained-partial:Good>)))"
+            ),
+            "urn:retained-partial:malformed": b"this is not an ontology document",
+        }
+    )
+
+    with pytest.raises(ParseError):
+        load_snapshot(
+            root,
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.RESOLVE_LOCAL,
+                backend=BackendPreference.NATIVE,
+            ),
+            resolver=resolver,
+        )
+
+    assert owner_calls == 0
 
 
 @pytest.mark.parametrize("collect_provenance", (False, True))

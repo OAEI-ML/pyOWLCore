@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from pyowl_core.io.resolver import ImportResolver
     from pyowl_core.io.source import SourcePayload
     from pyowl_core.limits import ParseLimits
-    from pyowl_core.model import IRI
+    from pyowl_core.model import IRI, StructuralNode
 
 
 class NativeIngestionExtension(Protocol):
@@ -34,6 +34,31 @@ class _RetainedStructuralExtension(NativeIngestionExtension, Protocol):
     _retain_structural_snapshot_v2: Callable[..., object]
     _prepare_parsed_structural_snapshot_v2: Callable[..., object]
     _finalize_parsed_structural_snapshot_v2: Callable[..., object]
+
+
+def _closure_publication_checkpoint_v2(
+    cancellation_token: CancellationToken | None,
+) -> None:
+    """Keep resolver-built closure preparation cooperatively cancellable."""
+
+    if cancellation_token is not None:
+        cancellation_token.check()
+
+
+def _closure_canonical_rows_v2(
+    values: Iterable[StructuralNode],
+    cancellation_token: CancellationToken | None,
+) -> tuple[bytes, ...]:
+    """Encode one root collection with cancellation around every row."""
+
+    from pyowl_core.model import canonical_bytes
+
+    rows: list[bytes] = []
+    for value in values:
+        _closure_publication_checkpoint_v2(cancellation_token)
+        rows.append(canonical_bytes(value))
+        _closure_publication_checkpoint_v2(cancellation_token)
+    return tuple(rows)
 
 
 def require_ingestion_binding(capability: str) -> NativeIngestionExtension:
@@ -1502,6 +1527,8 @@ def retain_native_snapshot_v2(
     retained owner or fails without fallback.
     """
 
+    _closure_publication_checkpoint_v2(cancellation_token)
+
     from pyowl_core.config import BackendPreference, DocumentFormat, ImportPolicy
 
     common_ineligible = (
@@ -2009,19 +2036,19 @@ def _publish_structural_closure_snapshot_v2(
         ontology_snapshot_from_native_publication_v2,
     )
     from pyowl_core.document.snapshot import AxiomScope
-    from pyowl_core.model import canonical_bytes
 
     if len(snapshot.documents) < 2:
         raise AssertionError("retained closure publication received an ineligible snapshot")
     records = snapshot.import_manifest.documents
     if len(records) != len(snapshot.documents):
         raise AssertionError("retained closure records are not aligned")
+    _closure_publication_checkpoint_v2(cancellation_token)
 
     raw_documents = tuple(
         (
-            tuple(canonical_bytes(value) for value in document.ontology_annotations),
-            tuple(canonical_bytes(value) for value in document.axioms),
-            tuple(canonical_bytes(value) for value in document.extension_components),
+            _closure_canonical_rows_v2(document.ontology_annotations, cancellation_token),
+            _closure_canonical_rows_v2(document.axioms, cancellation_token),
+            _closure_canonical_rows_v2(document.extension_components, cancellation_token),
         )
         for document in snapshot.documents
     )
@@ -2029,11 +2056,13 @@ def _publish_structural_closure_snapshot_v2(
     if snapshot.load_options.preserve_source_map:
         encoded_source_maps: list[tuple[tuple[bytes, ...], tuple[bytes, ...]]] = []
         for document in snapshot.documents:
+            _closure_publication_checkpoint_v2(cancellation_token)
             if document.source_map is None:
                 return snapshot
             entry_items: list[tuple[bytes, bytes]] = []
             for digest, source_occurrences in document.source_map.entries.items():
                 for source_occurrence in source_occurrences:
+                    _closure_publication_checkpoint_v2(cancellation_token)
                     collection, encoded = encode_native_auxiliary_row_v2(
                         NativeSourceMapRowV2(
                             digest=digest,
@@ -2051,9 +2080,11 @@ def _publish_structural_closure_snapshot_v2(
                     if collection is not NativeFacadeCollectionV2.SOURCE_MAP_ENTRIES:
                         raise AssertionError(collection)
                     entry_items.append((digest, encoded))
+                    _closure_publication_checkpoint_v2(cancellation_token)
             entry_items.sort(key=lambda item: item[0])
             prefix_items: list[tuple[bytes, bytes]] = []
             for prefix, iri in document.source_map.prefixes.items():
+                _closure_publication_checkpoint_v2(cancellation_token)
                 collection, encoded = encode_native_auxiliary_row_v2(
                     NativeSourcePrefixRowV2(prefix=prefix, iri=iri),
                     max_row_bytes=snapshot.load_options.limits.max_wire_bytes,
@@ -2061,6 +2092,7 @@ def _publish_structural_closure_snapshot_v2(
                 if collection is not NativeFacadeCollectionV2.SOURCE_MAP_PREFIXES:
                     raise AssertionError(collection)
                 prefix_items.append((prefix.encode("utf-8"), encoded))
+                _closure_publication_checkpoint_v2(cancellation_token)
             prefix_items.sort(key=lambda item: item[0])
             encoded_source_maps.append(
                 (
@@ -2071,34 +2103,34 @@ def _publish_structural_closure_snapshot_v2(
         source_map_documents = tuple(encoded_source_maps)
     effective_documents = tuple(
         (
-            tuple(
-                canonical_bytes(value)
-                for value in snapshot.ontology_annotations(
+            _closure_canonical_rows_v2(
+                snapshot.ontology_annotations(
                     scope=AxiomScope.DOCUMENT,
                     document_key=record.document_key,
-                )
+                ),
+                cancellation_token,
             ),
-            tuple(
-                canonical_bytes(value)
-                for value in snapshot.iter_axioms(
+            _closure_canonical_rows_v2(
+                snapshot.iter_axioms(
                     scope=AxiomScope.DOCUMENT,
                     document_key=record.document_key,
-                )
+                ),
+                cancellation_token,
             ),
-            tuple(
-                canonical_bytes(value)
-                for value in snapshot.iter_extensions(
+            _closure_canonical_rows_v2(
+                snapshot.iter_extensions(
                     scope=AxiomScope.DOCUMENT,
                     document_key=record.document_key,
-                )
+                ),
+                cancellation_token,
             ),
         )
         for record in records
     )
     closure_rows = (
-        tuple(canonical_bytes(value) for value in snapshot.ontology_annotations()),
-        tuple(canonical_bytes(value) for value in snapshot.iter_axioms()),
-        tuple(canonical_bytes(value) for value in snapshot.iter_extensions()),
+        _closure_canonical_rows_v2(snapshot.ontology_annotations(), cancellation_token),
+        _closure_canonical_rows_v2(snapshot.iter_axioms(), cancellation_token),
+        _closure_canonical_rows_v2(snapshot.iter_extensions(), cancellation_token),
     )
     raw_origin_documents: tuple[tuple[bytes, ...], ...] = ()
     effective_origin_documents: tuple[tuple[bytes, ...], ...] = ()
@@ -2106,11 +2138,13 @@ def _publish_structural_closure_snapshot_v2(
     if snapshot.load_options.collect_provenance:
         raw_tables: list[tuple[bytes, ...]] = []
         for record, document in zip(records, snapshot.documents, strict=True):
+            _closure_publication_checkpoint_v2(cancellation_token)
             if document.origin_index is None:
                 return snapshot
             raw_items: list[tuple[bytes, bytes]] = []
             for digest, occurrences in document.origin_index.entries.items():
                 for occurrence in occurrences:
+                    _closure_publication_checkpoint_v2(cancellation_token)
                     origin = NativeOriginRowV2(
                         digest=digest,
                         document_key=record.document_key,
@@ -2124,6 +2158,7 @@ def _publish_structural_closure_snapshot_v2(
                     if collection is not NativeFacadeCollectionV2.ORIGIN_ENTRIES:
                         raise AssertionError(collection)
                     raw_items.append((digest, encoded))
+                    _closure_publication_checkpoint_v2(cancellation_token)
             raw_items.sort(key=lambda item: item[0])
             raw_tables.append(tuple(item[1] for item in raw_items))
         raw_origin_documents = tuple(raw_tables)
@@ -2132,6 +2167,7 @@ def _publish_structural_closure_snapshot_v2(
         effective_items: list[list[tuple[bytes, bytes, int, bytes]]] = [[] for _record in records]
         for digest, occurrences in snapshot.origin_index.entries.items():
             for occurrence in occurrences:
+                _closure_publication_checkpoint_v2(cancellation_token)
                 ordinal = ordinals_by_key.get(occurrence.document_key)
                 if ordinal is None:
                     return snapshot
@@ -2155,6 +2191,7 @@ def _publish_structural_closure_snapshot_v2(
                         encoded,
                     )
                 )
+                _closure_publication_checkpoint_v2(cancellation_token)
         for items in effective_items:
             items.sort()
             if len({item[3] for item in items}) != len(items):
@@ -2171,6 +2208,7 @@ def _publish_structural_closure_snapshot_v2(
         tuple(freeze_native_diagnostic_publication_v1(value) for value in document.diagnostics)
         for document in snapshot.documents
     )
+    _closure_publication_checkpoint_v2(cancellation_token)
     documents = tuple(
         NativeDocumentPublicationV1(
             document_key=record.document_key,
@@ -2209,6 +2247,7 @@ def _publish_structural_closure_snapshot_v2(
     diagnostics = tuple(
         freeze_native_diagnostic_publication_v1(value) for value in snapshot.diagnostics
     )
+    _closure_publication_checkpoint_v2(cancellation_token)
     report = NativeLoadReportPublicationV1(
         backend="native",
         api_version=snapshot.report.api_version,
@@ -2424,17 +2463,31 @@ def _publish_structural_closure_snapshot_v2(
         )
         for record in records
     )
+    _closure_publication_checkpoint_v2(cancellation_token)
+    document_preimages: list[bytes] = []
+    for document in snapshot.documents:
+        document_preimages.append(document_fingerprint_bytes(document))
+        _closure_publication_checkpoint_v2(cancellation_token)
+    structural_preimage = snapshot_structural_fingerprint_bytes(
+        snapshot.import_manifest,
+        structural_documents,
+    )
+    _closure_publication_checkpoint_v2(cancellation_token)
+    logical_preimage = logical_fingerprint_bytes(
+        tuple(snapshot.iter_axioms()),
+        tuple(snapshot.iter_extensions()),
+    )
+    _closure_publication_checkpoint_v2(cancellation_token)
+    signature_preimage = signature_fingerprint_bytes(
+        snapshot.signature(),
+        include_builtins=True,
+    )
+    _closure_publication_checkpoint_v2(cancellation_token)
     preimages = (
-        *(document_fingerprint_bytes(document) for document in snapshot.documents),
-        snapshot_structural_fingerprint_bytes(
-            snapshot.import_manifest,
-            structural_documents,
-        ),
-        logical_fingerprint_bytes(
-            tuple(snapshot.iter_axioms()),
-            tuple(snapshot.iter_extensions()),
-        ),
-        signature_fingerprint_bytes(snapshot.signature(), include_builtins=True),
+        *document_preimages,
+        structural_preimage,
+        logical_preimage,
+        signature_preimage,
     )
     fingerprints = (
         *(document.document_fingerprint for document in snapshot.documents),
@@ -2485,6 +2538,7 @@ def _publish_structural_closure_snapshot_v2(
         facade_cardinality_summary=facade_summary,
         raw_document_collections=raw_collections,
     )
+    _closure_publication_checkpoint_v2(cancellation_token)
     attestation = native_snapshot_publication_attestation_v2(
         documents=documents,
         import_manifest=import_manifest,
@@ -2499,6 +2553,7 @@ def _publish_structural_closure_snapshot_v2(
         max_facade_row_bytes=max_facade_row_bytes,
         owl2_dl_report_summary=None,
     )
+    _closure_publication_checkpoint_v2(cancellation_token)
     topology = tuple((ordinal,) for ordinal in range(len(documents)))
     closure_ordinals = tuple(range(len(documents)))
     with native._relay(extension, snapshot.load_options.limits, cancellation_token) as cancel:
