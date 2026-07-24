@@ -450,9 +450,11 @@ class RDFMapper:
             if len(firsts) != 1 or len(rests) != 1:
                 return False
             first = firsts[0]
-            if (
-                not isinstance(first, RDFIRI)
-                or expected_kind not in self.kinds.get(first.value, set())
+            if not isinstance(first, RDFIRI):
+                return False
+            if expected_kind not in self.kinds.get(first.value, set()) and not (
+                expected_kind is m.EntityKind.DATATYPE
+                and first.value in _BUILTIN_DATATYPES
             ):
                 return False
             rest = rests[0]
@@ -639,7 +641,10 @@ class RDFMapper:
                 triple in self.consumed
                 or not isinstance(triple.subject, RDFBlank)
                 or not isinstance(triple.object, RDFIRI)
-                or m.EntityKind.DATATYPE not in self.kinds.get(triple.object.value, set())
+                or (
+                    m.EntityKind.DATATYPE not in self.kinds.get(triple.object.value, set())
+                    and triple.object.value not in _BUILTIN_DATATYPES
+                )
             ):
                 continue
             marker = Triple(

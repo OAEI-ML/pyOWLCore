@@ -2141,6 +2141,65 @@ def test_rdf_mapping_consumes_detached_named_data_boolean(
     assert len(document.axioms) == len(declared)
 
 
+@pytest.mark.parametrize("operator", ("intersectionOf", "unionOf"))
+def test_rdf_mapping_consumes_detached_builtin_named_data_boolean(
+    operator: str,
+) -> None:
+    items = "".join(
+        f'<rdf:Description rdf:about="{datatype}"/>'
+        for datatype in OWL2_BUILTIN_DATATYPES
+    )
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:{operator} rdf:parseType="Collection">{items}</owl:{operator}>
+  </rdfs:Datatype>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    expected_triples = 2 + 2 * len(OWL2_BUILTIN_DATATYPES)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == expected_triples
+    assert document.rdf_mapping_report.consumed_triples == expected_triples
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert not document.axioms
+
+
+@pytest.mark.parametrize(
+    "datatype",
+    (
+        XSD_NAMESPACE + "duration",
+        XSD_NAMESPACE + "anyType",
+        RDF_NAMESPACE + "langString",
+        OWL_NAMESPACE + "realNumber",
+        RDFS_NAMESPACE + "Datatype",
+    ),
+)
+def test_rdf_mapping_rejects_near_builtin_named_data_boolean(
+    datatype: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <rdfs:Datatype rdf:nodeID="expression">
+    <owl:intersectionOf rdf:parseType="Collection">
+      <rdf:Description rdf:about="{XSD_NAMESPACE}string"/>
+      <rdf:Description rdf:about="{datatype}"/>
+    </owl:intersectionOf>
+  </rdfs:Datatype>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
 @pytest.mark.parametrize(
     ("body", "code"),
     (
@@ -2901,6 +2960,60 @@ def test_rdf_mapping_consumes_detached_datatype_complement() -> None:
     assert document.rdf_mapping_report.unconsumed == ()
     assert len(tuple(document.iter_axioms(m.Declaration))) == 1
     assert len(document.axioms) == 1
+
+
+def test_rdf_mapping_consumes_detached_builtin_datatype_complements() -> None:
+    expressions = "".join(
+        f"""\
+  <rdfs:Datatype rdf:nodeID="complement-{index}">
+    <owl:datatypeComplementOf rdf:resource="{datatype}"/>
+  </rdfs:Datatype>
+"""
+        for index, datatype in enumerate(OWL2_BUILTIN_DATATYPES)
+    )
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+{expressions}</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    expected_triples = 2 * len(OWL2_BUILTIN_DATATYPES)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == expected_triples
+    assert document.rdf_mapping_report.consumed_triples == expected_triples
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert not document.axioms
+
+
+@pytest.mark.parametrize(
+    "datatype",
+    (
+        XSD_NAMESPACE + "duration",
+        XSD_NAMESPACE + "anyType",
+        RDF_NAMESPACE + "langString",
+        OWL_NAMESPACE + "realNumber",
+        RDFS_NAMESPACE + "Datatype",
+    ),
+)
+def test_rdf_mapping_rejects_near_builtin_datatype_complement(
+    datatype: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <rdfs:Datatype rdf:nodeID="complement">
+    <owl:datatypeComplementOf rdf:resource="{datatype}"/>
+  </rdfs:Datatype>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
 
 
 @pytest.mark.parametrize(

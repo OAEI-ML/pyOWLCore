@@ -2374,6 +2374,75 @@ def test_detached_named_data_boolean_matches_python(
     assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
+@pytest.mark.parametrize("operator", ("intersectionOf", "unionOf"))
+def test_detached_builtin_named_data_boolean_matches_python(
+    extension: NativeTestExtension,
+    operator: str,
+) -> None:
+    items = "".join(
+        f"<rdf:Description rdf:about='{datatype}'/>"
+        for datatype in OWL2_BUILTIN_DATATYPES
+    )
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <rdfs:Datatype rdf:nodeID='expression'>
+  <owl:{operator} rdf:parseType='Collection'>{items}</owl:{operator}>
+ </rdfs:Datatype>
+</rdf:RDF>""".encode()
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    expected_triples = 2 + 2 * len(OWL2_BUILTIN_DATATYPES)
+    assert python.rdf_mapping_report is not None
+    assert python.rdf_mapping_report.conformant
+    assert not python.axioms
+    assert observed.axioms == ()
+    assert observed.total_triples == observed.consumed_triples == expected_triples
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == 0
+    assert attestation.rdf_mapping_report_count == 1
+    assert extension.INGESTION_FEATURES == ()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
+@pytest.mark.parametrize(
+    "datatype",
+    (
+        XSD_NAMESPACE + "duration",
+        XSD_NAMESPACE + "anyType",
+        RDF_NAMESPACE + "langString",
+        OWL_NAMESPACE + "realNumber",
+        RDFS_NAMESPACE + "Datatype",
+    ),
+)
+def test_near_builtin_named_data_boolean_rejection_matches_python(
+    extension: NativeTestExtension,
+    datatype: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <rdfs:Datatype rdf:nodeID='expression'>
+  <owl:intersectionOf rdf:parseType='Collection'>
+   <rdf:Description rdf:about='{XSD_NAMESPACE}string'/>
+   <rdf:Description rdf:about='{datatype}'/>
+  </owl:intersectionOf>
+ </rdfs:Datatype>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(PyOWLCoreError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_INCOMPLETE"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_INCOMPLETE"
+
+
 @pytest.mark.parametrize(
     ("body", "python_code", "native_code"),
     (
@@ -3108,6 +3177,71 @@ def test_detached_datatype_complement_matches_python(
     assert attestation.rdf_mapping_report_count == 1
     assert extension.INGESTION_FEATURES == ()
     assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
+def test_detached_builtin_datatype_complements_match_python(
+    extension: NativeTestExtension,
+) -> None:
+    expressions = "".join(
+        f"""\
+ <rdfs:Datatype rdf:nodeID='complement-{index}'>
+  <owl:datatypeComplementOf rdf:resource='{datatype}'/>
+ </rdfs:Datatype>
+"""
+        for index, datatype in enumerate(OWL2_BUILTIN_DATATYPES)
+    )
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+{expressions}</rdf:RDF>""".encode()
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    expected_triples = 2 * len(OWL2_BUILTIN_DATATYPES)
+    assert python.rdf_mapping_report is not None
+    assert python.rdf_mapping_report.conformant
+    assert not python.axioms
+    assert observed.axioms == ()
+    assert observed.total_triples == observed.consumed_triples == expected_triples
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == 0
+    assert attestation.rdf_mapping_report_count == 1
+    assert extension.INGESTION_FEATURES == ()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
+@pytest.mark.parametrize(
+    "datatype",
+    (
+        XSD_NAMESPACE + "duration",
+        XSD_NAMESPACE + "anyType",
+        RDF_NAMESPACE + "langString",
+        OWL_NAMESPACE + "realNumber",
+        RDFS_NAMESPACE + "Datatype",
+    ),
+)
+def test_near_builtin_datatype_complement_rejection_matches_python(
+    extension: NativeTestExtension,
+    datatype: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <rdfs:Datatype rdf:nodeID='complement'>
+  <owl:datatypeComplementOf rdf:resource='{datatype}'/>
+ </rdfs:Datatype>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(PyOWLCoreError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_INCOMPLETE"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_INCOMPLETE"
 
 
 @pytest.mark.parametrize(

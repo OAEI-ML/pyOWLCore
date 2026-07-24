@@ -3536,7 +3536,7 @@ fn established_named_list<'graph>(
                 break;
             }
         }
-        if !established {
+        if !established && !(expected_kind == "datatype" && is_builtin_datatype(member)) {
             return Ok(false);
         }
         match rest {
@@ -3873,7 +3873,7 @@ fn consume_detached_data_complements<'view, 'graph>(
         else {
             continue;
         };
-        if !has_kind(kinds, target, "datatype") {
+        if !has_kind(kinds, target, "datatype") && !is_builtin_datatype(target) {
             continue;
         }
         let mut marker_present = false;
@@ -10178,6 +10178,7 @@ mod tests {
     #[test]
     fn detached_named_data_boolean_requires_established_named_operands() {
         let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let xsd = "http://www.w3.org/2001/XMLSchema#";
         for local_name in ["intersectionOf", "unionOf"] {
             let binary = format!(
                 "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:A\"/><rdfs:Datatype rdf:about=\"urn:B\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:{local_name} rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:B\"/></owl:{local_name}></rdfs:Datatype></rdf:RDF>"
@@ -10201,6 +10202,17 @@ mod tests {
                 duplicate_operand.mapping.total_triples,
                 duplicate_operand.mapping.consumed_triples,
             );
+
+            let builtins = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:nodeID=\"expression\"><owl:{local_name} rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"{xsd}integer\"/><rdf:Description rdf:about=\"{OWL}real\"/></owl:{local_name}></rdfs:Datatype></rdf:RDF>"
+            );
+            let builtins = mapped(builtins.as_bytes(), None).expect("built-in data operands");
+            assert!(builtins.axioms.is_empty());
+            assert_eq!(builtins.mapping.total_triples, 6);
+            assert_eq!(
+                builtins.mapping.total_triples,
+                builtins.mapping.consumed_triples,
+            );
         }
 
         let markerless = format!(
@@ -10218,6 +10230,9 @@ mod tests {
         let undeclared = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:A\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:about=\"urn:undeclared\"/></owl:intersectionOf></rdfs:Datatype></rdf:RDF>"
         );
+        let near_builtin = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"{xsd}string\"/><rdf:Description rdf:about=\"{xsd}duration\"/></owl:intersectionOf></rdfs:Datatype></rdf:RDF>"
+        );
         let anonymous = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:A\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:intersectionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description rdf:nodeID=\"anonymous\"/></owl:intersectionOf></rdfs:Datatype></rdf:RDF>"
         );
@@ -10231,7 +10246,16 @@ mod tests {
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:A\"/><rdfs:Datatype rdf:nodeID=\"expression\"><owl:intersectionOf rdf:nodeID=\"values\"/></rdfs:Datatype><rdf:Description rdf:nodeID=\"values\"><rdf:first rdf:resource=\"urn:A\"/><rdf:rest rdf:nodeID=\"values\"/></rdf:Description></rdf:RDF>"
         );
         for incomplete in [
-            markerless, named, empty, singleton, undeclared, anonymous, literal, forked, cyclic,
+            markerless,
+            named,
+            empty,
+            singleton,
+            undeclared,
+            near_builtin,
+            anonymous,
+            literal,
+            forked,
+            cyclic,
         ] {
             assert_eq!(
                 mapped(incomplete.as_bytes(), None).unwrap_err().code,
@@ -10655,6 +10679,7 @@ mod tests {
     #[test]
     fn detached_datatype_complement_requires_exact_expression_shape() {
         let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let xsd = "http://www.w3.org/2001/XMLSchema#";
         let source = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"complement\"><owl:datatypeComplementOf rdf:resource=\"urn:D\"/></rdfs:Datatype></rdf:RDF>"
         );
@@ -10666,6 +10691,17 @@ mod tests {
             document.mapping.consumed_triples,
         );
 
+        let builtin = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:nodeID=\"complement\"><owl:datatypeComplementOf rdf:resource=\"{xsd}integer\"/></rdfs:Datatype></rdf:RDF>"
+        );
+        let builtin = mapped(builtin.as_bytes(), None).expect("built-in datatype complement");
+        assert!(builtin.axioms.is_empty());
+        assert_eq!(builtin.mapping.total_triples, 2);
+        assert_eq!(
+            builtin.mapping.total_triples,
+            builtin.mapping.consumed_triples,
+        );
+
         let markerless = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdf:Description rdf:nodeID=\"complement\"><owl:datatypeComplementOf rdf:resource=\"urn:D\"/></rdf:Description></rdf:RDF>"
         );
@@ -10675,13 +10711,23 @@ mod tests {
         let undeclared = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:nodeID=\"complement\"><owl:datatypeComplementOf rdf:resource=\"urn:undeclared\"/></rdfs:Datatype></rdf:RDF>"
         );
+        let near_builtin = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:nodeID=\"complement\"><owl:datatypeComplementOf rdf:resource=\"{xsd}duration\"/></rdfs:Datatype></rdf:RDF>"
+        );
         let anonymous = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:about=\"urn:D\"/><rdfs:Datatype rdf:nodeID=\"complement\"><owl:datatypeComplementOf rdf:nodeID=\"anonymous\"/></rdfs:Datatype></rdf:RDF>"
         );
         let cyclic = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\"><rdfs:Datatype rdf:nodeID=\"left\"><owl:datatypeComplementOf rdf:nodeID=\"right\"/></rdfs:Datatype><rdfs:Datatype rdf:nodeID=\"right\"><owl:datatypeComplementOf rdf:nodeID=\"left\"/></rdfs:Datatype></rdf:RDF>"
         );
-        for incomplete in [markerless, named_subject, undeclared, anonymous, cyclic] {
+        for incomplete in [
+            markerless,
+            named_subject,
+            undeclared,
+            near_builtin,
+            anonymous,
+            cyclic,
+        ] {
             assert_eq!(
                 mapped(incomplete.as_bytes(), None).unwrap_err().code,
                 "NATIVE_RDF_MAPPING_INCOMPLETE",
