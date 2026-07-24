@@ -122,6 +122,8 @@ const OWL_ANNOTATED_PROPERTY: &str = "http://www.w3.org/2002/07/owl#annotatedPro
 const OWL_ANNOTATED_TARGET: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
 const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
+const OWL_TOP_OBJECT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#topObjectProperty";
+const OWL_BOTTOM_OBJECT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#bottomObjectProperty";
 const SWRL_IMP: &str = "http://www.w3.org/2003/11/swrl#Imp";
 const SWRL_BODY: &str = "http://www.w3.org/2003/11/swrl#body";
 const SWRL_HEAD: &str = "http://www.w3.org/2003/11/swrl#head";
@@ -3285,6 +3287,10 @@ fn is_builtin_class(value: &str) -> bool {
     matches!(value, OWL_THING | OWL_NOTHING)
 }
 
+fn is_builtin_object_property(value: &str) -> bool {
+    matches!(value, OWL_TOP_OBJECT_PROPERTY | OWL_BOTTOM_OBJECT_PROPERTY)
+}
+
 fn is_builtin_datatype(value: &str) -> bool {
     matches!(
         value,
@@ -3343,7 +3349,7 @@ fn consume_detached_inverse_property_expressions<'view, 'graph>(
         else {
             continue;
         };
-        if !has_kind(kinds, target, "object_property") {
+        if !has_kind(kinds, target, "object_property") && !is_builtin_object_property(target) {
             continue;
         }
         let mut inverse_targets = 0_usize;
@@ -11168,6 +11174,35 @@ mod tests {
             detached.mapping.total_triples,
             detached.mapping.consumed_triples,
         );
+
+        for target in [OWL_TOP_OBJECT_PROPERTY, OWL_BOTTOM_OBJECT_PROPERTY] {
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"inverse\"><owl:inverseOf rdf:resource=\"{target}\"/></rdf:Description></rdf:RDF>"
+            );
+            let document =
+                mapped(source.as_bytes(), None).expect("detached built-in inverse expression");
+            assert!(document.axioms.is_empty());
+            assert_eq!(document.mapping.total_triples, 1);
+            assert_eq!(
+                document.mapping.total_triples,
+                document.mapping.consumed_triples,
+            );
+        }
+
+        for target in [
+            "http://www.w3.org/2002/07/owl#topDataProperty",
+            "http://www.w3.org/2002/07/owl#bottomDataProperty",
+            OWL_OBJECT_PROPERTY,
+            "http://www.w3.org/2002/07/owl#topObjectPropertyy",
+        ] {
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:nodeID=\"inverse\"><owl:inverseOf rdf:resource=\"{target}\"/></rdf:Description></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(source.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            );
+        }
 
         let anonymous_target = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:ObjectProperty rdf:about=\"urn:q\"/><rdf:Description rdf:nodeID=\"inverse\"><owl:inverseOf rdf:nodeID=\"anonymous\"/></rdf:Description></rdf:RDF>"

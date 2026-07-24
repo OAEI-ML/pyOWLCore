@@ -344,7 +344,10 @@ class RDFMapper:
                 triple in self.consumed
                 or not isinstance(triple.subject, RDFBlank)
                 or not isinstance(triple.object, RDFIRI)
-                or triple.object.value not in self.object_kinds
+                or (
+                    triple.object.value not in self.object_kinds
+                    and triple.object.value not in _BUILTIN_OBJECT_PROPERTIES
+                )
             ):
                 continue
             self._object_property(triple.subject)
@@ -2444,6 +2447,9 @@ _SWRL_INDIVIDUAL_ATOM_METADATA = {
     SWRL + "argument2",
 }
 _BUILTIN_CLASSES = frozenset({OWL + "Thing", OWL + "Nothing"})
+_BUILTIN_OBJECT_PROPERTIES = frozenset(
+    {OWL + "topObjectProperty", OWL + "bottomObjectProperty"}
+)
 _BUILTIN_DATATYPES = frozenset(
     {
         RDFS + "Literal",

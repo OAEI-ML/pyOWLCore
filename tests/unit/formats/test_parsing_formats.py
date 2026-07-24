@@ -1537,6 +1537,60 @@ def test_rdf_mapping_consumes_detached_inverse_property_expression() -> None:
 
 
 @pytest.mark.parametrize(
+    "target",
+    (
+        OWL_NAMESPACE + "topObjectProperty",
+        OWL_NAMESPACE + "bottomObjectProperty",
+    ),
+)
+def test_rdf_mapping_consumes_detached_builtin_inverse_property_expression(
+    target: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <rdf:Description rdf:nodeID="inverse">
+    <owl:inverseOf rdf:resource="{target}"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 1
+    assert document.rdf_mapping_report.consumed_triples == 1
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert not document.axioms
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        OWL_NAMESPACE + "topDataProperty",
+        OWL_NAMESPACE + "bottomDataProperty",
+        OWL_NAMESPACE + "ObjectProperty",
+        OWL_NAMESPACE + "topObjectPropertyy",
+    ),
+)
+def test_rdf_mapping_rejects_near_builtin_detached_inverse_property_expression(
+    target: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <rdf:Description rdf:nodeID="inverse">
+    <owl:inverseOf rdf:resource="{target}"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
+@pytest.mark.parametrize(
     "body",
     (
         """
