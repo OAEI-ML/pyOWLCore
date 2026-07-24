@@ -60,18 +60,20 @@ pub(super) fn publish_timed(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn publish_scoped_timed(
-    document: &CanonicalDocument,
-    effective_roots: &[Vec<Vec<u8>>; 3],
+    documents: &[CanonicalDocument],
+    effective_roots: &[[Vec<Vec<u8>>; 3]],
+    effective_documents: &[Vec<u64>],
+    closure_documents: &[u64],
     limits: Limits,
     cancellation: Cancellation,
     interrupt: Option<InterruptSlot>,
     caller_external_bytes: usize,
 ) -> NativeResult<PublishedV2> {
     publish_timed_inner(
-        std::slice::from_ref(document),
+        documents,
         Some(effective_roots),
-        &[vec![0]],
-        &[0],
+        effective_documents,
+        closure_documents,
         limits,
         cancellation,
         interrupt,
@@ -82,7 +84,7 @@ pub(super) fn publish_scoped_timed(
 #[allow(clippy::too_many_arguments)]
 fn publish_timed_inner(
     documents: &[CanonicalDocument],
-    scoped_effective_roots: Option<&[Vec<Vec<u8>>; 3]>,
+    scoped_effective_roots: Option<&[[Vec<Vec<u8>>; 3]]>,
     effective_documents: &[Vec<u64>],
     closure_documents: &[u64],
     limits: Limits,
@@ -90,15 +92,19 @@ fn publish_timed_inner(
     interrupt: Option<InterruptSlot>,
     caller_external_bytes: usize,
 ) -> NativeResult<PublishedV2> {
-    if scoped_effective_roots.is_some() && documents.len() != 1 {
+    if scoped_effective_roots.is_some_and(|rows| rows.len() != documents.len()) {
         return Err(NativeError::protocol(
-            "native scoped RDF/XML publication requires one document",
+            "native scoped document count diverges from mapped documents",
         ));
     }
     let mapped_document_bytes = mapped_document_bytes(documents)?
         .checked_add(
             scoped_effective_roots
-                .map(rows_bytes)
+                .map(|documents| {
+                    documents
+                        .iter()
+                        .try_fold(0_usize, |total, rows| checked_add(total, rows_bytes(rows)?))
+                })
                 .transpose()?
                 .unwrap_or(0),
         )
@@ -109,18 +115,16 @@ fn publish_timed_inner(
     let arena_started = Instant::now();
     let mut builder = TypedFacadeBuilderV2::new(limits, cancellation, interrupt, external_bytes)?;
     for (index, document) in documents.iter().enumerate() {
-        if index == 0 {
-            if let Some(effective) = scoped_effective_roots {
-                builder.add_scoped_document(
-                    &document.ontology_annotations,
-                    &document.axioms,
-                    &document.extensions,
-                    &effective[0],
-                    &effective[1],
-                    &effective[2],
-                )?;
-                continue;
-            }
+        if let Some(effective) = scoped_effective_roots.and_then(|rows| rows.get(index)) {
+            builder.add_scoped_document(
+                &document.ontology_annotations,
+                &document.axioms,
+                &document.extensions,
+                &effective[0],
+                &effective[1],
+                &effective[2],
+            )?;
+            continue;
         }
         builder.add_document(
             &document.ontology_annotations,
@@ -216,6 +220,7 @@ fn checked_add(left: usize, right: usize) -> NativeResult<usize> {
 mod tests {
     use super::*;
     use crate::cancel::Guard;
+    use crate::canonical::{entity, iri, Field, Node};
     use crate::publication::{
         TypedFacadeCollectionV2, TypedFacadeCoordinateV2, TypedFacadePageRequestV2,
     };
@@ -272,5 +277,179 @@ mod tests {
         assert_eq!(counters.canonical_input_rows, 1);
         assert_eq!(counters.publication_structural_rows_copied, 0);
         assert_eq!(counters.publication_structural_bytes_copied, 0);
+    }
+
+    fn anonymous_assertion(scope: u8, class: &str) -> Vec<u8> {
+        let individual = Node::build(
+            3,
+            vec![Field::Bytes(vec![scope; 32]), Field::Bytes(vec![scope])],
+        )
+        .expect("anonymous individual");
+        Node::build(
+            112,
+            vec![
+                Field::Node(
+                    entity("class", iri(class.to_owned()).expect("class IRI"))
+                        .expect("class entity"),
+                ),
+                Field::Node(individual),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("class assertion")
+        .into_bytes()
+    }
+
+    fn mapped_document(ordinal: u8, axiom: Vec<u8>) -> CanonicalDocument {
+        CanonicalDocument {
+            document_iri: Some(format!("urn:adapter:document:{ordinal}")),
+            ontology_iri: Some(format!("urn:adapter:ontology:{ordinal}")),
+            version_iri: None,
+            imports: Vec::new(),
+            ontology_annotations: Vec::new(),
+            axioms: vec![axiom],
+            extensions: Vec::new(),
+            occurrences: Vec::new(),
+            language_spellings: Vec::new(),
+            source_blank_labels: Vec::new(),
+            source_prefixes: Vec::new(),
+            source_sha256: [ordinal; 32],
+            byte_length: 0,
+            decoded_codepoints: 0,
+            mapping: super::super::MappingEvidence {
+                total_triples: 0,
+                consumed_triples: 0,
+                occurrence_count: 0,
+                rule_ids: &[],
+                unconsumed: Vec::new(),
+            },
+        }
+    }
+
+    fn axiom_page(
+        storage: &TypedFacadeStorageV2,
+        document_ordinal: u64,
+        raw: bool,
+    ) -> Vec<Vec<u8>> {
+        storage
+            .page(
+                TypedFacadePageRequestV2::new(
+                    TypedFacadeCoordinateV2::document(
+                        TypedFacadeCollectionV2::Axioms,
+                        document_ordinal,
+                    ),
+                    raw,
+                    0,
+                    64,
+                    8 * 1024 * 1024,
+                ),
+                Cancellation::with_duration(None),
+                None,
+            )
+            .expect("axiom page")
+            .rows
+    }
+
+    fn sorted(mut rows: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+        rows.sort_unstable();
+        rows.dedup();
+        rows
+    }
+
+    #[test]
+    fn scoped_documents_cross_diamond_and_cycle_without_flattening() {
+        let documents = (0_u8..4)
+            .map(|ordinal| {
+                mapped_document(
+                    ordinal + 1,
+                    anonymous_assertion(ordinal + 1, &format!("urn:adapter:C{ordinal}")),
+                )
+            })
+            .collect::<Vec<_>>();
+        let effective = (0_u8..4)
+            .map(|ordinal| {
+                [
+                    Vec::new(),
+                    vec![anonymous_assertion(
+                        ordinal + 11,
+                        &format!("urn:adapter:C{ordinal}"),
+                    )],
+                    Vec::new(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let expected_diamond = sorted(
+            effective
+                .iter()
+                .flat_map(|rows| rows[1].iter().cloned())
+                .collect(),
+        );
+        let limits = Limits::default();
+        let diamond = publish_scoped_timed(
+            &documents,
+            &effective,
+            &[vec![0, 1, 2, 3], vec![1, 3], vec![2, 3], vec![3]],
+            &[0, 1, 2, 3],
+            limits,
+            Cancellation::with_duration(None),
+            None,
+            0,
+        )
+        .expect("scoped diamond")
+        .storage;
+        assert_eq!(axiom_page(&diamond, 0, true), documents[0].axioms);
+        assert_eq!(axiom_page(&diamond, 0, false), expected_diamond);
+        assert_eq!(
+            axiom_page(&diamond, 1, false),
+            sorted(vec![effective[1][1][0].clone(), effective[3][1][0].clone()])
+        );
+        let counters = diamond.counters().expect("diamond counters");
+        assert_eq!(counters.canonical_input_rows, 4);
+        assert_eq!(counters.publication_structural_rows_copied, 0);
+        assert_eq!(counters.publication_structural_bytes_copied, 0);
+
+        let cycle = publish_scoped_timed(
+            &documents[..2],
+            &effective[..2],
+            &[vec![0, 1], vec![0, 1]],
+            &[0, 1],
+            limits,
+            Cancellation::with_duration(None),
+            None,
+            0,
+        )
+        .expect("scoped cycle")
+        .storage;
+        let expected_cycle = sorted(vec![effective[0][1][0].clone(), effective[1][1][0].clone()]);
+        assert_eq!(axiom_page(&cycle, 0, false), expected_cycle);
+        assert_eq!(axiom_page(&cycle, 1, false), expected_cycle);
+        assert_eq!(axiom_page(&cycle, 0, true), documents[0].axioms);
+        assert_eq!(axiom_page(&cycle, 1, true), documents[1].axioms);
+        let counters = cycle.counters().expect("cycle counters");
+        assert_eq!(counters.canonical_input_rows, 2);
+        assert_eq!(counters.publication_structural_rows_copied, 0);
+        assert_eq!(counters.publication_structural_bytes_copied, 0);
+    }
+
+    #[test]
+    fn scoped_publication_rejects_partial_effective_document_tables() {
+        let document = mapped_document(1, anonymous_assertion(1, "urn:adapter:C"));
+        let error = publish_scoped_timed(
+            std::slice::from_ref(&document),
+            &[],
+            &[vec![0]],
+            &[0],
+            Limits::default(),
+            Cancellation::with_duration(None),
+            None,
+            0,
+        )
+        .err()
+        .expect("missing effective document must fail");
+        assert_eq!(error.code, "NATIVE_PROTOCOL");
+        assert_eq!(
+            error.message,
+            "native scoped document count diverges from mapped documents"
+        );
     }
 }

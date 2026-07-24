@@ -323,8 +323,10 @@ pub(crate) fn parse_rdfxml_retained_v2_with_mapping(
     session.finish()?;
     let published = match effective_rows.as_ref() {
         Some(effective) => v2_adapter::publish_scoped_timed(
-            &document,
-            effective,
+            std::slice::from_ref(&document),
+            std::slice::from_ref(effective),
+            &[vec![0]],
+            &[0],
             limits,
             cancellation,
             interrupt,
