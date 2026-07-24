@@ -1590,6 +1590,130 @@ def test_rdf_mapping_rejects_near_builtin_detached_inverse_property_expression(
     assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
 
 
+def test_rdf_mapping_classifies_implicit_builtin_properties() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}"
+         xmlns:xsd="{XSD_NAMESPACE}">
+  <rdf:Description rdf:about="{OWL_NAMESPACE}topDataProperty">
+    <rdfs:subPropertyOf rdf:resource="{OWL_NAMESPACE}bottomDataProperty"/>
+    <owl:equivalentProperty rdf:resource="{OWL_NAMESPACE}bottomDataProperty"/>
+    <owl:propertyDisjointWith rdf:resource="{OWL_NAMESPACE}bottomDataProperty"/>
+    <rdfs:domain rdf:resource="urn:C"/>
+    <rdfs:range rdf:resource="{XSD_NAMESPACE}string"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="{OWL_NAMESPACE}topObjectProperty">
+    <rdfs:subPropertyOf rdf:resource="{OWL_NAMESPACE}bottomObjectProperty"/>
+    <owl:equivalentProperty rdf:resource="{OWL_NAMESPACE}bottomObjectProperty"/>
+    <owl:propertyDisjointWith rdf:resource="{OWL_NAMESPACE}bottomObjectProperty"/>
+    <rdfs:domain rdf:resource="urn:C"/>
+    <rdfs:range rdf:resource="{OWL_NAMESPACE}Thing"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="urn:C">
+    <owl:hasKey rdf:parseType="Collection">
+      <rdf:Description rdf:about="{OWL_NAMESPACE}topObjectProperty"/>
+      <rdf:Description rdf:about="{OWL_NAMESPACE}bottomObjectProperty"/>
+      <rdf:Description rdf:about="{OWL_NAMESPACE}topDataProperty"/>
+      <rdf:Description rdf:about="{OWL_NAMESPACE}bottomDataProperty"/>
+    </owl:hasKey>
+    <rdfs:subClassOf>
+      <owl:Restriction>
+        <owl:onProperty rdf:resource="{OWL_NAMESPACE}topDataProperty"/>
+        <owl:someValuesFrom rdf:resource="{XSD_NAMESPACE}string"/>
+      </owl:Restriction>
+    </rdfs:subClassOf>
+  </rdf:Description>
+  <rdf:Description rdf:about="urn:i">
+    <owl:topDataProperty rdf:datatype="{XSD_NAMESPACE}integer">1</owl:topDataProperty>
+    <owl:topObjectProperty rdf:resource="urn:j"/>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 25
+    assert document.rdf_mapping_report.consumed_triples == 25
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert tuple(document.iter_axioms(m.Declaration)) == ()
+    assert len(document.axioms) == 14
+
+    data_properties = m.CanonicalSet(
+        (m.OWL_TOP_DATA_PROPERTY, m.OWL_BOTTOM_DATA_PROPERTY)
+    )
+    object_properties = m.CanonicalSet(
+        (m.OWL_TOP_OBJECT_PROPERTY, m.OWL_BOTTOM_OBJECT_PROPERTY)
+    )
+    class_c = m.Class(m.IRI("urn:C"))
+    assert m.SubDataPropertyOf(
+        m.OWL_TOP_DATA_PROPERTY, m.OWL_BOTTOM_DATA_PROPERTY
+    ) in document.axioms
+    assert m.EquivalentDataProperties(data_properties) in document.axioms
+    assert m.DisjointDataProperties(data_properties) in document.axioms
+    assert m.DataPropertyDomain(m.OWL_TOP_DATA_PROPERTY, class_c) in document.axioms
+    assert m.DataPropertyRange(
+        m.OWL_TOP_DATA_PROPERTY, m.XSD_STRING
+    ) in document.axioms
+    assert m.SubObjectPropertyOf(
+        m.OWL_TOP_OBJECT_PROPERTY, m.OWL_BOTTOM_OBJECT_PROPERTY
+    ) in document.axioms
+    assert m.EquivalentObjectProperties(object_properties) in document.axioms
+    assert m.DisjointObjectProperties(object_properties) in document.axioms
+    assert m.ObjectPropertyDomain(
+        m.OWL_TOP_OBJECT_PROPERTY, class_c
+    ) in document.axioms
+    assert m.ObjectPropertyRange(
+        m.OWL_TOP_OBJECT_PROPERTY, m.OWL_THING
+    ) in document.axioms
+    assert m.HasKey(
+        class_c,
+        object_properties,
+        data_properties,
+    ) in document.axioms
+    assert m.SubClassOf(
+        class_c,
+        m.DataSomeValuesFrom((m.OWL_TOP_DATA_PROPERTY,), m.XSD_STRING),
+    ) in document.axioms
+    assert m.DataPropertyAssertion(
+        m.OWL_TOP_DATA_PROPERTY,
+        m.NamedIndividual(m.IRI("urn:i")),
+        m.Literal(
+            "1",
+            m.Datatype(m.IRI(XSD_NAMESPACE + "integer")),
+        ),
+    ) in document.axioms
+    assert m.ObjectPropertyAssertion(
+        m.OWL_TOP_OBJECT_PROPERTY,
+        m.NamedIndividual(m.IRI("urn:i")),
+        m.NamedIndividual(m.IRI("urn:j")),
+    ) in document.axioms
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    (
+        '<owl:topDataProperty rdf:resource="urn:j"/>',
+        "<owl:topObjectProperty>literal</owl:topObjectProperty>",
+        "<owl:topDataPropertyy>literal</owl:topDataPropertyy>",
+    ),
+)
+def test_rdf_mapping_rejects_wrong_kind_builtin_property_assertion(
+    assertion: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}">
+  <rdf:Description rdf:about="urn:i">{assertion}</rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
 @pytest.mark.parametrize(
     "body",
     (

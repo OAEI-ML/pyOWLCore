@@ -1631,6 +1631,90 @@ def test_near_builtin_detached_inverse_property_expression_rejection_matches_pyt
     assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_INCOMPLETE"
 
 
+def test_implicit_builtin_property_classification_matches_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'
+ xmlns:xsd='{XSD_NAMESPACE}'>
+ <rdf:Description rdf:about='{OWL_NAMESPACE}topDataProperty'>
+  <rdfs:subPropertyOf rdf:resource='{OWL_NAMESPACE}bottomDataProperty'/>
+  <owl:equivalentProperty rdf:resource='{OWL_NAMESPACE}bottomDataProperty'/>
+  <owl:propertyDisjointWith rdf:resource='{OWL_NAMESPACE}bottomDataProperty'/>
+  <rdfs:domain rdf:resource='urn:C'/>
+  <rdfs:range rdf:resource='{XSD_NAMESPACE}string'/>
+ </rdf:Description>
+ <rdf:Description rdf:about='{OWL_NAMESPACE}topObjectProperty'>
+  <rdfs:subPropertyOf rdf:resource='{OWL_NAMESPACE}bottomObjectProperty'/>
+  <owl:equivalentProperty rdf:resource='{OWL_NAMESPACE}bottomObjectProperty'/>
+  <owl:propertyDisjointWith rdf:resource='{OWL_NAMESPACE}bottomObjectProperty'/>
+  <rdfs:domain rdf:resource='urn:C'/>
+  <rdfs:range rdf:resource='{OWL_NAMESPACE}Thing'/>
+ </rdf:Description>
+ <rdf:Description rdf:about='urn:C'>
+  <owl:hasKey rdf:parseType='Collection'>
+   <rdf:Description rdf:about='{OWL_NAMESPACE}topObjectProperty'/>
+   <rdf:Description rdf:about='{OWL_NAMESPACE}bottomObjectProperty'/>
+   <rdf:Description rdf:about='{OWL_NAMESPACE}topDataProperty'/>
+   <rdf:Description rdf:about='{OWL_NAMESPACE}bottomDataProperty'/>
+  </owl:hasKey>
+  <rdfs:subClassOf>
+   <owl:Restriction>
+    <owl:onProperty rdf:resource='{OWL_NAMESPACE}topDataProperty'/>
+    <owl:someValuesFrom rdf:resource='{XSD_NAMESPACE}string'/>
+   </owl:Restriction>
+  </rdfs:subClassOf>
+ </rdf:Description>
+ <rdf:Description rdf:about='urn:i'>
+  <owl:topDataProperty rdf:datatype='{XSD_NAMESPACE}integer'>1</owl:topDataProperty>
+  <owl:topObjectProperty rdf:resource='urn:j'/>
+ </rdf:Description>
+</rdf:RDF>""".encode()
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+    assert python.rdf_mapping_report.conformant
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert len(observed.axioms) == 14
+    assert observed.total_triples == observed.consumed_triples == 25
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == 14
+    assert attestation.rdf_mapping_report_count == 1
+    assert extension.INGESTION_FEATURES == ()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    (
+        "<owl:topDataProperty rdf:resource='urn:j'/>",
+        "<owl:topObjectProperty>literal</owl:topObjectProperty>",
+        "<owl:topDataPropertyy>literal</owl:topDataPropertyy>",
+    ),
+)
+def test_wrong_kind_builtin_property_assertion_rejection_matches_python(
+    extension: NativeTestExtension,
+    assertion: str,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'>
+ <rdf:Description rdf:about='urn:i'>{assertion}</rdf:Description>
+</rdf:RDF>""".encode()
+
+    with pytest.raises(PyOWLCoreError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDF_MAPPING_INCOMPLETE"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDF_MAPPING_INCOMPLETE"
+
+
 @pytest.mark.parametrize("base", OWL2_BUILTIN_DATATYPES)
 def test_detached_builtin_datatype_restriction_matches_python(
     extension: NativeTestExtension,

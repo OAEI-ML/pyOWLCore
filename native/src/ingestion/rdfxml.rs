@@ -124,6 +124,8 @@ const OWL_THING: &str = "http://www.w3.org/2002/07/owl#Thing";
 const OWL_NOTHING: &str = "http://www.w3.org/2002/07/owl#Nothing";
 const OWL_TOP_OBJECT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#topObjectProperty";
 const OWL_BOTTOM_OBJECT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#bottomObjectProperty";
+const OWL_TOP_DATA_PROPERTY: &str = "http://www.w3.org/2002/07/owl#topDataProperty";
+const OWL_BOTTOM_DATA_PROPERTY: &str = "http://www.w3.org/2002/07/owl#bottomDataProperty";
 const SWRL_IMP: &str = "http://www.w3.org/2003/11/swrl#Imp";
 const SWRL_BODY: &str = "http://www.w3.org/2003/11/swrl#body";
 const SWRL_HEAD: &str = "http://www.w3.org/2003/11/swrl#head";
@@ -2590,6 +2592,9 @@ fn map_graph(
     let mut simple_occurrences = Vec::new();
     let list_graph = list_graph_view(&triples, session)?;
     let mut expressions = RdfClassExpressionDecoder::new(&list_graph);
+    for property in [OWL_TOP_DATA_PROPERTY, OWL_BOTTOM_DATA_PROPERTY] {
+        expressions.register_data_property(property, session)?;
+    }
     for kind in &kinds {
         match kind.kind {
             "data_property" => expressions.register_data_property(kind.iri, session)?,
@@ -3281,6 +3286,11 @@ fn has_kind(kinds: &[KindRecord<'_>], value: &str, kind: &str) -> bool {
     kinds
         .iter()
         .any(|record| record.iri == value && record.kind == kind)
+        || match kind {
+            "object_property" => is_builtin_object_property(value),
+            "data_property" => is_builtin_data_property(value),
+            _ => false,
+        }
 }
 
 fn is_builtin_class(value: &str) -> bool {
@@ -3289,6 +3299,10 @@ fn is_builtin_class(value: &str) -> bool {
 
 fn is_builtin_object_property(value: &str) -> bool {
     matches!(value, OWL_TOP_OBJECT_PROPERTY | OWL_BOTTOM_OBJECT_PROPERTY)
+}
+
+fn is_builtin_data_property(value: &str) -> bool {
+    matches!(value, OWL_TOP_DATA_PROPERTY | OWL_BOTTOM_DATA_PROPERTY)
 }
 
 fn is_builtin_datatype(value: &str) -> bool {
@@ -3349,7 +3363,7 @@ fn consume_detached_inverse_property_expressions<'view, 'graph>(
         else {
             continue;
         };
-        if !has_kind(kinds, target, "object_property") && !is_builtin_object_property(target) {
+        if !has_kind(kinds, target, "object_property") {
             continue;
         }
         let mut inverse_targets = 0_usize;
@@ -12606,6 +12620,107 @@ mod tests {
             mapped(empty.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_CARDINALITY",
         );
+    }
+
+    #[test]
+    fn implicit_builtin_property_kinds_map_without_declarations() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let xsd = "http://www.w3.org/2001/XMLSchema#";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:rdfs=\"{rdfs}\" xmlns:owl=\"{OWL}\" xmlns:xsd=\"{xsd}\"><rdf:Description rdf:about=\"{OWL_TOP_DATA_PROPERTY}\"><rdfs:subPropertyOf rdf:resource=\"{OWL_BOTTOM_DATA_PROPERTY}\"/><owl:equivalentProperty rdf:resource=\"{OWL_BOTTOM_DATA_PROPERTY}\"/><owl:propertyDisjointWith rdf:resource=\"{OWL_BOTTOM_DATA_PROPERTY}\"/><rdfs:domain rdf:resource=\"urn:C\"/><rdfs:range rdf:resource=\"{xsd}string\"/></rdf:Description><rdf:Description rdf:about=\"{OWL_TOP_OBJECT_PROPERTY}\"><rdfs:subPropertyOf rdf:resource=\"{OWL_BOTTOM_OBJECT_PROPERTY}\"/><owl:equivalentProperty rdf:resource=\"{OWL_BOTTOM_OBJECT_PROPERTY}\"/><owl:propertyDisjointWith rdf:resource=\"{OWL_BOTTOM_OBJECT_PROPERTY}\"/><rdfs:domain rdf:resource=\"urn:C\"/><rdfs:range rdf:resource=\"{OWL_THING}\"/></rdf:Description><rdf:Description rdf:about=\"urn:C\"><owl:hasKey rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"{OWL_TOP_OBJECT_PROPERTY}\"/><rdf:Description rdf:about=\"{OWL_BOTTOM_OBJECT_PROPERTY}\"/><rdf:Description rdf:about=\"{OWL_TOP_DATA_PROPERTY}\"/><rdf:Description rdf:about=\"{OWL_BOTTOM_DATA_PROPERTY}\"/></owl:hasKey><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"{OWL_TOP_DATA_PROPERTY}\"/><owl:someValuesFrom rdf:resource=\"{xsd}string\"/></owl:Restriction></rdfs:subClassOf></rdf:Description><rdf:Description rdf:about=\"urn:i\"><owl:topDataProperty rdf:datatype=\"{xsd}integer\">1</owl:topDataProperty><owl:topObjectProperty rdf:resource=\"urn:j\"/></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("implicit built-in properties");
+        assert_eq!(document.axioms.len(), 14);
+        assert_eq!(document.mapping.total_triples, 25);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let property = |kind: &'static str, value: &str| {
+            entity(kind, iri(value.to_owned()).expect("property IRI")).expect("property")
+        };
+        let top_data = property("data_property", OWL_TOP_DATA_PROPERTY);
+        let bottom_data = property("data_property", OWL_BOTTOM_DATA_PROPERTY);
+        let top_object = property("object_property", OWL_TOP_OBJECT_PROPERTY);
+        let bottom_object = property("object_property", OWL_BOTTOM_OBJECT_PROPERTY);
+        let sub_data = Node::build(
+            90,
+            vec![
+                Field::Node(top_data.clone()),
+                Field::Node(bottom_data.clone()),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("built-in data sub-property");
+        let sub_object = Node::build(
+            70,
+            vec![
+                Field::Node(top_object.clone()),
+                Field::Node(bottom_object.clone()),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("built-in object sub-property");
+        let has_key = Node::build(
+            101,
+            vec![
+                Field::Node(class_node("urn:C")),
+                Field::Set(
+                    canonical_set(vec![top_object, bottom_object], 0, None)
+                        .expect("built-in object keys"),
+                ),
+                Field::Set(
+                    canonical_set(vec![top_data.clone(), bottom_data], 0, None)
+                        .expect("built-in data keys"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("built-in HasKey");
+        let data_some = Node::build(
+            41,
+            vec![
+                Field::Sequence(vec![top_data]),
+                Field::Node(
+                    entity(
+                        "datatype",
+                        iri(format!("{xsd}string")).expect("datatype IRI"),
+                    )
+                    .expect("datatype"),
+                ),
+            ],
+        )
+        .expect("built-in data restriction");
+        let subclass = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:C")),
+                Field::Node(data_some),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("built-in data-restriction subclass");
+        for expected in [sub_data, sub_object, has_key, subclass] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+
+        for assertion in [
+            "<owl:topDataProperty rdf:resource=\"urn:j\"/>",
+            "<owl:topObjectProperty>literal</owl:topObjectProperty>",
+            "<owl:topDataPropertyy>literal</owl:topDataPropertyy>",
+        ] {
+            let source = format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><rdf:Description rdf:about=\"urn:i\">{assertion}</rdf:Description></rdf:RDF>"
+            );
+            assert_eq!(
+                mapped(source.as_bytes(), None).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_INCOMPLETE",
+            );
+        }
     }
 
     #[test]

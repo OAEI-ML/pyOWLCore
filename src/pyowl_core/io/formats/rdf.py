@@ -177,8 +177,8 @@ class RDFMapper:
         self.allow_swrl = allow_swrl
         self.consumed: set[Triple] = set()
         self.kinds: dict[str, set[m.EntityKind]] = {}
-        self.object_kinds: set[str] = set()
-        self.data_kinds: set[str] = set()
+        self.object_kinds: set[str] = set(_BUILTIN_OBJECT_PROPERTIES)
+        self.data_kinds: set[str] = set(_BUILTIN_DATA_PROPERTIES)
         self.annotation_kinds: set[str] = set(_BUILTIN_ANNOTATION_PROPERTIES)
         self.annotation_annotations: dict[Triple, m.CanonicalSet[m.Annotation]] = {}
         self.annotation_dependencies: dict[Triple, set[Triple]] = {}
@@ -344,10 +344,7 @@ class RDFMapper:
                 triple in self.consumed
                 or not isinstance(triple.subject, RDFBlank)
                 or not isinstance(triple.object, RDFIRI)
-                or (
-                    triple.object.value not in self.object_kinds
-                    and triple.object.value not in _BUILTIN_OBJECT_PROPERTIES
-                )
+                or triple.object.value not in self.object_kinds
             ):
                 continue
             self._object_property(triple.subject)
@@ -2449,6 +2446,9 @@ _SWRL_INDIVIDUAL_ATOM_METADATA = {
 _BUILTIN_CLASSES = frozenset({OWL + "Thing", OWL + "Nothing"})
 _BUILTIN_OBJECT_PROPERTIES = frozenset(
     {OWL + "topObjectProperty", OWL + "bottomObjectProperty"}
+)
+_BUILTIN_DATA_PROPERTIES = frozenset(
+    {OWL + "topDataProperty", OWL + "bottomDataProperty"}
 )
 _BUILTIN_DATATYPES = frozenset(
     {
