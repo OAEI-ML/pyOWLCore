@@ -1354,6 +1354,9 @@ def _publish_retained_snapshot_v2(
     retained_rdf = prepared.rdf_report
     rdf_conformant = None if retained_rdf is None else retained_rdf.conformant
     rdf_digest = None if retained_rdf is None else retained_rdf.digest
+    raw_origin_rows_retained = (
+        seed.structural_occurrence_rows_scanned if options.collect_provenance else 0
+    )
 
     documents = (
         NativeDocumentPublicationV1(
@@ -1368,7 +1371,7 @@ def _publish_retained_snapshot_v2(
             axiom_count=seed.rows[1],
             extension_count=seed.rows[2],
             source_map_entry_count=prepared.source_map_rows_retained,
-            origin_entry_count=prepared.origin_rows_retained,
+            origin_entry_count=raw_origin_rows_retained,
             rdf_mapping_conformant=rdf_conformant,
             rdf_mapping_report_sha256=rdf_digest,
         ),
@@ -1730,11 +1733,12 @@ def _publish_structural_snapshot_v2(
                     return snapshot
                 origin = NativeOriginRowV2(
                     digest=digest,
-                    # Raw document occurrences use the provisional document
-                    # fingerprint while parsing.  The published owner is keyed
-                    # by the authoritative import-manifest identity, just like
-                    # the effective origin table.
-                    document_key=record.document_key,
+                    # Raw document occurrences retain the provisional document
+                    # fingerprint used by the Python parser. Effective rows use
+                    # the authoritative import-manifest identity.
+                    document_key=(
+                        occurrence.document_key if raw_owner_role else record.document_key
+                    ),
                     occurrence=occurrence.occurrence,
                     span=occurrence.span,
                 )

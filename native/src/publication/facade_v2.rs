@@ -2069,18 +2069,6 @@ fn retain_origin_tables_v2(
         for document_rows in raw {
             validate_raw_origin_rows_v2(document_rows)?;
         }
-        for (effective, raw) in rows.iter().zip(raw) {
-            if let (Some(effective_key), Some(raw_key)) = (
-                origin_document_key_v2(effective)?,
-                origin_document_key_v2(raw)?,
-            ) {
-                if effective_key != raw_key {
-                    return Err(NativeError::protocol(
-                        "typed V2 raw and effective origin tables name different documents",
-                    ));
-                }
-            }
-        }
     }
     let effective_count = origin_row_count_v2(&rows)?;
     let raw_count = raw_document_rows
@@ -4473,7 +4461,11 @@ mod tests {
     fn typed_structural_owner_retains_distinct_raw_and_effective_origin_tables() {
         let (typed, canonical) = typed_structural_owner();
         let effective_origin = origin_row(0x42, "d1:test", 0);
-        let raw_origin = origin_row(0x24, "d1:test", 0);
+        let raw_origin = origin_row(
+            0x24,
+            "75ae7dbd836f1a5fbbb84031a03333c4656f3a7cb3a470dcc3489e55020109fe",
+            0,
+        );
         let mut attestation = NativeSnapshotAttestationV2::fixture_for_tests();
         attestation.capability_bits |= 16;
         attestation.origin_entry_count = 1;
@@ -4684,9 +4676,21 @@ mod tests {
                 .is_err()
         );
         assert!(retain_origin_tables_v2(
-            vec![vec![origin_row(0x20, "d1:first", 0)], Vec::new()],
-            Some(vec![vec![origin_row(0x20, "d1:second", 0)], Vec::new(),]),
-            2,
+            vec![vec![
+                origin_row(0x20, "d1:first", 0),
+                origin_row(0x30, "d1:second", 1),
+            ]],
+            None,
+            1,
+        )
+        .is_err());
+        assert!(retain_origin_tables_v2(
+            vec![vec![origin_row(0x20, "d1:first", 0)]],
+            Some(vec![vec![
+                origin_row(0x20, "raw:first", 0),
+                origin_row(0x30, "raw:second", 1),
+            ]]),
+            1,
         )
         .is_err());
 

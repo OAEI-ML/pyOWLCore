@@ -83,6 +83,7 @@ pub(crate) struct RetainedParseMetadataV2 {
     pub(crate) occurrence_count: u64,
     pub(crate) root_counts: [u64; 3],
     occurrences: Vec<RetainedOccurrenceV2>,
+    effective_origin_fallbacks: Vec<([u8; 32], u64)>,
     source_prefixes: Option<Vec<(String, String)>>,
     rdf_mapping: Option<RetainedRdfMappingEvidenceV2>,
     scoped_roots: bool,
@@ -301,6 +302,18 @@ impl RetainedParseMetadataV2 {
                 })?;
             }
         }
+        retained = retained
+            .checked_add(
+                self.effective_origin_fallbacks
+                    .capacity()
+                    .checked_mul(size_of::<([u8; 32], u64)>())
+                    .ok_or_else(|| {
+                        NativeError::limit("native retained origin fallback metadata overflow")
+                    })?,
+            )
+            .ok_or_else(|| {
+                NativeError::limit("native retained origin fallback metadata overflow")
+            })?;
         if let Some(rows) = &self.source_prefixes {
             retained = rows.iter().try_fold(
                 retained
@@ -374,6 +387,7 @@ pub(crate) fn build_rdfxml_seed(
     preserve_source_map: bool,
     scoped_roots: bool,
     scoped_occurrence_digests: Option<&[([u8; 32], [u8; 32])]>,
+    effective_origin_fallbacks: Vec<([u8; 32], u64)>,
     limits: &Limits,
     cancellation: &Cancellation,
 ) -> NativeResult<(Vec<u8>, RetainedParseMetadataV2)> {
@@ -390,6 +404,16 @@ pub(crate) fn build_rdfxml_seed(
     if scoped_occurrence_digests.is_some() && !scoped_roots {
         return Err(NativeError::protocol(
             "native RDF/XML occurrence scopes require scoped root ownership",
+        ));
+    }
+    if !scoped_roots && !effective_origin_fallbacks.is_empty() {
+        return Err(NativeError::protocol(
+            "native RDF/XML origin fallbacks require scoped root ownership",
+        ));
+    }
+    if !collect_occurrences && !effective_origin_fallbacks.is_empty() {
+        return Err(NativeError::protocol(
+            "native RDF/XML origin fallbacks were captured while disabled",
         ));
     }
     let ontology_node = ontology_iri
@@ -468,6 +492,7 @@ pub(crate) fn build_rdfxml_seed(
             occurrence_count,
             root_counts,
             occurrences,
+            effective_origin_fallbacks,
             source_prefixes: preserve_source_map.then_some(source_prefixes),
             rdf_mapping: Some(RetainedRdfMappingEvidenceV2 {
                 consumed_triples,
@@ -665,6 +690,7 @@ pub(crate) fn build_seed(
             occurrence_count,
             root_counts,
             occurrences,
+            effective_origin_fallbacks: Vec::new(),
             source_prefixes: preserve_source_map.then_some(prefixes),
             rdf_mapping: None,
             scoped_roots,
@@ -708,10 +734,20 @@ pub(crate) fn prepare_publication(
                 "native retained auxiliary occurrences are incomplete",
             ));
         }
-        if collect_provenance && metadata.occurrence_count > limits.max_origin_entries {
-            return Err(NativeError::limit(
-                "native retained publication exceeds max_origin_entries",
-            ));
+        if collect_provenance {
+            let effective_origin_count = metadata
+                .occurrence_count
+                .checked_add(
+                    u64::try_from(metadata.effective_origin_fallbacks.len()).map_err(|_| {
+                        NativeError::limit("native retained origin fallback count exceeds u64")
+                    })?,
+                )
+                .ok_or_else(|| NativeError::limit("native retained origin count overflow"))?;
+            if effective_origin_count > limits.max_origin_entries {
+                return Err(NativeError::limit(
+                    "native retained publication exceeds max_origin_entries",
+                ));
+            }
         }
         if preserve_source_map && source_map_row_count(metadata)? > limits.max_source_map_entries {
             return Err(NativeError::limit(
@@ -1867,9 +1903,24 @@ fn encode_origin_rows(
     limits: &Limits,
     cancellation: &Cancellation,
 ) -> NativeResult<Vec<Vec<u8>>> {
+    let raw_document_key = raw_owner_role
+        .then(|| digest_hex(metadata.document_fingerprint.digest))
+        .transpose()?;
+    let selected_document_key = raw_document_key.as_deref().unwrap_or(document_key);
+    let fallback_count = if raw_owner_role {
+        0
+    } else {
+        metadata.effective_origin_fallbacks.len()
+    };
     let mut keyed = Vec::new();
     keyed
-        .try_reserve_exact(metadata.occurrences.len())
+        .try_reserve_exact(
+            metadata
+                .occurrences
+                .len()
+                .checked_add(fallback_count)
+                .ok_or_else(|| NativeError::limit("native origin table size overflow"))?,
+        )
         .map_err(|_| NativeError::limit("native origin table allocation failed"))?;
     for (occurrence, value) in metadata.occurrences.iter().enumerate() {
         cancellation.checkpoint()?;
@@ -1880,13 +1931,25 @@ fn encode_origin_rows(
         } else {
             value.effective_digest
         };
-        let row = encode_origin_row(digest, document_key, occurrence, value.span)?;
+        let row = encode_origin_row(digest, selected_document_key, occurrence, value.span)?;
         if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
             return Err(NativeError::limit(
                 "native retained origin row exceeds max_wire_bytes",
             ));
         }
         keyed.push((digest, occurrence, row));
+    }
+    if !raw_owner_role {
+        for (digest, occurrence) in &metadata.effective_origin_fallbacks {
+            cancellation.checkpoint()?;
+            let row = encode_origin_row(*digest, document_key, *occurrence, None)?;
+            if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
+                return Err(NativeError::limit(
+                    "native retained origin row exceeds max_wire_bytes",
+                ));
+            }
+            keyed.push((*digest, *occurrence, row));
+        }
     }
     keyed.sort_unstable_by(|left, right| {
         left.0
@@ -1899,6 +1962,20 @@ fn encode_origin_rows(
         .map_err(|_| NativeError::limit("native origin row allocation failed"))?;
     rows.extend(keyed.into_iter().map(|(_digest, _occurrence, row)| row));
     Ok(rows)
+}
+
+fn digest_hex(digest: [u8; 32]) -> NativeResult<String> {
+    const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let mut encoded = String::new();
+    encoded
+        .try_reserve_exact(digest.len() * 2)
+        .map_err(|_| NativeError::limit("native origin document fingerprint allocation failed"))?;
+    for byte in digest {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    Ok(encoded)
 }
 
 fn encode_source_map_rows(

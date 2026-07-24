@@ -203,6 +203,7 @@ pub(crate) fn parse_rdfxml_retained_v2_with_mapping(
     let anonymous_started = Instant::now();
     let mut effective_rows = None;
     let mut scoped_occurrence_digests: Option<Vec<([u8; 32], [u8; 32])>> = None;
+    let mut effective_origin_fallbacks = Vec::new();
     if contains_anonymous {
         let scoped_rows = [
             document.ontology_annotations.clone(),
@@ -286,6 +287,54 @@ pub(crate) fn parse_rdfxml_retained_v2_with_mapping(
                     })?;
                 ordered.push(lookup[selected].1);
             }
+            if collect_provenance {
+                let explicit_bytes = ordered
+                    .len()
+                    .checked_mul(std::mem::size_of::<[u8; 32]>())
+                    .ok_or_else(|| {
+                        NativeError::limit("native RDF/XML explicit-origin lookup size overflow")
+                    })?;
+                session.reserve_bytes(explicit_bytes)?;
+                let mut explicit = Vec::new();
+                explicit.try_reserve_exact(ordered.len()).map_err(|_| {
+                    NativeError::limit("native RDF/XML explicit-origin allocation failed")
+                })?;
+                explicit.extend(ordered.iter().map(|(raw, _effective)| *raw));
+                explicit.sort_unstable();
+                explicit.dedup();
+
+                let fallback_bytes = canonical_count
+                    .checked_mul(std::mem::size_of::<([u8; 32], u64)>())
+                    .ok_or_else(|| {
+                        NativeError::limit("native RDF/XML origin fallback size overflow")
+                    })?;
+                session.reserve_bytes(fallback_bytes)?;
+                effective_origin_fallbacks
+                    .try_reserve_exact(canonical_count)
+                    .map_err(|_| {
+                        NativeError::limit("native RDF/XML origin fallback allocation failed")
+                    })?;
+                let mut fallback = 0_u64;
+                for (raw, effective) in &source_occurrence_digests {
+                    if explicit.binary_search(raw).is_err() {
+                        effective_origin_fallbacks.push((*effective, fallback));
+                        fallback = fallback.checked_add(1).ok_or_else(|| {
+                            NativeError::limit("native RDF/XML origin fallback occurrence overflow")
+                        })?;
+                    }
+                }
+                let effective_origin_count = u64::try_from(ordered.len())
+                    .ok()
+                    .and_then(|count| count.checked_add(fallback))
+                    .ok_or_else(|| {
+                        NativeError::limit("native RDF/XML effective origin count overflow")
+                    })?;
+                if effective_origin_count > limits.max_origin_entries {
+                    return Err(NativeError::limit(
+                        "native retained publication exceeds max_origin_entries",
+                    ));
+                }
+            }
             scoped_occurrence_digests = Some(ordered);
         }
         effective_rows = Some(effective);
@@ -315,6 +364,7 @@ pub(crate) fn parse_rdfxml_retained_v2_with_mapping(
         preserve_source_map,
         contains_anonymous,
         scoped_occurrence_digests.as_deref(),
+        effective_origin_fallbacks,
         &limits,
         &cancellation,
     )?;
@@ -709,7 +759,9 @@ mod tests {
     #[test]
     fn retained_rdfxml_owns_anonymous_scope_and_rejects_resolver_bypass() {
         let anonymous = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-            xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#">
+            xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+            xmlns:owl="http://www.w3.org/2002/07/owl#">
+          <owl:Ontology rdf:about="urn:o"><rdfs:comment>ontology</rdfs:comment></owl:Ontology>
           <rdf:Description rdf:nodeID="anonymous"><rdfs:comment rdf:resource="urn:value"/></rdf:Description>
         </rdf:RDF>"#;
         let imported = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -751,8 +803,30 @@ mod tests {
         )
         .expect("prepared scoped publication");
         assert!(prepared.scoped_roots);
-        assert_eq!(prepared.origin_rows.as_ref().map(Vec::len), Some(1));
+        assert_eq!(prepared.origin_rows.as_ref().map(Vec::len), Some(2));
         assert_eq!(prepared.raw_origin_rows.as_ref().map(Vec::len), Some(1));
+        let raw_rows = prepared.raw_origin_rows.as_ref().expect("raw origins");
+        let effective_rows = prepared.origin_rows.as_ref().expect("effective origins");
+        let document_fingerprint = outcome
+            .metadata
+            .document_fingerprint
+            .digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let origin_document_key = |row: &[u8]| {
+            let size = usize::try_from(u32::from_le_bytes(
+                row[32..36].try_into().expect("origin key length"),
+            ))
+            .expect("origin key size");
+            std::str::from_utf8(&row[36..36 + size])
+                .expect("origin key")
+                .to_owned()
+        };
+        assert_eq!(origin_document_key(&raw_rows[0]), document_fingerprint);
+        assert!(effective_rows
+            .iter()
+            .all(|row| origin_document_key(row) == "document-key"));
         assert_ne!(
             prepared.content.root_table_sha256,
             prepared.content.effective_root_table_sha256,
@@ -760,6 +834,37 @@ mod tests {
         assert_ne!(
             prepared.content.provenance_manifest_sha256,
             prepared.content.effective_origin_manifest_sha256,
+        );
+
+        let mut limited = limits;
+        limited.max_origin_entries = 1;
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limited.deadline,
+            limited.cancellation_stride,
+        );
+        let mut session =
+            Session::new(&mut guard, &limited, anonymous.len()).expect("limited session");
+        let error = parse_rdfxml_retained_v2(
+            anonymous,
+            None,
+            &mut session,
+            limited,
+            cancellation,
+            None,
+            anonymous.len(),
+            true,
+            false,
+            true,
+            false,
+        )
+        .err()
+        .expect("effective fallback must consume the origin limit");
+        assert_eq!(error.code, "NATIVE_WIRE_LIMIT");
+        assert_eq!(
+            error.message,
+            "native retained publication exceeds max_origin_entries",
         );
 
         let cancellation = Cancellation::with_duration(None);

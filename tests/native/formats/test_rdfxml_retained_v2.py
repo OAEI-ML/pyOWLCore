@@ -1777,6 +1777,57 @@ def test_private_source_map_preserves_every_constructor_occurrence_order() -> No
     assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
+def test_private_provenance_preserves_every_constructor_origin_layers() -> None:
+    source = render_document(
+        every_constructor_document(),
+        format=DocumentFormat.RDF_XML,
+    )
+
+    def options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.RDF_XML,
+            imports=ImportPolicy.IGNORE,
+            backend=backend,
+            collect_provenance=True,
+        )
+
+    reference = load_snapshot(
+        source,
+        document_iri=DOCUMENT_IRI,
+        options=options(BackendPreference.PYTHON),
+    )
+    selected = cast(
+        Any,
+        _retained_snapshot(
+            source,
+            options=options(BackendPreference.NATIVE),
+            document_iri=DOCUMENT_IRI,
+        ),
+    )
+
+    assert selected.root.origin_index == reference.root.origin_index
+    assert selected.origin_index == reference.origin_index
+    assert reference.root.origin_index is not None
+    raw_origins = tuple(
+        occurrence
+        for occurrences in reference.root.origin_index.entries.values()
+        for occurrence in occurrences
+    )
+    effective_origins = tuple(
+        occurrence
+        for occurrences in reference.origin_index.entries.values()
+        for occurrence in occurrences
+    )
+    record = reference.import_manifest.documents[0]
+    assert {occurrence.document_key for occurrence in raw_origins} == {
+        reference.root.document_fingerprint.hex
+    }
+    assert {occurrence.document_key for occurrence in effective_origins} == {record.document_key}
+    assert len(raw_origins) == 50
+    assert len(effective_origins) == 51
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
 def test_private_source_map_and_provenance_match_under_default_combination() -> None:
     def options(backend: BackendPreference) -> LoadOptions:
         return LoadOptions(
