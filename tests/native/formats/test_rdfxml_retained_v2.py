@@ -112,6 +112,27 @@ PROCESSING_INSTRUCTION_SOURCE = b"""\
 </rdf:RDF>
 <?audit after?>
 """
+UNKNOWN_XML_ATTRIBUTE_SOURCE = b"""\
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:owl="http://www.w3.org/2002/07/owl#"
+  xmlns:e="urn:xml-attribute:"
+  xmlns:XmLmeta="urn:xml-metadata:"
+  xmlns:XmLrdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:XML="urn:xml-uppercase:"
+  xml:trace="root" xmlroot="root" XmLmeta:trace="root" XML:trace="root">
+  <owl:Ontology rdf:about="urn:xml-attribute:ontology"
+    xml:trace="node" XMLnode="node" XmLmeta:trace="node">
+    <rdfs:label xml:trace="property" xmlnewthing="property"
+      XmLmeta:trace="property">Ontology</rdfs:label>
+    <rdfs:seeAlso XmLrdf:resource="urn:wrong"/>
+    <rdfs:comment rdf:parseType="Literal" xml:trace="outer"
+      XmlOuter="outer" XmLmeta:trace="outer"><e:mark
+      xml:trace="literal"/></rdfs:comment>
+  </owl:Ontology>
+</rdf:RDF>
+"""
 PARSE_TYPE_RESOURCE_SOURCE = b"""\
 <rdf:RDF
   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -686,6 +707,33 @@ def test_processing_instructions_publish_from_the_retained_parser_owner(
     assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
     assert encode_snapshot(selected) == encode_snapshot(reference)
     assert counters.parser_bytes == len(PROCESSING_INSTRUCTION_SOURCE)
+    assert counters.publication_structural_rows_copied == 0
+    assert counters.publication_structural_bytes_copied == 0
+
+
+def test_unknown_xml_attributes_publish_from_the_retained_parser_owner(
+    extension: NativeTestExtension,
+) -> None:
+    reference = load_snapshot(
+        UNKNOWN_XML_ATTRIBUTE_SOURCE,
+        document_iri=DOCUMENT_IRI,
+        options=_options(BackendPreference.PYTHON),
+    )
+    unexpected = AssertionError("unknown XML attributes crossed the Python RDF/XML parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = cast(Any, _retained_snapshot(UNKNOWN_XML_ATTRIBUTE_SOURCE))
+
+    owner = selected._native_snapshot_state.owner.handle._owner_v2
+    counters = owner._publication_counters_v2()
+    assert type(owner) is cast(Any, extension)._NativeSnapshotHandle
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.root.ontology_annotations == reference.root.ontology_annotations
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    assert counters.parser_bytes == len(UNKNOWN_XML_ATTRIBUTE_SOURCE)
     assert counters.publication_structural_rows_copied == 0
     assert counters.publication_structural_bytes_copied == 0
 

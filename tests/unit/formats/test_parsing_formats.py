@@ -453,6 +453,47 @@ def test_rdfxml_root_and_node_elements_reject_character_data(document: str) -> N
     assert raised.value.code == "RDFXML_SYNTAX"
 
 
+def test_rdfxml_ignores_reserved_xml_attribute_names() -> None:
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xmlns:e='urn:xml-attribute:'
+ xmlns:XmLmeta='urn:xml-metadata:'
+ xmlns:XmLrdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:XML='urn:xml-uppercase:'
+ xml:trace='root' xmlroot='root' XmLmeta:trace='root' XML:trace='root'>
+ <owl:Ontology rdf:about='urn:xml-attribute:ontology'
+  xml:trace='node' XMLnode='node' XmLmeta:trace='node'>
+  <rdfs:label xml:trace='property' xmlnewthing='property'
+   XmLmeta:trace='property'>Ontology</rdfs:label>
+  <rdfs:seeAlso XmLrdf:resource='urn:wrong'/>
+  <rdfs:comment rdf:parseType='Literal' xml:trace='outer'
+   XmlOuter='outer' XmLmeta:trace='outer'><e:mark
+   xml:trace='literal'/></rdfs:comment>
+ </owl:Ontology>
+</rdf:RDF>"""
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    annotations = {item.property.iri.value: item.value for item in document.ontology_annotations}
+
+    assert annotations["http://www.w3.org/2000/01/rdf-schema#label"] == m.Literal(
+        "Ontology",
+        m.XSD_STRING,
+    )
+    assert annotations["http://www.w3.org/2000/01/rdf-schema#seeAlso"] == m.Literal(
+        "",
+        m.XSD_STRING,
+    )
+    assert annotations["http://www.w3.org/2000/01/rdf-schema#comment"] == m.Literal(
+        '<ns0:mark xmlns:ns0="urn:xml-attribute:" xml:trace="literal" />',
+        m.Datatype(m.IRI(RDF_NAMESPACE + "XMLLiteral")),
+    )
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.total_triples == 4
+    assert document.rdf_mapping_report.consumed_triples == 4
+
+
 @pytest.mark.parametrize(
     "document",
     (

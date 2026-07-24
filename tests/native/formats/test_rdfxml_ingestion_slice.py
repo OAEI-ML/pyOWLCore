@@ -1773,6 +1773,74 @@ def test_node_property_attributes_match_python_types_and_language_literals(
     assert limited.value.args[0] == "NATIVE_WIRE_LIMIT"
 
 
+def test_reserved_xml_attributes_are_ignored_at_semantic_scopes(
+    extension: NativeTestExtension,
+) -> None:
+    # W3C RDF/XML `unrecognised-xml-attributes` tests 001/002 remove names
+    # with an `xml*` prefix, or an unqualified local name beginning `xml`.
+    source = b"""<rdf:RDF
+ xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:rdfs='http://www.w3.org/2000/01/rdf-schema#'
+ xmlns:owl='http://www.w3.org/2002/07/owl#'
+ xmlns:e='urn:xml-attribute:'
+ xmlns:XmLmeta='urn:xml-metadata:'
+ xmlns:XmLrdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+ xmlns:XML='urn:xml-uppercase:'
+ xml:trace='root' xmlroot='root' XmLmeta:trace='root' XML:trace='root'>
+ <owl:Ontology rdf:about='urn:xml-attribute:ontology'
+  xml:trace='node' XMLnode='node' XmLmeta:trace='node'>
+  <rdfs:label xml:trace='property' xmlnewthing='property'
+   XmLmeta:trace='property'>Ontology</rdfs:label>
+  <rdfs:seeAlso XmLrdf:resource='urn:wrong'/>
+  <rdfs:comment rdf:parseType='Literal' xml:trace='outer'
+   XmlOuter='outer' XmLmeta:trace='outer'><e:mark
+   xml:trace='literal'/></rdfs:comment>
+ </owl:Ontology>
+</rdf:RDF>"""
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+    assert python.ontology_id.ontology_iri is not None
+
+    assert observed.ontology_iri == python.ontology_id.ontology_iri.value
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert observed.total_triples == observed.consumed_triples == 4
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.ontology_annotation_count == len(python.annotations) == 3
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        (
+            b"<rdf:RDF "
+            b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+            b"xmlns:e='urn:xml-attribute:' e:trace='root'/>"
+        ),
+        (
+            b"<rdf:RDF "
+            b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#' "
+            b"xmlns:e='urn:xml-attribute:'>"
+            b"<rdf:Description rdf:about='urn:s'><e:p "
+            b"rdf:parseType='Resource' e:trace='property'/></rdf:Description>"
+            b"</rdf:RDF>"
+        ),
+    ),
+)
+def test_non_xml_extension_attributes_remain_invalid_in_closed_grammar_scopes(
+    extension: NativeTestExtension,
+    source: bytes,
+) -> None:
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python_error.value.code == "RDFXML_SYNTAX"
+    with pytest.raises(extension._NativeError) as native_error:
+        _ingest(extension, source)
+    assert native_error.value.args[0] == "NATIVE_RDFXML_SYNTAX"
+
+
 def test_empty_xml_language_resets_inherited_literal_language(
     extension: NativeTestExtension,
 ) -> None:

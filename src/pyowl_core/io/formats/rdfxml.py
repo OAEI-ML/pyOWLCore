@@ -74,6 +74,7 @@ def parse_rdfxml(
     )
     depth = 0
     prefix_count = 0
+    has_reserved_xml_prefix = False
     root: ET.Element | None = None
     try:
         for offset in range(0, len(text), 64 * 1024):
@@ -84,6 +85,14 @@ def parse_rdfxml(
                 if event == "start-ns":
                     prefix_count += 1
                     context.limits.enforce("max_prefixes", prefix_count)
+                    prefix, _namespace_iri = cast(tuple[str, str], payload)
+                    has_reserved_xml_prefix = (
+                        has_reserved_xml_prefix
+                        or (
+                            prefix != "xml"
+                            and prefix[:3].casefold() == "xml"
+                        )
+                    )
                     continue
                 element = cast(ET.Element, payload)
                 if event == "start":
@@ -106,7 +115,25 @@ def parse_rdfxml(
         raise OntologySyntaxError("malformed RDF/XML document", code="RDFXML_SYNTAX") from error
     if root is None:
         raise OntologySyntaxError("empty RDF/XML document", code="RDFXML_ROOT")
-    graph = RDFXMLGraphParser(root, limits, document_iri, cancellation_token).parse()
+    reserved_xml_attributes_by_element: dict[int, frozenset[str]] = {}
+    if has_reserved_xml_prefix:
+        lexical_element_count, reserved_xml_attributes_by_ordinal = (
+            _reserved_xml_attribute_names(text, context)
+        )
+        structural_element_count = 0
+        for ordinal, element in enumerate(root.iter()):
+            structural_element_count += 1
+            if attributes := reserved_xml_attributes_by_ordinal.get(ordinal):
+                reserved_xml_attributes_by_element[id(element)] = attributes
+        if structural_element_count != lexical_element_count:
+            raise AssertionError("RDF/XML lexical and structural element streams diverged")
+    graph = RDFXMLGraphParser(
+        root,
+        limits,
+        document_iri,
+        cancellation_token,
+        reserved_xml_attributes_by_element,
+    ).parse()
     mapped = RDFMapper(
         graph,
         limits=limits,
@@ -133,6 +160,7 @@ class RDFXMLGraphParser:
         "context",
         "node_ids",
         "rdf_ids",
+        "reserved_xml_attributes",
         "root",
         "triples",
     )
@@ -143,6 +171,7 @@ class RDFXMLGraphParser:
         limits: ParseLimits,
         document_iri: IRI | None,
         cancellation_token: CancellationToken | None,
+        reserved_xml_attributes: dict[int, frozenset[str]],
     ) -> None:
         self.root = root
         self.context = ParseContext(limits, cancellation_token)
@@ -150,6 +179,7 @@ class RDFXMLGraphParser:
         self.blank_counter = 0
         self.node_ids: dict[str, RDFBlank] = {}
         self.rdf_ids: set[tuple[str, str]] = set()
+        self.reserved_xml_attributes = reserved_xml_attributes
         self.triples: set[Triple] = set()
 
     def parse(self) -> RDFGraph:
@@ -158,7 +188,10 @@ class RDFXMLGraphParser:
         if self.root.tag == _tag(RDF, "RDF"):
             self._validate_iri(RDF + "RDF")
             allowed = {f"{{{XML_NS}}}base", f"{{{XML_NS}}}lang"}
-            if any(name not in allowed for name in self.root.attrib):
+            if any(
+                name not in allowed and not self._is_reserved_xml_attribute(self.root, name)
+                for name in self.root.attrib
+            ):
                 self._syntax("rdf:RDF has an invalid attribute")
             if _has_non_whitespace_content(self.root):
                 self._syntax("rdf:RDF cannot contain direct character data")
@@ -189,9 +222,9 @@ class RDFXMLGraphParser:
         base = self._base(element, parent_base)
         language = element.get(f"{{{XML_NS}}}lang", parent_language)
         identities = [
-            ("about", element.get(_tag(RDF, "about"))),
-            ("ID", element.get(_tag(RDF, "ID"))),
-            ("nodeID", element.get(_tag(RDF, "nodeID"))),
+            ("about", self._rdf_attribute(element, "about")),
+            ("ID", self._rdf_attribute(element, "ID")),
+            ("nodeID", self._rdf_attribute(element, "nodeID")),
         ]
         present = [(name, value) for name, value in identities if value is not None]
         if len(present) > 1:
@@ -232,7 +265,7 @@ class RDFXMLGraphParser:
             f"{{{XML_NS}}}lang",
         }
         for name, value in element.attrib.items():
-            if name in ignored:
+            if name in ignored or self._is_reserved_xml_attribute(element, name):
                 continue
             predicate = self._expanded(name)
             if predicate == RDF + "type":
@@ -260,11 +293,11 @@ class RDFXMLGraphParser:
             self._syntax("RDF property element uses a reserved RDF name")
         base = self._base(element, parent_base)
         language = element.get(f"{{{XML_NS}}}lang", parent_language)
-        resource = element.get(_tag(RDF, "resource"))
-        node_id = element.get(_tag(RDF, "nodeID"))
-        parse_type = element.get(_tag(RDF, "parseType"))
-        datatype = element.get(_tag(RDF, "datatype"))
-        statement_id = element.get(_tag(RDF, "ID"))
+        resource = self._rdf_attribute(element, "resource")
+        node_id = self._rdf_attribute(element, "nodeID")
+        parse_type = self._rdf_attribute(element, "parseType")
+        datatype = self._rdf_attribute(element, "datatype")
+        statement_id = self._rdf_attribute(element, "ID")
         reified = None if statement_id is None else RDFIRI(self._rdf_id(statement_id, base))
         modes = sum(item is not None for item in (resource, node_id, parse_type, datatype))
         if modes > 1:
@@ -362,8 +395,7 @@ class RDFXMLGraphParser:
                 )
                 self._add(subject, predicate, literal)
 
-    @staticmethod
-    def _non_syntax_attributes(element: ET.Element) -> dict[str, str]:
+    def _non_syntax_attributes(self, element: ET.Element) -> dict[str, str]:
         syntax = {
             _tag(RDF, "resource"),
             _tag(RDF, "nodeID"),
@@ -373,7 +405,25 @@ class RDFXMLGraphParser:
             f"{{{XML_NS}}}base",
             f"{{{XML_NS}}}lang",
         }
-        return {key: value for key, value in element.attrib.items() if key not in syntax}
+        return {
+            key: value
+            for key, value in element.attrib.items()
+            if key not in syntax and not self._is_reserved_xml_attribute(element, key)
+        }
+
+    def _is_reserved_xml_attribute(self, element: ET.Element, name: str) -> bool:
+        namespace = _namespace(name)
+        return (
+            namespace == XML_NS
+            or (not namespace and name[:3].casefold() == "xml")
+            or name in self.reserved_xml_attributes.get(id(element), ())
+        )
+
+    def _rdf_attribute(self, element: ET.Element, local: str) -> str | None:
+        name = _tag(RDF, local)
+        if name in self.reserved_xml_attributes.get(id(element), ()):
+            return None
+        return element.get(name)
 
     def _collection(self, values: Sequence[RDFTerm]) -> RDFResource:
         if not values:
@@ -635,6 +685,41 @@ def _tag(namespace: str, local: str) -> str:
 
 def _namespace(tag: str) -> str:
     return tag[1:].split("}", 1)[0] if tag.startswith("{") else ""
+
+
+def _reserved_xml_attribute_names(
+    text: str,
+    context: ParseContext,
+) -> tuple[int, dict[int, frozenset[str]]]:
+    """Retain lexical XML prefixes that ElementTree otherwise discards."""
+
+    separator = "\x1f"
+    element_count = 0
+    attributes_by_ordinal: dict[int, frozenset[str]] = {}
+    parser = expat.ParserCreate(namespace_separator=separator)
+    parser.namespace_prefixes = True
+
+    def start_element(_name: str, attributes: dict[str, str]) -> None:
+        nonlocal element_count
+        reserved: set[str] = set()
+        for name in attributes:
+            parts = name.split(separator)
+            if len(parts) != 3:
+                continue
+            namespace, local, prefix = parts
+            if prefix != "xml" and prefix[:3].casefold() == "xml":
+                reserved.add(_tag(namespace, local))
+        if reserved:
+            attributes_by_ordinal[element_count] = frozenset(reserved)
+        element_count += 1
+
+    parser.StartElementHandler = start_element
+    for offset in range(0, len(text), 64 * 1024):
+        context.check()
+        parser.Parse(text[offset : offset + 64 * 1024], False)
+    context.check()
+    parser.Parse("", True)
+    return element_count, attributes_by_ordinal
 
 
 def _expanded(tag: str) -> str:

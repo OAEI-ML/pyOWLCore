@@ -144,6 +144,19 @@ struct Attribute {
     value: String,
 }
 
+fn is_reserved_xml_attribute(attribute: &Attribute) -> bool {
+    let (prefix, local) = attribute
+        .name
+        .split_once(':')
+        .map_or(("", attribute.name.as_str()), |(prefix, local)| {
+            (prefix, local)
+        });
+    let reserved_part = if prefix.is_empty() { local } else { prefix };
+    reserved_part
+        .get(..3)
+        .is_some_and(|value| value.eq_ignore_ascii_case("xml"))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct StartEvent {
     name: String,
@@ -941,6 +954,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
                 continue;
             }
+            if is_reserved_xml_attribute(attribute) {
+                continue;
+            }
             let predicate = self.expand(&attribute.name, true)?;
             if ignored.contains(&predicate.as_str()) {
                 continue;
@@ -987,6 +1003,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         let mut found = false;
         for attribute in attributes {
             if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
+                continue;
+            }
+            if is_reserved_xml_attribute(attribute) {
                 continue;
             }
             let expanded = self.expand(&attribute.name, true)?;
@@ -1914,6 +1933,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
                 continue;
             }
+            if namespace != XML && is_reserved_xml_attribute(attribute) {
+                continue;
+            }
             let expanded = self.expand(&attribute.name, true)?;
             if expanded_name_matches(&expanded, namespace, local) {
                 return Ok(Some(&attribute.value));
@@ -1929,6 +1951,9 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
     ) -> NativeResult<()> {
         for attribute in attributes {
             if attribute.name == "xmlns" || attribute.name.starts_with("xmlns:") {
+                continue;
+            }
+            if is_reserved_xml_attribute(attribute) {
                 continue;
             }
             let expanded = self.expand(&attribute.name, true)?;
@@ -7594,6 +7619,41 @@ mod tests {
                 language: None,
             },
         ));
+    }
+
+    #[test]
+    fn reserved_xml_attributes_are_ignored_outside_xml_literals() {
+        let baseline = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:label>value</e:label><e:empty/><e:xml rdf:parseType=\"Literal\"><e:mark xml:trace=\"literal\"/></e:xml></rdf:Description></rdf:RDF>"
+        );
+        let decorated = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\" xmlns:XmLmeta=\"urn:xml-metadata:\" xmlns:XmLrdf=\"{RDF}\" xmlns:XML=\"urn:xml-uppercase:\" xml:trace=\"root\" xmlroot=\"root\" XmLmeta:trace=\"root\" XML:trace=\"root\"><rdf:Description rdf:about=\"urn:s\" xml:trace=\"node\" XMLnode=\"node\" XmLmeta:trace=\"node\"><e:label xml:trace=\"property\" xmlnewthing=\"property\" XmLmeta:trace=\"property\">value</e:label><e:empty XmLrdf:resource=\"urn:wrong\"/><e:xml rdf:parseType=\"Literal\" xml:trace=\"outer\" XmlOuter=\"outer\" XmLmeta:trace=\"outer\"><e:mark xml:trace=\"literal\"/></e:xml></rdf:Description></rdf:RDF>"
+        );
+        let expected = graph(&baseline).expect("baseline XML attributes");
+        let parsed = graph(&decorated).expect("unrecognized XML attributes");
+
+        assert_eq!(parsed, expected);
+        assert!(parsed.iter().any(|triple| {
+            matches!(
+                &triple.object,
+                Term::Literal { lexical, .. }
+                    if lexical.contains("xml:trace=\"literal\"")
+            )
+        }));
+
+        for invalid in [
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\" e:trace=\"root\"/>"
+            ),
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:e=\"urn:e:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:parseType=\"Resource\" e:trace=\"property\"/></rdf:Description></rdf:RDF>"
+            ),
+        ] {
+            assert_eq!(
+                graph(&invalid).unwrap_err().code,
+                "NATIVE_RDFXML_SYNTAX"
+            );
+        }
     }
 
     #[test]
