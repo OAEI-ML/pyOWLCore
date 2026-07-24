@@ -12724,6 +12724,66 @@ mod tests {
     }
 
     #[test]
+    fn implicit_builtin_property_kinds_cross_special_axioms() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let xsd = "http://www.w3.org/2001/XMLSchema#";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:rdfs=\"{rdfs}\" xmlns:owl=\"{OWL}\" xmlns:xsd=\"{xsd}\"><rdf:Description rdf:nodeID=\"disjoint\"><rdf:type rdf:resource=\"{OWL_ALL_DISJOINT_PROPERTIES}\"/><owl:members rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"{OWL_TOP_DATA_PROPERTY}\"/><rdf:Description rdf:about=\"{OWL_BOTTOM_DATA_PROPERTY}\"/></owl:members></rdf:Description><rdf:Description rdf:nodeID=\"negative-data\"><rdf:type rdf:resource=\"{OWL_NEGATIVE_PROPERTY_ASSERTION}\"/><owl:sourceIndividual rdf:resource=\"urn:i\"/><owl:assertionProperty rdf:resource=\"{OWL_TOP_DATA_PROPERTY}\"/><owl:targetValue rdf:datatype=\"{xsd}integer\">1</owl:targetValue></rdf:Description><rdf:Description rdf:nodeID=\"negative-object\"><rdf:type rdf:resource=\"{OWL_NEGATIVE_PROPERTY_ASSERTION}\"/><owl:sourceIndividual rdf:resource=\"urn:i\"/><owl:assertionProperty rdf:resource=\"{OWL_TOP_OBJECT_PROPERTY}\"/><owl:targetIndividual rdf:resource=\"urn:j\"/></rdf:Description><rdf:Description rdf:about=\"{OWL_TOP_DATA_PROPERTY}\"><rdf:type rdf:resource=\"{OWL_FUNCTIONAL_PROPERTY}\"/></rdf:Description><rdf:Description rdf:about=\"{OWL_TOP_OBJECT_PROPERTY}\"><rdf:type rdf:resource=\"{OWL_FUNCTIONAL_PROPERTY}\"/></rdf:Description><rdf:Description rdf:about=\"urn:C\"><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"{OWL_BOTTOM_DATA_PROPERTY}\"/><owl:minCardinality>1</owl:minCardinality></owl:Restriction></rdfs:subClassOf><rdfs:subClassOf><owl:Restriction><owl:onProperty rdf:resource=\"{OWL_BOTTOM_OBJECT_PROPERTY}\"/><owl:minCardinality>1</owl:minCardinality></owl:Restriction></rdfs:subClassOf><rdfs:subClassOf><owl:Restriction><owl:onProperties rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"{OWL_TOP_DATA_PROPERTY}\"/><rdf:Description rdf:about=\"{OWL_BOTTOM_DATA_PROPERTY}\"/></owl:onProperties><owl:allValuesFrom rdf:resource=\"{xsd}string\"/></owl:Restriction></rdfs:subClassOf></rdf:Description></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("built-in property special axioms");
+        assert_eq!(document.axioms.len(), 8);
+        assert_eq!(document.mapping.total_triples, 32);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples,
+        );
+
+        let property = |kind: &'static str, value: &str| {
+            entity(kind, iri(value.to_owned()).expect("property IRI")).expect("property")
+        };
+        let disjoint = Node::build(
+            92,
+            vec![
+                Field::Set(
+                    canonical_set(
+                        vec![
+                            property("data_property", OWL_TOP_DATA_PROPERTY),
+                            property("data_property", OWL_BOTTOM_DATA_PROPERTY),
+                        ],
+                        2,
+                        None,
+                    )
+                    .expect("built-in disjoint data properties"),
+                ),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("built-in disjoint data-property axiom");
+        let functional_data = Node::build(
+            95,
+            vec![
+                Field::Node(property("data_property", OWL_TOP_DATA_PROPERTY)),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("built-in functional data property");
+        let functional_object = Node::build(
+            76,
+            vec![
+                Field::Node(property("object_property", OWL_TOP_OBJECT_PROPERTY)),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .expect("built-in functional object property");
+        for expected in [disjoint, functional_data, functional_object] {
+            assert!(document
+                .axioms
+                .iter()
+                .any(|value| value == expected.as_bytes()));
+        }
+    }
+
+    #[test]
     fn disjoint_union_maps_named_class_and_nested_members() {
         let source = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Class rdf:about=\"urn:Defined\"><owl:disjointUnionOf rdf:parseType=\"Collection\"><rdf:Description rdf:about=\"urn:A\"/><rdf:Description><owl:complementOf rdf:resource=\"urn:B\"/></rdf:Description></owl:disjointUnionOf></owl:Class></rdf:RDF>"

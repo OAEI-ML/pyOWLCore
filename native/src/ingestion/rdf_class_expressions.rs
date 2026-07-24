@@ -19,6 +19,7 @@ const OWL_INVERSE_OF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
 const OWL_ONE_OF: &str = "http://www.w3.org/2002/07/owl#oneOf";
 const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
 const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
+const OWL_ON_PROPERTIES: &str = "http://www.w3.org/2002/07/owl#onProperties";
 const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
 const OWL_ALL_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#allValuesFrom";
 const OWL_HAS_VALUE: &str = "http://www.w3.org/2002/07/owl#hasValue";
@@ -887,9 +888,29 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         consumed: &mut Vec<usize>,
         session: &mut Session<'_>,
     ) -> NativeResult<Node> {
-        let on_property = self
-            .unique_edge(subject, OWL_ON_PROPERTY, session)?
-            .ok_or_else(|| unsupported("native RDF restriction has no property selector"))?;
+        let on_property = self.unique_edge(subject, OWL_ON_PROPERTY, session)?;
+        let on_properties = self.unique_edge(subject, OWL_ON_PROPERTIES, session)?;
+        let on_property = match (on_property, on_properties) {
+            (Some(on_property), None) => on_property,
+            (None, Some(on_properties)) => {
+                return self.decode_nary_data_restriction(
+                    subject,
+                    on_properties,
+                    consumed,
+                    session,
+                );
+            }
+            (None, None) => {
+                return Err(unsupported(
+                    "native RDF restriction has no property selector",
+                ));
+            }
+            (Some(_), Some(_)) => {
+                return Err(unsupported(
+                    "native RDF restriction has conflicting property selectors",
+                ));
+            }
+        };
         let some = self.unique_edge(subject, OWL_SOME_VALUES_FROM, session)?;
         let all = self.unique_edge(subject, OWL_ALL_VALUES_FROM, session)?;
         let has_value = self.unique_edge(subject, OWL_HAS_VALUE, session)?;
@@ -1046,6 +1067,55 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 session,
             ),
         }
+    }
+
+    fn decode_nary_data_restriction(
+        &mut self,
+        subject: &'data str,
+        on_properties: usize,
+        consumed: &mut Vec<usize>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Node> {
+        let some = self.unique_edge(subject, OWL_SOME_VALUES_FROM, session)?;
+        let all = self.unique_edge(subject, OWL_ALL_VALUES_FROM, session)?;
+        let (quantifier, tag) = match (some, all) {
+            (Some(index), None) => (index, 41),
+            (None, Some(index)) => (index, 42),
+            (None, None) => {
+                return Err(unsupported(
+                    "native n-ary data restriction has no quantifier",
+                ));
+            }
+            (Some(_), Some(_)) => {
+                return Err(unsupported(
+                    "native n-ary data restriction has conflicting quantifiers",
+                ));
+            }
+        };
+
+        let decoded = self
+            .lists
+            .decode(self.triples[on_properties].object, session)?;
+        for cell in &decoded.cells {
+            self.claim_blank(cell, ROLE_LIST, session)?;
+        }
+        if decoded.items.is_empty() {
+            return Err(unsupported(
+                "native n-ary data restriction has no properties",
+            ));
+        }
+        let mut properties = reserved_vec(decoded.items.len(), session)?;
+        for item in decoded.items {
+            properties.push(named_data_property(item, session)?);
+        }
+        push_index(consumed, on_properties, session)?;
+        for index in decoded.consumed {
+            push_index(consumed, index, session)?;
+        }
+        push_index(consumed, quantifier, session)?;
+        let filler = self.decode_data_range(self.triples[quantifier].object, consumed, session)?;
+        let fields = reserved_fields([Field::Sequence(properties), Field::Node(filler)], session)?;
+        Node::build(tag, fields)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2430,6 +2500,86 @@ mod tests {
         .unwrap();
         assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
         assert_eq!(decoded.consumed, [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn nary_data_restrictions_preserve_property_order_and_fail_closed() {
+        for (predicate, tag) in [(OWL_SOME_VALUES_FROM, 41), (OWL_ALL_VALUES_FROM, 42)] {
+            let graph = [
+                edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+                edge("e", OWL_ON_PROPERTIES, blank_term("h")),
+                edge("h", RDF_FIRST, iri_term("urn:first")),
+                edge("h", RDF_REST, blank_term("t")),
+                edge("t", RDF_FIRST, iri_term("urn:second")),
+                edge("t", RDF_REST, iri_term(RDF_NIL)),
+                edge("e", predicate, iri_term("urn:Datatype")),
+            ];
+            let decoded = decode(&graph, blank_term("e")).expect("n-ary data restriction");
+            let expected = Node::build(
+                tag,
+                vec![
+                    Field::Sequence(vec![
+                        entity("data_property", iri("urn:first".to_owned()).unwrap()).unwrap(),
+                        entity("data_property", iri("urn:second".to_owned()).unwrap()).unwrap(),
+                    ]),
+                    Field::Node(
+                        entity("datatype", iri("urn:Datatype".to_owned()).unwrap()).unwrap(),
+                    ),
+                ],
+            )
+            .unwrap();
+            assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
+            assert_eq!(decoded.consumed, [0, 1, 2, 3, 4, 5, 6]);
+        }
+
+        let conflicting_selectors = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTY, iri_term("urn:p")),
+            edge("e", OWL_ON_PROPERTIES, iri_term(RDF_NIL)),
+            edge("e", OWL_ALL_VALUES_FROM, iri_term("urn:Datatype")),
+        ];
+        let missing_quantifier = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTIES, iri_term(RDF_NIL)),
+        ];
+        let conflicting_quantifiers = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTIES, iri_term(RDF_NIL)),
+            edge("e", OWL_SOME_VALUES_FROM, iri_term("urn:Datatype")),
+            edge("e", OWL_ALL_VALUES_FROM, iri_term("urn:Datatype")),
+        ];
+        let empty_properties = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTIES, iri_term(RDF_NIL)),
+            edge("e", OWL_ALL_VALUES_FROM, iri_term("urn:Datatype")),
+        ];
+        let anonymous_property = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTIES, blank_term("h")),
+            edge("h", RDF_FIRST, blank_term("p")),
+            edge("h", RDF_REST, iri_term(RDF_NIL)),
+            edge("e", OWL_ALL_VALUES_FROM, iri_term("urn:Datatype")),
+        ];
+        let literal_filler = [
+            edge("e", RDF_TYPE, iri_term(OWL_RESTRICTION)),
+            edge("e", OWL_ON_PROPERTIES, blank_term("h")),
+            edge("h", RDF_FIRST, iri_term("urn:p")),
+            edge("h", RDF_REST, iri_term(RDF_NIL)),
+            edge("e", OWL_ALL_VALUES_FROM, RdfTerm::Literal("not-a-range")),
+        ];
+        for graph in [
+            conflicting_selectors.as_slice(),
+            missing_quantifier.as_slice(),
+            conflicting_quantifiers.as_slice(),
+            empty_properties.as_slice(),
+            anonymous_property.as_slice(),
+            literal_filler.as_slice(),
+        ] {
+            assert_eq!(
+                decode(graph, blank_term("e")).unwrap_err().code,
+                "NATIVE_RDF_MAPPING_UNSUPPORTED",
+            );
+        }
     }
 
     #[test]

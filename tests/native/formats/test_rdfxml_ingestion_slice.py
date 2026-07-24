@@ -1689,6 +1689,80 @@ def test_implicit_builtin_property_classification_matches_python(
     assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
+def test_builtin_property_special_axioms_match_python(
+    extension: NativeTestExtension,
+) -> None:
+    source = f"""<rdf:RDF
+ xmlns:rdf='{RDF_NAMESPACE}'
+ xmlns:rdfs='{RDFS_NAMESPACE}'
+ xmlns:owl='{OWL_NAMESPACE}'
+ xmlns:xsd='{XSD_NAMESPACE}'>
+ <rdf:Description rdf:nodeID='disjoint'>
+  <rdf:type rdf:resource='{OWL_NAMESPACE}AllDisjointProperties'/>
+  <owl:members rdf:parseType='Collection'>
+   <rdf:Description rdf:about='{OWL_NAMESPACE}topDataProperty'/>
+   <rdf:Description rdf:about='{OWL_NAMESPACE}bottomDataProperty'/>
+  </owl:members>
+ </rdf:Description>
+ <rdf:Description rdf:nodeID='negative-data'>
+  <rdf:type rdf:resource='{OWL_NAMESPACE}NegativePropertyAssertion'/>
+  <owl:sourceIndividual rdf:resource='urn:i'/>
+  <owl:assertionProperty rdf:resource='{OWL_NAMESPACE}topDataProperty'/>
+  <owl:targetValue rdf:datatype='{XSD_NAMESPACE}integer'>1</owl:targetValue>
+ </rdf:Description>
+ <rdf:Description rdf:nodeID='negative-object'>
+  <rdf:type rdf:resource='{OWL_NAMESPACE}NegativePropertyAssertion'/>
+  <owl:sourceIndividual rdf:resource='urn:i'/>
+  <owl:assertionProperty rdf:resource='{OWL_NAMESPACE}topObjectProperty'/>
+  <owl:targetIndividual rdf:resource='urn:j'/>
+ </rdf:Description>
+ <rdf:Description rdf:about='{OWL_NAMESPACE}topDataProperty'>
+  <rdf:type rdf:resource='{OWL_NAMESPACE}FunctionalProperty'/>
+ </rdf:Description>
+ <rdf:Description rdf:about='{OWL_NAMESPACE}topObjectProperty'>
+  <rdf:type rdf:resource='{OWL_NAMESPACE}FunctionalProperty'/>
+ </rdf:Description>
+ <rdf:Description rdf:about='urn:C'>
+  <rdfs:subClassOf>
+   <owl:Restriction>
+    <owl:onProperty rdf:resource='{OWL_NAMESPACE}bottomDataProperty'/>
+    <owl:minCardinality>1</owl:minCardinality>
+   </owl:Restriction>
+  </rdfs:subClassOf>
+  <rdfs:subClassOf>
+   <owl:Restriction>
+    <owl:onProperty rdf:resource='{OWL_NAMESPACE}bottomObjectProperty'/>
+    <owl:minCardinality>1</owl:minCardinality>
+   </owl:Restriction>
+  </rdfs:subClassOf>
+  <rdfs:subClassOf>
+   <owl:Restriction>
+    <owl:onProperties rdf:parseType='Collection'>
+     <rdf:Description rdf:about='{OWL_NAMESPACE}topDataProperty'/>
+     <rdf:Description rdf:about='{OWL_NAMESPACE}bottomDataProperty'/>
+    </owl:onProperties>
+    <owl:allValuesFrom rdf:resource='{XSD_NAMESPACE}string'/>
+   </owl:Restriction>
+  </rdfs:subClassOf>
+ </rdf:Description>
+</rdf:RDF>""".encode()
+
+    owner, observed = _ingest(extension, source)
+    python = parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
+    assert python.rdf_mapping_report is not None
+    assert python.rdf_mapping_report.conformant
+    assert observed.axioms == tuple(sorted(canonical_bytes(value) for value in python.axioms))
+    assert len(observed.axioms) == 8
+    assert observed.total_triples == observed.consumed_triples == 32
+    assert observed.total_triples == python.rdf_mapping_report.total_triples
+    assert observed.consumed_triples == python.rdf_mapping_report.consumed_triples
+    attestation = cast(Any, owner)._publication_attestation_v1()
+    assert attestation.stored_axiom_count == 8
+    assert attestation.rdf_mapping_report_count == 1
+    assert extension.INGESTION_FEATURES == ()
+    assert "parse-rdfxml-v1" not in extension.FEATURES
+
+
 @pytest.mark.parametrize(
     "assertion",
     (

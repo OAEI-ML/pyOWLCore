@@ -1691,6 +1691,119 @@ def test_rdf_mapping_classifies_implicit_builtin_properties() -> None:
     ) in document.axioms
 
 
+def test_rdf_mapping_classifies_builtin_properties_in_special_axioms() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="{RDFS_NAMESPACE}"
+         xmlns:owl="{OWL_NAMESPACE}"
+         xmlns:xsd="{XSD_NAMESPACE}">
+  <rdf:Description rdf:nodeID="disjoint">
+    <rdf:type rdf:resource="{OWL_NAMESPACE}AllDisjointProperties"/>
+    <owl:members rdf:parseType="Collection">
+      <rdf:Description rdf:about="{OWL_NAMESPACE}topDataProperty"/>
+      <rdf:Description rdf:about="{OWL_NAMESPACE}bottomDataProperty"/>
+    </owl:members>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="negative-data">
+    <rdf:type rdf:resource="{OWL_NAMESPACE}NegativePropertyAssertion"/>
+    <owl:sourceIndividual rdf:resource="urn:i"/>
+    <owl:assertionProperty rdf:resource="{OWL_NAMESPACE}topDataProperty"/>
+    <owl:targetValue rdf:datatype="{XSD_NAMESPACE}integer">1</owl:targetValue>
+  </rdf:Description>
+  <rdf:Description rdf:nodeID="negative-object">
+    <rdf:type rdf:resource="{OWL_NAMESPACE}NegativePropertyAssertion"/>
+    <owl:sourceIndividual rdf:resource="urn:i"/>
+    <owl:assertionProperty rdf:resource="{OWL_NAMESPACE}topObjectProperty"/>
+    <owl:targetIndividual rdf:resource="urn:j"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="{OWL_NAMESPACE}topDataProperty">
+    <rdf:type rdf:resource="{OWL_NAMESPACE}FunctionalProperty"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="{OWL_NAMESPACE}topObjectProperty">
+    <rdf:type rdf:resource="{OWL_NAMESPACE}FunctionalProperty"/>
+  </rdf:Description>
+  <rdf:Description rdf:about="urn:C">
+    <rdfs:subClassOf>
+      <owl:Restriction>
+        <owl:onProperty rdf:resource="{OWL_NAMESPACE}bottomDataProperty"/>
+        <owl:minCardinality>1</owl:minCardinality>
+      </owl:Restriction>
+    </rdfs:subClassOf>
+    <rdfs:subClassOf>
+      <owl:Restriction>
+        <owl:onProperty rdf:resource="{OWL_NAMESPACE}bottomObjectProperty"/>
+        <owl:minCardinality>1</owl:minCardinality>
+      </owl:Restriction>
+    </rdfs:subClassOf>
+    <rdfs:subClassOf>
+      <owl:Restriction>
+        <owl:onProperties rdf:parseType="Collection">
+          <rdf:Description rdf:about="{OWL_NAMESPACE}topDataProperty"/>
+          <rdf:Description rdf:about="{OWL_NAMESPACE}bottomDataProperty"/>
+        </owl:onProperties>
+        <owl:allValuesFrom rdf:resource="{XSD_NAMESPACE}string"/>
+      </owl:Restriction>
+    </rdfs:subClassOf>
+  </rdf:Description>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 32
+    assert document.rdf_mapping_report.consumed_triples == 32
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert tuple(document.iter_axioms(m.Declaration)) == ()
+    assert len(document.axioms) == 8
+
+    class_c = m.Class(m.IRI("urn:C"))
+    individual_i = m.NamedIndividual(m.IRI("urn:i"))
+    assert m.DisjointDataProperties(
+        m.CanonicalSet((m.OWL_TOP_DATA_PROPERTY, m.OWL_BOTTOM_DATA_PROPERTY))
+    ) in document.axioms
+    assert m.NegativeDataPropertyAssertion(
+        m.OWL_TOP_DATA_PROPERTY,
+        individual_i,
+        m.Literal(
+            "1",
+            m.Datatype(m.IRI(XSD_NAMESPACE + "integer")),
+        ),
+    ) in document.axioms
+    assert m.NegativeObjectPropertyAssertion(
+        m.OWL_TOP_OBJECT_PROPERTY,
+        individual_i,
+        m.NamedIndividual(m.IRI("urn:j")),
+    ) in document.axioms
+    assert m.FunctionalDataProperty(m.OWL_TOP_DATA_PROPERTY) in document.axioms
+    assert m.FunctionalObjectProperty(
+        m.OWL_TOP_OBJECT_PROPERTY
+    ) in document.axioms
+    assert m.SubClassOf(
+        class_c,
+        m.DataMinCardinality(
+            1,
+            m.OWL_BOTTOM_DATA_PROPERTY,
+            m.RDFS_LITERAL,
+        ),
+    ) in document.axioms
+    assert m.SubClassOf(
+        class_c,
+        m.ObjectMinCardinality(
+            1,
+            m.OWL_BOTTOM_OBJECT_PROPERTY,
+            m.OWL_THING,
+        ),
+    ) in document.axioms
+    assert m.SubClassOf(
+        class_c,
+        m.DataAllValuesFrom(
+            (m.OWL_TOP_DATA_PROPERTY, m.OWL_BOTTOM_DATA_PROPERTY),
+            m.XSD_STRING,
+        ),
+    ) in document.axioms
+
+
 @pytest.mark.parametrize(
     "assertion",
     (
