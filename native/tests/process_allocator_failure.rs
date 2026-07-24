@@ -175,6 +175,24 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
         .expect("first non-failing component digest index boundary must build");
     assert_eq!(boundary_index, baseline_index);
 
+    let (baseline_signature, signature_allocations) =
+        count_allocations(|| component.build_signature_index());
+    let baseline_signature =
+        baseline_signature.expect("retained signature index baseline must build");
+    assert_eq!(baseline_signature, [1, 1, 1, 1, 1, 0]);
+    assert!(signature_allocations > 1);
+
+    for fail_after in 0..signature_allocations {
+        let failure = typed_allocation_failure(fail_allocation(fail_after, || {
+            component.build_signature_index()
+        }));
+        assert!(failure.message.contains("allocation failed"));
+    }
+    let boundary_signature =
+        fail_allocation(signature_allocations, || component.build_signature_index())
+            .expect("first non-failing retained signature boundary must build");
+    assert_eq!(boundary_signature, baseline_signature);
+
     let (baseline_prepared, preparation_allocations) =
         count_allocations(|| component.prepare_encoded_columns());
     let baseline_prepared = baseline_prepared.expect("encoded columns must prepare");

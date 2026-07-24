@@ -4,11 +4,12 @@
 use crate::cancel::{Cancellation, Guard};
 use crate::error::NativeError;
 use crate::hash::crc32c;
+use crate::index::build_retained_signature_index_v1;
 use crate::limits::Limits;
 use crate::model::{
-    prepare_encoded_structural_columns_from_tables_v1, Category, ComponentId, EncodedRootKindV1,
-    EncodedRootTableV1, FrozenComponentBuild, NativeComponentBuilder, NativeComponentDigestIndex,
-    PreparedEncodedStructuralColumnsV1,
+    prepare_encoded_structural_columns_from_tables_v1, Category, ComponentFieldRef, ComponentId,
+    EncodedRootKindV1, EncodedRootTableV1, FrozenComponentBuild, NativeComponentBuilder,
+    NativeComponentDigestIndex, PreparedEncodedStructuralColumnsV1,
 };
 use crate::wire::Validation;
 
@@ -39,6 +40,7 @@ impl From<NativeError> for Failure {
 #[derive(Debug)]
 pub struct ComponentEncodingFixture {
     frozen: FrozenComponentBuild,
+    entities: [ComponentId; 1],
     identifiers: [ComponentId; 1],
     cancellation: Cancellation,
 }
@@ -57,8 +59,22 @@ impl ComponentEncodingFixture {
         let pending = builder.intern_canonical(canonical)?;
         let frozen = builder.freeze()?;
         let identifier = frozen.resolve(pending)?;
+        let entity = match frozen.arena().record(identifier)?.field(0)? {
+            ComponentFieldRef::Node(entity)
+                if frozen.arena().category(entity)? == Category::Entity =>
+            {
+                entity
+            }
+            _ => {
+                return Err(Failure {
+                    code: "NATIVE_PROTOCOL",
+                    message: "native allocator declaration fixture lost its entity",
+                });
+            }
+        };
         Ok(Self {
             frozen,
+            entities: [entity],
             identifiers: [identifier],
             cancellation: Cancellation::with_duration(None),
         })
@@ -87,6 +103,35 @@ impl ComponentEncodingFixture {
             None,
         )?;
         Ok((index.len(), index.retained_bytes()))
+    }
+
+    /// Build and consume the production retained-signature index while
+    /// allocation injection is armed.
+    ///
+    /// Its arena owner, count buffers, ordinal map, traversal stack, and
+    /// entity set are all dropped before the allocation-free counter summary
+    /// escapes.
+    pub fn build_signature_index(&self) -> Result<[u64; 6], Failure> {
+        let index = build_retained_signature_index_v1(
+            self.frozen.arena(),
+            &self.entities,
+            &[],
+            &self.identifiers,
+            &[],
+            &Limits::default(),
+            self.cancellation.clone(),
+            None,
+            0,
+        )?;
+        let counters = index.counters();
+        Ok([
+            counters.structural_root_rows,
+            counters.entity_rows,
+            counters.referenced_links,
+            counters.nonannotation_links,
+            counters.declaration_links,
+            counters.complete_root_encode_calls,
+        ])
     }
 
     /// Prepare retained encoded-column metadata before allocation injection.
