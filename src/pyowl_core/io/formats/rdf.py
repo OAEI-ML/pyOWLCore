@@ -219,6 +219,7 @@ class RDFMapper:
                 occurrences.append((simple_axiom, None))
         self._consume_detached_inverse_property_expressions()
         self._consume_detached_class_complements()
+        self._consume_detached_data_complements()
         if self.unclaimed_axiom_reifications or self.unclaimed_nested_reifications:
             raise OntologySyntaxError(
                 "RDF reification targets an unsupported axiom or annotation mapping",
@@ -359,6 +360,25 @@ class RDFMapper:
             if marker in self.consumed or not self.graph.contains(marker):
                 continue
             self._class_expression(triple.subject)
+
+    def _consume_detached_data_complements(self) -> None:
+        for triple in self.graph.find(predicate=OWL + "datatypeComplementOf"):
+            self.context.check()
+            if (
+                triple in self.consumed
+                or not isinstance(triple.subject, RDFBlank)
+                or not isinstance(triple.object, RDFIRI)
+                or m.EntityKind.DATATYPE not in self.kinds.get(triple.object.value, set())
+            ):
+                continue
+            marker = Triple(
+                triple.subject,
+                RDFIRI(RDF + "type"),
+                RDFIRI(RDFS + "Datatype"),
+            )
+            if marker in self.consumed or not self.graph.contains(marker):
+                continue
+            self._data_range(triple.subject)
 
     def _collect_axiom_annotations(self) -> None:
         annotation_nodes: dict[Triple, list[RDFResource]] = {}

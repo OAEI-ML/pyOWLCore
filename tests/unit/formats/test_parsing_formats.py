@@ -1518,6 +1518,97 @@ def test_rdf_mapping_rejects_ambiguous_detached_class_complement() -> None:
     assert raised.value.code == "RDF_MAPPING_CARDINALITY"
 
 
+def test_rdf_mapping_consumes_detached_datatype_complement() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="complement">
+    <owl:datatypeComplementOf rdf:resource="urn:D"/>
+  </rdfs:Datatype>
+</rdf:RDF>
+""".encode()
+
+    document = parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert document.rdf_mapping_report is not None
+    assert document.rdf_mapping_report.conformant
+    assert document.rdf_mapping_report.total_triples == 3
+    assert document.rdf_mapping_report.consumed_triples == 3
+    assert document.rdf_mapping_report.unconsumed == ()
+    assert len(tuple(document.iter_axioms(m.Declaration))) == 1
+    assert len(document.axioms) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdf:Description rdf:nodeID="complement">
+    <owl:datatypeComplementOf rdf:resource="urn:D"/>
+  </rdf:Description>
+""",
+        """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:about="urn:complement">
+    <owl:datatypeComplementOf rdf:resource="urn:D"/>
+  </rdfs:Datatype>
+""",
+        """
+  <rdfs:Datatype rdf:nodeID="complement">
+    <owl:datatypeComplementOf rdf:resource="urn:undeclared"/>
+  </rdfs:Datatype>
+""",
+        """
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="complement">
+    <owl:datatypeComplementOf rdf:nodeID="anonymous"/>
+  </rdfs:Datatype>
+""",
+        """
+  <rdfs:Datatype rdf:nodeID="left">
+    <owl:datatypeComplementOf rdf:nodeID="right"/>
+  </rdfs:Datatype>
+  <rdfs:Datatype rdf:nodeID="right">
+    <owl:datatypeComplementOf rdf:nodeID="left"/>
+  </rdfs:Datatype>
+""",
+    ),
+)
+def test_rdf_mapping_rejects_unestablished_detached_datatype_complement(
+    body: str,
+) -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">{body}</rdf:RDF>
+""".encode()
+
+    with pytest.raises(UnsupportedSyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_INCOMPLETE"
+
+
+def test_rdf_mapping_rejects_ambiguous_detached_datatype_complement() -> None:
+    source = f"""\
+<rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
+         xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <rdfs:Datatype rdf:about="urn:C"/>
+  <rdfs:Datatype rdf:about="urn:D"/>
+  <rdfs:Datatype rdf:nodeID="complement">
+    <owl:datatypeComplementOf rdf:resource="urn:C"/>
+    <owl:datatypeComplementOf rdf:resource="urn:D"/>
+  </rdfs:Datatype>
+</rdf:RDF>
+""".encode()
+
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
+    assert raised.value.code == "RDF_MAPPING_CARDINALITY"
+
+
 def test_rdf_mapping_enforces_the_distinct_ontology_annotation_limit() -> None:
     source = f"""\
 <rdf:RDF xmlns:rdf="{RDF_NAMESPACE}"
