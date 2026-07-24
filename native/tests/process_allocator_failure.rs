@@ -278,6 +278,37 @@ fn production_fallible_allocations_fail_closed_and_recover_at_the_boundary() {
         .expect("typed facade freeze boundary must be observable");
     assert_eq!(boundary_typed_freeze, baseline_typed_freeze);
 
+    let typed_raw_freeze = component
+        .prepare_typed_facade_raw_freeze()
+        .expect("typed raw facade freeze fixture must prepare");
+    let (baseline_typed_raw_freeze, typed_raw_freeze_allocations) =
+        count_allocations(|| typed_raw_freeze.freeze());
+    let baseline_typed_raw_freeze = baseline_typed_raw_freeze
+        .expect("typed raw facade freeze baseline must succeed")
+        .summary()
+        .expect("typed raw facade freeze baseline must be observable");
+    assert_eq!(baseline_typed_raw_freeze[0..4], [2, 1, 1, 2]);
+    assert!(baseline_typed_raw_freeze[4] > baseline_typed_freeze[4]);
+    assert!(baseline_typed_raw_freeze[5] > baseline_typed_raw_freeze[4]);
+    assert_eq!(baseline_typed_raw_freeze[6..], [1, 0]);
+    assert!(typed_raw_freeze_allocations > typed_freeze_allocations);
+
+    for fail_after in 0..typed_raw_freeze_allocations {
+        let typed_raw_freeze = component
+            .prepare_typed_facade_raw_freeze()
+            .expect("typed raw facade freeze fixture must prepare for every rejection");
+        typed_allocation_failure(fail_allocation(fail_after, || typed_raw_freeze.freeze()));
+    }
+    let typed_raw_freeze = component
+        .prepare_typed_facade_raw_freeze()
+        .expect("typed raw facade freeze boundary fixture must prepare");
+    let boundary_typed_raw_freeze =
+        fail_allocation(typed_raw_freeze_allocations, || typed_raw_freeze.freeze())
+            .expect("first non-failing typed raw facade freeze boundary must succeed")
+            .summary()
+            .expect("typed raw facade freeze boundary must be observable");
+    assert_eq!(boundary_typed_raw_freeze, baseline_typed_raw_freeze);
+
     let typed_builder_add = component
         .prepare_typed_builder_add(&canonical)
         .expect("typed builder add fixture must prepare");

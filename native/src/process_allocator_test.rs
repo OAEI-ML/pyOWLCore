@@ -235,6 +235,39 @@ impl ComponentEncodingFixture {
         Ok(TypedFacadeFreezeFixture {
             arena: self.frozen.arena().clone(),
             tables,
+            raw_document_tables: Vec::new(),
+            cancellation: self.cancellation.clone(),
+        })
+    }
+
+    /// Own matching effective and raw document tables before allocation
+    /// injection is armed, leaving both production indexes pending.
+    pub fn prepare_typed_facade_raw_freeze(&self) -> Result<TypedFacadeFreezeFixture, Failure> {
+        let coordinate = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+        let mut effective_roots = Vec::new();
+        effective_roots.try_reserve_exact(1).map_err(|_| {
+            NativeError::limit("native allocator effective typed root allocation failed")
+        })?;
+        effective_roots.push(self.identifiers[0]);
+        let mut raw_roots = Vec::new();
+        raw_roots
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native allocator raw typed root allocation failed"))?;
+        raw_roots.push(self.identifiers[0]);
+        let mut tables = Vec::new();
+        tables.try_reserve_exact(1).map_err(|_| {
+            NativeError::limit("native allocator effective typed table allocation failed")
+        })?;
+        tables.push(TypedFacadeTableV2::new(coordinate, effective_roots));
+        let mut raw_document_tables = Vec::new();
+        raw_document_tables.try_reserve_exact(1).map_err(|_| {
+            NativeError::limit("native allocator raw typed table allocation failed")
+        })?;
+        raw_document_tables.push(TypedFacadeTableV2::new(coordinate, raw_roots));
+        Ok(TypedFacadeFreezeFixture {
+            arena: self.frozen.arena().clone(),
+            tables,
+            raw_document_tables,
             cancellation: self.cancellation.clone(),
         })
     }
@@ -346,6 +379,7 @@ pub struct TypedFacadeReadFixture {
 pub struct TypedFacadeFreezeFixture {
     arena: NativeComponentArena,
     tables: Vec<TypedFacadeTableV2>,
+    raw_document_tables: Vec<TypedFacadeTableV2>,
     cancellation: Cancellation,
 }
 
@@ -397,7 +431,7 @@ impl TypedFacadeFreezeFixture {
         let storage = TypedFacadeStorageV2::freeze(
             self.arena,
             self.tables,
-            Vec::new(),
+            self.raw_document_tables,
             1,
             Limits::default(),
             self.cancellation,
