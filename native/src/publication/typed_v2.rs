@@ -28,7 +28,7 @@ const MAX_TYPED_FACADE_TABLES_V2: usize = 100_000;
 const MAX_FACADE_PAGE_ROWS_V2: u32 = 64;
 const MAX_FACADE_PAGE_BYTES_V2: u64 = 8 * 1024 * 1024;
 
-type FlatDocumentV2 = (
+pub(crate) type FlatDocumentV2 = (
     NativeComponentArena,
     [Vec<ComponentId>; 3],
     [Option<Vec<ComponentId>>; 3],

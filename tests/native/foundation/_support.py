@@ -104,6 +104,7 @@ class NativeTestExtension(Protocol):
         effective_origins: object | None = None,
         effective_document_ordinals: object | None = None,
         closure_document_ordinals: object | None = None,
+        anonymous_scope_targets: object | None = None,
     ) -> object: ...
 
     def _rdfxml_retained_bridge_allocation_probe_v2(

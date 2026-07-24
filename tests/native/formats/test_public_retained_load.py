@@ -1792,6 +1792,7 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     )
     assert captured["effective_document_ordinals"] == ((0,), (1,))
     assert captured["closure_document_ordinals"] == (0, 1)
+    assert captured["anonymous_scope_targets"] == (None, None)
     if preserve_source_map:
         source_maps = cast(
             tuple[tuple[tuple[bytes, ...], tuple[bytes, ...]], ...],
@@ -1877,6 +1878,135 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     )
     assert effective_rows[0] != effective_rows[1]
     assert len(tuple(selected.iter_axioms())) == 2
+
+
+def test_repeated_anonymous_fingerprint_group_is_rescoped_inside_native_composition(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-repeat:root> "
+        b"Import(<urn:retained-repeat:first>) "
+        b"Import(<urn:retained-repeat:second>) "
+        b"Import(<urn:retained-repeat:third>) "
+        b"Declaration(Class(<urn:retained-repeat:Root>)))"
+    )
+    first = b"Ontology(ClassAssertion(<urn:retained-repeat:C> _:person))"
+    second = b"Ontology(  ClassAssertion(<urn:retained-repeat:C> _:person)  )"
+    third = b"Ontology(\nClassAssertion(<urn:retained-repeat:C> _:person)\n)"
+    sources = {
+        "urn:retained-repeat:first": first,
+        "urn:retained-repeat:second": second,
+        "urn:retained-repeat:third": third,
+    }
+
+    def selected_options(backend: BackendPreference) -> LoadOptions:
+        return LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            imports=ImportPolicy.RESOLVE_STRICT,
+            backend=backend,
+            collect_provenance=True,
+            preserve_source_map=True,
+        )
+
+    reference = SnapshotLoader(
+        acquisition_cache=AcquisitionCache(),
+        document_cache=ParsedDocumentCache(),
+    ).load(
+        root,
+        options=selected_options(BackendPreference.PYTHON),
+        resolver=MappingResolver(sources),
+    )
+    merge_retained = cast(Any, extension)._merge_parsed_structural_snapshot_v2
+    captured: dict[str, object] = {}
+
+    def capture(
+        parsed_documents: object,
+        origins: object,
+        attestation: object,
+        config: object,
+        cancel: object,
+        **keywords: object,
+    ) -> object:
+        captured["parsed_documents"] = parsed_documents
+        captured.update(keywords)
+        return merge_retained(
+            parsed_documents,
+            origins,
+            attestation,
+            config,
+            cancel,
+            **keywords,
+        )
+
+    def unexpected_structural(*_arguments: object, **_keywords: object) -> object:
+        raise AssertionError("repeated anonymous owners crossed Python structural retention")
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_merge_parsed_structural_snapshot_v2",
+        capture,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_retain_structural_snapshot_v2",
+        unexpected_structural,
+    )
+    selected = SnapshotLoader(
+        acquisition_cache=AcquisitionCache(),
+        document_cache=ParsedDocumentCache(),
+    ).load(
+        root,
+        options=selected_options(BackendPreference.NATIVE),
+        resolver=MappingResolver(sources),
+    )
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert tuple(document.source_map for document in selected.documents) == tuple(
+        document.source_map for document in reference.documents
+    )
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+    parsed_documents = cast(tuple[object, ...], captured["parsed_documents"])
+    assert len(parsed_documents) == 4
+    scope_targets = cast(tuple[bytes | None, ...], captured["anonymous_scope_targets"])
+    assert len(scope_targets) == 4
+    assert sum(target is not None for target in scope_targets) == 2
+    assert all(target is None or len(target) == 32 for target in scope_targets)
+
+    anonymous_records = tuple(
+        (record, document)
+        for record, document in zip(
+            selected.import_manifest.documents,
+            selected.documents,
+            strict=True,
+        )
+        if document.ontology_id.ontology_iri is None
+    )
+    assert len(anonymous_records) == 3
+    assert len({record.document_fingerprint for record, _document in anonymous_records}) == 1
+    assert len({record.source_sha256 for record, _document in anonymous_records}) == 3
+    raw_rows = {
+        tuple(canonical_bytes(value) for value in document.axioms)
+        for _record, document in anonymous_records
+    }
+    assert len(raw_rows) == 1
+    effective_rows = tuple(
+        tuple(
+            canonical_bytes(value)
+            for value in selected.iter_axioms(
+                scope=AxiomScope.DOCUMENT,
+                document_key=record.document_key,
+            )
+        )
+        for record, _document in anonymous_records
+    )
+    assert len(set(effective_rows)) == 3
+    assert len(tuple(selected.iter_axioms())) == 4
 
 
 def test_eligible_owner_construction_failure_propagates_without_fallback(

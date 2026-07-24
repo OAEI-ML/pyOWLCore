@@ -111,6 +111,42 @@ pub(crate) fn scope_functional_anonymous_rows_v2(
     })
 }
 
+/// Re-scope canonical raw document rows into a caller-selected snapshot scope.
+///
+/// Parser owners initially retain the ordinal-zero effective rows. Closure
+/// composition uses this path only for a later member of an equal-fingerprint
+/// group, and deliberately starts from the raw document roots so the derived
+/// local keys match Python's single re-scope operation exactly.
+pub(crate) fn rescope_anonymous_rows_v2(
+    rows: [&[Vec<u8>]; 3],
+    snapshot_scope: [u8; 32],
+    session: &mut Session<'_>,
+    cancellation: &Cancellation,
+) -> NativeResult<[Vec<Vec<u8>>; 3]> {
+    let limits = *session.limits();
+    let mut parsed = [Vec::new(), Vec::new(), Vec::new()];
+    for (target, source) in parsed.iter_mut().zip(rows) {
+        reserve_items::<CanonicalNode<'_>>(session, source.len())?;
+        target
+            .try_reserve_exact(source.len())
+            .map_err(|_| NativeError::limit("native anonymous root allocation failed"))?;
+        for row in source {
+            cancellation.checkpoint()?;
+            let mut scan = ScanBudget::from_limits(&limits);
+            scan_canonical(row, &mut scan)?;
+            target.push(parse_root(row, &limits, cancellation, session)?);
+        }
+    }
+    let mut effective = encode_collections(
+        &parsed,
+        |identity| Ok(Some(rescope_identity(identity, snapshot_scope))),
+        session,
+    )?;
+    canonicalize_collections(&mut effective);
+    cancellation.checkpoint()?;
+    Ok(effective)
+}
+
 fn scope_anonymous_rows_v2<F>(
     rows: [&[Vec<u8>]; 3],
     ontology_key: Vec<u8>,

@@ -1104,7 +1104,8 @@ fn retain_structural_snapshot_v2_with_allocations<'py>(
     source_maps=None,
     effective_origins=None,
     effective_document_ordinals=None,
-    closure_document_ordinals=None
+    closure_document_ordinals=None,
+    anonymous_scope_targets=None
 ))]
 #[allow(clippy::too_many_arguments)]
 fn _merge_parsed_structural_snapshot_v2<'py>(
@@ -1118,6 +1119,7 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
     effective_origins: Option<&Bound<'py, PyAny>>,
     effective_document_ordinals: Option<&Bound<'py, PyAny>>,
     closure_document_ordinals: Option<&Bound<'py, PyAny>>,
+    anonymous_scope_targets: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<NativeSnapshotHandle> {
     let mut allocations = crate::BridgeAllocationProbe::disabled();
     let limits = crate::limits_from_python_with_allocations(config, &mut allocations)?;
@@ -1203,6 +1205,20 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
             "native parsed closure topology size overflow",
         ))
     })?;
+    let (anonymous_scope_targets, anonymous_scope_bytes) = owned_anonymous_scope_targets(
+        py,
+        anonymous_scope_targets,
+        parsed_documents,
+        &cancellation,
+        &mut allocations,
+    )?;
+    external_bytes = external_bytes
+        .checked_add(anonymous_scope_bytes)
+        .ok_or_else(|| {
+            crate::python_error(NativeError::limit(
+                "native parsed anonymous scope size overflow",
+            ))
+        })?;
     enforce_retained_boundary(external_bytes, &limits)?;
     let owned_origins = if origins.is_none() {
         None
@@ -1276,10 +1292,12 @@ fn _merge_parsed_structural_snapshot_v2<'py>(
                 storages,
                 &effective_document_ordinals,
                 &closure_document_ordinals,
+                &anonymous_scope_targets,
                 limits,
                 cancellation,
                 Some(interrupt),
                 closure_external_bytes,
+                source_owner_bytes,
             )?,
             effective,
             raw,
@@ -1530,6 +1548,73 @@ fn owned_ordinal_tuple(
         owned.push(value.extract::<u64>()?);
     }
     Ok(owned)
+}
+
+fn owned_anonymous_scope_targets(
+    py: Python<'_>,
+    value: Option<&Bound<'_, PyAny>>,
+    parsed_documents: &Bound<'_, PyTuple>,
+    cancellation: &crate::cancel::Cancellation,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<(Vec<Option<[u8; 32]>>, usize)> {
+    let document_count = parsed_documents.len();
+    let values = match value {
+        Some(value) => {
+            if !value.get_type().is(py.get_type::<PyTuple>()) {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "native anonymous scope targets must be an exact tuple",
+                ));
+            }
+            let values = value.cast::<PyTuple>()?;
+            if values.len() != document_count {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "native anonymous scope targets must cover every document",
+                ));
+            }
+            Some(values)
+        }
+        None => None,
+    };
+    let mut targets = Vec::new();
+    allocations.checkpoint()?;
+    targets.try_reserve_exact(document_count).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native anonymous scope allocation failed",
+        ))
+    })?;
+    for index in 0..document_count {
+        cancellation.checkpoint().map_err(crate::python_error)?;
+        let Some(values) = values else {
+            targets.push(None);
+            continue;
+        };
+        let value = values.get_item(index)?;
+        if value.is_none() {
+            targets.push(None);
+            continue;
+        }
+        if !value.get_type().is(py.get_type::<PyBytes>()) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native anonymous scope targets must contain None or exact bytes",
+            ));
+        }
+        let scope = value.cast::<PyBytes>()?.as_bytes();
+        let scope: [u8; 32] = scope.try_into().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err(
+                "native anonymous scope targets must be exactly 32 bytes",
+            )
+        })?;
+        targets.push(Some(scope));
+    }
+    let bytes = targets
+        .capacity()
+        .checked_mul(size_of::<Option<[u8; 32]>>())
+        .ok_or_else(|| {
+            crate::python_error(NativeError::limit(
+                "native anonymous scope accounting overflow",
+            ))
+        })?;
+    Ok((targets, bytes))
 }
 
 fn closure_topology_bytes(

@@ -62,6 +62,45 @@ def _closure_canonical_rows_v2(
     return tuple(rows)
 
 
+def _snapshot_anonymous_scope_targets_v2(
+    snapshot: OntologySnapshot,
+    raw_documents: tuple[object, ...],
+    effective_documents: tuple[object, ...],
+) -> tuple[bytes | None, ...]:
+    """Return nonzero anonymous scopes aligned with retained document owners."""
+
+    from pyowl_core.model import encode_varint
+
+    records = snapshot.import_manifest.documents
+    grouped: dict[bytes, list[tuple[bytes, str, int]]] = {}
+    for document_ordinal, record in enumerate(records):
+        grouped.setdefault(record.document_fingerprint.digest, []).append(
+            (record.source_sha256, record.document_key, document_ordinal)
+        )
+    ordinals = [0] * len(records)
+    for group in grouped.values():
+        for scope_ordinal, (_source, _key, document_ordinal) in enumerate(sorted(group)):
+            ordinals[document_ordinal] = scope_ordinal
+    return tuple(
+        (
+            hashlib.sha256(
+                b"pyowl-core:snapshot-document-scope:v1\x00"
+                + record.document_fingerprint.digest
+                + encode_varint(scope_ordinal)
+            ).digest()
+            if scope_ordinal > 0 and raw != effective
+            else None
+        )
+        for record, scope_ordinal, raw, effective in zip(
+            records,
+            ordinals,
+            raw_documents,
+            effective_documents,
+            strict=True,
+        )
+    )
+
+
 def require_ingestion_binding(capability: str) -> NativeIngestionExtension:
     """Require a capability registered specifically by the ingestion seam."""
 
@@ -2627,6 +2666,11 @@ def _publish_structural_closure_snapshot_v2(
                     effective_origins=effective_origins,
                     effective_document_ordinals=topology,
                     closure_document_ordinals=closure_ordinals,
+                    anonymous_scope_targets=_snapshot_anonymous_scope_targets_v2(
+                        snapshot,
+                        raw_documents,
+                        effective_documents,
+                    ),
                 ),
             )
     publication_values: dict[str, object] = {

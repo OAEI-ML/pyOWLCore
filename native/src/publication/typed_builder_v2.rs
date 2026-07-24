@@ -14,7 +14,9 @@ use crate::model::{
     scan_canonical, Category, ComponentFieldRef, ComponentId, NativeComponentArena,
     NativeComponentBuilder, PendingComponentId, ScanBudget,
 };
+use crate::session::Session;
 
+use super::typed_v2::FlatDocumentV2;
 use super::{
     TypedFacadeCollectionV2, TypedFacadeCoordinateV2, TypedFacadeScopeV2,
     TypedFacadeSignatureKindV2, TypedFacadeStorageV2, TypedFacadeTableV2,
@@ -435,10 +437,12 @@ impl TypedFacadeBuilderV2 {
         sources: Vec<TypedFacadeStorageV2>,
         effective_documents: &[Vec<u64>],
         closure_documents: &[u64],
+        anonymous_scope_targets: &[Option<[u8; 32]>],
         limits: Limits,
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
         base_external_bytes: usize,
+        source_owner_bytes: usize,
     ) -> NativeResult<TypedFacadeStorageV2> {
         if sources.len() < 2 {
             return Err(NativeError::protocol(
@@ -446,6 +450,11 @@ impl TypedFacadeBuilderV2 {
             ));
         }
         validate_reachability(effective_documents, closure_documents, sources.len())?;
+        if anonymous_scope_targets.len() != sources.len() {
+            return Err(NativeError::protocol(
+                "native anonymous scope targets are not document-aligned",
+            ));
+        }
         cancellation.checkpoint()?;
 
         let mut flat_documents = Vec::new();
@@ -486,11 +495,27 @@ impl TypedFacadeBuilderV2 {
             flat_documents.push(flat);
         }
 
+        let derived_arena = rescope_flat_documents(
+            &mut flat_documents,
+            anonymous_scope_targets,
+            &limits,
+            cancellation.clone(),
+            interrupt.clone(),
+            base_external_bytes,
+            source_owner_bytes,
+        )?;
         let mut source_arenas = Vec::new();
         source_arenas
-            .try_reserve_exact(flat_documents.len())
+            .try_reserve_exact(
+                flat_documents
+                    .len()
+                    .saturating_add(usize::from(derived_arena.is_some())),
+            )
             .map_err(|_| NativeError::limit("native closure arena manifest allocation failed"))?;
         source_arenas.extend(flat_documents.iter().map(|document| &document.0));
+        if let Some(arena) = derived_arena.as_ref() {
+            source_arenas.push(arena);
+        }
         let arena = NativeComponentArena::compose_flat(&source_arenas)?;
         drop(source_arenas);
 
@@ -677,6 +702,288 @@ impl TypedFacadeBuilderV2 {
             .ok_or_else(|| NativeError::limit("typed V2 external memory size overflow"))?;
         self.components.set_external_bytes(external)
     }
+}
+
+fn rescope_flat_documents(
+    documents: &mut [FlatDocumentV2],
+    targets: &[Option<[u8; 32]>],
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    base_external_bytes: usize,
+    source_owner_bytes: usize,
+) -> NativeResult<Option<NativeComponentArena>> {
+    let target_count = targets.iter().filter(|target| target.is_some()).count();
+    if target_count == 0 {
+        return Ok(None);
+    }
+    let mut rescoped: Vec<(usize, [Vec<Vec<u8>>; 3])> = Vec::new();
+    rescoped
+        .try_reserve_exact(target_count)
+        .map_err(|_| NativeError::limit("native re-scoped document allocation failed"))?;
+    let rescoped_metadata_bytes = rescoped
+        .capacity()
+        .checked_mul(size_of::<(usize, [Vec<Vec<u8>>; 3])>())
+        .ok_or_else(|| NativeError::limit("native re-scoped document size overflow"))?;
+    let mut retained_rescoped_bytes = 0_usize;
+
+    for (document_ordinal, target) in targets.iter().copied().enumerate() {
+        let Some(target) = target else {
+            continue;
+        };
+        cancellation.checkpoint()?;
+        let document = documents.get(document_ordinal).ok_or_else(|| {
+            NativeError::protocol("native anonymous scope target is out of bounds")
+        })?;
+        let current_arena_bytes = usize::try_from(document.0.counters().retained_bytes)
+            .map_err(|_| NativeError::limit("native source component arena exceeds usize"))?;
+        let other_source_bytes = source_owner_bytes
+            .checked_sub(current_arena_bytes)
+            .ok_or_else(|| {
+                NativeError::protocol("native source owner accounting is inconsistent")
+            })?;
+        let mut raw_rows: [Vec<Vec<u8>>; 3] = Default::default();
+        let mut has_anonymous_roots = false;
+        for (collection_index, roots) in document.1.iter().enumerate() {
+            if document.2[collection_index].is_none() {
+                continue;
+            }
+            has_anonymous_roots = true;
+            raw_rows[collection_index]
+                .try_reserve_exact(roots.len())
+                .map_err(|_| NativeError::limit("native raw re-scope row allocation failed"))?;
+            for identifier in roots {
+                cancellation.checkpoint()?;
+                let external_bytes = checked_external_bytes(
+                    &[
+                        base_external_bytes,
+                        other_source_bytes,
+                        rescoped_metadata_bytes,
+                        retained_rescoped_bytes,
+                        canonical_row_storage_bytes(&raw_rows)?,
+                    ],
+                    "native raw re-scope accounting overflow",
+                )?;
+                raw_rows[collection_index].push(document.0.encode(
+                    *identifier,
+                    limits,
+                    cancellation.clone(),
+                    interrupt.clone(),
+                    external_bytes,
+                )?);
+            }
+        }
+        if !has_anonymous_roots {
+            return Err(NativeError::protocol(
+                "native anonymous scope target has no raw parser roots",
+            ));
+        }
+        let raw_bytes = canonical_row_storage_bytes(&raw_rows)?;
+        let input_bytes = checked_external_bytes(
+            &[
+                base_external_bytes,
+                source_owner_bytes,
+                rescoped_metadata_bytes,
+                retained_rescoped_bytes,
+                raw_bytes,
+            ],
+            "native anonymous re-scope input size overflow",
+        )?;
+        let mut guard = match interrupt.as_ref() {
+            Some(slot) => Guard::with_interrupt(
+                cancellation.clone(),
+                limits.deadline,
+                limits.cancellation_stride,
+                slot.clone(),
+            ),
+            None => Guard::new(
+                cancellation.clone(),
+                limits.deadline,
+                limits.cancellation_stride,
+            ),
+        };
+        let mut session = Session::new(&mut guard, limits, input_bytes)?;
+        let transformed = crate::parse::rescope_anonymous_rows_v2(
+            [
+                raw_rows[0].as_slice(),
+                raw_rows[1].as_slice(),
+                raw_rows[2].as_slice(),
+            ],
+            target,
+            &mut session,
+            &cancellation,
+        )?;
+        session.finish()?;
+        retained_rescoped_bytes = retained_rescoped_bytes
+            .checked_add(canonical_row_storage_bytes(&transformed)?)
+            .ok_or_else(|| NativeError::limit("native re-scoped row size overflow"))?;
+        rescoped.push((document_ordinal, transformed));
+    }
+
+    let pending_count = rescoped
+        .iter()
+        .flat_map(|(_ordinal, collections)| collections)
+        .try_fold(0_usize, |total, rows| {
+            total
+                .checked_add(rows.len())
+                .ok_or_else(|| NativeError::limit("native re-scoped root count overflow"))
+        })?;
+    let pending_root_bytes = pending_count
+        .checked_mul(size_of::<PendingComponentId>())
+        .ok_or_else(|| NativeError::limit("native re-scoped pending root size overflow"))?;
+    let mut pending_documents: Vec<(usize, [Option<Vec<PendingComponentId>>; 3])> = Vec::new();
+    pending_documents
+        .try_reserve_exact(rescoped.len())
+        .map_err(|_| NativeError::limit("native pending re-scope allocation failed"))?;
+    let pending_metadata_bytes = pending_documents
+        .capacity()
+        .checked_mul(size_of::<(usize, [Option<Vec<PendingComponentId>>; 3])>())
+        .ok_or_else(|| NativeError::limit("native pending re-scope size overflow"))?;
+    let builder_external_bytes = checked_external_bytes(
+        &[
+            base_external_bytes,
+            source_owner_bytes,
+            rescoped_metadata_bytes,
+            retained_rescoped_bytes,
+            pending_metadata_bytes,
+            pending_root_bytes,
+        ],
+        "native re-scope builder accounting overflow",
+    )?;
+    let mut builder = NativeComponentBuilder::with_control(
+        limits,
+        cancellation.clone(),
+        interrupt.clone(),
+        builder_external_bytes,
+    )?;
+    for (document_ordinal, collections) in rescoped {
+        let mut pending: [Option<Vec<PendingComponentId>>; 3] = Default::default();
+        for (collection_index, rows) in collections.into_iter().enumerate() {
+            if rows.is_empty() {
+                continue;
+            }
+            let mut roots = Vec::new();
+            roots.try_reserve_exact(rows.len()).map_err(|_| {
+                NativeError::limit("native pending re-scope root allocation failed")
+            })?;
+            for row in rows {
+                cancellation.checkpoint()?;
+                roots.push(builder.intern_canonical(&row)?);
+            }
+            pending[collection_index] = Some(roots);
+        }
+        pending_documents.push((document_ordinal, pending));
+    }
+    let live_pending_bytes = pending_re_scope_bytes(&pending_documents)?;
+    builder.set_external_bytes(checked_external_bytes(
+        &[base_external_bytes, source_owner_bytes, live_pending_bytes],
+        "native frozen re-scope accounting overflow",
+    )?)?;
+    let frozen = builder.freeze()?;
+    let mut resolve_guard = match interrupt.as_ref() {
+        Some(slot) => Guard::with_interrupt(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+            slot.clone(),
+        ),
+        None => Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        ),
+    };
+    let mut resolve_work = 0_u64;
+    for (document_ordinal, pending) in pending_documents {
+        let document = documents.get_mut(document_ordinal).ok_or_else(|| {
+            NativeError::protocol("native pending anonymous scope is out of bounds")
+        })?;
+        for (collection_index, roots) in pending.into_iter().enumerate() {
+            let Some(roots) = roots else {
+                continue;
+            };
+            document.2[collection_index] = Some(resolve_roots(
+                &frozen,
+                &roots,
+                &mut resolve_guard,
+                &mut resolve_work,
+                limits,
+            )?);
+        }
+    }
+    let arena = frozen.into_arena();
+    for (document, target) in documents.iter().zip(targets) {
+        if target.is_none() {
+            continue;
+        }
+        for (collection_index, roots) in document.2.iter().enumerate() {
+            let Some(roots) = roots else {
+                continue;
+            };
+            for identifier in roots {
+                if arena.category(*identifier)? != STRUCTURAL_CATEGORIES[collection_index] {
+                    return Err(NativeError::protocol(
+                        "native re-scoped root has the wrong structural category",
+                    ));
+                }
+            }
+        }
+    }
+    cancellation.checkpoint()?;
+    Ok(Some(arena))
+}
+
+fn canonical_row_storage_bytes(rows: &[Vec<Vec<u8>>; 3]) -> NativeResult<usize> {
+    rows.iter().try_fold(0_usize, |total, collection| {
+        let metadata = collection
+            .capacity()
+            .checked_mul(size_of::<Vec<u8>>())
+            .ok_or_else(|| NativeError::limit("native canonical row metadata size overflow"))?;
+        collection.iter().try_fold(
+            total
+                .checked_add(metadata)
+                .ok_or_else(|| NativeError::limit("native canonical row size overflow"))?,
+            |subtotal, row| {
+                subtotal
+                    .checked_add(row.capacity())
+                    .ok_or_else(|| NativeError::limit("native canonical row size overflow"))
+            },
+        )
+    })
+}
+
+fn pending_re_scope_bytes(
+    documents: &[(usize, [Option<Vec<PendingComponentId>>; 3])],
+) -> NativeResult<usize> {
+    let metadata = documents
+        .len()
+        .checked_mul(size_of::<(usize, [Option<Vec<PendingComponentId>>; 3])>())
+        .ok_or_else(|| NativeError::limit("native pending re-scope metadata size overflow"))?;
+    documents
+        .iter()
+        .try_fold(metadata, |total, (_ordinal, roots)| {
+            roots.iter().try_fold(total, |subtotal, values| {
+                let bytes = values.as_ref().map_or(Ok(0), |values| {
+                    values
+                        .capacity()
+                        .checked_mul(size_of::<PendingComponentId>())
+                        .ok_or_else(|| {
+                            NativeError::limit("native pending re-scope root size overflow")
+                        })
+                })?;
+                subtotal
+                    .checked_add(bytes)
+                    .ok_or_else(|| NativeError::limit("native pending re-scope size overflow"))
+            })
+        })
+}
+
+fn checked_external_bytes(values: &[usize], message: &'static str) -> NativeResult<usize> {
+    values.iter().try_fold(0_usize, |total, value| {
+        total
+            .checked_add(*value)
+            .ok_or_else(|| NativeError::limit(message))
+    })
 }
 
 fn resolve_roots(
@@ -1721,9 +2028,11 @@ mod tests {
             sources,
             &[vec![0], vec![1]],
             &[0, 1],
+            &[None, None],
             limits,
             Cancellation::with_duration(None),
             None,
+            0,
             0,
         )
         .expect("composite closure");
@@ -1815,9 +2124,11 @@ mod tests {
             sources,
             &[vec![0], vec![1]],
             &[0, 1],
+            &[None, None],
             limits,
             Cancellation::with_duration(None),
             None,
+            0,
             0,
         )
         .expect("scoped composite closure");
