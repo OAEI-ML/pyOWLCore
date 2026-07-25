@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
@@ -50,8 +51,14 @@ def main() -> None:
     if not hasattr(core_extension, "_parse_rdfxml_retained_v2"):
         raise RuntimeError("native artifact lacks the guarded retained RDF/XML parser")
     pyelk_native = _load_pyelk_extension(Path(os.environ["PYOWL_CORE_TEST_PYELK_NATIVE_LIBRARY"]))
-    from pyelk.indexing.compiler import compile_ontology  # type: ignore[import-not-found]
-    from pyelk.indexing.summary import compiler_digest  # type: ignore[import-not-found]
+    from pyelk import Reasoner, ReasonerConfig  # type: ignore[import-not-found]
+    from pyelk.indexing.encoded import (  # type: ignore[import-not-found]
+        ENCODED_SCHEMA_NAME,
+        ENCODED_SCHEMA_VERSION,
+    )
+
+    if cast(Any, pyelk_native).encoded_view_schemas():
+        raise AssertionError("pyELK fixture advertised an unfinished encoded input capability")
 
     functional_source = b"""Prefix(:=<urn:core-pyelk#>) Ontology(<urn:core-pyelk>
       Declaration(Class(:A))
@@ -94,6 +101,10 @@ def main() -> None:
             source,
             options=options(format, BackendPreference.PYTHON),
         )
+        expected = Reasoner(
+            reference,
+            ReasonerConfig(backend="python", unsupported="error"),
+        )
         with ExitStack() as stack:
             if guarded_candidate:
                 stack.enter_context(
@@ -134,22 +145,46 @@ def main() -> None:
             if type(raw_owner) is not cast(Any, core_extension)._NativeSnapshotHandle:
                 raise AssertionError("public load did not retain the exact Rust snapshot owner")
             before = cast(Any, raw_owner)._publication_counters_v2()
+            state = cast(Any, selected)._native_snapshot_state
+            advertised = replace(
+                state.capabilities,
+                encoded_view_schemas={ENCODED_SCHEMA_NAME: ENCODED_SCHEMA_VERSION},
+            )
             scalar_error = AssertionError("pyELK handoff crossed scalar ontology traversal")
             with (
+                ExitStack() as reasoner_stack,
+                patch.object(state, "capabilities", advertised),
+                patch.object(
+                    pyelk_native,
+                    "encoded_view_schemas",
+                    return_value={ENCODED_SCHEMA_NAME: ENCODED_SCHEMA_VERSION},
+                ),
                 patch.object(type(selected), "iter_axioms", side_effect=scalar_error),
                 patch.object(type(selected), "iter_extensions", side_effect=scalar_error),
                 patch.object(type(selected), "ontology_annotations", side_effect=scalar_error),
                 patch.object(type(selected), "signature", side_effect=scalar_error),
+                patch(
+                    "pyelk.api._compile_ontology_with_materialization_count",
+                    side_effect=scalar_error,
+                ),
             ):
-                encoded = selected.view(EncodedStructuralView)
-                direct = pyelk_native.create_session_from_encoded(encoded, 1, "error")
-            after = cast(Any, raw_owner)._publication_counters_v2()
-
-            compiled = compile_ontology(reference, unsupported="error")
-            scalar = pyelk_native.create_session(compiled.encode(), 1)
-            try:
+                actual = reasoner_stack.enter_context(
+                    Reasoner(
+                        selected,
+                        ReasonerConfig(backend="rust", workers=1, unsupported="error"),
+                    )
+                )
+                if actual.ontology is not selected:
+                    raise AssertionError("public pyELK facade changed the retained owner identity")
+                session = cast(Any, actual)._session
+                handoff = session._encoded_owner
+                if handoff is None:
+                    raise AssertionError("public pyELK facade did not retain its encoded handoff")
+                encoded = handoff.encoded_view
+                if not isinstance(encoded, EncodedStructuralView):
+                    raise AssertionError("public pyELK facade retained the wrong encoded view type")
                 exporters = {id(value.obj) for value in encoded.buffers.values()}
-                if encoded.owner is not selected:
+                if handoff.owner is not selected or encoded.owner is not selected:
                     raise AssertionError("encoded handoff changed the exact public owner")
                 if len(encoded.buffers) != 11 or len(exporters) != 1:
                     raise AssertionError("encoded handoff is not eleven slices over one exporter")
@@ -157,6 +192,22 @@ def main() -> None:
                     raise AssertionError(
                         "encoded handoff exporter is not the direct immutable bytes owner"
                     )
+                actual_results = (
+                    actual.is_consistent(),
+                    actual.classify(),
+                    actual.classify_object_properties(),
+                    actual.realize(),
+                )
+                expected_results = (
+                    expected.is_consistent(),
+                    expected.classify(),
+                    expected.classify_object_properties(),
+                    expected.realize(),
+                )
+                if actual_results != expected_results:
+                    raise AssertionError("public pyELK encoded and scalar results diverge")
+
+                after = cast(Any, raw_owner)._publication_counters_v2()
                 if after.encoded_view_requests != before.encoded_view_requests + 1:
                     raise AssertionError(
                         "encoded handoff did not use exactly one native view export"
@@ -167,34 +218,38 @@ def main() -> None:
                 ):
                     raise AssertionError("encoded handoff materialized scalar facade rows")
 
-                direct_diagnostics = direct.diagnostics()
-                scalar_diagnostics = scalar.diagnostics()
-                expected_digest = compiler_digest(compiled).hex()
-                if direct_diagnostics["compiler_digest"] != expected_digest:
+                actual_diagnostics = actual.diagnostics()
+                expected_diagnostics = expected.diagnostics()
+                expected_digest = expected_diagnostics["compiler_digest"]
+                if actual_diagnostics["compiler_digest"] != expected_digest:
                     raise AssertionError(
-                        "pyELK direct compiler digest diverges from scalar compilation"
+                        "public pyELK encoded compiler digest diverges from scalar compilation"
                     )
-                if scalar_diagnostics["compiler_digest"] != expected_digest:
-                    raise AssertionError("pyELK scalar compiler digest diverges from its source IR")
-                if direct_diagnostics["encoded_zero_copy_buffers"] != 11:
+                if actual_diagnostics["ingestion_path"] != "encoded-native":
+                    raise AssertionError("public pyELK facade did not select encoded-native")
+                if actual_diagnostics["materialized_scalar_rows"] != 0:
+                    raise AssertionError("public pyELK facade materialized scalar compiler rows")
+                if actual_diagnostics["encoded_zero_copy_buffers"] != 11:
                     raise AssertionError("pyELK did not borrow all eleven direct buffers")
-                if direct_diagnostics["encoded_detached_buffer_count"] != 11:
+                if actual_diagnostics["encoded_detached_buffer_count"] != 11:
                     raise AssertionError("pyELK did not detach the shared exporter")
-                if direct_diagnostics["encoded_staging_copy_bytes"] != 0:
+                if actual_diagnostics["encoded_staging_copy_bytes"] != 0:
                     raise AssertionError("pyELK staged the direct encoded handoff")
-                if direct.debug_snapshot(realize=True) != scalar.debug_snapshot(realize=True):
-                    raise AssertionError("pyELK direct and scalar results diverge")
-                return {
+                result = {
                     "compiler_digest": expected_digest,
                     "encoded_buffers": len(encoded.buffers),
                     "encoded_exporters": len(exporters),
                     "parser_bytes": after.parser_bytes,
+                    "public_operations": len(actual_results),
                     "scalar_facade_rows": after.rows_emitted - before.rows_emitted,
                 }
-            finally:
-                direct.close()
-                scalar.close()
+            if selected.capabilities.encoded_view_schemas:
+                raise AssertionError("test-local core capability leaked into the public snapshot")
+            if cast(Any, pyelk_native).encoded_view_schemas():
+                raise AssertionError("test-local pyELK capability leaked into the native module")
+            return result
         finally:
+            expected.close()
             for snapshot in (selected, reference):
                 close_snapshot = getattr(snapshot, "close", None)
                 if callable(close_snapshot):
@@ -212,10 +267,7 @@ def main() -> None:
             guarded_candidate=True,
         ),
     }
-    if (
-        observed["functional"]["compiler_digest"]
-        != observed["rdfxml"]["compiler_digest"]
-    ):
+    if observed["functional"]["compiler_digest"] != observed["rdfxml"]["compiler_digest"]:
         raise AssertionError("format-equivalent retained owners produced different pyELK compilers")
     print(json.dumps({"formats": observed}, sort_keys=True))
 
