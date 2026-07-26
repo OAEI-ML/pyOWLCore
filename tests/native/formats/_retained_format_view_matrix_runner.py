@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import json
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
@@ -16,11 +17,17 @@ def main() -> None:
     from pyowl_core import (
         AxiomScope,
         BackendPreference,
+        BackendProtocolError,
+        CancellationSource,
         DocumentFormat,
         EncodedStructuralView,
         ImportPolicy,
         LoadOptions,
         OntologyDelta,
+        OntologySyntaxError,
+        OperationCancelledError,
+        ParseLimits,
+        ResourceLimitError,
         apply_delta,
         compose_views,
         decode_snapshot,
@@ -82,6 +89,9 @@ def main() -> None:
     def forced_native_snapshot(
         source: bytes,
         format_value: DocumentFormat,
+        *,
+        load_options: LoadOptions | None = None,
+        cancellation_token: object | None = None,
     ) -> Any:
         parser_name = {
             DocumentFormat.FUNCTIONAL: "parse_functional",
@@ -104,10 +114,26 @@ def main() -> None:
         ):
             return load_snapshot(
                 source,
-                options=options(format_value, BackendPreference.NATIVE),
+                options=(
+                    options(format_value, BackendPreference.NATIVE)
+                    if load_options is None
+                    else load_options
+                ),
+                cancellation_token=cast(Any, cancellation_token),
             )
 
     observed: dict[str, dict[str, object]] = {}
+    malformed_sources = {
+        DocumentFormat.FUNCTIONAL: b"Ontology(Declaration(Class(<urn:broken>))",
+        DocumentFormat.RDF_XML: (
+            b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+            b'xmlns:owl="http://www.w3.org/2002/07/owl#"><owl:Ontology></rdf:RDF>'
+        ),
+        DocumentFormat.TURTLE: b"@prefix ex: <urn:broken:> . ex:A ex:p",
+        DocumentFormat.OWL_XML: (
+            b'<Ontology xmlns="http://www.w3.org/2002/07/owl#"><Declaration></Ontology>'
+        ),
+    }
     document = every_constructor_document()
     right_document = parse_document(
         b"Ontology(<urn:format-view-matrix:right> "
@@ -129,6 +155,41 @@ def main() -> None:
         )
         expected_roots = scalar_roots(reference)
         expected_mapped_roots = scalar_roots(right_reference)
+
+        try:
+            forced_native_snapshot(malformed_sources[format_value], format_value)
+        except OntologySyntaxError as error:
+            syntax_error_code = error.code
+        else:
+            raise AssertionError(f"{format_value.value} malformed source did not fail")
+
+        limited_options = replace(
+            options(format_value, BackendPreference.NATIVE),
+            limits=ParseLimits(max_axioms=1),
+        )
+        try:
+            forced_native_snapshot(
+                source,
+                format_value,
+                load_options=limited_options,
+            )
+        except ResourceLimitError as error:
+            limit_error_code = error.code
+        else:
+            raise AssertionError(f"{format_value.value} axiom limit did not fail")
+
+        cancellation = CancellationSource()
+        cancellation.cancel(f"{format_value.value} matrix cancellation")
+        try:
+            forced_native_snapshot(
+                source,
+                format_value,
+                cancellation_token=cancellation.token,
+            )
+        except OperationCancelledError as error:
+            cancellation_error_code = error.code
+        else:
+            raise AssertionError(f"{format_value.value} cancellation did not fail")
 
         selected = forced_native_snapshot(source, format_value)
         right_selected = forced_native_snapshot(right_source, format_value)
@@ -163,6 +224,17 @@ def main() -> None:
 
         direct_roots = decode_root_canonical_bytes(direct.buffers)
         right_direct_roots = decode_root_canonical_bytes(right_direct.buffers)
+        try:
+            independent_decoder.decode_segmented_root_canonical_bytes(
+                replace(direct, descriptor=b"hostile"),
+                expected_owner=selected,
+                expected_scope=AxiomScope.CLOSURE,
+                expected_document_key=None,
+            )
+        except BackendProtocolError as error:
+            hostile_descriptor_code = error.code
+        else:
+            raise AssertionError(f"{format_value.value} hostile encoded descriptor did not fail")
         overlay_decoded = independent_decoder.decode_segmented_root_canonical_bytes(
             overlay_encoded,
             expected_owner=overlay,
@@ -277,6 +349,7 @@ def main() -> None:
         )
 
         observed[format_value.value] = {
+            "cancellation_error_code": cancellation_error_code,
             "composite_model_row_deltas": [
                 after_composite_python.model_rows_materialized
                 - before_composite_python.model_rows_materialized,
@@ -302,6 +375,8 @@ def main() -> None:
             "direct_root_parity": direct_roots == expected_roots,
             "eager_structural_objects": ingestion.eager_structural_objects_materialized,
             "fingerprint_parity": fingerprint_parity,
+            "hostile_descriptor_code": hostile_descriptor_code,
+            "limit_error_code": limit_error_code,
             "mapped_one_exporter": mapped_one_exporter,
             "mapped_owner_identity": mapped_owner_identity,
             "mapped_readonly": mapped_readonly,
@@ -319,6 +394,7 @@ def main() -> None:
             ),
             "source_bytes": len(source),
             "source_map_parity": source_map_parity,
+            "syntax_error_code": syntax_error_code,
             "right_direct_owner_identity": right_direct.owner is right_selected,
             "right_direct_root_parity": right_direct_roots == expected_mapped_roots,
             "right_wire_parity": right_selected_wire == right_reference_wire,

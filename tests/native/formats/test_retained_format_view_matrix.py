@@ -29,9 +29,16 @@ def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -
     )
     observed = json.loads(completed.stdout)
     assert set(observed) == {"functional", "owlxml", "rdfxml", "turtle"}
+    syntax_codes = {
+        "functional": "FORMAT_SYNTAX",
+        "owlxml": "OWLXML_SYNTAX",
+        "rdfxml": "RDFXML_SYNTAX",
+        "turtle": "TURTLE_SYNTAX",
+    }
 
     for format_name, result in observed.items():
         assert result == {
+            "cancellation_error_code": "OPERATION_CANCELLED",
             "composite_model_row_deltas": [0, 0],
             "composite_owner_identity": True,
             "composite_page_request_deltas": [0, 0],
@@ -44,6 +51,8 @@ def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -
             "direct_root_parity": True,
             "eager_structural_objects": 0,
             "fingerprint_parity": True,
+            "hostile_descriptor_code": "ENCODED_VIEW_DESCRIPTOR",
+            "limit_error_code": "NATIVE_WIRE_LIMIT",
             "mapped_one_exporter": True,
             "mapped_owner_identity": True,
             "mapped_readonly": True,
@@ -57,6 +66,7 @@ def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -
             "publication_structural_rows_copied": 0,
             "source_bytes": result["source_bytes"],
             "source_map_parity": True,
+            "syntax_error_code": syntax_codes[format_name],
             "right_direct_owner_identity": True,
             "right_direct_root_parity": True,
             "right_wire_parity": True,
