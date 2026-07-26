@@ -1380,6 +1380,52 @@ def publish_retained_turtle_snapshot_v2(
     )
 
 
+def publish_retained_owlxml_snapshot_v2(
+    summary: bytes,
+    *,
+    parsed_native_storage: object,
+    phase_timings: tuple[tuple[str, float], ...],
+    payload: SourcePayload,
+    detection: FormatDetection,
+    document_iri: IRI | None,
+    media_type: str | None,
+    options: LoadOptions,
+    resolver: ImportResolver | None,
+    cancellation_token: CancellationToken | None,
+    load_started: float,
+    root_parse_started: float,
+) -> OntologySnapshot:
+    """Publish one privately selected OWL/XML retained-owner checkpoint."""
+
+    seed = _decode_retained_functional_seed_v2(summary, options.limits)
+    runtime = native._runtime()
+    extension = runtime.extension
+    if not runtime.probe.available or extension is None:
+        raise BackendProtocolError(
+            "retained OWL/XML parser storage outlived its compatible extension",
+            code="NATIVE_INGESTION_REGISTRATION",
+        )
+    return _publish_retained_snapshot_v2(
+        summary,
+        seed=seed,
+        rdf_total_triples=None,
+        allow_partial_rdf_mapping=False,
+        expected_format="owlxml",
+        extension=extension,
+        parsed_native_storage=parsed_native_storage,
+        phase_timings=phase_timings,
+        payload=payload,
+        detection=detection,
+        document_iri=document_iri,
+        media_type=media_type,
+        options=options,
+        resolver=resolver,
+        cancellation_token=cancellation_token,
+        load_started=load_started,
+        root_parse_started=root_parse_started,
+    )
+
+
 def _publish_retained_snapshot_v2(
     summary: bytes,
     *,
@@ -1462,7 +1508,7 @@ def _publish_retained_snapshot_v2(
         options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
         or (
             options.preserve_source_map
-            and expected_format not in {"functional", "rdfxml", "turtle"}
+            and expected_format not in {"functional", "rdfxml", "turtle", "owlxml"}
         )
         or options.validate_owl2_dl
         or detection.format.value != expected_format

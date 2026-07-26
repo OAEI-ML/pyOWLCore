@@ -210,6 +210,17 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...
 
+    def _owlxml_retained_bridge_allocation_probe_v2(
+        self,
+        source: object,
+        document_iri: object | None,
+        config: object,
+        collect_provenance: bool,
+        allow_swrl: bool,
+        require_empty_imports: bool,
+        fail_after: int | None = None,
+    ) -> tuple[bytes, int]: ...
+
     def _parse_turtle_retained_v2(
         self,
         source: object,

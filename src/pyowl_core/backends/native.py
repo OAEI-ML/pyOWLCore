@@ -219,6 +219,28 @@ class _Extension(Protocol):
         cancel: _NativeCancellation | None = None,
     ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
 
+    def _parse_owlxml_retained_v2(
+        self,
+        data: object,
+        document_iri: str | None,
+        config: object,
+        collect_provenance: bool,
+        allow_swrl: bool,
+        require_empty_imports: bool,
+        cancel: _NativeCancellation | None = None,
+    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+
+    def _parse_owlxml_retained_source_map_v2(
+        self,
+        data: object,
+        document_iri: str | None,
+        config: object,
+        collect_provenance: bool,
+        allow_swrl: bool,
+        require_empty_imports: bool,
+        cancel: _NativeCancellation | None = None,
+    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+
     def _fork_parsed_structural_storage_v2(
         self,
         parsed: object,
@@ -593,7 +615,7 @@ def _parse_rdfxml_retained_v2(
 ) -> _NativeRetainedFunctionalParseV2:
     """Use the private, unadvertised retained RDF/XML production seam."""
 
-    return _parse_rdf_retained_v2(
+    return _parse_structural_retained_v2(
         "rdfxml",
         data,
         document_iri=document_iri,
@@ -621,7 +643,7 @@ def _parse_turtle_retained_v2(
 ) -> _NativeRetainedFunctionalParseV2:
     """Use the private, unadvertised retained Turtle production seam."""
 
-    return _parse_rdf_retained_v2(
+    return _parse_structural_retained_v2(
         "turtle",
         data,
         document_iri=document_iri,
@@ -635,7 +657,34 @@ def _parse_turtle_retained_v2(
     )
 
 
-def _parse_rdf_retained_v2(
+def _parse_owlxml_retained_v2(
+    data: bytes,
+    *,
+    document_iri: str | None,
+    limits: ParseLimits | None = None,
+    collect_provenance: bool = False,
+    preserve_source_map: bool = False,
+    allow_swrl: bool = False,
+    require_empty_imports: bool = False,
+    cancellation_token: CancellationToken | None = None,
+) -> _NativeRetainedFunctionalParseV2:
+    """Use the private, unadvertised retained OWL/XML production seam."""
+
+    return _parse_structural_retained_v2(
+        "owlxml",
+        data,
+        document_iri=document_iri,
+        limits=limits,
+        collect_provenance=collect_provenance,
+        preserve_source_map=preserve_source_map,
+        allow_partial_rdf_mapping=False,
+        allow_swrl=allow_swrl,
+        require_empty_imports=require_empty_imports,
+        cancellation_token=cancellation_token,
+    )
+
+
+def _parse_structural_retained_v2(
     syntax: str,
     data: bytes,
     *,
@@ -648,9 +697,11 @@ def _parse_rdf_retained_v2(
     require_empty_imports: bool,
     cancellation_token: CancellationToken | None,
 ) -> _NativeRetainedFunctionalParseV2:
-    if syntax not in {"rdfxml", "turtle"}:
-        raise AssertionError("unknown retained RDF syntax")
-    label = "RDF/XML" if syntax == "rdfxml" else "Turtle"
+    if syntax not in {"rdfxml", "turtle", "owlxml"}:
+        raise AssertionError("unknown retained structural syntax")
+    label = {"rdfxml": "RDF/XML", "turtle": "Turtle", "owlxml": "OWL/XML"}[syntax]
+    if syntax == "owlxml" and allow_partial_rdf_mapping:
+        raise AssertionError("OWL/XML has no partial RDF mapping mode")
     runtime = _runtime()
     extension = runtime.extension
     if not runtime.probe.available or extension is None:
@@ -687,19 +738,33 @@ def _parse_rdf_retained_v2(
     selected.enforce("max_source_bytes", len(data))
     config = _encode_config(selected, cancellation_token, verify=False)
     with _relay(extension, selected, cancellation_token) as cancel:
-        result = _call_parse_value(
-            extension,
-            lambda: hook(
-                data,
-                document_iri,
-                config,
-                collect_provenance,
-                allow_partial_rdf_mapping,
-                allow_swrl,
-                require_empty_imports,
-                cancel,
-            ),
-        )
+        if syntax == "owlxml":
+            result = _call_parse_value(
+                extension,
+                lambda: hook(
+                    data,
+                    document_iri,
+                    config,
+                    collect_provenance,
+                    allow_swrl,
+                    require_empty_imports,
+                    cancel,
+                ),
+            )
+        else:
+            result = _call_parse_value(
+                extension,
+                lambda: hook(
+                    data,
+                    document_iri,
+                    config,
+                    collect_provenance,
+                    allow_partial_rdf_mapping,
+                    allow_swrl,
+                    require_empty_imports,
+                    cancel,
+                ),
+            )
     if type(result) is not tuple or len(result) != 3:
         raise BackendProtocolError(
             f"native retained {label} parser returned invalid result framing",
@@ -725,14 +790,23 @@ def _parse_rdf_retained_v2(
             f"native retained {label} parser returned invalid phase counters",
             code="NATIVE_RESULT_TYPE",
         )
-    if not framing.startswith(_RETAINED_RDFXML_SEED_MAGIC_V2):
+    expected_magic = (
+        _RETAINED_FUNCTIONAL_SEED_MAGIC_V2
+        if syntax == "owlxml"
+        else _RETAINED_RDFXML_SEED_MAGIC_V2
+    )
+    if not framing.startswith(expected_magic):
         raise BackendProtocolError(
             f"native retained {label} parser returned unknown metadata",
             code="NATIVE_PARSE_VERSION",
         )
     names = (
         f"native_{syntax}_syntax_parse_seconds",
-        "native_rdf_mapping_seconds",
+        (
+            "native_owlxml_structural_mapping_seconds"
+            if syntax == "owlxml"
+            else "native_rdf_mapping_seconds"
+        ),
         "native_result_encode_seconds",
         "native_arena_construction_seconds",
         "native_freeze_seconds",
@@ -1796,6 +1870,8 @@ def _call_parse_value(extension: _Extension, operation: Callable[[], object]) ->
             "NATIVE_RDFXML_IRI_REFERENCE",
             "NATIVE_RDFXML_RELATIVE_IRI_NO_BASE",
             "NATIVE_RDFXML_SYNTAX",
+            "NATIVE_OWLXML_ROOT",
+            "NATIVE_OWLXML_SYNTAX",
             "NATIVE_TURTLE_ENCODING",
             "NATIVE_TURTLE_RELATIVE_IRI",
             "NATIVE_TURTLE_SYNTAX",
@@ -1806,6 +1882,7 @@ def _call_parse_value(extension: _Extension, operation: Callable[[], object]) ->
             "NATIVE_EXTENSION_DISABLED",
             "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
             "NATIVE_TURTLE_RETAINED_UNSUPPORTED",
+            "NATIVE_OWLXML_RETAINED_UNSUPPORTED",
             "NATIVE_RDF_AXIOM_REIFICATION",
             "NATIVE_RDF_MAPPING_CARDINALITY",
             "NATIVE_RDF_MAPPING_INCOMPLETE",
