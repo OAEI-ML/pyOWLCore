@@ -119,6 +119,7 @@ def _wheel(
 def _sdist(
     tmp_path: Path,
     *,
+    duplicate_member: str | None = None,
     metadata: bytes = _METADATA,
     pyproject: bytes = _PYPROJECT,
     root: str = "pyowl_core-0.1.0.dev0",
@@ -137,6 +138,14 @@ def _sdist(
     path = tmp_path / "pyowl_core-0.1.0.dev0.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
         for name, payload in entries.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            info.mode = 0o644
+            info.mtime = 1_735_689_600
+            archive.addfile(info, io.BytesIO(payload))
+        if duplicate_member is not None:
+            name = f"{root}/{duplicate_member}"
+            payload = b"ambiguous replacement"
             info = tarfile.TarInfo(name)
             info.size = len(payload)
             info.mode = 0o644
@@ -337,6 +346,24 @@ def test_sdist_root_must_match_project_identity(tmp_path: Path) -> None:
     assert not result.ok
     assert "sdist: archive root does not exactly match project identity" in result.errors
     assert "sdist: missing required source PKG-INFO" in result.errors
+
+
+def test_sdist_duplicate_member_blocks_before_ambiguous_payload_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = _sdist(tmp_path, duplicate_member="PKG-INFO")
+    monkeypatch.setattr(
+        artifact_inspector._SdistReader,
+        "read",
+        lambda *args: pytest.fail("ambiguous archive payload was read"),
+    )
+
+    result = inspect_artifact(archive)
+
+    assert not result.ok
+    assert result.metadata == {}
+    assert "archive: duplicate member name" in result.errors
 
 
 def test_record_tampering_is_rejected(tmp_path: Path) -> None:

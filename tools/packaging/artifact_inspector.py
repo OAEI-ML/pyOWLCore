@@ -155,10 +155,11 @@ class _WheelReader:
 class _SdistReader:
     def __init__(self, path: Path) -> None:
         self._archive = tarfile.open(path, "r:*")  # noqa: SIM115 - closed by reader
-        self._info = {entry.name: entry for entry in self._archive.getmembers()}
+        self._entries = tuple(self._archive.getmembers())
+        self._info = {entry.name: entry for entry in self._entries}
 
     def names(self) -> tuple[str, ...]:
-        return tuple(self._info)
+        return tuple(entry.name for entry in self._entries)
 
     def read(self, name: str) -> bytes:
         stream = self._archive.extractfile(self._info[name])
@@ -168,10 +169,10 @@ class _SdistReader:
         return self._info[name].mode
 
     def sizes(self) -> tuple[int, ...]:
-        return tuple(entry.size for entry in self._info.values())
+        return tuple(entry.size for entry in self._entries)
 
     def unsafe_links(self) -> tuple[str, ...]:
-        return tuple(entry.name for entry in self._info.values() if entry.issym() or entry.islnk())
+        return tuple(entry.name for entry in self._entries if entry.issym() or entry.islnk())
 
     def close(self) -> None:
         self._archive.close()
@@ -381,6 +382,7 @@ def _validate_common(reader: ArchiveReader) -> tuple[list[str], int, bool]:
         resource_safe = False
     if len(set(names)) != len(names):
         errors.append("archive: duplicate member name")
+        resource_safe = False
     if len({name.casefold() for name in names}) != len(names):
         errors.append("archive: case-insensitive member collision")
     normalized_names = [
