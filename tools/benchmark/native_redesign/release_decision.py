@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
-from collections.abc import Mapping, Sequence
+import stat
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
-from typing import cast
+from typing import BinaryIO, TypeVar, cast
 
 INPUT_SCHEMA = "pyowl-core.native-redesign-release-evidence/2"
 DECISION_SCHEMA = "pyowl-core.native-redesign-release-decision/2"
@@ -44,6 +46,7 @@ _EVIDENCE_FIELDS = frozenset({"path", "sha256"})
 _STATUSES = frozenset({"pass", "fail", "not-run"})
 _GIT_REVISION = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_StableResultT = TypeVar("_StableResultT")
 
 
 class ReleaseDecisionError(ValueError):
@@ -54,14 +57,20 @@ def load_release_evidence(path: Path) -> dict[str, object]:
     """Load one evidence document and verify pass evidence beside the manifest."""
 
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        evidence_root = path.parent.resolve(strict=True)
+        manifest = _read_stable_regular_file(path, label="release evidence manifest")
+        payload = json.loads(manifest.decode("utf-8"))
+        if path.parent.resolve(strict=True) != evidence_root:
+            raise ReleaseDecisionError("release evidence manifest changed while reading")
+    except ReleaseDecisionError:
+        raise
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ReleaseDecisionError(f"cannot load release evidence: {error}") from error
     if not isinstance(payload, dict):
         raise ReleaseDecisionError("release evidence root must be an object")
     return evaluate_release_decision(
         cast(dict[str, object], payload),
-        evidence_root=path.resolve().parent,
+        evidence_root=evidence_root,
     )
 
 
@@ -286,7 +295,8 @@ def _verify_evidence_file(
         raise ReleaseDecisionError(f"{label}.path must be relative to the evidence manifest")
     try:
         resolved_root = root.resolve(strict=True)
-        resolved_path = (resolved_root / path).resolve()
+        selected_path = resolved_root / path
+        resolved_path = selected_path.resolve()
         resolved_path.relative_to(resolved_root)
     except (OSError, RuntimeError) as error:
         raise ReleaseDecisionError(f"{label}.path cannot be loaded: {error}") from error
@@ -294,24 +304,90 @@ def _verify_evidence_file(
         raise ReleaseDecisionError(f"{label}.path escapes the evidence root") from error
     if not resolved_root.is_dir():
         raise ReleaseDecisionError("evidence root must be a directory")
-    if not resolved_path.exists():
-        raise ReleaseDecisionError(f"{label}.path cannot be loaded: file does not exist")
-    if not resolved_path.is_file():
-        raise ReleaseDecisionError(f"{label}.path must name a regular file")
     try:
-        actual_sha256 = _sha256(resolved_path)
-    except OSError as error:
+        resolved_path = selected_path.resolve(strict=True)
+        resolved_path.relative_to(resolved_root)
+    except (OSError, RuntimeError) as error:
         raise ReleaseDecisionError(f"{label}.path cannot be loaded: {error}") from error
+    except ValueError as error:
+        raise ReleaseDecisionError(f"{label}.path escapes the evidence root") from error
+    actual_sha256 = _stable_regular_file_sha256(
+        selected_path,
+        label=f"{label}.path",
+    )
+    try:
+        resolved_after_read = selected_path.resolve(strict=True)
+        resolved_after_read.relative_to(resolved_root)
+    except (OSError, RuntimeError) as error:
+        raise ReleaseDecisionError(f"{label}.path cannot be loaded: {error}") from error
+    except ValueError as error:
+        raise ReleaseDecisionError(f"{label}.path escapes the evidence root") from error
+    if resolved_after_read != resolved_path:
+        raise ReleaseDecisionError(f"{label}.path changed while reading")
     if actual_sha256 != expected_sha256:
         raise ReleaseDecisionError(f"{label}.sha256 does not match {relative_path}")
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
+def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _consume_stable_regular_file(
+    path: Path,
+    *,
+    label: str,
+    consume: Callable[[BinaryIO], tuple[_StableResultT, int]],
+) -> _StableResultT:
+    try:
+        initial = path.lstat()
+    except OSError as error:
+        raise ReleaseDecisionError(f"cannot inspect {label}: {error}") from error
+    if not stat.S_ISREG(initial.st_mode):
+        raise ReleaseDecisionError(f"{label} must be a regular non-symlink file")
+    try:
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            result, consumed_bytes = consume(stream)
+            completed = os.fstat(stream.fileno())
+        final = path.lstat()
+    except OSError as error:
+        raise ReleaseDecisionError(f"cannot read {label}: {error}") from error
+    identities = {
+        _stat_identity(initial),
+        _stat_identity(opened),
+        _stat_identity(completed),
+        _stat_identity(final),
+    }
+    if len(identities) != 1 or not stat.S_ISREG(opened.st_mode) or consumed_bytes != opened.st_size:
+        raise ReleaseDecisionError(f"{label} changed while reading")
+    return result
+
+
+def _read_stable_regular_file(path: Path, *, label: str) -> bytes:
+    def consume(stream: BinaryIO) -> tuple[bytes, int]:
+        payload = stream.read()
+        return payload, len(payload)
+
+    return _consume_stable_regular_file(path, label=label, consume=consume)
+
+
+def _stable_regular_file_sha256(path: Path, *, label: str) -> str:
+    def consume(stream: BinaryIO) -> tuple[str, int]:
+        consumed_bytes = 0
+        digest = hashlib.sha256()
         for chunk in iter(lambda: stream.read(1024**2), b""):
+            consumed_bytes += len(chunk)
             digest.update(chunk)
-    return digest.hexdigest()
+        return digest.hexdigest(), consumed_bytes
+
+    return _consume_stable_regular_file(path, label=label, consume=consume)
 
 
 def _blocker(

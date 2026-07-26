@@ -143,6 +143,64 @@ def test_pass_evidence_must_exist_within_manifest_directory(tmp_path: Path) -> N
         evaluate_release_decision(payload, evidence_root=tmp_path)
 
 
+def test_pass_evidence_must_be_a_regular_non_symlink_file(tmp_path: Path) -> None:
+    payload = _evidence(tmp_path)
+    evidence = cast(
+        list[dict[str, str]],
+        cast(list[dict[str, object]], payload["core_gates"])[0]["evidence"],
+    )
+    path = tmp_path / evidence[0]["path"]
+    target = path.with_name(f"captured-{path.name}")
+    path.replace(target)
+    try:
+        path.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    with pytest.raises(ReleaseDecisionError, match="regular non-symlink file"):
+        evaluate_release_decision(payload, evidence_root=tmp_path)
+
+
+def test_pass_evidence_changed_during_hashing_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _evidence(tmp_path)
+    evidence = cast(
+        list[dict[str, str]],
+        cast(list[dict[str, object]], payload["core_gates"])[0]["evidence"],
+    )
+    path = tmp_path / evidence[0]["path"]
+    original_lstat = Path.lstat
+    inspections = 0
+
+    def mutate_before_final_identity(selected: Path) -> Any:
+        nonlocal inspections
+        if selected == path:
+            inspections += 1
+            if inspections == 2:
+                selected.write_bytes(b"changed-after-read")
+        return original_lstat(selected)
+
+    monkeypatch.setattr(Path, "lstat", mutate_before_final_identity)
+
+    with pytest.raises(ReleaseDecisionError, match="changed while reading"):
+        evaluate_release_decision(payload, evidence_root=tmp_path)
+
+
+def test_loader_rejects_a_symlinked_evidence_manifest(tmp_path: Path) -> None:
+    target = tmp_path / "captured-manifest.json"
+    target.write_text(json.dumps(_evidence(tmp_path)), encoding="utf-8")
+    path = tmp_path / "evidence.json"
+    try:
+        path.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    with pytest.raises(ReleaseDecisionError, match="regular non-symlink file"):
+        load_release_evidence(path)
+
+
 def test_legacy_schema_cannot_claim_a_pass(tmp_path: Path) -> None:
     payload = _evidence(tmp_path)
     payload["schema"] = "pyowl-core.native-redesign-release-evidence/1"
