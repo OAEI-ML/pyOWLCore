@@ -480,13 +480,13 @@ impl<'a> XmlStream<'a> {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Resource {
+pub(super) enum Resource {
     Iri(String),
     Blank(String),
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Term {
+pub(super) enum Term {
     Iri(String),
     Blank(String),
     Literal {
@@ -506,10 +506,10 @@ impl From<Resource> for Term {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct Triple {
-    subject: Resource,
-    predicate: String,
-    object: Term,
+pub(super) struct Triple {
+    pub(super) subject: Resource,
+    pub(super) predicate: String,
+    pub(super) object: Term,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2514,7 +2514,7 @@ fn decode_utf8(source: &[u8], session: &mut Session<'_>) -> NativeResult<(String
     Ok((output, codepoints))
 }
 
-fn map_graph(
+pub(super) fn map_graph(
     triples: Vec<Triple>,
     decoded_codepoints: u64,
     allow_swrl: bool,
@@ -7369,6 +7369,11 @@ fn python_triple_cmp(left: &Triple, right: &Triple) -> Ordering {
         .then_with(|| python_term_cmp(&left.object, &right.object))
 }
 
+pub(super) fn sort_graph_like_python(triples: &mut Vec<Triple>) {
+    triples.sort_unstable_by(python_triple_cmp);
+    triples.dedup();
+}
+
 #[derive(Clone, Copy)]
 struct PythonOrderedTriple<'a>(&'a Triple);
 
@@ -7673,7 +7678,11 @@ struct IriReference<'a> {
     fragment: Option<&'a str>,
 }
 
-fn resolve_iri(value: &str, base: Option<&str>, session: &mut Session<'_>) -> NativeResult<String> {
+pub(super) fn resolve_iri(
+    value: &str,
+    base: Option<&str>,
+    session: &mut Session<'_>,
+) -> NativeResult<String> {
     enforce_resolved_iri_size(value.len(), session)?;
     let reference = parse_iri_reference(value)?;
     let parsed_base = match (reference.scheme, base) {

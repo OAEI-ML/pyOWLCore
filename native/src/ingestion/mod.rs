@@ -8,6 +8,7 @@
 mod rdf_class_expressions;
 mod rdf_lists;
 mod rdfxml;
+mod turtle;
 #[cfg(any(test, feature = "test-hooks"))]
 mod v1_adapter;
 mod v2_adapter;
@@ -94,6 +95,56 @@ fn parse_rdfxml(
         session,
     )?
     .0)
+}
+
+fn parse_turtle(
+    source: &[u8],
+    document_iri: Option<&str>,
+    allow_swrl: bool,
+    session: &mut Session<'_>,
+) -> NativeResult<CanonicalDocument> {
+    Ok(parse_turtle_timed(
+        source,
+        document_iri,
+        allow_swrl,
+        false,
+        false,
+        false,
+        session,
+    )?
+    .0)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn parse_turtle_timed(
+    source: &[u8],
+    document_iri: Option<&str>,
+    allow_swrl: bool,
+    allow_partial_rdf_mapping: bool,
+    capture_occurrences: bool,
+    preserve_source_map: bool,
+    session: &mut Session<'_>,
+) -> NativeResult<(CanonicalDocument, u64)> {
+    check_turtle_source(source, session)?;
+    if let Some(iri) = document_iri {
+        check_turtle_iri(iri, session)?;
+    }
+    let (mut document, mapping_ns) = turtle::parse_and_map_timed(
+        source,
+        document_iri,
+        allow_swrl,
+        allow_partial_rdf_mapping,
+        capture_occurrences,
+        preserve_source_map,
+        session,
+    )?;
+    document.document_iri = document_iri
+        .map(|value| owned_text(value, session))
+        .transpose()?;
+    document.source_sha256 = sha256(source);
+    document.byte_length = u64::try_from(source.len())
+        .map_err(|_| NativeError::limit("native Turtle source length exceeds u64"))?;
+    Ok((document, mapping_ns))
 }
 
 fn parse_rdfxml_timed(
@@ -471,6 +522,36 @@ fn check_source(source: &[u8], session: &Session<'_>) -> NativeResult<()> {
     Ok(())
 }
 
+fn check_turtle_source(source: &[u8], session: &Session<'_>) -> NativeResult<()> {
+    let size = u64::try_from(source.len())
+        .map_err(|_| NativeError::limit("native Turtle source length exceeds u64"))?;
+    if size > session.limits().value(LimitKey::MaxSourceBytes)
+        || size > session.limits().value(LimitKey::MaxTotalSourceBytes)
+    {
+        return Err(NativeError::limit(
+            "native Turtle source exceeds configured resource limits",
+        ));
+    }
+    Ok(())
+}
+
+fn check_turtle_iri(value: &str, session: &Session<'_>) -> NativeResult<()> {
+    if u64::try_from(value.len()).map_or(true, |size| {
+        size > session.limits().value(LimitKey::MaxIriBytes)
+    }) {
+        return Err(NativeError::limit(
+            "native Turtle document IRI exceeds max_iri_bytes",
+        ));
+    }
+    crate::model::validate_iri(value).map_err(|error| {
+        if error.code == "NATIVE_WIRE_CORRUPTION" {
+            turtle::syntax_error()
+        } else {
+            error
+        }
+    })
+}
+
 fn check_iri(value: &str, session: &Session<'_>, limit_message: &'static str) -> NativeResult<()> {
     if u64::try_from(value.len()).map_or(true, |size| {
         size > session.limits().value(LimitKey::MaxIriBytes)
@@ -526,6 +607,32 @@ mod tests {
         </rdf:RDF>"#;
         let document = parse(source, Some("urn:document")).expect("mapped document");
         assert_eq!(document.document_iri.as_deref(), Some("urn:document"));
+        assert_eq!(document.source_sha256, sha256(source));
+        assert_eq!(document.byte_length, source.len() as u64);
+        assert_eq!(document.axioms.len(), 1);
+    }
+
+    #[test]
+    fn turtle_source_digest_and_document_iri_wrap_the_shared_mapper() {
+        let source = br#"
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix ex: <urn:turtle:> .
+            ex:C a owl:Class .
+        "#;
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
+        let document = parse_turtle(source, Some("urn:turtle:document"), true, &mut session)
+            .expect("mapped Turtle document");
+        session.finish().expect("finished session");
+        assert_eq!(
+            document.document_iri.as_deref(),
+            Some("urn:turtle:document")
+        );
         assert_eq!(document.source_sha256, sha256(source));
         assert_eq!(document.byte_length, source.len() as u64);
         assert_eq!(document.axioms.len(), 1);
