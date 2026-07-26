@@ -67,8 +67,9 @@ def test_real_retained_owner_crosses_pyelk_without_scalar_materialization() -> N
         env=environment,
     )
     observed = json.loads(completed.stdout)
-    assert set(observed["formats"]) == {"functional", "rdfxml", "turtle"}
-    assert set(observed["owners"]) == {"functional", "rdfxml", "turtle"}
+    expected_formats = {"functional", "rdfxml", "turtle", "owlxml"}
+    assert set(observed["formats"]) == expected_formats
+    assert set(observed["owners"]) == expected_formats
     digests = set()
     for result in observed["formats"].values():
         assert result["encoded_buffers"] == 11
@@ -129,7 +130,10 @@ def test_real_retained_owner_crosses_pyelk_without_scalar_materialization() -> N
             else:
                 assert result["fingerprint_accesses"] == direct_fingerprint_accesses
     functional = observed["owners"]["functional"]
-    rdfxml = observed["owners"]["rdfxml"]
     for owner in (*sorted(semantic_owners), "composite"):
-        assert functional[owner]["compiler_digest"] == rdfxml[owner]["compiler_digest"]
-        assert functional[owner]["encoded_buffer_bytes"] == rdfxml[owner]["encoded_buffer_bytes"]
+        assert {matrix[owner]["compiler_digest"] for matrix in observed["owners"].values()} == {
+            functional[owner]["compiler_digest"]
+        }
+        assert {
+            matrix[owner]["encoded_buffer_bytes"] for matrix in observed["owners"].values()
+        } == {functional[owner]["encoded_buffer_bytes"]}

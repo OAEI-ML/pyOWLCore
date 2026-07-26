@@ -56,7 +56,11 @@ def main() -> None:
     probe = native.probe(refresh=True)
     if not probe.available or "parse-functional-v1" not in probe.features:
         raise RuntimeError(probe.reason or "native Functional parser is unavailable")
-    for hook in ("_parse_rdfxml_retained_v2", "_parse_turtle_retained_v2"):
+    for hook in (
+        "_parse_rdfxml_retained_v2",
+        "_parse_turtle_retained_v2",
+        "_parse_owlxml_retained_v2",
+    ):
         if not hasattr(core_extension, hook):
             raise RuntimeError(f"native artifact lacks the guarded retained parser {hook}")
     pyelk_native = _load_pyelk_extension(Path(os.environ["PYOWL_CORE_TEST_PYELK_NATIVE_LIBRARY"]))
@@ -111,6 +115,8 @@ def main() -> None:
     right_rdfxml_source = render_source(right_functional_source, DocumentFormat.RDF_XML)
     turtle_source = render_source(functional_source, DocumentFormat.TURTLE)
     right_turtle_source = render_source(right_functional_source, DocumentFormat.TURTLE)
+    owlxml_source = render_source(functional_source, DocumentFormat.OWL_XML)
+    right_owlxml_source = render_source(right_functional_source, DocumentFormat.OWL_XML)
 
     def exercise(
         source: bytes,
@@ -131,6 +137,7 @@ def main() -> None:
                 parser_name = {
                     DocumentFormat.RDF_XML: "parse_rdfxml",
                     DocumentFormat.TURTLE: "parse_turtle",
+                    DocumentFormat.OWL_XML: "parse_owlxml",
                 }[format]
                 stack.enter_context(
                     patch(
@@ -562,10 +569,15 @@ def main() -> None:
 
     def native_snapshot(source: bytes, format: DocumentFormat) -> Any:
         with ExitStack() as stack:
-            if format in {DocumentFormat.RDF_XML, DocumentFormat.TURTLE}:
+            if format in {
+                DocumentFormat.RDF_XML,
+                DocumentFormat.TURTLE,
+                DocumentFormat.OWL_XML,
+            }:
                 parser_name = {
                     DocumentFormat.RDF_XML: "parse_rdfxml",
                     DocumentFormat.TURTLE: "parse_turtle",
+                    DocumentFormat.OWL_XML: "parse_owlxml",
                 }[format]
                 stack.enter_context(
                     patch(
@@ -720,6 +732,11 @@ def main() -> None:
             DocumentFormat.TURTLE,
             guarded_candidate=True,
         ),
+        "owlxml": exercise(
+            owlxml_source,
+            DocumentFormat.OWL_XML,
+            guarded_candidate=True,
+        ),
     }
     if len({result["compiler_digest"] for result in observed.values()}) != 1:
         raise AssertionError("format-equivalent retained owners produced different pyELK compilers")
@@ -739,6 +756,11 @@ def main() -> None:
             right_turtle_source,
             DocumentFormat.TURTLE,
         ),
+        "owlxml": exercise_owner_matrix(
+            owlxml_source,
+            right_owlxml_source,
+            DocumentFormat.OWL_XML,
+        ),
     }
 
     def owner_digest(format_name: str, owner_name: str) -> str:
@@ -748,20 +770,13 @@ def main() -> None:
         return value
 
     semantic_owners = ("direct", "decoded", "mmap", "overlay")
-    for format_name in ("functional", "rdfxml", "turtle"):
+    format_names = ("functional", "rdfxml", "turtle", "owlxml")
+    for format_name in format_names:
         semantic_digests = {owner_digest(format_name, owner_name) for owner_name in semantic_owners}
         if semantic_digests != {observed[format_name]["compiler_digest"]}:
             raise AssertionError("direct, decoded, mmap, no-op overlay, and scalar digests diverge")
     for owner_name in (*semantic_owners, "composite"):
-        if (
-            len(
-                {
-                    owner_digest(format_name, owner_name)
-                    for format_name in ("functional", "rdfxml", "turtle")
-                }
-            )
-            != 1
-        ):
+        if len({owner_digest(format_name, owner_name) for format_name in format_names}) != 1:
             raise AssertionError(f"format-equivalent {owner_name} owner digests diverge")
     print(json.dumps({"formats": observed, "owners": owner_matrix}, sort_keys=True))
 
