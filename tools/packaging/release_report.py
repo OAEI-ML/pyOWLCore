@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Literal
 
 from .artifact_inspector import InspectionResult, inspect_artifact
+from .platform_audit import APPROVED_LANES
 
 GateStatus = Literal["passed", "blocked", "failed"]
+SUPPORTED_CPYTHON_TAGS = ("cp310", "cp311", "cp312", "cp313", "cp314")
 REQUIRED_RELEASE_GATES = (
     "advisory_scan",
     "consumer_matrix",
@@ -100,6 +102,23 @@ def _artifact_paths(directory: Path) -> tuple[Path, ...]:
     return tuple(sorted(paths, key=lambda path: path.name))
 
 
+def expected_artifact_filenames(version: str) -> frozenset[str]:
+    """Return the exact pure, native, and source artifact matrix for a release."""
+
+    native = {
+        f"pyowl_core-{version}-{python_tag}-{python_tag}-{platform_tag}.whl"
+        for python_tag in SUPPORTED_CPYTHON_TAGS
+        for _, _, platform_tag in APPROVED_LANES.values()
+    }
+    return frozenset(
+        {
+            f"pyowl_core-{version}-py3-none-any.whl",
+            f"pyowl_core-{version}.tar.gz",
+            *native,
+        }
+    )
+
+
 def build_release_report(
     artifact_dir: Path,
     *,
@@ -138,12 +157,22 @@ def build_release_report(
     pure_count = sum(result.variant == "pure" for result in results)
     sdist_count = sum(result.variant == "sdist" for result in results)
     native_count = sum(result.variant == "native" for result in results)
+    expected_filenames = expected_artifact_filenames(expected_version)
+    actual_filenames = {path.name for path in paths}
+    for filename in sorted(expected_filenames - actual_filenames):
+        set_errors.append(f"artifact set is missing required artifact: {filename}")
+    for filename in sorted(actual_filenames - expected_filenames):
+        set_errors.append(f"artifact set contains unexpected artifact: {filename}")
     if pure_count != 1:
         set_errors.append(f"artifact set must contain exactly one pure wheel; found {pure_count}")
     if sdist_count != 1:
         set_errors.append(f"artifact set must contain exactly one sdist; found {sdist_count}")
-    if native_count == 0:
-        set_errors.append("artifact set contains no native wheels")
+    expected_native_count = len(SUPPORTED_CPYTHON_TAGS) * len(APPROVED_LANES)
+    if native_count != expected_native_count:
+        set_errors.append(
+            "artifact set must contain exactly "
+            f"{expected_native_count} native wheels; found {native_count}"
+        )
 
     blockers = list(set_errors)
     for result in results:
@@ -155,8 +184,7 @@ def build_release_report(
     if platform_gate is None or platform_gate.status != "passed":
         for result in results:
             blockers.extend(
-                f"{Path(result.path).name}: {check}"
-                for check in result.deferred_platform_checks
+                f"{Path(result.path).name}: {check}" for check in result.deferred_platform_checks
             )
 
     rendered_gates: dict[str, dict[str, str]] = {}

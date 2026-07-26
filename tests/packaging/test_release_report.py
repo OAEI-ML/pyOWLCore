@@ -11,6 +11,7 @@ from tools.packaging.artifact_inspector import InspectionResult
 from tools.packaging.release_report import REQUIRED_RELEASE_GATES, ReleaseGate
 
 REVISION = "a" * 40
+VERSION = "0.1.0.dev0"
 
 
 def _result(path: Path, variant: str) -> InspectionResult:
@@ -29,12 +30,17 @@ def _result(path: Path, variant: str) -> InspectionResult:
     )
 
 
-def _artifacts(tmp_path: Path) -> tuple[Path, ...]:
-    paths = (
-        tmp_path / "pyowl_core-0.1.0.dev0-py3-none-any.whl",
-        tmp_path / "pyowl_core-0.1.0.dev0-cp310-cp310-platform.whl",
-        tmp_path / "pyowl_core-0.1.0.dev0.tar.gz",
+def _artifacts(tmp_path: Path, *, complete: bool = False) -> tuple[Path, ...]:
+    names = (
+        release_report.expected_artifact_filenames(VERSION)
+        if complete
+        else (
+            f"pyowl_core-{VERSION}-py3-none-any.whl",
+            f"pyowl_core-{VERSION}-cp310-cp310-platform.whl",
+            f"pyowl_core-{VERSION}.tar.gz",
+        )
     )
+    paths = tuple(tmp_path / name for name in sorted(names))
     for index, path in enumerate(paths):
         path.write_bytes(f"artifact-{index}".encode())
     return paths
@@ -52,6 +58,23 @@ def _patch_inspection(monkeypatch: pytest.MonkeyPatch) -> None:
         return _result(path, variant)
 
     monkeypatch.setattr(release_report, "inspect_artifact", inspect)
+
+
+def test_expected_artifact_matrix_covers_every_supported_target() -> None:
+    filenames = release_report.expected_artifact_filenames(VERSION)
+
+    assert len(filenames) == 27
+    assert f"pyowl_core-{VERSION}-py3-none-any.whl" in filenames
+    assert f"pyowl_core-{VERSION}.tar.gz" in filenames
+    for python_tag in ("cp310", "cp311", "cp312", "cp313", "cp314"):
+        for platform_tag in (
+            "manylinux_2_28_x86_64",
+            "manylinux_2_28_aarch64",
+            "macosx_13_0_x86_64",
+            "macosx_13_0_arm64",
+            "win_amd64",
+        ):
+            assert f"pyowl_core-{VERSION}-{python_tag}-{python_tag}-{platform_tag}.whl" in filenames
 
 
 def test_incomplete_candidate_records_every_missing_external_gate(
@@ -76,7 +99,7 @@ def test_all_evidenced_gates_can_close_a_complete_artifact_set(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    paths = _artifacts(tmp_path)
+    paths = _artifacts(tmp_path, complete=True)
     _patch_inspection(monkeypatch)
     gates = {
         name: ReleaseGate(status="passed", evidence=f"evidence/{name}.json")
@@ -93,6 +116,59 @@ def test_all_evidenced_gates_can_close_a_complete_artifact_set(
     assert isinstance(artifacts, list)
     expected_hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
     assert {row["filename"]: row["sha256"] for row in artifacts} == expected_hashes
+
+
+def test_release_report_rejects_missing_supported_native_wheel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _artifacts(tmp_path, complete=True)
+    missing = next(path for path in paths if "-cp314-cp314-win_amd64.whl" in path.name)
+    missing.unlink()
+    _patch_inspection(monkeypatch)
+    gates = {
+        name: ReleaseGate(status="passed", evidence=f"evidence/{name}.json")
+        for name in REQUIRED_RELEASE_GATES
+    }
+
+    report = release_report.build_release_report(
+        tmp_path,
+        source_revision=REVISION,
+        gates=gates,
+    )
+
+    assert not report["release_ready"]
+    blockers = report["blockers"]
+    assert isinstance(blockers, list)
+    assert f"artifact set is missing required artifact: {missing.name}" in blockers
+    assert "artifact set must contain exactly 25 native wheels; found 24" in blockers
+
+
+def test_release_report_rejects_unapproved_native_wheel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _artifacts(tmp_path, complete=True)
+    source = next(path for path in paths if "-cp314-cp314-win_amd64.whl" in path.name)
+    unexpected = source.with_name(source.name.replace("cp314-cp314", "cp315-cp315"))
+    source.rename(unexpected)
+    _patch_inspection(monkeypatch)
+    gates = {
+        name: ReleaseGate(status="passed", evidence=f"evidence/{name}.json")
+        for name in REQUIRED_RELEASE_GATES
+    }
+
+    report = release_report.build_release_report(
+        tmp_path,
+        source_revision=REVISION,
+        gates=gates,
+    )
+
+    assert not report["release_ready"]
+    blockers = report["blockers"]
+    assert isinstance(blockers, list)
+    assert f"artifact set is missing required artifact: {source.name}" in blockers
+    assert f"artifact set contains unexpected artifact: {unexpected.name}" in blockers
 
 
 @pytest.mark.parametrize("revision", ["main", "A" * 40, "a" * 39, "a" * 41])
@@ -135,9 +211,7 @@ def test_gate_file_is_strict_and_round_trips(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert release_report.load_gate_file(path) == {
-        "legal_review": ReleaseGate(
-            status="blocked", evidence="approval has not been recorded"
-        )
+        "legal_review": ReleaseGate(status="blocked", evidence="approval has not been recorded")
     }
 
     path.write_text('{"schema": 1, "gates": {"invented": {}}}', encoding="utf-8")
