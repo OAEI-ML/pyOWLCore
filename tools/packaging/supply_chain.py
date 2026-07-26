@@ -19,6 +19,8 @@ else:  # pragma: no cover - exercised by the Python 3.10 lane
 Variant = Literal["pure", "native"]
 _LOCAL_NATIVE_CRATE = "pyowl-core-native"
 _FORBIDDEN_COMPONENTS = {"deeponto", "jpype", "jpype1", "mowl", "owlapi", "robot"}
+_NOTICE_INVENTORY_START = "<!-- pyowl-core-native-inventory:start -->"
+_NOTICE_INVENTORY_END = "<!-- pyowl-core-native-inventory:end -->"
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +139,35 @@ def _third_party(packages: tuple[LockedPackage, ...]) -> tuple[LockedPackage, ..
     return tuple(package for package in packages if package.source is not None)
 
 
+def _notice_inventory_lines(inventory: Inventory) -> tuple[str, ...]:
+    lines: list[str] = []
+    for component in sorted(inventory.components, key=lambda item: item.key):
+        line = (
+            f"- {component.name} {component.version}: "
+            f"{component.selected_license} [{component.scope}]"
+        )
+        if component.additional_license_file is not None:
+            line += f"; additional terms: {component.additional_license_file}"
+        lines.append(line)
+    return tuple(lines)
+
+
+def validate_notice(root: Path, inventory: Inventory) -> list[str]:
+    """Require NOTICE's native component block to exactly match the review ledger."""
+
+    try:
+        lines = (root / "NOTICE").read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        return [f"inventory: cannot load NOTICE: {error}"]
+    if lines.count(_NOTICE_INVENTORY_START) != 1 or lines.count(_NOTICE_INVENTORY_END) != 1:
+        return ["inventory: NOTICE must contain exactly one native component block"]
+    start = lines.index(_NOTICE_INVENTORY_START)
+    end = lines.index(_NOTICE_INVENTORY_END)
+    if end <= start or tuple(lines[start + 1 : end]) != _notice_inventory_lines(inventory):
+        return ["inventory: NOTICE native component block does not match inventory.toml"]
+    return []
+
+
 def validate_inventory(root: Path) -> list[str]:
     """Return deterministic drift/license violations without network access."""
 
@@ -146,6 +177,7 @@ def validate_inventory(root: Path) -> list[str]:
     except (KeyError, OSError, TypeError, ValueError) as error:
         return [f"inventory: cannot load {inventory_path.relative_to(root)}: {error}"]
     violations: list[str] = []
+    violations.extend(validate_notice(root, inventory))
     if inventory.schema != 1:
         violations.append(f"inventory: unsupported schema {inventory.schema}")
     if inventory.lockfile != "native/Cargo.lock":

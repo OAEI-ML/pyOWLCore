@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _copy_dependency_manifests(target: Path) -> None:
     shutil.copytree(ROOT / "THIRD_PARTY_LICENSES", target / "THIRD_PARTY_LICENSES")
+    shutil.copy2(ROOT / "NOTICE", target / "NOTICE")
     (target / "native").mkdir()
     shutil.copy2(ROOT / "native" / "Cargo.lock", target / "native" / "Cargo.lock")
     shutil.copy2(ROOT / "native" / "Cargo.toml", target / "native" / "Cargo.toml")
@@ -104,4 +105,18 @@ def test_inventory_cannot_redirect_the_reviewed_lockfile(tmp_path: Path) -> None
 
     assert validate_inventory(tmp_path) == [
         "inventory: lockfile must be exactly native/Cargo.lock, got '../unreviewed/Cargo.lock'"
+    ]
+
+
+def test_inventory_rejects_notice_component_drift(tmp_path: Path) -> None:
+    _copy_dependency_manifests(tmp_path)
+    notice_path = tmp_path / "NOTICE"
+    notice = notice_path.read_text(encoding="utf-8")
+    notice_path.write_text(
+        notice.replace("- pyo3 0.29.0: Apache-2.0 [native-runtime]\n", ""),
+        encoding="utf-8",
+    )
+
+    assert validate_inventory(tmp_path) == [
+        "inventory: NOTICE native component block does not match inventory.toml"
     ]

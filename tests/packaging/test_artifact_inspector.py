@@ -194,6 +194,30 @@ def test_wheel_payload_fingerprint_excludes_only_native_extension(
     assert drifted.non_native_payload_sha256 != pure.non_native_payload_sha256
 
 
+def test_legal_payload_fingerprint_matches_sdist_and_detects_tampering(
+    tmp_path: Path,
+) -> None:
+    wheel = inspect_artifact(_wheel(tmp_path))
+    sdist_root = tmp_path / "sdist"
+    sdist_root.mkdir()
+    sdist = inspect_artifact(_sdist(sdist_root))
+    tampered_root = tmp_path / "tampered"
+    tampered_root.mkdir()
+    tampered = inspect_artifact(
+        _wheel(
+            tampered_root,
+            extra_entries={
+                "pyowl_core-0.1.0.dev0.dist-info/"
+                "licenses/THIRD_PARTY_LICENSES/NOTICE": b"tampered notice"
+            },
+        )
+    )
+
+    assert wheel.legal_payload_sha256 is not None
+    assert sdist.legal_payload_sha256 == wheel.legal_payload_sha256
+    assert tampered.legal_payload_sha256 != wheel.legal_payload_sha256
+
+
 def test_native_wheel_internal_tag_must_match_filename(tmp_path: Path) -> None:
     wheel = _wheel(
         tmp_path,
@@ -250,6 +274,15 @@ def test_pure_wheel_rejects_native_binary_outside_package(tmp_path: Path) -> Non
 
     assert not result.ok
     assert "wheel: pure artifact contains native binaries: payload/vendor.so" in result.errors
+
+
+def test_wheel_rejects_duplicate_required_license_basename(tmp_path: Path) -> None:
+    result = inspect_artifact(
+        _wheel(tmp_path, extra_entries={"pyowl_core/NOTICE": b"ambiguous notice"})
+    )
+
+    assert not result.ok
+    assert "license: duplicate required files in wheel: NOTICE" in result.errors
 
 
 def test_native_wheel_rejects_additional_binary_outside_package(tmp_path: Path) -> None:

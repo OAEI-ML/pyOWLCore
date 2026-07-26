@@ -114,6 +114,7 @@ class InspectionResult:
     release_blockers: tuple[str, ...]
     deferred_platform_checks: tuple[str, ...]
     non_native_payload_sha256: str | None = None
+    legal_payload_sha256: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -442,11 +443,34 @@ def _validate_common(reader: ArchiveReader) -> tuple[list[str], int, bool]:
 
 
 def _validate_licenses(names: tuple[str, ...], kind: ArtifactKind) -> list[str]:
-    basenames = {PurePosixPath(name).name for name in names}
-    missing = sorted(_REQUIRED_LICENSE_BASENAMES - basenames)
+    basenames = [PurePosixPath(name).name for name in names]
+    missing = sorted(_REQUIRED_LICENSE_BASENAMES - set(basenames))
+    duplicates = sorted(
+        basename for basename in _REQUIRED_LICENSE_BASENAMES if basenames.count(basename) > 1
+    )
+    errors: list[str] = []
     if missing:
-        return [f"license: missing required files in {kind}: {', '.join(missing)}"]
-    return []
+        errors.append(f"license: missing required files in {kind}: {', '.join(missing)}")
+    if duplicates:
+        errors.append(f"license: duplicate required files in {kind}: {', '.join(duplicates)}")
+    return errors
+
+
+def _legal_payload_sha256(reader: ArchiveReader) -> str:
+    by_basename = {
+        PurePosixPath(name).name: name
+        for name in reader.names()
+        if PurePosixPath(name).name in _REQUIRED_LICENSE_BASENAMES
+    }
+    digest = hashlib.sha256(b"pyowl-core:legal-payload:v1\0")
+    for basename in sorted(by_basename):
+        encoded_name = basename.encode("utf-8")
+        payload = reader.read(by_basename[basename])
+        digest.update(len(encoded_name).to_bytes(8, "big"))
+        digest.update(encoded_name)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
 
 
 def _wheel_variant(reader: ArchiveReader) -> ArtifactVariant:
@@ -818,6 +842,7 @@ def inspect_artifact(
             non_native_payload_sha256=(
                 _non_native_payload_sha256(reader) if kind == "wheel" and not errors else None
             ),
+            legal_payload_sha256=_legal_payload_sha256(reader) if not errors else None,
         )
     finally:
         reader.close()

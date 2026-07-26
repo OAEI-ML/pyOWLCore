@@ -177,6 +177,7 @@ def build_release_report(
                 "errors": list(result.errors),
                 "release_blockers": list(result.release_blockers),
                 "deferred_platform_checks": list(result.deferred_platform_checks),
+                "legal_payload_sha256": result.legal_payload_sha256,
             }
         )
 
@@ -218,6 +219,25 @@ def build_release_report(
                         "artifact non-native payload differs from pure wheel: "
                         f"{Path(result.path).name}"
                     )
+    legal_baseline = next(
+        (
+            result.legal_payload_sha256
+            for result in results
+            if result.variant == "sdist" and result.legal_payload_sha256 is not None
+        ),
+        None,
+    )
+    for result in results:
+        if result.legal_payload_sha256 is None:
+            set_errors.append(
+                f"artifact has no legal payload fingerprint: {Path(result.path).name}"
+            )
+        elif legal_baseline is None:
+            legal_baseline = result.legal_payload_sha256
+        elif result.legal_payload_sha256 != legal_baseline:
+            set_errors.append(
+                f"artifact legal payload differs across artifact set: {Path(result.path).name}"
+            )
 
     blockers = list(set_errors)
     for result in results:
