@@ -172,6 +172,9 @@ class TurtleLexer:
                 else:
                     end = index
                     while end < self.length and self.text[end] not in _WORD_STOP:
+                        if self.text[end] == "\\" and end + 1 < self.length:
+                            end += 2
+                            continue
                         if self.text[end] == "." and (
                             end + 1 == self.length or self.text[end + 1] in " \t\r\n;,[]()"
                         ):
@@ -527,6 +530,15 @@ def _decode_pname(value: str, fail: Callable[[str], NoReturn]) -> str:
     output: list[str] = []
     index = 0
     while index < len(value):
+        if value[index] == "%":
+            end = index + 3
+            if end > len(value) or not all(
+                character in "0123456789abcdefABCDEF" for character in value[index + 1 : end]
+            ):
+                fail("invalid prefixed-name percent escape")
+            output.append(value[index:end])
+            index = end
+            continue
         if value[index] != "\\":
             output.append(value[index])
             index += 1

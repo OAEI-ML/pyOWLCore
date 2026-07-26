@@ -96,8 +96,17 @@ TURTLE_LEXICAL_SOURCES = (
             ] .
         ex:B a owl:Class .
         ex:C a owl:Class .
+        ex:Class\,Name a owl:Class .
+        ex:Class%2CName a owl:Class .
     """,
 )
+
+INVALID_TURTLE_PERCENT_ESCAPE = rb"""
+    @prefix owl: <http://www.w3.org/2002/07/owl#> .
+    @prefix ex: <urn:ex:> .
+    ex:ontology a owl:Ontology .
+    ex:Class%2XName a owl:Class .
+"""
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -175,6 +184,13 @@ def test_private_turtle_seam_fails_closed_and_retries_without_fallback(
         )
     assert invalid_pname.value.code == "TURTLE_SYNTAX"
 
+    with pytest.raises(OntologySyntaxError) as invalid_percent:
+        native._parse_turtle_retained_v2(
+            INVALID_TURTLE_PERCENT_ESCAPE,
+            document_iri=None,
+        )
+    assert invalid_percent.value.code == "TURTLE_SYNTAX"
+
     with pytest.raises(OntologySyntaxError) as encoding:
         native._parse_turtle_retained_v2(b"\xff", document_iri=None)
     assert encoding.value.code == "TURTLE_ENCODING"
@@ -208,6 +224,19 @@ def test_private_turtle_seam_fails_closed_and_retries_without_fallback(
         document_iri="urn:turtle-retained:document",
     )
     assert type(retry.storage) is extension._NativeParsedStructuralStorageV2
+
+
+def test_python_turtle_rejects_invalid_prefixed_name_percent_escape() -> None:
+    with pytest.raises(OntologySyntaxError) as raised:
+        parse_document(
+            INVALID_TURTLE_PERCENT_ESCAPE,
+            options=LoadOptions(
+                format=DocumentFormat.TURTLE,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.PYTHON,
+            ),
+        )
+    assert raised.value.code == "TURTLE_SYNTAX"
 
 
 def test_private_turtle_owner_publishes_without_python_structural_reconstruction(

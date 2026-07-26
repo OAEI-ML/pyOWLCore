@@ -268,6 +268,12 @@ impl<'text> Lexer<'text> {
         while end < self.text.len() {
             session.step(1)?;
             let character = self.text[end..].chars().next().ok_or_else(turtle_syntax)?;
+            if character == '\\' {
+                end += character.len_utf8();
+                let escaped = self.text[end..].chars().next().ok_or_else(turtle_syntax)?;
+                end += escaped.len_utf8();
+                continue;
+            }
             if word_stop(character)
                 || character == '.' && word_boundary(self.text, end + character.len_utf8())
             {
@@ -914,15 +920,34 @@ fn decode_pname<'text>(
     value: &'text str,
     session: &mut Session<'_>,
 ) -> NativeResult<Cow<'text, str>> {
-    if !value.contains('\\') {
+    if !value.contains('\\') && !value.contains('%') {
         return Ok(Cow::Borrowed(value));
     }
     let mut output = String::new();
     let mut cursor = 0_usize;
-    while let Some(relative) = value[cursor..].find('\\') {
+    while cursor < value.len() {
         session.step(1)?;
-        let offset = cursor + relative;
-        push_tracked(&mut output, &value[cursor..offset], session)?;
+        let next_escape = value[cursor..]
+            .find(['\\', '%'])
+            .map(|relative| cursor + relative)
+            .unwrap_or(value.len());
+        push_tracked(&mut output, &value[cursor..next_escape], session)?;
+        if next_escape == value.len() {
+            break;
+        }
+        if value.as_bytes()[next_escape] == b'%' {
+            let end = next_escape
+                .checked_add(3)
+                .ok_or_else(|| NativeError::limit("native Turtle percent escape overflow"))?;
+            let encoded = value.get(next_escape + 1..end).ok_or_else(turtle_syntax)?;
+            if !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(turtle_syntax());
+            }
+            push_tracked(&mut output, &value[next_escape..end], session)?;
+            cursor = end;
+            continue;
+        }
+        let offset = next_escape;
         let marker = value
             .as_bytes()
             .get(offset + 1)
@@ -941,7 +966,6 @@ fn decode_pname<'text>(
         push_character_tracked(&mut output, decoded, session)?;
         cursor = end;
     }
-    push_tracked(&mut output, &value[cursor..], session)?;
     Ok(Cow::Owned(output))
 }
 
@@ -1227,9 +1251,11 @@ mod tests {
             @prefix ex: <urn:turtle:pname:> .
             ex:ontology a owl:Ontology .
             ex:Class\~Name a owl:Class .
+            ex:Class\,Name a owl:Class .
+            ex:Class%2CName a owl:Class .
         "#;
         let document = parse(escaped).expect("escaped prefixed name");
-        assert_eq!(document.axioms.len(), 1);
+        assert_eq!(document.axioms.len(), 3);
 
         let invalid = br#"
             @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -1238,6 +1264,15 @@ mod tests {
             ex:Class\qName a owl:Class .
         "#;
         let error = parse(invalid).expect_err("invalid prefixed-name escape");
+        assert_eq!(error.code, "NATIVE_TURTLE_SYNTAX");
+
+        let invalid_percent = br#"
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix ex: <urn:turtle:pname:> .
+            ex:ontology a owl:Ontology .
+            ex:Class%2XName a owl:Class .
+        "#;
+        let error = parse(invalid_percent).expect_err("invalid prefixed-name percent escape");
         assert_eq!(error.code, "NATIVE_TURTLE_SYNTAX");
     }
 
