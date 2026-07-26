@@ -1866,8 +1866,11 @@ def retain_native_snapshot_v2(
 
     formats = {document.provenance.format for document in snapshot.documents}
     functional_documents = formats == {DocumentFormat.FUNCTIONAL}
-    rdfxml_documents = formats == {DocumentFormat.RDF_XML}
-    rdfxml_reports_eligible = rdfxml_documents and all(
+    rdf_documents = bool(formats) and formats <= {
+        DocumentFormat.RDF_XML,
+        DocumentFormat.TURTLE,
+    }
+    rdf_reports_eligible = rdf_documents and all(
         (report := document.rdf_mapping_report) is not None
         and report.conformant
         and not report.unconsumed
@@ -1881,10 +1884,10 @@ def retain_native_snapshot_v2(
         or (
             snapshot.load_options.preserve_source_map
             and len(snapshot.documents) == 1
-            and not (rdfxml_reports_eligible and parsed_native_storage is not None)
+            and not (rdf_reports_eligible and parsed_native_storage is not None)
         )
         or snapshot.load_options.validate_owl2_dl
-        or not (functional_documents or rdfxml_reports_eligible)
+        or not (functional_documents or rdf_reports_eligible)
         or any(
             document.provenance.backend != "native"
             or (functional_documents and document.rdf_mapping_report is not None)
@@ -1895,12 +1898,10 @@ def retain_native_snapshot_v2(
         len(snapshot.documents) == 1 and snapshot.load_options.imports is ImportPolicy.IGNORE
     )
     retained_closure = len(snapshot.documents) > 1
-    retained_rdfxml_single = (
-        len(snapshot.documents) == 1
-        and rdfxml_reports_eligible
-        and parsed_native_storage is not None
+    retained_rdf_single = (
+        len(snapshot.documents) == 1 and rdf_reports_eligible and parsed_native_storage is not None
     )
-    if common_ineligible or not (single_document or retained_closure or retained_rdfxml_single):
+    if common_ineligible or not (single_document or retained_closure or retained_rdf_single):
         return snapshot
     if functional_documents:
         extension = native.require("parse-functional-v1")
@@ -1910,19 +1911,19 @@ def retain_native_snapshot_v2(
         if not runtime.probe.available or runtime_extension is None:
             return snapshot
         extension = runtime_extension
-    if retained_closure or retained_rdfxml_single:
+    if retained_closure or retained_rdf_single:
         parsed_native_storages = (
             parsed_native_storage
             if type(parsed_native_storage) is tuple
             and len(parsed_native_storage) == len(snapshot.documents)
-            else ((parsed_native_storage,) if retained_rdfxml_single else None)
+            else ((parsed_native_storage,) if retained_rdf_single else None)
         )
         if parsed_native_storages is not None and functional_documents:
             from pyowl_core.backends.parser import _NativeBackendDriver
 
             if not _NativeBackendDriver().supports_retained_storage_fork():
                 parsed_native_storages = None
-        if rdfxml_documents and parsed_native_storages is None:
+        if rdf_documents and parsed_native_storages is None:
             return snapshot
         required_hooks = (
             (

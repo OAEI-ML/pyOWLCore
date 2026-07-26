@@ -1,23 +1,31 @@
 from __future__ import annotations
 
 import time
-from typing import cast
+from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 
 from pyowl_core import (
     IRI,
+    AcquisitionCache,
     BackendPreference,
     CancellationSource,
     DocumentFormat,
     ImportPolicy,
     LoadOptions,
+    MappingResolver,
     OntologySyntaxError,
     OperationCancelledError,
+    ParsedDocumentCache,
     ParseLimits,
+    ResolvedDocument,
     ResourceLimitError,
+    SnapshotLoader,
     UnsupportedSyntaxError,
+    encode_snapshot,
     load_snapshot,
+    parse_document,
 )
 from pyowl_core.backends import native, native_ingestion
 from pyowl_core.io.formats.detection import detect_format
@@ -44,6 +52,20 @@ RDFXML_SOURCE = rb"""
       </owl:Class>
       <owl:Class rdf:about="urn:turtle-retained:B"/>
     </rdf:RDF>
+"""
+
+TURTLE_IMPORT_ROOT = rb"""
+    @prefix owl: <http://www.w3.org/2002/07/owl#> .
+    @prefix ex: <urn:turtle-retained:> .
+    ex:root a owl:Ontology ; owl:imports ex:child .
+    ex:Root a owl:Class .
+"""
+
+TURTLE_IMPORT_CHILD = rb"""
+    @prefix owl: <http://www.w3.org/2002/07/owl#> .
+    @prefix ex: <urn:turtle-retained:> .
+    ex:child-document a owl:Ontology .
+    ex:Child a owl:Class .
 """
 
 
@@ -203,6 +225,181 @@ def test_private_turtle_owner_publishes_without_python_structural_reconstruction
         assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
         assert selected.report.timings["native_turtle_syntax_parse_seconds"] >= 0
         assert selected.report.timings["native_rdf_mapping_seconds"] >= 0
+    finally:
+        selected.close()
+
+
+@pytest.mark.parametrize("loader", (load_snapshot, parse_document))
+def test_guarded_public_turtle_routes_through_the_retained_owner(
+    loader: Any,
+) -> None:
+    document_iri = IRI("urn:turtle-retained:public-document")
+    native_options = LoadOptions(
+        format=DocumentFormat.TURTLE,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=True,
+        preserve_source_map=True,
+    )
+    reference = loader(
+        TURTLE_SOURCE,
+        document_iri=document_iri,
+        options=LoadOptions(
+            format=DocumentFormat.TURTLE,
+            imports=ImportPolicy.IGNORE,
+            backend=BackendPreference.PYTHON,
+            collect_provenance=True,
+            preserve_source_map=True,
+        ),
+    )
+    unexpected = AssertionError("guarded public Turtle source crossed the Python parser")
+    with (
+        patch(
+            "pyowl_core.backends.parser._NativeBackendDriver.select",
+            autospec=True,
+            return_value="native",
+        ),
+        patch("pyowl_core.backends.python.parser.parse_turtle", side_effect=unexpected),
+    ):
+        selected = cast(
+            Any,
+            loader(
+                TURTLE_SOURCE,
+                document_iri=document_iri,
+                options=native_options,
+            ),
+        )
+
+    if loader is load_snapshot:
+        assert type(selected).__name__ == "_NativeOntologySnapshot"
+        assert selected.structural_fingerprint == reference.structural_fingerprint
+        assert selected.logical_fingerprint == reference.logical_fingerprint
+        assert selected.signature_fingerprint == reference.signature_fingerprint
+        publication = (
+            selected._native_snapshot_state.owner.handle._owner_v2._publication_counters_v2()
+        )
+        selected.close()
+    else:
+        assert type(selected).__name__ == "_NativeOntologyDocument"
+        assert selected == reference
+        assert selected.document_fingerprint == reference.document_fingerprint
+        publication = (
+            selected._native_document_state.owner.handle._owner_v2._publication_counters_v2()
+        )
+    assert publication.parser_bytes == len(TURTLE_SOURCE)
+    assert publication.publication_structural_rows_copied == 0
+    assert publication.publication_structural_bytes_copied == 0
+
+
+@pytest.mark.parametrize("loader", (load_snapshot, parse_document))
+@pytest.mark.parametrize(
+    ("source", "expected_error"),
+    (
+        (b"@prefix ex: <urn:ex:> . ex:A ex:p", OntologySyntaxError),
+        (TURTLE_SOURCE, ResourceLimitError),
+    ),
+    ids=("syntax", "triple-limit"),
+)
+def test_guarded_public_turtle_failure_never_publishes(
+    loader: Any,
+    source: bytes,
+    expected_error: type[Exception],
+) -> None:
+    limits = ParseLimits(max_triples=3) if expected_error is ResourceLimitError else ParseLimits()
+    unexpected_parse = AssertionError("guarded Turtle failure crossed the Python parser")
+    unexpected_publish = AssertionError("invalid Turtle reached retained publication")
+    with (
+        patch(
+            "pyowl_core.backends.parser._NativeBackendDriver.select",
+            autospec=True,
+            return_value="native",
+        ),
+        patch("pyowl_core.backends.python.parser.parse_turtle", side_effect=unexpected_parse),
+        patch(
+            "pyowl_core.backends.parser._NativeBackendDriver.publish_retained_turtle",
+            side_effect=unexpected_publish,
+        ),
+        pytest.raises(expected_error),
+    ):
+        loader(
+            source,
+            options=LoadOptions(
+                format=DocumentFormat.TURTLE,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.NATIVE,
+                limits=limits,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("child_source", "child_format"),
+    (
+        (TURTLE_IMPORT_CHILD, DocumentFormat.TURTLE),
+        (RDFXML_SOURCE, DocumentFormat.RDF_XML),
+    ),
+    ids=("turtle-child", "rdfxml-child"),
+)
+def test_guarded_turtle_import_closure_merges_retained_owners(
+    child_source: bytes,
+    child_format: DocumentFormat,
+) -> None:
+    def load(backend: BackendPreference) -> Any:
+        loader = SnapshotLoader(
+            acquisition_cache=AcquisitionCache(),
+            document_cache=ParsedDocumentCache(),
+        )
+        options = LoadOptions(
+            format=DocumentFormat.TURTLE,
+            imports=ImportPolicy.RESOLVE_LOCAL,
+            backend=backend,
+            collect_provenance=True,
+            preserve_source_map=True,
+        )
+        resolver = MappingResolver(
+            {
+                "urn:turtle-retained:child": ResolvedDocument(
+                    child_source,
+                    IRI("urn:turtle-retained:child-source"),
+                    format=child_format,
+                )
+            }
+        )
+        if backend is BackendPreference.PYTHON:
+            return loader.load(TURTLE_IMPORT_ROOT, options=options, resolver=resolver)
+        unexpected = AssertionError("retained Turtle closure crossed the Python parser")
+        with (
+            patch(
+                "pyowl_core.backends.parser._NativeBackendDriver.select",
+                autospec=True,
+                return_value="native",
+            ),
+            patch("pyowl_core.backends.python.parser.parse_turtle", side_effect=unexpected),
+            patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected),
+        ):
+            return loader.load(TURTLE_IMPORT_ROOT, options=options, resolver=resolver)
+
+    reference = load(BackendPreference.PYTHON)
+    selected = load(BackendPreference.NATIVE)
+    try:
+        assert type(selected).__name__ == "_NativeOntologySnapshot"
+        assert selected == reference
+        assert selected.import_manifest == reference.import_manifest
+        assert selected.origin_index == reference.origin_index
+        assert selected.structural_fingerprint == reference.structural_fingerprint
+        assert selected.logical_fingerprint == reference.logical_fingerprint
+        assert selected.signature_fingerprint == reference.signature_fingerprint
+        assert encode_snapshot(selected) == encode_snapshot(reference)
+        assert len(selected.documents) == 2
+        assert all(
+            type(document).__name__ == "_NativeOntologyDocument" for document in selected.documents
+        )
+        publication = (
+            selected._native_snapshot_state.owner.handle._owner_v2._publication_counters_v2()
+        )
+        assert publication.parser_bytes == len(TURTLE_IMPORT_ROOT) + len(child_source)
+        assert publication.publication_structural_rows_copied == 0
+        assert publication.publication_structural_bytes_copied == 0
     finally:
         selected.close()
 

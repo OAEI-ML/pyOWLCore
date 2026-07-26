@@ -341,6 +341,7 @@ def _prepare_retained_native_root(options: LoadOptions) -> bool:
             None,
             DocumentFormat.FUNCTIONAL,
             DocumentFormat.RDF_XML,
+            DocumentFormat.TURTLE,
         }
     )
 
@@ -764,6 +765,7 @@ class SnapshotLoader:
             None,
             DocumentFormat.FUNCTIONAL,
             DocumentFormat.RDF_XML,
+            DocumentFormat.TURTLE,
         }
         if retain_native:
             from pyowl_core.backends.parser import _parse_import_for_retained_load
