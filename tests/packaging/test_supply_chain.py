@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from tools.packaging.supply_chain import (
     build_cyclonedx,
     build_dependency_inventory,
+    build_provenance,
     generate_evidence,
     load_locked_packages,
     validate_inventory,
@@ -47,6 +49,26 @@ def test_pure_and_native_sboms_are_variant_exact_and_deterministic() -> None:
     assert native["metadata"]["component"]["version"] == "0.1.0.dev0"
     assert all("pkg:cargo/" in component["bom-ref"] for component in native["components"])
     assert all(component["hashes"][0]["alg"] == "SHA-256" for component in native["components"])
+
+
+def test_build_provenance_binds_exact_toolchain_and_lock_hash() -> None:
+    provenance = build_provenance(ROOT)
+
+    assert provenance["schema"] == "pyowl-core.build-provenance/1"
+    assert provenance["source_date_epoch"] == 1_735_689_600
+    assert provenance["tools"] == {
+        "rust_toolchain": "1.83.0",
+        "cargo_manifest_rust_version": "1.83",
+        "python_build_frontend": "build==1.5.0",
+        "python_build_backend": "setuptools==83.0.0",
+        "wheel_builder": "wheel==0.45.1",
+        "cibuildwheel_action": ("pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55"),
+    }
+    lock = (ROOT / "native" / "Cargo.lock").read_bytes()
+    assert provenance["inputs"]["native/Cargo.lock"] == {
+        "bytes": len(lock),
+        "sha256": hashlib.sha256(lock).hexdigest(),
+    }
 
 
 def test_generated_evidence_check_detects_and_reports_drift(tmp_path: Path) -> None:

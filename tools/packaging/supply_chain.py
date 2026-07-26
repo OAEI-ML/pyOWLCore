@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -21,6 +22,16 @@ _LOCAL_NATIVE_CRATE = "pyowl-core-native"
 _FORBIDDEN_COMPONENTS = {"deeponto", "jpype", "jpype1", "mowl", "owlapi", "robot"}
 _NOTICE_INVENTORY_START = "<!-- pyowl-core-native-inventory:start -->"
 _NOTICE_INVENTORY_END = "<!-- pyowl-core-native-inventory:end -->"
+_BUILD_INPUT_PATHS = (
+    ".github/workflows/native-safety.yml",
+    ".github/workflows/wheels.yml",
+    "MANIFEST.in",
+    "native/Cargo.lock",
+    "native/Cargo.toml",
+    "pyowl_build.py",
+    "pyproject.toml",
+    "setup.py",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,6 +394,80 @@ def build_dependency_inventory(root: Path) -> dict[str, Any]:
     }
 
 
+def _workflow_pin(text: str, pattern: str, label: str) -> str:
+    values: set[str] = set(re.findall(pattern, text))
+    if len(values) != 1:
+        raise ValueError(f"build provenance: expected one unique {label}, got {sorted(values)!r}")
+    return values.pop()
+
+
+def _file_identity(path: Path) -> dict[str, Any]:
+    payload = path.read_bytes()
+    return {
+        "bytes": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
+
+
+def build_provenance(root: Path) -> dict[str, Any]:
+    """Bind exact release tool pins to every deterministic build input."""
+
+    wheels = (root / ".github" / "workflows" / "wheels.yml").read_text(encoding="utf-8")
+    cargo = _load_toml(root / "native" / "Cargo.toml")
+    package = cargo.get("package")
+    if not isinstance(package, dict) or not isinstance(package.get("rust-version"), str):
+        raise ValueError("build provenance: native Cargo.toml has no literal rust-version")
+    rust_msrv = package["rust-version"]
+    rust_toolchain = _workflow_pin(
+        wheels,
+        r"rustup toolchain install ([0-9]+\.[0-9]+\.[0-9]+)",
+        "Rust release toolchain",
+    )
+    if not rust_toolchain.startswith(f"{rust_msrv}."):
+        raise ValueError(
+            "build provenance: Cargo rust-version "
+            f"{rust_msrv!r} does not match workflow toolchain {rust_toolchain!r}"
+        )
+    source_date_epoch = _workflow_pin(
+        wheels,
+        r'(?m)^\s*SOURCE_DATE_EPOCH:\s*"([0-9]+)"\s*$',
+        "SOURCE_DATE_EPOCH",
+    )
+    build_version = _workflow_pin(wheels, r"\bbuild==([0-9][^\s]+)", "build frontend")
+    setuptools_version = _workflow_pin(
+        wheels,
+        r"\bsetuptools==([0-9][^\s]+)",
+        "setuptools backend",
+    )
+    wheel_version = _workflow_pin(wheels, r"\bwheel==([0-9][^\s]+)", "wheel builder")
+    cibuildwheel_revision = _workflow_pin(
+        wheels,
+        r"pypa/cibuildwheel@([0-9a-f]{40})",
+        "cibuildwheel action revision",
+    )
+    inputs: dict[str, dict[str, Any]] = {}
+    for relative_path in _BUILD_INPUT_PATHS:
+        path = root / relative_path
+        if not path.is_file():
+            raise ValueError(f"build provenance: missing build input {relative_path}")
+        inputs[relative_path] = _file_identity(path)
+    return {
+        "schema": "pyowl-core.build-provenance/1",
+        "distribution": "pyowl-core",
+        "version": _project_version(root),
+        "source_date_epoch": int(source_date_epoch),
+        "tools": {
+            "rust_toolchain": rust_toolchain,
+            "cargo_manifest_rust_version": rust_msrv,
+            "python_build_frontend": f"build=={build_version}",
+            "python_build_backend": f"setuptools=={setuptools_version}",
+            "wheel_builder": f"wheel=={wheel_version}",
+            "cibuildwheel_action": f"pypa/cibuildwheel@{cibuildwheel_revision}",
+        },
+        "inputs": inputs,
+    }
+
+
 def _canonical_json(value: dict[str, Any]) -> str:
     return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
@@ -391,6 +476,7 @@ def generate_evidence(root: Path, output_dir: Path, *, check: bool = False) -> l
     """Write or verify the deterministic inventory and pure/native SBOM files."""
 
     documents = {
+        "build-provenance.json": build_provenance(root),
         "dependency-inventory.json": build_dependency_inventory(root),
         "sbom-native.cdx.json": build_cyclonedx(root, "native"),
         "sbom-pure.cdx.json": build_cyclonedx(root, "pure"),

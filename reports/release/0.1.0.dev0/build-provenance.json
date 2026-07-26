@@ -1,0 +1,48 @@
+{
+  "distribution": "pyowl-core",
+  "inputs": {
+    ".github/workflows/native-safety.yml": {
+      "bytes": 7082,
+      "sha256": "0ac4909e1794224c9b9172554fedc5bf763657770c9713f39e1a91da5fde67fd"
+    },
+    ".github/workflows/wheels.yml": {
+      "bytes": 22731,
+      "sha256": "d1c8762c04401d1556fc575ba3d3b7c8f817f862930f245bc169f1008b9f64c6"
+    },
+    "MANIFEST.in": {
+      "bytes": 1098,
+      "sha256": "f4a623b505ece40f0c65eb4da0fc355fad05ebd2ab623876a2129ffb64c0a609"
+    },
+    "native/Cargo.lock": {
+      "bytes": 3421,
+      "sha256": "143c6038631949aaddc13f33f21d3d37e421497e80de6a7cff76c38eb9779707"
+    },
+    "native/Cargo.toml": {
+      "bytes": 901,
+      "sha256": "6bcedfcbb646b4f9a89371c846589906867d55fe6b07d94b3e46f69bdba35e93"
+    },
+    "pyowl_build.py": {
+      "bytes": 9961,
+      "sha256": "9a3ee55e9431ca8a36d444624ce270ec8fdc394605142051edd6dd14a99a1933"
+    },
+    "pyproject.toml": {
+      "bytes": 1690,
+      "sha256": "7ea2a1e1ac78ff0022e01d8240178058ccf6d0dee9f180f02e5e4cb1545732ca"
+    },
+    "setup.py": {
+      "bytes": 2809,
+      "sha256": "e07baac9df972f7d908bdcf5cf2dc30d3a457f67b237e96f7ee5112e4268aa63"
+    }
+  },
+  "schema": "pyowl-core.build-provenance/1",
+  "source_date_epoch": 1735689600,
+  "tools": {
+    "cargo_manifest_rust_version": "1.83",
+    "cibuildwheel_action": "pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55",
+    "python_build_backend": "setuptools==83.0.0",
+    "python_build_frontend": "build==1.5.0",
+    "rust_toolchain": "1.83.0",
+    "wheel_builder": "wheel==0.45.1"
+  },
+  "version": "0.1.0.dev0"
+}
