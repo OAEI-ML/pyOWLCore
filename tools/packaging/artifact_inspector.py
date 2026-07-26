@@ -49,6 +49,12 @@ _JAVA_RUNTIME_TEXT = (
     re.compile(rb"(?i)\b(?:subprocess\.(?:run|call|popen)|Popen)\s*\([^\n]*['\"]java['\"]"),
     re.compile(rb"(?i)\b(?:owlapi|org\.semanticweb\.owlapi)\b"),
 )
+_EXTRA_MARKER = re.compile(
+    r"""(?:extra\s*==\s*(?:"[^"\r\n]+"|'[^'\r\n]+')|"""
+    r"""(?:"[^"\r\n]+"|'[^'\r\n]+')\s*==\s*extra)\Z"""
+)
+_MAX_MARKER_CHARACTERS = 8192
+_MAX_MARKER_DEPTH = 64
 _TEXT_SUFFIXES = {".cfg", ".ini", ".lock", ".md", ".py", ".toml", ".txt"}
 _DEPENDENCY_FILENAMES = {
     "cargo.lock",
@@ -170,6 +176,117 @@ def _normalized_member(name: str) -> PurePosixPath | None:
     return path
 
 
+def _split_marker_expression(
+    expression: str,
+    operator: str,
+) -> tuple[str, ...] | None:
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    position = 0
+    while position < len(expression):
+        character = expression[position]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            position += 1
+            continue
+        if character in {"'", '"'}:
+            quote = character
+            position += 1
+            continue
+        if character == "(":
+            depth += 1
+            position += 1
+            continue
+        if character == ")":
+            depth -= 1
+            if depth < 0:
+                return None
+            position += 1
+            continue
+        end = position + len(operator)
+        before = expression[position - 1] if position else " "
+        after = expression[end] if end < len(expression) else " "
+        if (
+            depth == 0
+            and expression[position:end].casefold() == operator
+            and not (before.isalnum() or before == "_")
+            and not (after.isalnum() or after == "_")
+        ):
+            part = expression[start:position].strip()
+            if not part:
+                return None
+            parts.append(part)
+            start = end
+            position = end
+            continue
+        position += 1
+    if quote is not None or depth != 0:
+        return None
+    final = expression[start:].strip()
+    if not final:
+        return None
+    parts.append(final)
+    return tuple(parts)
+
+
+def _has_enclosing_parentheses(expression: str) -> bool:
+    if not expression.startswith("(") or not expression.endswith(")"):
+        return False
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for position, character in enumerate(expression):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            continue
+        if character in {"'", '"'}:
+            quote = character
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0 and position != len(expression) - 1:
+                return False
+    return depth == 0 and quote is None
+
+
+def _marker_requires_extra(expression: str, *, depth: int = 0) -> bool:
+    expression = expression.strip()
+    if not expression or len(expression) > _MAX_MARKER_CHARACTERS or depth >= _MAX_MARKER_DEPTH:
+        return False
+    if _has_enclosing_parentheses(expression):
+        return _marker_requires_extra(expression[1:-1], depth=depth + 1)
+    alternatives = _split_marker_expression(expression, "or")
+    if alternatives is None:
+        return False
+    if len(alternatives) > 1:
+        return all(_marker_requires_extra(part, depth=depth + 1) for part in alternatives)
+    conjunctions = _split_marker_expression(expression, "and")
+    if conjunctions is None:
+        return False
+    if len(conjunctions) > 1:
+        return any(_marker_requires_extra(part, depth=depth + 1) for part in conjunctions)
+    return _EXTRA_MARKER.fullmatch(expression) is not None
+
+
+def _is_extra_only_requirement(requirement: str) -> bool:
+    package, separator, marker = requirement.partition(";")
+    return bool(package.strip() and separator and _marker_requires_extra(marker))
+
+
 def _metadata(reader: ArchiveReader, kind: ArtifactKind) -> tuple[dict[str, str], str | None]:
     suffix = ".dist-info/METADATA" if kind == "wheel" else "/PKG-INFO"
     candidates = [
@@ -191,7 +308,7 @@ def _metadata(reader: ArchiveReader, kind: ArtifactKind) -> tuple[dict[str, str]
     runtime_requirements = [
         str(requirement)
         for requirement in message.get_all("Requires-Dist", [])
-        if "extra ==" not in str(requirement) and "extra==" not in str(requirement)
+        if not _is_extra_only_requirement(str(requirement))
     ]
     if runtime_requirements:
         fields["Runtime-Requires-Dist"] = " | ".join(runtime_requirements)

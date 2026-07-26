@@ -61,12 +61,13 @@ def _wheel(
     extra_binary: str | None = None,
     internal_tag: str | None = None,
     malformed_record_row: bool = False,
+    metadata: bytes = _METADATA,
     record_duplicate: str | None = None,
 ) -> Path:
     tag = "py3-none-any" if variant == "pure" else "cp310-cp310-manylinux_2_28_x86_64"
     entries = {
         "pyowl_core/__init__.py": b'__version__ = "0.1.0.dev0"\n',
-        f"{dist_info}/METADATA": _METADATA,
+        f"{dist_info}/METADATA": metadata,
         f"{dist_info}/WHEEL": (f"Wheel-Version: 1.0\nTag: {internal_tag or tag}\n".encode()),
     }
     for name, payload in _LICENSE_FILES.items():
@@ -183,6 +184,32 @@ def test_wheel_metadata_root_must_match_project_identity(tmp_path: Path) -> None
     assert not result.ok
     assert "wheel: dist-info root does not exactly match project identity" in result.errors
     assert any(error.startswith("wheel: missing identity member(s):") for error in result.errors)
+
+
+def test_metadata_rejects_optional_marker_with_runtime_escape(tmp_path: Path) -> None:
+    metadata = _METADATA.replace(
+        b'Requires-Dist: pytest>=8; extra == "dev"',
+        b'Requires-Dist: requests; extra == "dev" or python_version >= "3.10"',
+    )
+
+    result = inspect_artifact(_wheel(tmp_path, metadata=metadata))
+
+    assert not result.ok
+    assert any(
+        error.startswith("metadata: unexpected runtime dependency requests;")
+        for error in result.errors
+    )
+
+
+def test_metadata_accepts_conditional_extra_only_dependency(tmp_path: Path) -> None:
+    metadata = _METADATA.replace(
+        b'Requires-Dist: pytest>=8; extra == "dev"',
+        b'Requires-Dist: tomli>=2; python_version < "3.11" and extra == "dev"',
+    )
+
+    result = inspect_artifact(_wheel(tmp_path, metadata=metadata))
+
+    assert result.ok
 
 
 def test_sdist_contains_complete_sources_without_binaries(tmp_path: Path) -> None:
