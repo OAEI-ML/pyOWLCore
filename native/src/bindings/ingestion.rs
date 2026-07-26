@@ -61,11 +61,17 @@ type RetainedParseBindingResult = (
     (u64, u64, u64, u64),
 );
 
-type RetainedRdfXmlParseBindingResult = (
+type RetainedRdfParseBindingResult = (
     Py<PyBytes>,
     NativeParsedStructuralStorageV2,
     (u64, u64, u64, u64, u64),
 );
+
+#[derive(Clone, Copy)]
+enum RetainedRdfBindingSyntax {
+    RdfXml,
+    Turtle,
+}
 
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
     _module.add_class::<NativeParsedStructuralStorageV2>()?;
@@ -109,6 +115,11 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
         _parse_rdfxml_retained_source_map_v2,
         _module
     )?)?;
+    _module.add_function(wrap_pyfunction!(_parse_turtle_retained_v2, _module)?)?;
+    _module.add_function(wrap_pyfunction!(
+        _parse_turtle_retained_source_map_v2,
+        _module
+    )?)?;
     _module.add_function(wrap_pyfunction!(
         _fork_parsed_structural_storage_v2,
         _module
@@ -116,6 +127,11 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     #[cfg(feature = "test-hooks")]
     _module.add_function(wrap_pyfunction!(
         _rdfxml_retained_bridge_allocation_probe_v2,
+        _module
+    )?)?;
+    #[cfg(feature = "test-hooks")]
+    _module.add_function(wrap_pyfunction!(
+        _turtle_retained_bridge_allocation_probe_v2,
         _module
     )?)?;
     #[cfg(feature = "test-hooks")]
@@ -225,9 +241,10 @@ fn _parse_rdfxml_retained_v2<'py>(
     allow_swrl: bool,
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
-) -> PyResult<RetainedRdfXmlParseBindingResult> {
+) -> PyResult<RetainedRdfParseBindingResult> {
     let mut allocations = crate::BridgeAllocationProbe::disabled();
-    parse_rdfxml_retained_v2_with_allocations(
+    parse_rdf_retained_v2_with_allocations(
+        RetainedRdfBindingSyntax::RdfXml,
         py,
         source,
         document_iri,
@@ -267,9 +284,93 @@ fn _parse_rdfxml_retained_source_map_v2<'py>(
     allow_swrl: bool,
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
-) -> PyResult<RetainedRdfXmlParseBindingResult> {
+) -> PyResult<RetainedRdfParseBindingResult> {
     let mut allocations = crate::BridgeAllocationProbe::disabled();
-    parse_rdfxml_retained_v2_with_allocations(
+    parse_rdf_retained_v2_with_allocations(
+        RetainedRdfBindingSyntax::RdfXml,
+        py,
+        source,
+        document_iri,
+        config,
+        collect_provenance,
+        true,
+        allow_partial_rdf_mapping,
+        allow_swrl,
+        require_empty_imports,
+        cancel,
+        &mut allocations,
+    )
+}
+
+/// Parse one complete Turtle document into the same retained RDF owner path.
+/// The seam remains private until the full forced-native Turtle matrix passes.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    source,
+    document_iri,
+    config,
+    collect_provenance,
+    allow_partial_rdf_mapping,
+    allow_swrl,
+    require_empty_imports,
+    cancel=None
+))]
+fn _parse_turtle_retained_v2<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    document_iri: Option<&Bound<'py, PyAny>>,
+    config: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<RetainedRdfParseBindingResult> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    parse_rdf_retained_v2_with_allocations(
+        RetainedRdfBindingSyntax::Turtle,
+        py,
+        source,
+        document_iri,
+        config,
+        collect_provenance,
+        false,
+        allow_partial_rdf_mapping,
+        allow_swrl,
+        require_empty_imports,
+        cancel,
+        &mut allocations,
+    )
+}
+
+/// Parse one Turtle document while retaining exact source occurrence metadata.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    source,
+    document_iri,
+    config,
+    collect_provenance,
+    allow_partial_rdf_mapping,
+    allow_swrl,
+    require_empty_imports,
+    cancel=None
+))]
+fn _parse_turtle_retained_source_map_v2<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    document_iri: Option<&Bound<'py, PyAny>>,
+    config: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<RetainedRdfParseBindingResult> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    parse_rdf_retained_v2_with_allocations(
+        RetainedRdfBindingSyntax::Turtle,
         py,
         source,
         document_iri,
@@ -312,7 +413,53 @@ fn _rdfxml_retained_bridge_allocation_probe_v2<'py>(
         fail_after,
         "injected native RDF/XML retained bridge allocation failure",
     );
-    let (encoded, _storage, _phases) = parse_rdfxml_retained_v2_with_allocations(
+    let (encoded, _storage, _phases) = parse_rdf_retained_v2_with_allocations(
+        RetainedRdfBindingSyntax::RdfXml,
+        py,
+        source,
+        document_iri,
+        config,
+        collect_provenance,
+        false,
+        allow_partial_rdf_mapping,
+        allow_swrl,
+        require_empty_imports,
+        None,
+        &mut allocations,
+    )?;
+    Ok((encoded, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    source,
+    document_iri,
+    config,
+    collect_provenance,
+    allow_partial_rdf_mapping,
+    allow_swrl,
+    require_empty_imports,
+    fail_after=None
+))]
+fn _turtle_retained_bridge_allocation_probe_v2<'py>(
+    py: Python<'py>,
+    source: &Bound<'py, PyAny>,
+    document_iri: Option<&Bound<'py, PyAny>>,
+    config: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+    fail_after: Option<u64>,
+) -> PyResult<(Py<PyBytes>, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native Turtle retained bridge allocation failure",
+    );
+    let (encoded, _storage, _phases) = parse_rdf_retained_v2_with_allocations(
+        RetainedRdfBindingSyntax::Turtle,
         py,
         source,
         document_iri,
@@ -329,7 +476,8 @@ fn _rdfxml_retained_bridge_allocation_probe_v2<'py>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn parse_rdfxml_retained_v2_with_allocations<'py>(
+fn parse_rdf_retained_v2_with_allocations<'py>(
+    syntax: RetainedRdfBindingSyntax,
     py: Python<'py>,
     source: &Bound<'py, PyAny>,
     document_iri: Option<&Bound<'py, PyAny>>,
@@ -341,7 +489,7 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
     require_empty_imports: bool,
     cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
     allocations: &mut crate::BridgeAllocationProbe,
-) -> PyResult<RetainedRdfXmlParseBindingResult> {
+) -> PyResult<RetainedRdfParseBindingResult> {
     let limits = crate::limits_from_python_with_allocations(config, allocations)?;
     let cancellation = crate::cancellation_or_default(cancel);
     let document_iri = owned_document_iri_with_allocations(py, document_iri, &limits, allocations)?;
@@ -365,22 +513,44 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
             interrupt.clone(),
         );
         let mut session = Session::new(&mut guard, &limits, accounted_input)?;
-        let outcome = engine::parse_rdfxml_retained_v2_with_mapping(
-            &owned,
-            document_iri.as_deref(),
-            &mut session,
-            limits,
-            cancellation,
-            Some(interrupt),
-            accounted_input,
-            collect_provenance,
-            preserve_source_map,
-            allow_partial_rdf_mapping,
-            allow_swrl,
-            require_empty_imports,
-        )?;
-        let parser_bytes = u64::try_from(input_size)
-            .map_err(|_| NativeError::limit("native RDF/XML source exceeds u64"))?;
+        let outcome = match syntax {
+            RetainedRdfBindingSyntax::RdfXml => engine::parse_rdfxml_retained_v2_with_mapping(
+                &owned,
+                document_iri.as_deref(),
+                &mut session,
+                limits,
+                cancellation,
+                Some(interrupt),
+                accounted_input,
+                collect_provenance,
+                preserve_source_map,
+                allow_partial_rdf_mapping,
+                allow_swrl,
+                require_empty_imports,
+            ),
+            RetainedRdfBindingSyntax::Turtle => engine::parse_turtle_retained_v2_with_mapping(
+                &owned,
+                document_iri.as_deref(),
+                &mut session,
+                limits,
+                cancellation,
+                Some(interrupt),
+                accounted_input,
+                collect_provenance,
+                preserve_source_map,
+                allow_partial_rdf_mapping,
+                allow_swrl,
+                require_empty_imports,
+            ),
+        }?;
+        let parser_bytes = u64::try_from(input_size).map_err(|_| match syntax {
+            RetainedRdfBindingSyntax::RdfXml => {
+                NativeError::limit("native RDF/XML source exceeds u64")
+            }
+            RetainedRdfBindingSyntax::Turtle => {
+                NativeError::limit("native Turtle source exceeds u64")
+            }
+        })?;
         Ok((outcome, parser_bytes))
     })?;
     // Python's repr printability follows the active runtime Unicode database.

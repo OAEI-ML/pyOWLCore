@@ -198,6 +198,42 @@ class NativeTestExtension(Protocol):
         fail_after: int | None = None,
     ) -> tuple[bytes, int]: ...
 
+    def _turtle_retained_bridge_allocation_probe_v2(
+        self,
+        source: object,
+        document_iri: object | None,
+        config: object,
+        collect_provenance: bool,
+        allow_partial_rdf_mapping: bool,
+        allow_swrl: bool,
+        require_empty_imports: bool,
+        fail_after: int | None = None,
+    ) -> tuple[bytes, int]: ...
+
+    def _parse_turtle_retained_v2(
+        self,
+        source: object,
+        document_iri: object | None,
+        config: object,
+        collect_provenance: bool,
+        allow_partial_rdf_mapping: bool,
+        allow_swrl: bool,
+        require_empty_imports: bool,
+        cancel: NativeTestCancellation | None = None,
+    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+
+    def _parse_turtle_retained_source_map_v2(
+        self,
+        source: object,
+        document_iri: object | None,
+        config: object,
+        collect_provenance: bool,
+        allow_partial_rdf_mapping: bool,
+        allow_swrl: bool,
+        require_empty_imports: bool,
+        cancel: NativeTestCancellation | None = None,
+    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+
     def _retained_structural_bridge_allocation_probe_v2(
         self,
         documents: object,

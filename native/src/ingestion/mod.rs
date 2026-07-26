@@ -65,12 +65,33 @@ pub(crate) struct CanonicalOccurrence {
     pub(crate) row: Vec<u8>,
 }
 
-pub(crate) struct RetainedRdfXmlOutcomeV2 {
+pub(crate) struct RetainedRdfOutcomeV2 {
     pub(crate) encoded: Vec<u8>,
     pub(crate) storage: TypedFacadeStorageV2,
     pub(crate) metadata: crate::parse::RetainedParseMetadataV2,
     pub(crate) phases: crate::parse::RetainedParsePhases,
     pub(crate) mapping_ns: u64,
+}
+
+#[derive(Clone, Copy)]
+enum RetainedRdfSyntax {
+    RdfXml,
+    Turtle,
+}
+
+impl RetainedRdfSyntax {
+    fn imports_unsupported(self) -> NativeError {
+        match self {
+            Self::RdfXml => NativeError::new(
+                "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
+                "native retained RDF/XML publication cannot bypass resolver-backed imports",
+            ),
+            Self::Turtle => NativeError::new(
+                "NATIVE_TURTLE_RETAINED_UNSUPPORTED",
+                "native retained Turtle publication cannot bypass resolver-backed imports",
+            ),
+        }
+    }
 }
 
 #[cfg(feature = "test-hooks")]
@@ -195,7 +216,7 @@ pub(crate) fn parse_rdfxml_retained_v2(
     preserve_source_map: bool,
     allow_swrl: bool,
     require_empty_imports: bool,
-) -> NativeResult<RetainedRdfXmlOutcomeV2> {
+) -> NativeResult<RetainedRdfOutcomeV2> {
     parse_rdfxml_retained_v2_with_mapping(
         source,
         document_iri,
@@ -226,24 +247,98 @@ pub(crate) fn parse_rdfxml_retained_v2_with_mapping(
     allow_partial_rdf_mapping: bool,
     allow_swrl: bool,
     require_empty_imports: bool,
-) -> NativeResult<RetainedRdfXmlOutcomeV2> {
-    let parse_started = Instant::now();
-    let (mut document, mapping_ns) = parse_rdfxml_timed(
+) -> NativeResult<RetainedRdfOutcomeV2> {
+    parse_rdf_retained_v2_with_mapping(
+        RetainedRdfSyntax::RdfXml,
         source,
         document_iri,
-        allow_swrl,
-        allow_partial_rdf_mapping,
-        collect_provenance || preserve_source_map,
-        preserve_source_map,
         session,
-    )?;
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+        collect_provenance,
+        preserve_source_map,
+        allow_partial_rdf_mapping,
+        allow_swrl,
+        require_empty_imports,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn parse_turtle_retained_v2_with_mapping(
+    source: &[u8],
+    document_iri: Option<&str>,
+    session: &mut Session<'_>,
+    limits: Limits,
+    cancellation: Cancellation,
+    interrupt: Option<crate::cancel::InterruptSlot>,
+    caller_external_bytes: usize,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+) -> NativeResult<RetainedRdfOutcomeV2> {
+    parse_rdf_retained_v2_with_mapping(
+        RetainedRdfSyntax::Turtle,
+        source,
+        document_iri,
+        session,
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+        collect_provenance,
+        preserve_source_map,
+        allow_partial_rdf_mapping,
+        allow_swrl,
+        require_empty_imports,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_rdf_retained_v2_with_mapping(
+    syntax: RetainedRdfSyntax,
+    source: &[u8],
+    document_iri: Option<&str>,
+    session: &mut Session<'_>,
+    limits: Limits,
+    cancellation: Cancellation,
+    interrupt: Option<crate::cancel::InterruptSlot>,
+    caller_external_bytes: usize,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+) -> NativeResult<RetainedRdfOutcomeV2> {
+    let parse_started = Instant::now();
+    let capture_occurrences = collect_provenance || preserve_source_map;
+    let (mut document, mapping_ns) = match syntax {
+        RetainedRdfSyntax::RdfXml => parse_rdfxml_timed(
+            source,
+            document_iri,
+            allow_swrl,
+            allow_partial_rdf_mapping,
+            capture_occurrences,
+            preserve_source_map,
+            session,
+        ),
+        RetainedRdfSyntax::Turtle => parse_turtle_timed(
+            source,
+            document_iri,
+            allow_swrl,
+            allow_partial_rdf_mapping,
+            capture_occurrences,
+            preserve_source_map,
+            session,
+        ),
+    }?;
     let parse_mapping_ns = elapsed_ns(parse_started)?;
     let syntax_parse_ns = parse_mapping_ns.saturating_sub(mapping_ns);
     if require_empty_imports && !document.imports.is_empty() {
-        return Err(NativeError::new(
-            "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
-            "native retained RDF/XML publication cannot bypass resolver-backed imports",
-        ));
+        return Err(syntax.imports_unsupported());
     }
     let rows = [
         document.ontology_annotations.as_slice(),
@@ -443,7 +538,7 @@ pub(crate) fn parse_rdfxml_retained_v2_with_mapping(
             caller_external_bytes,
         )?,
     };
-    Ok(RetainedRdfXmlOutcomeV2 {
+    Ok(RetainedRdfOutcomeV2 {
         encoded,
         storage: published.storage,
         metadata,
@@ -733,6 +828,107 @@ mod tests {
         assert!(report.rows.unconsumed_triples.is_empty());
         assert!(report.rows.rule_ids.is_empty());
         assert!(report.rows.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn production_turtle_result_uses_the_single_retained_rdf_owner_path() {
+        let source = br#"
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+            @prefix ex: <urn:turtle-retained:> .
+            ex:ontology a owl:Ontology .
+            ex:A a owl:Class ; rdfs:subClassOf ex:B .
+            ex:B a owl:Class .
+        "#;
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
+        let outcome = parse_turtle_retained_v2_with_mapping(
+            source,
+            Some("urn:turtle-retained:document"),
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            source.len(),
+            true,
+            true,
+            false,
+            true,
+            false,
+        )
+        .expect("retained Turtle outcome");
+        assert_eq!(outcome.encoded.get(..8), Some(b"PYNRRS2\0".as_slice()));
+        let counts = outcome.storage.structural_counts().expect("counts");
+        assert_eq!(counts.stored_axioms, 3);
+        assert_eq!(counts.effective_axioms, 3);
+        let prepared = crate::parse::prepare_retained_publication_v2(
+            &outcome.storage,
+            &outcome.metadata,
+            b"manifest",
+            "document-key",
+            true,
+            true,
+            &limits,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect("prepared Turtle publication");
+        assert_eq!(prepared.origin_rows.as_ref().map(Vec::len), Some(3));
+        assert_eq!(prepared.raw_origin_rows.as_ref().map(Vec::len), Some(3));
+        assert_eq!(
+            prepared
+                .source_map
+                .as_ref()
+                .map(|source| source.entries.len()),
+            Some(3),
+        );
+        assert_eq!(
+            prepared
+                .source_map
+                .as_ref()
+                .map(|source| source.prefixes.len()),
+            Some(3),
+        );
+        let report = prepared.rdf_report.expect("retained RDF report");
+        assert!(report.conformant);
+        assert_eq!(report.consumed_triples, 4);
+        assert_eq!(report.total_triples, 4);
+
+        let imported = br#"
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix ex: <urn:turtle-retained:> .
+            ex:ontology a owl:Ontology ; owl:imports ex:imported .
+        "#;
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, imported.len()).expect("session");
+        let error = parse_turtle_retained_v2_with_mapping(
+            imported,
+            None,
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            imported.len(),
+            false,
+            false,
+            false,
+            true,
+            true,
+        )
+        .err()
+        .expect("resolver bypass must fail");
+        assert_eq!(error.code, "NATIVE_TURTLE_RETAINED_UNSUPPORTED");
     }
 
     #[test]

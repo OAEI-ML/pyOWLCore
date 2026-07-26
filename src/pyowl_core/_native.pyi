@@ -223,6 +223,16 @@ def _rdfxml_retained_bridge_allocation_probe_v2(
     require_empty_imports: bool,
     fail_after: int | None = None,
 ) -> tuple[bytes, int]: ...
+def _turtle_retained_bridge_allocation_probe_v2(
+    source: object,
+    document_iri: object | None,
+    config: object,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+    fail_after: int | None = None,
+) -> tuple[bytes, int]: ...
 def _index_bridge_allocation_probe_v1(
     snapshot_wire: object,
     request: object,
@@ -451,6 +461,26 @@ def _parse_rdfxml_retained_v2(
     cancel: _Cancellation | None = None,
 ) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
 def _parse_rdfxml_retained_source_map_v2(
+    source: object,
+    document_iri: str | None,
+    config: object,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+    cancel: _Cancellation | None = None,
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
+def _parse_turtle_retained_v2(
+    source: object,
+    document_iri: str | None,
+    config: object,
+    collect_provenance: bool,
+    allow_partial_rdf_mapping: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+    cancel: _Cancellation | None = None,
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
+def _parse_turtle_retained_source_map_v2(
     source: object,
     document_iri: str | None,
     config: object,
