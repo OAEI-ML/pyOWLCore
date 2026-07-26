@@ -63,14 +63,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_successor_partitions_fail_closed() {
+    fn successor_partitions_are_exact_and_disjoint() {
         let features = BindingFeatures {
             ingestion: ingestion::FEATURES,
             views: views::FEATURES,
         };
-        assert!(features.ingestion.is_empty());
+        assert_eq!(
+            features.ingestion,
+            &[
+                "parse-functional-v1",
+                "parse-owlxml-v1",
+                "parse-rdfxml-v1",
+                "parse-turtle-v1",
+            ]
+        );
         assert!(features.views.is_empty());
-        assert!(features.combined().unwrap().is_empty());
+        assert_eq!(features.combined().unwrap(), features.ingestion);
     }
 
     #[test]

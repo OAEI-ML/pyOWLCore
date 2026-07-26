@@ -68,10 +68,15 @@ _FOUNDATION_FEATURES = frozenset(
         "wire-v1",
     }
 )
-_FOUNDATION_FEATURE_LEDGER = _FOUNDATION_FEATURES | {
-    "index-axiom-types-v1",
-    "parse-functional-v1",
-}
+_FOUNDATION_FEATURE_LEDGER = _FOUNDATION_FEATURES | {"index-axiom-types-v1"}
+_INGESTION_FEATURE_LEDGER = frozenset(
+    {
+        "parse-functional-v1",
+        "parse-owlxml-v1",
+        "parse-rdfxml-v1",
+        "parse-turtle-v1",
+    }
+)
 
 
 class _NativeCancellation(Protocol):
@@ -613,7 +618,7 @@ def _parse_rdfxml_retained_v2(
     require_empty_imports: bool = False,
     cancellation_token: CancellationToken | None = None,
 ) -> _NativeRetainedFunctionalParseV2:
-    """Use the private, unadvertised retained RDF/XML production seam."""
+    """Use the private retained RDF/XML operation behind its public capability."""
 
     return _parse_structural_retained_v2(
         "rdfxml",
@@ -641,7 +646,7 @@ def _parse_turtle_retained_v2(
     require_empty_imports: bool = False,
     cancellation_token: CancellationToken | None = None,
 ) -> _NativeRetainedFunctionalParseV2:
-    """Use the private, unadvertised retained Turtle production seam."""
+    """Use the private retained Turtle operation behind its public capability."""
 
     return _parse_structural_retained_v2(
         "turtle",
@@ -668,7 +673,7 @@ def _parse_owlxml_retained_v2(
     require_empty_imports: bool = False,
     cancellation_token: CancellationToken | None = None,
 ) -> _NativeRetainedFunctionalParseV2:
-    """Use the private, unadvertised retained OWL/XML production seam."""
+    """Use the private retained OWL/XML operation behind its public capability."""
 
     return _parse_structural_retained_v2(
         "owlxml",

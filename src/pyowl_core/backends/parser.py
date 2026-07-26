@@ -455,7 +455,7 @@ def _parse_document_for_retained_load(
     load_started: float,
     root_parse_started: float,
 ) -> _ParsedDocumentResult:
-    """Parse a root while retaining an unadvertised native structural owner."""
+    """Parse a root while retaining its selected native structural owner."""
 
     return PythonParser()._parse(
         source,

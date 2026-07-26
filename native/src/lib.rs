@@ -43,7 +43,7 @@ use wire::WireArena;
 pub(crate) const ABI_VERSION: u32 = 3;
 const MODEL_SCHEMA_VERSION: u32 = 1;
 const WIRE_FORMAT_VERSION: (u16, u16) = (1, 1);
-const FOUNDATION_FEATURES: [&str; 10] = [
+const FOUNDATION_FEATURES: [&str; 9] = [
     "cancellation",
     "canonical-model-v1",
     "deadlines",
@@ -51,7 +51,6 @@ const FOUNDATION_FEATURES: [&str; 10] = [
     "index-axiom-types-v1",
     "owned-buffers",
     "panic-containment",
-    "parse-functional-v1",
     "safe-rust",
     "wire-v1",
 ];
@@ -1234,7 +1233,7 @@ mod tests {
     fn feature_ledger_is_sorted_and_foundational() {
         assert!(FOUNDATION_FEATURES.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(FOUNDATION_FEATURES.contains(&"wire-v1"));
-        assert!(FOUNDATION_FEATURES.contains(&"parse-functional-v1"));
+        assert!(!FOUNDATION_FEATURES.contains(&"parse-functional-v1"));
         assert!(FOUNDATION_FEATURES.contains(&"index-axiom-types-v1"));
     }
 }

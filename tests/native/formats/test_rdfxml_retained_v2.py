@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gc
-import io
 import mmap
 import time
 from pathlib import Path
@@ -15,7 +14,6 @@ from pyowl_core import (
     IRI,
     BackendPreference,
     BackendProtocolError,
-    BackendUnavailableError,
     CancellationSource,
     DocumentFormat,
     EncodedStructuralView,
@@ -386,11 +384,6 @@ ANONYMOUS_SYMMETRIC_SOURCE = (
     + b"</rdf:RDF>"
 )
 DOCUMENT_IRI = IRI("urn:rdfxml:document")
-
-
-class _UnreadableRdfXml(io.BytesIO):
-    def read(self, size: int | None = -1, /) -> bytes:
-        raise AssertionError("unsupported forced-native RDF/XML consumed its source")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -1431,7 +1424,7 @@ def test_guarded_public_rdfxml_route_matrix_publishes_the_retained_owner(
 
     owner = selected._native_snapshot_state.owner.handle._owner_v2
     counters = owner._publication_counters_v2()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
+    assert "parse-rdfxml-v1" in extension.INGESTION_FEATURES
     assert type(owner) is cast(Any, extension)._NativeSnapshotHandle
     assert type(selected).__name__ == "_NativeOntologySnapshot"
     assert selected.root.axioms == reference.root.axioms
@@ -1500,7 +1493,7 @@ def test_guarded_public_rdfxml_document_matrix_retains_the_parser_owner(
 
     owner = selected._native_document_state.owner.handle._owner_v2
     counters = owner._publication_counters_v2()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
+    assert "parse-rdfxml-v1" in extension.INGESTION_FEATURES
     assert type(owner) is cast(Any, extension)._NativeDocumentHandle
     assert type(selected).__name__ == "_NativeOntologyDocument"
     assert selected == reference
@@ -1514,35 +1507,23 @@ def test_guarded_public_rdfxml_document_matrix_retains_the_parser_owner(
     assert counters.publication_structural_bytes_copied == 0
 
 
-def test_rdfxml_capability_remains_absent_and_public_dispatch_does_not_fallback(
+def test_rdfxml_capability_is_registered_and_public_dispatch_uses_native(
     extension: NativeTestExtension,
 ) -> None:
-    assert "parse-rdfxml-v1" not in extension.FEATURES
-    assert extension.INGESTION_FEATURES == ()
-    unexpected = AssertionError("unsupported forced-native RDF/XML executed a parser")
-    with (
-        patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected),
-        patch.object(
-            cast(Any, extension),
-            "_parse_rdfxml_retained_v2",
-            side_effect=unexpected,
-        ),
-        pytest.raises(BackendUnavailableError, match="parse-rdfxml-v1"),
-    ):
-        load_snapshot(
+    assert "parse-rdfxml-v1" in extension.INGESTION_FEATURES
+    expected_ingestion = tuple(sorted(native._INGESTION_FEATURE_LEDGER))
+    assert expected_ingestion == extension.INGESTION_FEATURES
+    unexpected = AssertionError("advertised forced-native RDF/XML crossed the Python parser")
+    with patch("pyowl_core.backends.python.parser.parse_rdfxml", side_effect=unexpected):
+        selected = load_snapshot(
             SOURCE,
             document_iri=DOCUMENT_IRI,
             options=_options(BackendPreference.NATIVE),
         )
-
-    unread = _UnreadableRdfXml(SOURCE)
-    with pytest.raises(BackendUnavailableError, match="parse-rdfxml-v1"):
-        load_snapshot(
-            unread,
-            document_iri=DOCUMENT_IRI,
-            options=_options(BackendPreference.NATIVE),
-        )
-    assert unread.tell() == 0
+    try:
+        assert type(selected).__name__ == "_NativeOntologySnapshot"
+    finally:
+        selected.close()
 
 
 def test_private_rdfxml_seam_rejects_unowned_semantics_before_publication() -> None:
@@ -1854,7 +1835,7 @@ def test_private_source_map_matches_python_with_prefixes_and_language_details(
     assert before.source_map_rows_emitted == 0
     assert before.source_prefix_rows_emitted == 0
     assert before_python.auxiliary_rows_decoded == 0
-    assert "parse-rdfxml-v1" not in extension.FEATURES
+    assert "parse-rdfxml-v1" in extension.INGESTION_FEATURES
 
     assert selected.root.source_map == reference.root.source_map
     assert dict(selected.root.source_map.prefixes) == {

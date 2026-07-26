@@ -1,8 +1,7 @@
 //! WP16-owned native ingestion registration seam.
 //!
-//! WP15 intentionally publishes no successor ingestion capability. WP16 may
-//! add functions/classes and feature names in this module without editing the
-//! shared module registry.
+//! Complete retained parsers register their top-level format capabilities in
+//! this partition without coupling the shared module registry to ingestion.
 
 #[path = "ingestion_closure.rs"]
 mod closure;
@@ -26,7 +25,12 @@ use crate::publication::{
 };
 use crate::session::Session;
 
-pub(super) const FEATURES: &[&str] = &[];
+pub(super) const FEATURES: &[&str] = &[
+    "parse-functional-v1",
+    "parse-owlxml-v1",
+    "parse-rdfxml-v1",
+    "parse-turtle-v1",
+];
 
 #[pyclass(
     module = "pyowl_core._native",
@@ -227,9 +231,7 @@ fn _fork_parsed_structural_storage_v2<'py>(
 }
 
 /// Parse one complete RDF/XML document and retain its canonical structural
-/// roots in the typed V2 owner. This production seam stays private and absent
-/// from the capability ledger until the full forced-native format matrix is
-/// complete.
+/// roots in the typed V2 owner registered by `parse-rdfxml-v1`.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
@@ -271,8 +273,7 @@ fn _parse_rdfxml_retained_v2<'py>(
 }
 
 /// Parse one RDF/XML document while retaining its exact source occurrence
-/// metadata. This additive private seam keeps the stable retained-parser call
-/// shape intact and remains absent from the capability ledger.
+/// metadata behind the registered top-level RDF/XML capability.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
@@ -396,8 +397,8 @@ fn _parse_turtle_retained_source_map_v2<'py>(
     )
 }
 
-/// Parse one complete OWL/XML document into a retained structural owner.  The
-/// seam remains private and is deliberately absent from the capability ledger.
+/// Parse one complete OWL/XML document into a retained structural owner behind
+/// the registered top-level OWL/XML capability.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
@@ -2200,10 +2201,9 @@ fn validate_prepared_closure_attestation(
 
 /// Freeze already-validated documents into one real typed V2 owner.
 ///
-/// This private, unadvertised bridge lets the narrowly eligible public
-/// forced-native load path retain its structural roots in the typed owner. It
-/// accepts canonical roots, optional attested origin rows, and an explicit
-/// document/closure topology, while publishing no format capability.
+/// This private bridge lets the public forced-native load path retain its
+/// structural roots in the typed owner. It accepts canonical roots, optional
+/// attested origin rows, and an explicit document/closure topology.
 #[pyfunction]
 #[pyo3(signature = (
     documents,
@@ -3660,11 +3660,10 @@ fn owned_auxiliary_rows(
     Ok(owned)
 }
 
-/// Bounded observability hook for the unadvertised first WP16 slice.
+/// Bounded observability hook for the retained RDF/XML ingestion engine.
 ///
 /// The returned bytes are a test-only ledger; the first tuple item is the real
-/// frozen V1 owner.  No production capability is advertised until the complete
-/// RDF/XML grammar and OWL RDF mapping pass the installed-path matrix.
+/// frozen V1 owner.
 #[cfg(feature = "test-hooks")]
 #[pyfunction]
 #[pyo3(signature = (source, document_iri, config, cancel=None, *, allow_swrl=false))]

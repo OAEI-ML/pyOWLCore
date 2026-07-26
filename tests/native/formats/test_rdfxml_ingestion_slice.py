@@ -175,6 +175,14 @@ def extension() -> NativeTestExtension:
     return selected
 
 
+def test_rdfxml_is_registered_in_the_exact_ingestion_partition(
+    extension: NativeTestExtension,
+) -> None:
+    expected_ingestion = tuple(sorted(native._INGESTION_FEATURE_LEDGER))
+    assert expected_ingestion == extension.INGESTION_FEATURES
+    assert "parse-rdfxml-v1" in extension.INGESTION_FEATURES
+
+
 def _ingest(
     extension: NativeTestExtension,
     source: object,
@@ -288,8 +296,6 @@ def test_supported_slice_matches_python_mapping_and_crosses_v1_freeze(
     assert attestation.stored_axiom_count == len(python.axioms)
     assert attestation.total_source_bytes == len(source)
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 def test_generated_every_constructor_corpus_matches_python_mapping(
@@ -1352,8 +1358,6 @@ def test_owl1_builtin_named_class_constructors_match_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 1
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -2078,8 +2082,6 @@ def test_owl1_declarations_characteristics_and_deprecation_match_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == len(python.axioms)
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 def test_owl1_property_marker_on_a_nonproperty_remains_incomplete(
@@ -2142,8 +2144,6 @@ def test_detached_inverse_property_expression_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == len(python.axioms)
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -2177,8 +2177,6 @@ def test_detached_builtin_inverse_property_expression_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 0
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -2264,8 +2262,6 @@ def test_implicit_builtin_property_classification_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 14
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 def test_builtin_property_special_axioms_match_python(
@@ -2338,8 +2334,6 @@ def test_builtin_property_special_axioms_match_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 8
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -2520,8 +2514,6 @@ def test_detached_builtin_datatype_restriction_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 0
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -2640,8 +2632,6 @@ def test_detached_class_complement_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == len(python.axioms)
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize("target", ("Thing", "Nothing"))
@@ -2669,8 +2659,6 @@ def test_detached_builtin_class_complement_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 0
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -2804,8 +2792,6 @@ def test_detached_empty_class_boolean_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 0
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -2850,8 +2836,6 @@ def test_detached_named_class_boolean_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == len(members)
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize("operator", ("intersectionOf", "unionOf"))
@@ -2883,8 +2867,6 @@ def test_detached_builtin_named_class_boolean_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 0
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -3341,8 +3323,6 @@ def test_detached_object_enumeration_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 0
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 def test_named_object_enumeration_axiom_matches_python(
@@ -3492,8 +3472,6 @@ def test_detached_named_data_boolean_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == len(declared)
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize("operator", ("intersectionOf", "unionOf"))
@@ -3527,8 +3505,6 @@ def test_detached_builtin_named_data_boolean_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 0
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -3921,8 +3897,6 @@ def test_detached_datatype_restriction_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 1
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -4297,8 +4271,6 @@ def test_detached_datatype_complement_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == len(python.axioms)
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 def test_detached_builtin_datatype_complements_match_python(
@@ -4331,8 +4303,6 @@ def test_detached_builtin_datatype_complements_match_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 0
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -4481,8 +4451,6 @@ def test_detached_data_enumeration_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 0
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(
@@ -4635,8 +4603,6 @@ def test_detached_owl1_data_enumeration_matches_python(
     attestation = cast(Any, owner)._publication_attestation_v1()
     assert attestation.stored_axiom_count == 0
     assert attestation.rdf_mapping_report_count == 1
-    assert extension.INGESTION_FEATURES == ()
-    assert "parse-rdfxml-v1" not in extension.FEATURES
 
 
 @pytest.mark.parametrize(

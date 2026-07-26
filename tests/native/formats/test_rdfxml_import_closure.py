@@ -195,7 +195,7 @@ def test_rdfxml_two_document_closure_is_exact_and_owner_first(
         collect_provenance=collect_provenance,
     )
 
-    assert "parse-rdfxml-v1" not in extension.FEATURES
+    assert "parse-rdfxml-v1" in extension.INGESTION_FEATURES
     assert type(selected).__name__ == "_NativeOntologySnapshot"
     assert selected.capabilities.backend == "native"
     assert selected == reference

@@ -60,6 +60,20 @@ def main() -> None:
     probe = native.probe(refresh=True)
     if not probe.available:
         raise RuntimeError(probe.reason or "native backend is unavailable")
+    expected_ingestion_features = tuple(
+        sorted(
+            {
+                "parse-functional-v1",
+                "parse-owlxml-v1",
+                "parse-rdfxml-v1",
+                "parse-turtle-v1",
+            }
+        )
+    )
+    if expected_ingestion_features != extension.INGESTION_FEATURES:
+        raise AssertionError("installed native ingestion capability partition is incomplete")
+    if not set(expected_ingestion_features).issubset(probe.features):
+        raise AssertionError("installed native feature ledger omits an ingestion capability")
 
     formats = (
         DocumentFormat.FUNCTIONAL,
@@ -102,11 +116,6 @@ def main() -> None:
             f"{format_value.value} forced-native matrix crossed a Python parser"
         )
         with (
-            patch(
-                "pyowl_core.backends.parser._NativeBackendDriver.select",
-                autospec=True,
-                return_value="native",
-            ),
             patch(
                 "pyowl_core.backends.python.parser.parse_functional",
                 side_effect=unexpected,
@@ -429,6 +438,14 @@ def main() -> None:
         gc.collect()
         selected.close()
         right_selected.close()
+
+    observed["capabilities"] = {
+        "ingestion_features": list(extension.INGESTION_FEATURES),
+        "probe_contains_ingestion_partition": set(extension.INGESTION_FEATURES).issubset(
+            probe.features
+        ),
+        "view_features": list(extension.VIEW_FEATURES),
+    }
 
     mixed_root = b"""\
 <Ontology xmlns="http://www.w3.org/2002/07/owl#" ontologyIRI="urn:matrix:mixed-root">

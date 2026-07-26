@@ -1897,13 +1897,11 @@ def retain_native_snapshot_v2(
     cancellation_token: CancellationToken | None = None,
     parsed_native_storage: object | None = None,
 ) -> OntologySnapshot:
-    """Promote one narrowly eligible native parse into the typed V2 owner.
+    """Promote one eligible native parse into the typed V2 owner.
 
-    The bridge remains deliberately unadvertised while WP16's complete
-    format/import/source-map matrix is unfinished. An ineligible load stays on
-    its existing Python storage before owner publication; an eligible load
-    selected explicitly or by the existing AUTO policy either publishes the
-    retained owner or fails without fallback.
+    An ineligible load stays on its existing Python storage before owner
+    publication; an eligible load selected explicitly or by AUTO either
+    publishes the retained owner or fails without fallback.
     """
 
     _closure_publication_checkpoint_v2(cancellation_token)

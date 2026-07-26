@@ -957,7 +957,6 @@ def test_large_auto_load_retains_parser_arena_with_ignored_import_metadata(
     assert encode_snapshot(selected) == encode_snapshot(reference)
     after_wire_python = cast(Any, selected)._native_python_counters()
     assert after_wire_python.model_rows_materialized == before_python.model_rows_materialized
-    assert extension.INGESTION_FEATURES == ()
     assert extension.VIEW_FEATURES == ()
     assert not selected.capabilities.encoded_view_schemas
 
@@ -1029,7 +1028,6 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
     assert imported.capabilities.backend == "python"
 
     assert calls == 0
-    assert extension.INGESTION_FEATURES == ()
     assert "retained-structural-snapshot-v2" not in extension.FEATURES
     assert not imported.capabilities.encoded_view_schemas
 
@@ -1695,7 +1693,6 @@ def test_record_unresolved_mixed_closure_retains_resolved_documents_and_diagnost
     assert handle.attestation.capability_bits == (
         7 | (8 if preserve_source_map else 0) | (16 if collect_provenance else 0)
     )
-    assert extension.INGESTION_FEATURES == ()
 
 
 @pytest.mark.parametrize("collect_provenance", (False, True))
@@ -1761,7 +1758,6 @@ def test_large_auto_resolver_built_closure_retains_one_native_owner(
     assert handle.attestation.capability_bits == (
         7 | (8 if preserve_source_map else 0) | (16 if collect_provenance else 0)
     )
-    assert extension.INGESTION_FEATURES == ()
 
 
 @pytest.mark.parametrize("small_document", ("root", "child"))
@@ -3005,7 +3001,7 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
         "right": 1,
         "leaf": 1,
     }
-    assert observed["ingestion_features"] == []
+    assert observed["ingestion_features"] == sorted(native._INGESTION_FEATURE_LEDGER)
     assert observed["view_features"] == []
     assert observed["encoded_view_schemas"] == {}
     assert observed["wire_model_rows_materialized"] == 0

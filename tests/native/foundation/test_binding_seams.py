@@ -32,9 +32,10 @@ def _metadata_extension(
     )
 
 
-def test_successor_binding_partitions_start_empty() -> None:
+def test_successor_binding_partitions_are_exact_and_disjoint() -> None:
     extension = load_extension()
-    assert extension.INGESTION_FEATURES == ()
+    expected_ingestion = tuple(sorted(native._INGESTION_FEATURE_LEDGER))
+    assert expected_ingestion == extension.INGESTION_FEATURES
     assert extension.VIEW_FEATURES == ()
     assert set(extension.INGESTION_FEATURES).isdisjoint(extension.VIEW_FEATURES)
     assert set(extension.INGESTION_FEATURES) <= set(extension.FEATURES)

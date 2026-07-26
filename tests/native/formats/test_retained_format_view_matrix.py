@@ -29,11 +29,22 @@ def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -
     )
     observed = json.loads(completed.stdout)
     assert set(observed) == {
+        "capabilities",
         "functional",
         "mixed_closure",
         "owlxml",
         "rdfxml",
         "turtle",
+    }
+    assert observed.pop("capabilities") == {
+        "ingestion_features": [
+            "parse-functional-v1",
+            "parse-owlxml-v1",
+            "parse-rdfxml-v1",
+            "parse-turtle-v1",
+        ],
+        "probe_contains_ingestion_partition": True,
+        "view_features": [],
     }
     mixed_closure = observed.pop("mixed_closure")
     assert mixed_closure == {

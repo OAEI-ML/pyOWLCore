@@ -13,7 +13,6 @@ from pyowl_core import (
     IRI,
     AcquisitionCache,
     BackendPreference,
-    BackendUnavailableError,
     CancellationSource,
     DocumentFormat,
     ImportPolicy,
@@ -769,17 +768,20 @@ def test_private_owlxml_bridge_allocations_are_transactional(
     ) == (encoded, allocations)
 
 
-def test_owlxml_remains_absent_from_the_advertised_capability_ledger() -> None:
-    assert "parse-owlxml-v1" not in native.probe(refresh=True).features
+def test_owlxml_is_registered_in_the_ingestion_capability_ledger() -> None:
+    assert "parse-owlxml-v1" in native.probe(refresh=True).features
 
 
-def test_forced_owlxml_stays_outside_acquisition_until_capability_advertisement() -> None:
+def test_forced_owlxml_acquires_once_and_publishes_native_storage() -> None:
     source = _OneShotStream(SOURCE)
-    with pytest.raises(BackendUnavailableError) as unavailable:
-        load_snapshot(
-            source,
-            document_iri=DOCUMENT_IRI,
-            options=_public_options(BackendPreference.NATIVE),
-        )
-    assert unavailable.value.code == "NATIVE_CAPABILITY_UNAVAILABLE"
-    assert source.read_calls == 0
+    selected = load_snapshot(
+        source,
+        document_iri=DOCUMENT_IRI,
+        options=_public_options(BackendPreference.NATIVE),
+    )
+    try:
+        assert type(selected).__name__ == "_NativeOntologySnapshot"
+        assert source.read_calls == 2
+        assert source.closed is False
+    finally:
+        selected.close()

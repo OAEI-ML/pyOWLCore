@@ -107,7 +107,7 @@ def _parse_functional_native_retained_v2(
     cancellation_token: CancellationToken | None,
     materialize_document: bool = False,
 ) -> _NativeRetainedFunctionalParseV2:
-    """Execute the unadvertised parser-to-retained-arena construction seam."""
+    """Execute the selected parser-to-retained-arena construction seam."""
 
     return native._parse_functional_retained_v2(
         data,

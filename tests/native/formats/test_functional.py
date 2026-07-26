@@ -5,7 +5,6 @@ import struct
 import subprocess
 import sys
 import threading
-import warnings
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -23,8 +22,6 @@ from pyowl_core.backends import native
 from pyowl_core.cancellation import CancellationSource
 from pyowl_core.exceptions import (
     BackendProtocolError,
-    BackendUnavailableError,
-    NativeBackendUnavailableWarning,
     OperationCancelledError,
     ResourceLimitError,
     UnsupportedSyntaxError,
@@ -120,26 +117,26 @@ def test_anonymous_bom_unicode_and_swrl_match_reference_parser() -> None:
         native.parse_functional(source)
 
 
-def test_unadvertised_formats_fallback_or_fail_before_parser_work() -> None:
+def test_advertised_owlxml_selects_native_for_auto_and_forced_requests() -> None:
     owlxml = b"""<?xml version='1.0'?>
 <Ontology xmlns='http://www.w3.org/2002/07/owl#'
  xmlns:xsd='http://www.w3.org/2001/XMLSchema#'
  ontologyIRI='urn:native:owlxml'><Declaration><Class IRI='urn:C'/></Declaration></Ontology>"""
-    with warnings.catch_warnings(record=True) as observed:
-        warnings.simplefilter("always")
-        document = parse_document(
+    documents = (
+        parse_document(
             owlxml,
             format=DocumentFormat.OWL_XML,
             options=LoadOptions(backend=BackendPreference.AUTO),
-        )
-    assert document.provenance.backend == "python"
-    assert any(issubclass(item.category, NativeBackendUnavailableWarning) for item in observed)
-    with pytest.raises(BackendUnavailableError):
+        ),
         parse_document(
             owlxml,
             format=DocumentFormat.OWL_XML,
             options=LoadOptions(backend=BackendPreference.NATIVE),
-        )
+        ),
+    )
+
+    assert all(document.provenance.backend == "native" for document in documents)
+    assert "parse-owlxml-v1" in native.probe(refresh=True).features
 
 
 def test_auto_keeps_small_functional_documents_on_python_without_a_probe() -> None:
