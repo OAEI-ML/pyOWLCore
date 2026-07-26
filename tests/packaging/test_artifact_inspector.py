@@ -6,6 +6,7 @@ import hashlib
 import io
 import tarfile
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,7 @@ def _wheel(
     *,
     dist_info: str = "pyowl_core-0.1.0.dev0.dist-info",
     extra_binary: str | None = None,
+    extra_entries: Mapping[str, bytes] | None = None,
     internal_tag: str | None = None,
     malformed_record_row: bool = False,
     metadata: bytes = _METADATA,
@@ -86,6 +88,8 @@ def _wheel(
         entries["pyowl_core/_native.cpython-310-x86_64-linux-gnu.so"] = b"native-fixture"
     if extra_binary is not None:
         entries[extra_binary] = b"unapproved-native-fixture"
+    if extra_entries is not None:
+        entries.update(extra_entries)
     record_name = f"{dist_info}/RECORD"
     entries[record_name] = _record(
         entries,
@@ -308,6 +312,40 @@ def test_java_artifact_and_unsafe_member_are_rejected(tmp_path: Path) -> None:
     assert not result.ok
     assert any("unsafe member path" in error for error in result.errors)
     assert any("forbidden artifact" in error for error in result.errors)
+
+
+@pytest.mark.parametrize(
+    "member",
+    (
+        "payload//value.txt",
+        "payload/./value.txt",
+        "payload\\value.txt",
+        "C:/payload.txt",
+    ),
+)
+def test_wheel_rejects_noncanonical_member_paths(
+    tmp_path: Path,
+    member: str,
+) -> None:
+    result = inspect_artifact(_wheel(tmp_path, extra_entries={member: b"noncanonical"}))
+
+    assert not result.ok
+    assert f"archive: unsafe member path {member!r}" in result.errors
+
+
+def test_wheel_rejects_normalized_file_directory_collision(tmp_path: Path) -> None:
+    result = inspect_artifact(
+        _wheel(
+            tmp_path,
+            extra_entries={
+                "payload": b"file",
+                "payload/": b"",
+            },
+        )
+    )
+
+    assert not result.ok
+    assert "archive: normalized member collision" in result.errors
 
 
 def test_declared_member_limit_blocks_before_payload_read(

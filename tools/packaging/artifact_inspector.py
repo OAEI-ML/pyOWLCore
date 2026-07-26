@@ -172,8 +172,18 @@ def _artifact_kind(path: Path) -> ArtifactKind:
 
 
 def _normalized_member(name: str) -> PurePosixPath | None:
-    path = PurePosixPath(name.replace("\\", "/"))
-    if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
+    if "\\" in name or any(ord(character) < 32 or ord(character) == 127 for character in name):
+        return None
+    path = PurePosixPath(name)
+    if (
+        path.is_absolute()
+        or not path.parts
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or re.match(r"[A-Za-z]:", path.parts[0]) is not None
+    ):
+        return None
+    canonical = path.as_posix()
+    if name not in {canonical, f"{canonical}/"}:
         return None
     return path
 
@@ -359,6 +369,13 @@ def _validate_common(reader: ArchiveReader) -> tuple[list[str], int, bool]:
         errors.append("archive: duplicate member name")
     if len({name.casefold() for name in names}) != len(names):
         errors.append("archive: case-insensitive member collision")
+    normalized_names = [
+        normalized.as_posix().casefold()
+        for name in names
+        if (normalized := _normalized_member(name)) is not None
+    ]
+    if len(set(normalized_names)) != len(normalized_names):
+        errors.append("archive: normalized member collision")
     total = sum(max(size, 0) for size in sizes)
     for name, size in zip(names, sizes, strict=False):
         if size < 0:
