@@ -72,11 +72,11 @@ TURTLE_IMPORT_CHILD = rb"""
 """
 
 TURTLE_LEXICAL_SOURCES = (
-    b"\xef\xbb\xbfBASE <https://example.test/base/> "
+    b"\xef\xbb\xbfBASE <https://example.test/\\u0062ase/> "
     b"PREFIX owl: <http://www.w3.org/2002/07/owl#> "
     b"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> "
     b"<ontology> a owl:Ontology . "
-    b"<A> a owl:Class ; rdfs:subClassOf <B> . "
+    b"<A\\u007Eescaped> a owl:Class ; rdfs:subClassOf <B> . "
     b"<B> a owl:Class .",
     rb'''
         @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -107,6 +107,11 @@ INVALID_TURTLE_PERCENT_ESCAPE = rb"""
     ex:ontology a owl:Ontology .
     ex:Class%2XName a owl:Class .
 """
+
+INVALID_TURTLE_IRIREFS = (
+    b"<urn:invalid IRI> <urn:predicate> <urn:object> .",
+    rb"<urn:invalid\qescape> <urn:predicate> <urn:object> .",
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -237,6 +242,32 @@ def test_python_turtle_rejects_invalid_prefixed_name_percent_escape() -> None:
             ),
         )
     assert raised.value.code == "TURTLE_SYNTAX"
+
+
+@pytest.mark.parametrize(
+    "source",
+    INVALID_TURTLE_IRIREFS,
+    ids=("raw-space", "non-unicode-escape"),
+)
+def test_turtle_iriref_grammar_fails_at_the_syntax_boundary(source: bytes) -> None:
+    with pytest.raises(OntologySyntaxError) as python_error:
+        parse_document(
+            source,
+            options=LoadOptions(
+                format=DocumentFormat.TURTLE,
+                imports=ImportPolicy.IGNORE,
+                backend=BackendPreference.PYTHON,
+            ),
+        )
+    with pytest.raises(OntologySyntaxError) as native_error:
+        native._parse_turtle_retained_v2(
+            source,
+            document_iri=None,
+            allow_partial_rdf_mapping=True,
+        )
+
+    assert python_error.value.code == "TURTLE_SYNTAX"
+    assert native_error.value.code == "TURTLE_SYNTAX"
 
 
 def test_private_turtle_owner_publishes_without_python_structural_reconstruction(

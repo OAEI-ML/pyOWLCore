@@ -122,8 +122,23 @@ class TurtleLexer:
             elif char == "<":
                 end = index + 1
                 while end < self.length and self.text[end] != ">":
-                    if self.text[end] in "\r\n":
-                        self._syntax("IRIREF cannot contain a line break", start_line, start_column)
+                    current = self.text[end]
+                    if current == "\\":
+                        uchar = _UCHAR.match(self.text, end)
+                        if uchar is None:
+                            self._syntax(
+                                "IRIREF contains an invalid escape",
+                                start_line,
+                                start_column,
+                            )
+                        end = uchar.end()
+                        continue
+                    if ord(current) <= 0x20 or current in '<"{}|^`':
+                        self._syntax(
+                            "IRIREF contains a forbidden character",
+                            start_line,
+                            start_column,
+                        )
                     end += 1
                 if end >= self.length:
                     self._syntax("unterminated IRIREF", start_line, start_column)
@@ -266,11 +281,13 @@ class TurtleParser:
             if not prefix.value.endswith(":"):
                 self._syntax("prefix label must end in ':'", prefix)
             iri = self._expect("IRI")
-            self.prefixes[prefix.value[:-1]] = self._resolve_iri(iri.value)
+            self.prefixes[prefix.value[:-1]] = self._resolve_iri(
+                _decode_uchar(iri.value, self._syntax_message)
+            )
             self.context.limits.enforce("max_prefixes", len(self.prefixes))
         elif value in {"@base", "base"}:
             iri = self._expect("IRI")
-            self.base = self._resolve_iri(iri.value)
+            self.base = self._resolve_iri(_decode_uchar(iri.value, self._syntax_message))
         else:
             self._syntax("unknown Turtle directive", token)
         if value.startswith("@"):

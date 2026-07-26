@@ -145,7 +145,13 @@ impl<'text> Lexer<'text> {
                     value: Cow::Borrowed(value),
                 });
             }
-            if matches!(character, '\r' | '\n') {
+            if character == '\\' {
+                let (_decoded, following) = decode_unicode_escape(self.text, end)?;
+                end = following;
+                continue;
+            }
+            if character <= '\u{20}' || matches!(character, '<' | '"' | '{' | '}' | '|' | '^' | '`')
+            {
                 return Err(turtle_syntax());
             }
             end += character.len_utf8();
@@ -1274,6 +1280,26 @@ mod tests {
         "#;
         let error = parse(invalid_percent).expect_err("invalid prefixed-name percent escape");
         assert_eq!(error.code, "NATIVE_TURTLE_SYNTAX");
+    }
+
+    #[test]
+    fn turtle_iriref_escapes_and_forbidden_characters_are_lexical() {
+        let escaped = br#"
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix ex: <urn:turtle:\u0070refix:> .
+            ex:ontology a owl:Ontology .
+            <urn:turtle:\u0043lass> a owl:Class .
+        "#;
+        let document = parse(escaped).expect("escaped IRIREF");
+        assert_eq!(document.axioms.len(), 1);
+
+        for invalid in [
+            b"<urn:invalid IRI> <urn:predicate> <urn:object> .".as_slice(),
+            br"<urn:invalid\qescape> <urn:predicate> <urn:object> .".as_slice(),
+        ] {
+            let error = parse(invalid).expect_err("invalid IRIREF");
+            assert_eq!(error.code, "NATIVE_TURTLE_SYNTAX");
+        }
     }
 
     #[test]
