@@ -771,6 +771,70 @@ pub(crate) fn build_rdfxml_seed(
     ))
 }
 
+/// Reuse the canonical-row ingestion ledger for a non-RDF streaming syntax
+/// while retaining the ordinary structural seed contract and no RDF report.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_structural_rows_seed(
+    ontology_iri: Option<&str>,
+    version_iri: Option<&str>,
+    imports: &[String],
+    rows: [&[Vec<u8>]; 3],
+    decoded_codepoints: u64,
+    occurrence_count: u64,
+    occurrence_rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
+    language_spellings: Vec<String>,
+    source_blank_labels: Vec<String>,
+    source_prefixes: Vec<(String, String)>,
+    collect_occurrences: bool,
+    preserve_source_map: bool,
+    scoped_roots: bool,
+    scoped_occurrence_digests: Option<&[([u8; 32], [u8; 32])]>,
+    effective_origin_fallbacks: Vec<([u8; 32], u64)>,
+    limits: &Limits,
+    cancellation: &Cancellation,
+) -> NativeResult<(Vec<u8>, RetainedParseMetadataV2)> {
+    let (mut encoded, mut metadata) = build_rdfxml_seed(
+        ontology_iri,
+        version_iri,
+        imports,
+        rows,
+        decoded_codepoints,
+        0,
+        0,
+        Vec::new(),
+        occurrence_count,
+        occurrence_rows,
+        language_spellings,
+        source_blank_labels,
+        source_prefixes,
+        collect_occurrences,
+        preserve_source_map,
+        scoped_roots,
+        scoped_occurrence_digests,
+        effective_origin_fallbacks,
+        limits,
+        cancellation,
+    )?;
+    if encoded.len() < RETAINED_RDFXML_SEED_MAGIC_V2.len() + size_of::<u64>()
+        || encoded.get(..RETAINED_RDFXML_SEED_MAGIC_V2.len()) != Some(RETAINED_RDFXML_SEED_MAGIC_V2)
+    {
+        return Err(NativeError::protocol(
+            "native structural-row seed framing diverged",
+        ));
+    }
+    encoded[..RETAINED_SEED_MAGIC_V2.len()].copy_from_slice(RETAINED_SEED_MAGIC_V2);
+    encoded.truncate(
+        encoded
+            .len()
+            .checked_sub(size_of::<u64>())
+            .ok_or_else(|| NativeError::protocol("native structural-row seed is truncated"))?,
+    );
+    metadata.parser_summary_bytes_materialized = u64::try_from(encoded.len())
+        .map_err(|_| NativeError::limit("native structural-row seed exceeds u64"))?;
+    metadata.rdf_mapping = None;
+    Ok((encoded, metadata))
+}
+
 pub(crate) fn contains_anonymous_rows(
     rows: [&[Vec<u8>]; 3],
     limits: &Limits,

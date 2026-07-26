@@ -5,6 +5,7 @@
 //! retained V2 constructor can consume the same `CanonicalDocument` without
 //! replacing the parser.
 
+mod owlxml;
 mod rdf_class_expressions;
 mod rdf_lists;
 mod rdfxml;
@@ -65,7 +66,7 @@ pub(crate) struct CanonicalOccurrence {
     pub(crate) row: Vec<u8>,
 }
 
-pub(crate) struct RetainedRdfOutcomeV2 {
+pub(crate) struct RetainedStructuralOutcomeV2 {
     pub(crate) encoded: Vec<u8>,
     pub(crate) storage: TypedFacadeStorageV2,
     pub(crate) metadata: crate::parse::RetainedParseMetadataV2,
@@ -74,12 +75,13 @@ pub(crate) struct RetainedRdfOutcomeV2 {
 }
 
 #[derive(Clone, Copy)]
-enum RetainedRdfSyntax {
+enum RetainedStructuralSyntax {
     RdfXml,
     Turtle,
+    OwlXml,
 }
 
-impl RetainedRdfSyntax {
+impl RetainedStructuralSyntax {
     fn imports_unsupported(self) -> NativeError {
         match self {
             Self::RdfXml => NativeError::new(
@@ -89,6 +91,10 @@ impl RetainedRdfSyntax {
             Self::Turtle => NativeError::new(
                 "NATIVE_TURTLE_RETAINED_UNSUPPORTED",
                 "native retained Turtle publication cannot bypass resolver-backed imports",
+            ),
+            Self::OwlXml => NativeError::new(
+                "NATIVE_OWLXML_RETAINED_UNSUPPORTED",
+                "native retained OWL/XML publication cannot bypass resolver-backed imports",
             ),
         }
     }
@@ -216,7 +222,7 @@ pub(crate) fn parse_rdfxml_retained_v2(
     preserve_source_map: bool,
     allow_swrl: bool,
     require_empty_imports: bool,
-) -> NativeResult<RetainedRdfOutcomeV2> {
+) -> NativeResult<RetainedStructuralOutcomeV2> {
     parse_rdfxml_retained_v2_with_mapping(
         source,
         document_iri,
@@ -247,9 +253,9 @@ pub(crate) fn parse_rdfxml_retained_v2_with_mapping(
     allow_partial_rdf_mapping: bool,
     allow_swrl: bool,
     require_empty_imports: bool,
-) -> NativeResult<RetainedRdfOutcomeV2> {
-    parse_rdf_retained_v2_with_mapping(
-        RetainedRdfSyntax::RdfXml,
+) -> NativeResult<RetainedStructuralOutcomeV2> {
+    parse_structural_retained_v2(
+        RetainedStructuralSyntax::RdfXml,
         source,
         document_iri,
         session,
@@ -279,9 +285,9 @@ pub(crate) fn parse_turtle_retained_v2_with_mapping(
     allow_partial_rdf_mapping: bool,
     allow_swrl: bool,
     require_empty_imports: bool,
-) -> NativeResult<RetainedRdfOutcomeV2> {
-    parse_rdf_retained_v2_with_mapping(
-        RetainedRdfSyntax::Turtle,
+) -> NativeResult<RetainedStructuralOutcomeV2> {
+    parse_structural_retained_v2(
+        RetainedStructuralSyntax::Turtle,
         source,
         document_iri,
         session,
@@ -298,8 +304,39 @@ pub(crate) fn parse_turtle_retained_v2_with_mapping(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn parse_rdf_retained_v2_with_mapping(
-    syntax: RetainedRdfSyntax,
+pub(crate) fn parse_owlxml_retained_v2(
+    source: &[u8],
+    document_iri: Option<&str>,
+    session: &mut Session<'_>,
+    limits: Limits,
+    cancellation: Cancellation,
+    interrupt: Option<crate::cancel::InterruptSlot>,
+    caller_external_bytes: usize,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    allow_swrl: bool,
+    require_empty_imports: bool,
+) -> NativeResult<RetainedStructuralOutcomeV2> {
+    parse_structural_retained_v2(
+        RetainedStructuralSyntax::OwlXml,
+        source,
+        document_iri,
+        session,
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+        collect_provenance,
+        preserve_source_map,
+        false,
+        allow_swrl,
+        require_empty_imports,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_structural_retained_v2(
+    syntax: RetainedStructuralSyntax,
     source: &[u8],
     document_iri: Option<&str>,
     session: &mut Session<'_>,
@@ -312,11 +349,11 @@ fn parse_rdf_retained_v2_with_mapping(
     allow_partial_rdf_mapping: bool,
     allow_swrl: bool,
     require_empty_imports: bool,
-) -> NativeResult<RetainedRdfOutcomeV2> {
+) -> NativeResult<RetainedStructuralOutcomeV2> {
     let parse_started = Instant::now();
     let capture_occurrences = collect_provenance || preserve_source_map;
     let (mut document, mapping_ns) = match syntax {
-        RetainedRdfSyntax::RdfXml => parse_rdfxml_timed(
+        RetainedStructuralSyntax::RdfXml => parse_rdfxml_timed(
             source,
             document_iri,
             allow_swrl,
@@ -325,7 +362,7 @@ fn parse_rdf_retained_v2_with_mapping(
             preserve_source_map,
             session,
         ),
-        RetainedRdfSyntax::Turtle => parse_turtle_timed(
+        RetainedStructuralSyntax::Turtle => parse_turtle_timed(
             source,
             document_iri,
             allow_swrl,
@@ -334,11 +371,32 @@ fn parse_rdf_retained_v2_with_mapping(
             preserve_source_map,
             session,
         ),
+        RetainedStructuralSyntax::OwlXml => owlxml::parse_and_map(
+            source,
+            document_iri,
+            capture_occurrences,
+            preserve_source_map,
+            preserve_source_map,
+            session,
+        )
+        .map(|document| (document, 0)),
     }?;
     let parse_mapping_ns = elapsed_ns(parse_started)?;
     let syntax_parse_ns = parse_mapping_ns.saturating_sub(mapping_ns);
     if require_empty_imports && !document.imports.is_empty() {
         return Err(syntax.imports_unsupported());
+    }
+    if matches!(syntax, RetainedStructuralSyntax::OwlXml) {
+        document.imports.sort_unstable();
+        document.imports.dedup();
+        for roots in [
+            &mut document.ontology_annotations,
+            &mut document.axioms,
+            &mut document.extensions,
+        ] {
+            roots.sort_unstable();
+            roots.dedup();
+        }
     }
     let rows = [
         document.ontology_annotations.as_slice(),
@@ -492,28 +550,65 @@ fn parse_rdf_retained_v2_with_mapping(
         document.extensions.as_slice(),
     ];
     let encode_started = Instant::now();
-    let (encoded, metadata) = crate::parse::build_retained_rdfxml_seed_v2(
-        document.ontology_iri.as_deref(),
-        document.version_iri.as_deref(),
-        &document.imports,
-        rows,
-        document.decoded_codepoints,
-        document.mapping.total_triples,
-        document.mapping.consumed_triples,
-        std::mem::take(&mut document.mapping.unconsumed),
-        document.mapping.occurrence_count,
-        &document.occurrences,
-        std::mem::take(&mut document.language_spellings),
-        std::mem::take(&mut document.source_blank_labels),
-        std::mem::take(&mut document.source_prefixes),
-        collect_provenance || preserve_source_map,
-        preserve_source_map,
-        contains_anonymous,
-        scoped_occurrence_digests.as_deref(),
-        effective_origin_fallbacks,
-        &limits,
-        &cancellation,
-    )?;
+    let language_spellings = std::mem::take(&mut document.language_spellings);
+    let source_blank_labels = std::mem::take(&mut document.source_blank_labels);
+    let source_prefixes = std::mem::take(&mut document.source_prefixes);
+    let unconsumed = std::mem::take(&mut document.mapping.unconsumed);
+    let (encoded, metadata) = match syntax {
+        RetainedStructuralSyntax::OwlXml => {
+            if document.mapping.total_triples != 0
+                || document.mapping.consumed_triples != 0
+                || !unconsumed.is_empty()
+            {
+                return Err(NativeError::protocol(
+                    "native OWL/XML unexpectedly produced RDF mapping evidence",
+                ));
+            }
+            crate::parse::build_retained_structural_rows_seed_v2(
+                document.ontology_iri.as_deref(),
+                document.version_iri.as_deref(),
+                &document.imports,
+                rows,
+                document.decoded_codepoints,
+                document.mapping.occurrence_count,
+                &document.occurrences,
+                language_spellings,
+                source_blank_labels,
+                source_prefixes,
+                collect_provenance || preserve_source_map,
+                preserve_source_map,
+                contains_anonymous,
+                scoped_occurrence_digests.as_deref(),
+                effective_origin_fallbacks,
+                &limits,
+                &cancellation,
+            )
+        }
+        RetainedStructuralSyntax::RdfXml | RetainedStructuralSyntax::Turtle => {
+            crate::parse::build_retained_rdfxml_seed_v2(
+                document.ontology_iri.as_deref(),
+                document.version_iri.as_deref(),
+                &document.imports,
+                rows,
+                document.decoded_codepoints,
+                document.mapping.total_triples,
+                document.mapping.consumed_triples,
+                unconsumed,
+                document.mapping.occurrence_count,
+                &document.occurrences,
+                language_spellings,
+                source_blank_labels,
+                source_prefixes,
+                collect_provenance || preserve_source_map,
+                preserve_source_map,
+                contains_anonymous,
+                scoped_occurrence_digests.as_deref(),
+                effective_origin_fallbacks,
+                &limits,
+                &cancellation,
+            )
+        }
+    }?;
     document.occurrences = Vec::new();
     let result_encode_ns = elapsed_ns(encode_started)?;
     session.finish()?;
@@ -538,7 +633,7 @@ fn parse_rdf_retained_v2_with_mapping(
             caller_external_bytes,
         )?,
     };
-    Ok(RetainedRdfOutcomeV2 {
+    Ok(RetainedStructuralOutcomeV2 {
         encoded,
         storage: published.storage,
         metadata,
@@ -1206,6 +1301,134 @@ mod tests {
         .err()
         .expect("resolver bypass must fail");
         assert_eq!(error.code, "NATIVE_RDFXML_RETAINED_UNSUPPORTED");
+    }
+
+    #[test]
+    fn retained_owlxml_uses_the_non_rdf_structural_seed_and_owner_path() {
+        let source = br#"<Ontology xmlns="http://www.w3.org/2002/07/owl#"
+            xmlns:e="urn:source:" ontologyIRI="urn:o">
+          <Annotation><AnnotationProperty IRI="urn:note"/>
+            <Literal xml:lang="EN">ontology</Literal></Annotation>
+          <ClassAssertion><ObjectOneOf><AnonymousIndividual nodeID="anonymous"/>
+            </ObjectOneOf><NamedIndividual IRI="urn:i"/></ClassAssertion>
+        </Ontology>"#;
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
+        let outcome = parse_owlxml_retained_v2(
+            source,
+            Some("urn:document"),
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            source.len(),
+            true,
+            true,
+            false,
+            false,
+        )
+        .expect("retained OWL/XML outcome");
+        assert_eq!(outcome.encoded.get(..8), Some(b"PYNFRS2\0".as_slice()));
+        assert_eq!(outcome.mapping_ns, 0);
+        let counts = outcome.storage.structural_counts().expect("counts");
+        assert_eq!(counts.ontology_annotations, 1);
+        assert_eq!(counts.stored_axioms, 1);
+        let prepared = crate::parse::prepare_retained_publication_v2(
+            &outcome.storage,
+            &outcome.metadata,
+            b"manifest",
+            "document-key",
+            true,
+            true,
+            &limits,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect("prepared OWL/XML publication");
+        assert!(prepared.scoped_roots);
+        assert!(prepared.rdf_report.is_none());
+        assert_eq!(prepared.origin_rows.as_ref().map(Vec::len), Some(2));
+        assert_eq!(
+            prepared
+                .source_map
+                .as_ref()
+                .map(|source| source.entries.len()),
+            Some(3),
+        );
+        assert_eq!(
+            prepared
+                .source_map
+                .as_ref()
+                .map(|source| source.prefixes.len()),
+            Some(2),
+        );
+
+        let duplicated = br#"<Ontology xmlns="http://www.w3.org/2002/07/owl#">
+          <Declaration><Class IRI="urn:C"/></Declaration>
+          <Declaration><Class IRI="urn:C"/></Declaration>
+        </Ontology>"#;
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, duplicated.len()).expect("session");
+        let deduplicated = parse_owlxml_retained_v2(
+            duplicated,
+            None,
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            duplicated.len(),
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("deduplicated retained OWL/XML outcome");
+        assert_eq!(
+            deduplicated
+                .storage
+                .structural_counts()
+                .expect("deduplicated counts")
+                .stored_axioms,
+            1
+        );
+        assert_eq!(deduplicated.metadata.occurrence_count, 2);
+
+        let imported = br#"<Ontology xmlns="http://www.w3.org/2002/07/owl#">
+          <Import>urn:import</Import></Ontology>"#;
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, imported.len()).expect("session");
+        let error = parse_owlxml_retained_v2(
+            imported,
+            None,
+            &mut session,
+            limits,
+            cancellation,
+            None,
+            imported.len(),
+            false,
+            false,
+            false,
+            true,
+        )
+        .err()
+        .expect("resolver bypass must fail");
+        assert_eq!(error.code, "NATIVE_OWLXML_RETAINED_UNSUPPORTED");
     }
 
     #[test]
