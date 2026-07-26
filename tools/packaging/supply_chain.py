@@ -40,6 +40,7 @@ _ADDITIONAL_LICENSE_FILES = {
 _DEVELOPMENT_LICENSE_FILES = {"W3C-RDF-tests-BSD-3-Clause.txt"}
 _BUILD_INPUT_PATHS = (
     ".github/workflows/native-safety.yml",
+    ".github/workflows/release.yml",
     ".github/workflows/wheels.yml",
     "MANIFEST.in",
     "native/Cargo.lock",
@@ -47,6 +48,14 @@ _BUILD_INPUT_PATHS = (
     "pyowl_build.py",
     "pyproject.toml",
     "setup.py",
+    "tools/__init__.py",
+    "tools/packaging/__init__.py",
+    "tools/packaging/artifact_inspector.py",
+    "tools/packaging/import_probe.py",
+    "tools/packaging/platform_audit.py",
+    "tools/packaging/release_report.py",
+    "tools/packaging/release_tag.py",
+    "tools/packaging/supply_chain.py",
 )
 
 

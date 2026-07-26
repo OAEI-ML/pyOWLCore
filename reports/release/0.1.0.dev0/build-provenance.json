@@ -5,6 +5,10 @@
       "bytes": 7082,
       "sha256": "0ac4909e1794224c9b9172554fedc5bf763657770c9713f39e1a91da5fde67fd"
     },
+    ".github/workflows/release.yml": {
+      "bytes": 24917,
+      "sha256": "c16e6b4727531a66ebace1aef4503cf1612cfc96a6b4155349ec1342dafea4b3"
+    },
     ".github/workflows/wheels.yml": {
       "bytes": 22731,
       "sha256": "d1c8762c04401d1556fc575ba3d3b7c8f817f862930f245bc169f1008b9f64c6"
@@ -32,6 +36,38 @@
     "setup.py": {
       "bytes": 2809,
       "sha256": "e07baac9df972f7d908bdcf5cf2dc30d3a457f67b237e96f7ee5112e4268aa63"
+    },
+    "tools/__init__.py": {
+      "bytes": 69,
+      "sha256": "45b46651b595588e7b2d34b943f34e38b017dd2439cfcf78ed76ee213c6b0ef6"
+    },
+    "tools/packaging/__init__.py": {
+      "bytes": 62,
+      "sha256": "a6a99c1f9cfd47a0d73ebb2657e1bb29b800f682e5ffe84738c920e79838978c"
+    },
+    "tools/packaging/artifact_inspector.py": {
+      "bytes": 38034,
+      "sha256": "b995193756be7c3d750b4b6f5295d91e8c8be25142b5c12b11dc9cf5fd7fedfd"
+    },
+    "tools/packaging/import_probe.py": {
+      "bytes": 3282,
+      "sha256": "8d61345349dbf9b228edd859e739758d48a4f2a3c88c8bbdd0ed149f937893b8"
+    },
+    "tools/packaging/platform_audit.py": {
+      "bytes": 23376,
+      "sha256": "7e851f26cb55d224808e1762db5eb6ed9719e1603c772f8edb4127275b2f2d1b"
+    },
+    "tools/packaging/release_report.py": {
+      "bytes": 12983,
+      "sha256": "bc1109a61d0678bc0d60b3231a54530b2fc18c3b62e819ffb86b8e1c67de6e43"
+    },
+    "tools/packaging/release_tag.py": {
+      "bytes": 1554,
+      "sha256": "de7ef0287437191c302fb239f479d5339d996d2ae5749bee752762ce342592d0"
+    },
+    "tools/packaging/supply_chain.py": {
+      "bytes": 30137,
+      "sha256": "d16c7b0fc95888676ce2e413a6a882fc1d6fdf9708df2fab2ea2ca9b0aaa1fa7"
     }
   },
   "schema": "pyowl-core.build-provenance/1",

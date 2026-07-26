@@ -21,6 +21,25 @@ from tools.packaging.supply_chain import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+EXPECTED_PROVENANCE_INPUTS = {
+    ".github/workflows/native-safety.yml",
+    ".github/workflows/release.yml",
+    ".github/workflows/wheels.yml",
+    "MANIFEST.in",
+    "native/Cargo.lock",
+    "native/Cargo.toml",
+    "pyowl_build.py",
+    "pyproject.toml",
+    "setup.py",
+    "tools/__init__.py",
+    "tools/packaging/__init__.py",
+    "tools/packaging/artifact_inspector.py",
+    "tools/packaging/import_probe.py",
+    "tools/packaging/platform_audit.py",
+    "tools/packaging/release_report.py",
+    "tools/packaging/release_tag.py",
+    "tools/packaging/supply_chain.py",
+}
 
 
 def _copy_dependency_manifests(target: Path) -> None:
@@ -105,11 +124,14 @@ def test_build_provenance_binds_exact_toolchain_and_lock_hash() -> None:
         "wheel_builder": "wheel==0.45.1",
         "cibuildwheel_action": ("pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55"),
     }
-    lock = (ROOT / "native" / "Cargo.lock").read_bytes()
-    assert provenance["inputs"]["native/Cargo.lock"] == {
-        "bytes": len(lock),
-        "sha256": hashlib.sha256(lock).hexdigest(),
-    }
+    inputs = provenance["inputs"]
+    assert set(inputs) == EXPECTED_PROVENANCE_INPUTS
+    for relative_path in EXPECTED_PROVENANCE_INPUTS:
+        payload = (ROOT / relative_path).read_bytes()
+        assert inputs[relative_path] == {
+            "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
 
 
 def test_build_provenance_parses_and_hashes_the_same_captured_payload(
