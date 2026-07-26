@@ -467,8 +467,18 @@ def _validate_wheel(
     wheel_files = [name for name in reader.names() if name.endswith(".dist-info/WHEEL")]
     if len(wheel_files) != 1:
         return [*errors, f"wheel: expected exactly one WHEEL file, found {len(wheel_files)}"]
-    wheel_text = reader.read(wheel_files[0]).decode("utf-8", errors="replace")
-    tags = re.findall(r"(?m)^Tag:\s*(\S+)\s*$", wheel_text)
+    wheel_message = BytesParser(policy=default).parsebytes(reader.read(wheel_files[0]))
+    wheel_versions = [str(value).strip() for value in wheel_message.get_all("Wheel-Version", [])]
+    if wheel_versions != ["1.0"]:
+        errors.append(f"wheel: Wheel-Version must be exactly '1.0', got {wheel_versions!r}")
+    purelib_values = [str(value).strip() for value in wheel_message.get_all("Root-Is-Purelib", [])]
+    expected_purelib = "true" if variant == "pure" else "false"
+    if purelib_values != [expected_purelib]:
+        errors.append(
+            "wheel: Root-Is-Purelib must be exactly "
+            f"{expected_purelib!r} for {variant}, got {purelib_values!r}"
+        )
+    tags = [str(value).strip() for value in wheel_message.get_all("Tag", [])]
     binaries = [name for name in reader.names() if name.casefold().endswith(_NATIVE_SUFFIXES)]
     if variant == "pure":
         if binaries:

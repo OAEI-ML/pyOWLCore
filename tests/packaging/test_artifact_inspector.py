@@ -63,12 +63,22 @@ def _wheel(
     malformed_record_row: bool = False,
     metadata: bytes = _METADATA,
     record_duplicate: str | None = None,
+    root_is_purelib: str | None = None,
+    wheel_version: str = "1.0",
 ) -> Path:
     tag = "py3-none-any" if variant == "pure" else "cp310-cp310-manylinux_2_28_x86_64"
+    purelib = (
+        ("true" if variant == "pure" else "false") if root_is_purelib is None else root_is_purelib
+    )
     entries = {
         "pyowl_core/__init__.py": b'__version__ = "0.1.0.dev0"\n',
         f"{dist_info}/METADATA": metadata,
-        f"{dist_info}/WHEEL": (f"Wheel-Version: 1.0\nTag: {internal_tag or tag}\n".encode()),
+        f"{dist_info}/WHEEL": (
+            f"Wheel-Version: {wheel_version}\n"
+            "Generator: pyowl-core-test-fixture\n"
+            f"Root-Is-Purelib: {purelib}\n"
+            f"Tag: {internal_tag or tag}\n"
+        ).encode(),
     }
     for name, payload in _LICENSE_FILES.items():
         entries[f"{dist_info}/licenses/THIRD_PARTY_LICENSES/{name}"] = payload
@@ -153,6 +163,38 @@ def test_native_wheel_internal_tag_must_match_filename(tmp_path: Path) -> None:
         "wheel: native WHEEL tags ['cp310-cp310-manylinux_2_17_x86_64'] "
         "do not match filename tag 'cp310-cp310-manylinux_2_28_x86_64'" in result.errors
     )
+
+
+@pytest.mark.parametrize(
+    ("variant", "declared", "expected"),
+    (
+        ("pure", "false", "true"),
+        ("native", "true", "false"),
+    ),
+)
+def test_wheel_purelib_claim_must_match_contents(
+    tmp_path: Path,
+    variant: str,
+    declared: str,
+    expected: str,
+) -> None:
+    result = inspect_artifact(
+        _wheel(tmp_path, variant, root_is_purelib=declared),
+        expected_variant=variant,  # type: ignore[arg-type]
+    )
+
+    assert not result.ok
+    assert (
+        f"wheel: Root-Is-Purelib must be exactly {expected!r} for {variant}, "
+        f"got [{declared!r}]" in result.errors
+    )
+
+
+def test_wheel_version_must_be_exactly_supported(tmp_path: Path) -> None:
+    result = inspect_artifact(_wheel(tmp_path, wheel_version="2.0"))
+
+    assert not result.ok
+    assert "wheel: Wheel-Version must be exactly '1.0', got ['2.0']" in result.errors
 
 
 def test_pure_wheel_rejects_native_binary_outside_package(tmp_path: Path) -> None:
