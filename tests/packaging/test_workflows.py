@@ -10,9 +10,7 @@ WHEELS = (WORKFLOWS / "wheels.yml").read_text(encoding="utf-8")
 RELEASE = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
 CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 NATIVE_SAFETY = (WORKFLOWS / "native-safety.yml").read_text(encoding="utf-8")
-PLATFORM_AUDIT = (ROOT / "tools" / "packaging" / "platform_audit.py").read_text(
-    encoding="utf-8"
-)
+PLATFORM_AUDIT = (ROOT / "tools" / "packaging" / "platform_audit.py").read_text(encoding="utf-8")
 ACTION = re.compile(r"(?m)^\s*-?\s*uses:\s+([^\s#]+)")
 
 
@@ -66,7 +64,7 @@ def test_wheel_matrix_covers_supported_runtime_and_platforms() -> None:
     assert "rustup toolchain install 1.83.0" in WHEELS
     assert "--default-toolchain 1.83.0" in WHEELS
     assert "pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55" in WHEELS
-    assert "MACOSX_DEPLOYMENT_TARGET: \"13.0\"" in WHEELS
+    assert 'MACOSX_DEPLOYMENT_TARGET: "13.0"' in WHEELS
 
 
 def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
@@ -79,6 +77,9 @@ def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
         "--target x86_64-unknown-linux-gnu",
         "--component miri",
         "tests/miri/native/Cargo.toml --locked",
+        "process-allocator:",
+        "--features process-allocator-test",
+        "--test process_allocator_failure",
         'python: "3.14t"',
         "pytest==9.1.1",
         "--features test-hooks",
@@ -98,7 +99,7 @@ def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
         "tests/fuzz/native/artifacts/",
     ):
         assert requirement in NATIVE_SAFETY
-    assert NATIVE_SAFETY.count("timeout-minutes:") == 4
+    assert NATIVE_SAFETY.count("timeout-minutes:") == 5
     assert "continue-on-error" not in NATIVE_SAFETY
 
 
@@ -116,7 +117,7 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         "cargo audit --deny warnings",
         "cmp candidate/sdist-a/*.tar.gz candidate/sdist-b/*.tar.gz",
         "assert first == second",
-        '.cibw-target-$PYOWL_CORE_BUILD_PASS',
+        ".cibw-target-$PYOWL_CORE_BUILD_PASS",
         "PYOWL_CORE_BUILD_PASS: candidate",
         "PYOWL_CORE_BUILD_PASS: rebuild",
         "python -m pytest -q -p no:cacheprovider {project}/tests",
@@ -199,8 +200,8 @@ def test_release_signs_final_report_and_verifies_index_attestations() -> None:
     public_index = RELEASE.index("Verify public index hashes, provenance")
     assert promotion < publish < public_index
     promotion_body = RELEASE[promotion:publish]
-    assert 'assert actual == expected' in promotion_body
-    assert 'candidate/SHA256SUMS candidate/dist/*' in promotion_body
+    assert "assert actual == expected" in promotion_body
+    assert "candidate/SHA256SUMS candidate/dist/*" in promotion_body
     assert RELEASE[public_index:].count("pypi-attestations verify pypi") == 1
 
 
