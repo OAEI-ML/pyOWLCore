@@ -15,6 +15,7 @@ def main() -> None:
     extension = load_extension()
 
     from pyowl_core import (
+        IRI,
         AxiomScope,
         BackendPreference,
         BackendProtocolError,
@@ -23,10 +24,12 @@ def main() -> None:
         EncodedStructuralView,
         ImportPolicy,
         LoadOptions,
+        MappingResolver,
         OntologyDelta,
         OntologySyntaxError,
         OperationCancelledError,
         ParseLimits,
+        ResolvedDocument,
         ResourceLimitError,
         apply_delta,
         compose_views,
@@ -92,13 +95,12 @@ def main() -> None:
         *,
         load_options: LoadOptions | None = None,
         cancellation_token: object | None = None,
+        document_iri: object | None = None,
+        resolver: object | None = None,
     ) -> Any:
-        parser_name = {
-            DocumentFormat.FUNCTIONAL: "parse_functional",
-            DocumentFormat.RDF_XML: "parse_rdfxml",
-            DocumentFormat.TURTLE: "parse_turtle",
-            DocumentFormat.OWL_XML: "parse_owlxml",
-        }[format_value]
+        unexpected = AssertionError(
+            f"{format_value.value} forced-native matrix crossed a Python parser"
+        )
         with (
             patch(
                 "pyowl_core.backends.parser._NativeBackendDriver.select",
@@ -106,20 +108,32 @@ def main() -> None:
                 return_value="native",
             ),
             patch(
-                f"pyowl_core.backends.python.parser.{parser_name}",
-                side_effect=AssertionError(
-                    f"{format_value.value} forced-native matrix crossed the Python parser"
-                ),
+                "pyowl_core.backends.python.parser.parse_functional",
+                side_effect=unexpected,
+            ),
+            patch(
+                "pyowl_core.backends.python.parser.parse_rdfxml",
+                side_effect=unexpected,
+            ),
+            patch(
+                "pyowl_core.backends.python.parser.parse_turtle",
+                side_effect=unexpected,
+            ),
+            patch(
+                "pyowl_core.backends.python.parser.parse_owlxml",
+                side_effect=unexpected,
             ),
         ):
             return load_snapshot(
                 source,
+                document_iri=cast(Any, document_iri),
                 options=(
                     options(format_value, BackendPreference.NATIVE)
                     if load_options is None
                     else load_options
                 ),
                 cancellation_token=cast(Any, cancellation_token),
+                resolver=cast(Any, resolver),
             )
 
     observed: dict[str, dict[str, object]] = {}
@@ -415,6 +429,155 @@ def main() -> None:
         gc.collect()
         selected.close()
         right_selected.close()
+
+    mixed_root = b"""\
+<Ontology xmlns="http://www.w3.org/2002/07/owl#" ontologyIRI="urn:matrix:mixed-root">
+  <Import>urn:matrix:child:functional</Import>
+  <Import>urn:matrix:child:rdfxml</Import>
+  <Import>urn:matrix:child:turtle</Import>
+  <Declaration><Class IRI="urn:matrix:Root"/></Declaration>
+</Ontology>
+"""
+    mixed_children = {
+        "urn:matrix:child:functional": ResolvedDocument(
+            b"""\
+Ontology(<urn:matrix:child:functional>
+  Declaration(Class(<urn:matrix:FunctionalChild>))
+  SubClassOf(<urn:matrix:FunctionalChild> <urn:matrix:Root>)
+)
+""",
+            IRI("urn:matrix:source:functional"),
+            format=DocumentFormat.FUNCTIONAL,
+        ),
+        "urn:matrix:child:rdfxml": ResolvedDocument(
+            b"""\
+<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+    xmlns:owl="http://www.w3.org/2002/07/owl#">
+  <owl:Ontology rdf:about="urn:matrix:child:rdfxml"/>
+  <owl:Class rdf:about="urn:matrix:RdfXmlChild">
+    <rdfs:subClassOf rdf:resource="urn:matrix:Root"/>
+  </owl:Class>
+</rdf:RDF>
+""",
+            IRI("urn:matrix:source:rdfxml"),
+            format=DocumentFormat.RDF_XML,
+        ),
+        "urn:matrix:child:turtle": ResolvedDocument(
+            b"""\
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+<urn:matrix:child:turtle> a owl:Ontology .
+<urn:matrix:TurtleChild> a owl:Class ;
+    rdfs:subClassOf <urn:matrix:Root> .
+""",
+            IRI("urn:matrix:source:turtle"),
+            format=DocumentFormat.TURTLE,
+        ),
+    }
+    mixed_options = LoadOptions(
+        format=DocumentFormat.OWL_XML,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.PYTHON,
+        collect_provenance=True,
+        preserve_source_map=True,
+    )
+    reference_mixed = load_snapshot(
+        mixed_root,
+        document_iri=IRI("urn:matrix:source:root"),
+        options=mixed_options,
+        resolver=MappingResolver(cast(Any, mixed_children)),
+    )
+    selected_mixed = forced_native_snapshot(
+        mixed_root,
+        DocumentFormat.OWL_XML,
+        load_options=replace(mixed_options, backend=BackendPreference.NATIVE),
+        document_iri=IRI("urn:matrix:source:root"),
+        resolver=MappingResolver(cast(Any, mixed_children)),
+    )
+    try:
+        mixed_owner = object.__getattribute__(
+            selected_mixed._native_snapshot_state.owner.handle,
+            "_owner_v2",
+        )
+        mixed_before_native = mixed_owner._publication_counters_v2()
+        mixed_before_python = selected_mixed._native_python_counters()
+        scalar_error = AssertionError("mixed-format encoded publication crossed scalar traversal")
+        with (
+            patch.object(
+                type(selected_mixed),
+                "ontology_annotations",
+                side_effect=scalar_error,
+            ),
+            patch.object(type(selected_mixed), "iter_axioms", side_effect=scalar_error),
+            patch.object(
+                type(selected_mixed),
+                "iter_extensions",
+                side_effect=scalar_error,
+            ),
+            patch.object(type(selected_mixed), "signature", side_effect=scalar_error),
+        ):
+            mixed_encoded = selected_mixed.view(EncodedStructuralView)
+        mixed_decoded = independent_decoder.decode_segmented_root_canonical_bytes(
+            mixed_encoded,
+            expected_owner=selected_mixed,
+            expected_scope=AxiomScope.CLOSURE,
+            expected_document_key=None,
+        )
+        mixed_after_native = mixed_owner._publication_counters_v2()
+        mixed_after_python = selected_mixed._native_python_counters()
+        expected_mixed_roots = scalar_roots(reference_mixed)
+        observed_mixed_roots = tuple(
+            (root.root_kind, root.canonical) for root in mixed_decoded.roots
+        )
+        selected_formats = tuple(
+            sorted(document.provenance.format.value for document in selected_mixed.documents)
+        )
+        expected_formats = tuple(sorted(format_value.value for format_value in formats))
+        observed["mixed_closure"] = {
+            "all_documents_native": all(
+                type(document).__name__ == "_NativeOntologyDocument"
+                for document in selected_mixed.documents
+            ),
+            "document_count": len(selected_mixed.documents),
+            "encoded_owner_identity": mixed_encoded.owner is selected_mixed,
+            "encoded_root_parity": observed_mixed_roots == expected_mixed_roots,
+            "fingerprint_parity": (
+                selected_mixed.structural_fingerprint == reference_mixed.structural_fingerprint
+                and selected_mixed.logical_fingerprint == reference_mixed.logical_fingerprint
+                and selected_mixed.signature_fingerprint == reference_mixed.signature_fingerprint
+            ),
+            "format_coverage": selected_formats == expected_formats,
+            "manifest_parity": selected_mixed.import_manifest == reference_mixed.import_manifest,
+            "model_row_delta": (
+                mixed_after_python.model_rows_materialized
+                - mixed_before_python.model_rows_materialized
+            ),
+            "origin_parity": selected_mixed.origin_index == reference_mixed.origin_index,
+            "page_request_delta": (
+                mixed_after_native.page_requests - mixed_before_native.page_requests
+            ),
+            "parser_bytes": mixed_after_native.parser_bytes,
+            "publication_structural_bytes_copied": (
+                mixed_after_native.publication_structural_bytes_copied
+            ),
+            "publication_structural_rows_copied": (
+                mixed_after_native.publication_structural_rows_copied
+            ),
+            "referenced_buffer_copy_bytes": (mixed_decoded.proof.referenced_buffer_copy_bytes),
+            "rows_emitted_delta": (
+                mixed_after_native.rows_emitted - mixed_before_native.rows_emitted
+            ),
+            "scalar_traversal_calls": mixed_decoded.proof.scalar_traversal_calls,
+            "source_map_parity": tuple(document.source_map for document in selected_mixed.documents)
+            == tuple(document.source_map for document in reference_mixed.documents),
+            "source_bytes": len(mixed_root)
+            + sum(len(cast(bytes, document.source)) for document in mixed_children.values()),
+            "wire_parity": encode_snapshot(selected_mixed) == encode_snapshot(reference_mixed),
+        }
+    finally:
+        selected_mixed.close()
 
     print(json.dumps(observed, sort_keys=True))
 

@@ -28,7 +28,35 @@ def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -
         env=environment,
     )
     observed = json.loads(completed.stdout)
-    assert set(observed) == {"functional", "owlxml", "rdfxml", "turtle"}
+    assert set(observed) == {
+        "functional",
+        "mixed_closure",
+        "owlxml",
+        "rdfxml",
+        "turtle",
+    }
+    mixed_closure = observed.pop("mixed_closure")
+    assert mixed_closure == {
+        "all_documents_native": True,
+        "document_count": 4,
+        "encoded_owner_identity": True,
+        "encoded_root_parity": True,
+        "fingerprint_parity": True,
+        "format_coverage": True,
+        "manifest_parity": True,
+        "model_row_delta": 0,
+        "origin_parity": True,
+        "page_request_delta": 0,
+        "parser_bytes": mixed_closure["source_bytes"],
+        "publication_structural_bytes_copied": 0,
+        "publication_structural_rows_copied": 0,
+        "referenced_buffer_copy_bytes": 0,
+        "rows_emitted_delta": 0,
+        "scalar_traversal_calls": 0,
+        "source_map_parity": True,
+        "source_bytes": mixed_closure["source_bytes"],
+        "wire_parity": True,
+    }
     syntax_codes = {
         "functional": "FORMAT_SYNTAX",
         "owlxml": "OWLXML_SYNTAX",
