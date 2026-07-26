@@ -46,6 +46,7 @@ def _wheel(
     tmp_path: Path,
     variant: str = "pure",
     *,
+    extra_binary: str | None = None,
     internal_tag: str | None = None,
 ) -> Path:
     dist_info = "pyowl_core-0.1.0.dev0.dist-info"
@@ -59,6 +60,8 @@ def _wheel(
         entries[f"{dist_info}/licenses/THIRD_PARTY_LICENSES/{name}"] = payload
     if variant == "native":
         entries["pyowl_core/_native.cpython-310-x86_64-linux-gnu.so"] = b"native-fixture"
+    if extra_binary is not None:
+        entries[extra_binary] = b"unapproved-native-fixture"
     record_name = f"{dist_info}/RECORD"
     entries[record_name] = _record(entries, record_name)
     path = tmp_path / f"pyowl_core-0.1.0.dev0-{tag}.whl"
@@ -127,6 +130,29 @@ def test_native_wheel_internal_tag_must_match_filename(tmp_path: Path) -> None:
     assert (
         "wheel: native WHEEL tags ['cp310-cp310-manylinux_2_17_x86_64'] "
         "do not match filename tag 'cp310-cp310-manylinux_2_28_x86_64'" in result.errors
+    )
+
+
+def test_pure_wheel_rejects_native_binary_outside_package(tmp_path: Path) -> None:
+    result = inspect_artifact(
+        _wheel(tmp_path, extra_binary="payload/vendor.so"),
+        expected_variant="pure",
+    )
+
+    assert not result.ok
+    assert "wheel: pure artifact contains native binaries: payload/vendor.so" in result.errors
+
+
+def test_native_wheel_rejects_additional_binary_outside_package(tmp_path: Path) -> None:
+    result = inspect_artifact(
+        _wheel(tmp_path, "native", extra_binary="payload/vendor.dll"),
+        expected_variant="native",
+    )
+
+    assert not result.ok
+    assert (
+        "wheel: native artifact must contain exactly one pyowl_core/_native extension"
+        in result.errors
     )
 
 

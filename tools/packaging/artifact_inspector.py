@@ -318,11 +318,7 @@ def _validate_wheel(reader: ArchiveReader, variant: ArtifactVariant, filename: s
         return [*errors, f"wheel: expected exactly one WHEEL file, found {len(wheel_files)}"]
     wheel_text = reader.read(wheel_files[0]).decode("utf-8", errors="replace")
     tags = re.findall(r"(?m)^Tag:\s*(\S+)\s*$", wheel_text)
-    binaries = [
-        name
-        for name in reader.names()
-        if name.startswith("pyowl_core/") and name.casefold().endswith(_NATIVE_SUFFIXES)
-    ]
+    binaries = [name for name in reader.names() if name.casefold().endswith(_NATIVE_SUFFIXES)]
     if variant == "pure":
         if binaries:
             errors.append(f"wheel: pure artifact contains native binaries: {', '.join(binaries)}")
@@ -330,7 +326,10 @@ def _validate_wheel(reader: ArchiveReader, variant: ArtifactVariant, filename: s
             errors.append(f"wheel: pure artifact has non-universal tags {tags!r}")
     elif variant == "native":
         expected_binary = [
-            name for name in binaries if PurePosixPath(name).name.startswith("_native.")
+            name
+            for name in binaries
+            if PurePosixPath(name).parent == PurePosixPath("pyowl_core")
+            and PurePosixPath(name).name.startswith("_native.")
         ]
         if len(expected_binary) != 1 or len(binaries) != 1:
             errors.append(
