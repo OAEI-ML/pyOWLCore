@@ -10,13 +10,20 @@ import io
 import json
 import re
 import stat
+import sys
 import tarfile
 import zipfile
+from collections import Counter
 from dataclasses import asdict, dataclass
 from email.parser import BytesParser
 from email.policy import default
 from pathlib import Path, PurePosixPath
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - exercised by the Python 3.10 lane
+    import tomli as tomllib  # type: ignore[import-not-found, unused-ignore]
 
 ArtifactKind = Literal["wheel", "sdist"]
 ArtifactVariant = Literal["pure", "native", "sdist"]
@@ -52,6 +59,12 @@ _JAVA_RUNTIME_TEXT = (
 _EXTRA_MARKER = re.compile(
     r"""(?:extra\s*==\s*(?:"[^"\r\n]+"|'[^'\r\n]+')|"""
     r"""(?:"[^"\r\n]+"|'[^'\r\n]+')\s*==\s*extra)\Z"""
+)
+_EXTRA_VALUE = re.compile(
+    r"""(?:extra\s*==\s*(?:"(?P<double>[^"\r\n]+)"|'(?P<single>[^'\r\n]+)')|"""
+    r"""(?:"(?P<reverse_double>[^"\r\n]+)"|'(?P<reverse_single>[^'\r\n]+)')"""
+    r"""\s*==\s*extra)""",
+    re.IGNORECASE,
 )
 _MAX_MARKER_CHARACTERS = 8192
 _MAX_MARKER_DEPTH = 64
@@ -582,6 +595,124 @@ def _validate_wheel(
     return errors
 
 
+def _canonical_extra(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).casefold()
+
+
+def _requirement_base(value: str) -> str:
+    requirement, _, _ = value.partition(";")
+    return re.sub(r"\s+", "", requirement)
+
+
+def _metadata_extra_names(marker: str) -> tuple[str, ...]:
+    names: set[str] = set()
+    for match in _EXTRA_VALUE.finditer(marker):
+        value = next(group for group in match.groups() if group is not None)
+        names.add(_canonical_extra(value))
+    return tuple(sorted(names))
+
+
+def _declared_dependency_rows(
+    project: dict[str, Any],
+) -> tuple[Counter[tuple[str, str | None]], list[str]]:
+    errors: list[str] = []
+    rows: Counter[tuple[str, str | None]] = Counter()
+    dependencies = project.get("dependencies")
+    if not isinstance(dependencies, list) or not all(
+        isinstance(requirement, str) and requirement.strip() for requirement in dependencies
+    ):
+        errors.append("sdist: pyproject [project].dependencies must be a string array")
+    else:
+        rows.update((_requirement_base(requirement), None) for requirement in dependencies)
+
+    optional = project.get("optional-dependencies")
+    if not isinstance(optional, dict):
+        errors.append("sdist: pyproject [project.optional-dependencies] must be a table")
+        return rows, errors
+    canonical_extras = [_canonical_extra(str(extra)) for extra in optional]
+    if len(set(canonical_extras)) != len(canonical_extras):
+        errors.append("sdist: pyproject optional dependency names collide after normalization")
+    for extra, requirements in optional.items():
+        if (
+            not isinstance(extra, str)
+            or not isinstance(requirements, list)
+            or not all(
+                isinstance(requirement, str) and requirement.strip() for requirement in requirements
+            )
+        ):
+            errors.append("sdist: pyproject optional dependencies must map names to string arrays")
+            continue
+        canonical_extra = _canonical_extra(extra)
+        rows.update(
+            (_requirement_base(requirement), canonical_extra) for requirement in requirements
+        )
+    return rows, errors
+
+
+def _packaged_dependency_rows(
+    message: Any,
+) -> tuple[Counter[tuple[str, str | None]], set[str]]:
+    rows: Counter[tuple[str, str | None]] = Counter()
+    for raw_requirement in message.get_all("Requires-Dist", []):
+        requirement = str(raw_requirement)
+        _, separator, marker = requirement.partition(";")
+        extras = _metadata_extra_names(marker) if separator else ()
+        if extras:
+            rows.update((_requirement_base(requirement), extra) for extra in extras)
+        else:
+            rows[(_requirement_base(requirement), None)] += 1
+    provided = {_canonical_extra(str(extra)) for extra in message.get_all("Provides-Extra", [])}
+    return rows, provided
+
+
+def _validate_sdist_project_metadata(
+    reader: _SdistReader,
+    root: str,
+) -> list[str]:
+    pyproject_name = f"{root}/pyproject.toml"
+    metadata_name = f"{root}/PKG-INFO"
+    if pyproject_name not in reader.names() or metadata_name not in reader.names():
+        return []
+    try:
+        document = tomllib.loads(reader.read(pyproject_name).decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        return [f"sdist: cannot parse pyproject.toml: {error}"]
+    project = document.get("project")
+    if not isinstance(project, dict):
+        return ["sdist: pyproject.toml must contain a [project] table"]
+
+    message = BytesParser(policy=default).parsebytes(reader.read(metadata_name))
+    errors: list[str] = []
+    parity_fields = {
+        "name": "Name",
+        "version": "Version",
+        "requires-python": "Requires-Python",
+        "license": "License-Expression",
+    }
+    for project_field, metadata_field in parity_fields.items():
+        declared = project.get(project_field)
+        packaged = message.get(metadata_field)
+        if not isinstance(declared, str) or declared != packaged:
+            errors.append(
+                "sdist: pyproject "
+                f"[project].{project_field} does not match PKG-INFO {metadata_field}"
+            )
+
+    declared_rows, declaration_errors = _declared_dependency_rows(project)
+    errors.extend(declaration_errors)
+    packaged_rows, packaged_extras = _packaged_dependency_rows(message)
+    if not declaration_errors and declared_rows != packaged_rows:
+        errors.append("sdist: pyproject dependency declarations do not match PKG-INFO requirements")
+    optional = project.get("optional-dependencies")
+    if isinstance(optional, dict):
+        declared_extras = {_canonical_extra(extra) for extra in optional if isinstance(extra, str)}
+        if declared_extras != packaged_extras:
+            errors.append(
+                "sdist: pyproject optional dependency names do not match PKG-INFO Provides-Extra"
+            )
+    return errors
+
+
 def _validate_sdist(
     reader: _SdistReader,
     filename: str,
@@ -617,6 +748,7 @@ def _validate_sdist(
     binaries = [name for name in names if name.casefold().endswith(_NATIVE_SUFFIXES)]
     if binaries:
         errors.append(f"sdist: platform binary is forbidden: {', '.join(binaries)}")
+    errors.extend(_validate_sdist_project_metadata(reader, expected_root))
     return errors
 
 

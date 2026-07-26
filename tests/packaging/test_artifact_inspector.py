@@ -24,6 +24,16 @@ Requires-Dist: pytest>=8; extra == "dev"
 
 fixture
 """
+_PYPROJECT = b"""[project]
+name = "pyowl-core"
+version = "0.1.0.dev0"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+"""
 _LICENSE_FILES = {
     "LICENSE": b"Apache License 2.0",
     "NOTICE": b"pyowl-core",
@@ -109,11 +119,13 @@ def _wheel(
 def _sdist(
     tmp_path: Path,
     *,
+    metadata: bytes = _METADATA,
+    pyproject: bytes = _PYPROJECT,
     root: str = "pyowl_core-0.1.0.dev0",
 ) -> Path:
     entries = {
-        f"{root}/PKG-INFO": _METADATA,
-        f"{root}/pyproject.toml": b"[build-system]\n",
+        f"{root}/PKG-INFO": metadata,
+        f"{root}/pyproject.toml": pyproject,
         f"{root}/setup.py": b"from setuptools import setup\nsetup()\n",
         f"{root}/src/pyowl_core/__init__.py": b"",
         f"{root}/native/Cargo.lock": b"version = 4\n",
@@ -282,6 +294,38 @@ def test_sdist_contains_complete_sources_without_binaries(tmp_path: Path) -> Non
     result = inspect_artifact(_sdist(tmp_path), expected_variant="sdist")
     assert result.ok
     assert result.variant == "sdist"
+
+
+@pytest.mark.parametrize(
+    ("pyproject", "expected_error"),
+    [
+        (
+            _PYPROJECT.replace(b'version = "0.1.0.dev0"', b'version = "9.9.9"'),
+            "sdist: pyproject [project].version does not match PKG-INFO Version",
+        ),
+        (
+            _PYPROJECT.replace(b'license = "Apache-2.0"', b'license = "MIT"'),
+            "sdist: pyproject [project].license does not match PKG-INFO License-Expression",
+        ),
+        (
+            _PYPROJECT.replace(b"dependencies = []", b'dependencies = ["requests"]'),
+            "sdist: pyproject dependency declarations do not match PKG-INFO requirements",
+        ),
+        (
+            _PYPROJECT.replace(b'dev = ["pytest>=8"]', b'dev = ["requests"]'),
+            "sdist: pyproject dependency declarations do not match PKG-INFO requirements",
+        ),
+    ],
+)
+def test_sdist_rejects_embedded_project_metadata_drift(
+    tmp_path: Path,
+    pyproject: bytes,
+    expected_error: str,
+) -> None:
+    result = inspect_artifact(_sdist(tmp_path, pyproject=pyproject))
+
+    assert not result.ok
+    assert expected_error in result.errors
 
 
 def test_sdist_root_must_match_project_identity(tmp_path: Path) -> None:
