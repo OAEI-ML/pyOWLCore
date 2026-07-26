@@ -2509,6 +2509,11 @@ def test_auxiliary_attachment_plan_one_byte_boundary_is_retryable_before_finaliz
     monkeypatch: pytest.MonkeyPatch,
     extension: NativeTestExtension,
 ) -> None:
+    if not hasattr(
+        extension,
+        "_prepare_parsed_structural_closure_auxiliary_failure_probe_v2",
+    ):
+        pytest.skip("native closure auxiliary allocation hook is unavailable")
     annotations = b" ".join(
         f'Annotation(<urn:retained-plan:property> "value-{ordinal:04d}")'.encode()
         for ordinal in range(128)

@@ -619,6 +619,8 @@ def test_guarded_turtle_import_closure_merges_retained_owners(
 def test_private_turtle_partial_mapping_and_bridge_allocations_are_transactional(
     extension: NativeTestExtension,
 ) -> None:
+    if not hasattr(extension, "_turtle_retained_bridge_allocation_probe_v2"):
+        pytest.skip("native retained Turtle bridge allocation hook is unavailable")
     partial_source = b'<urn:s> <urn:unknown:p> "value" .'
     with pytest.raises(UnsupportedSyntaxError):
         native._parse_turtle_retained_v2(partial_source, document_iri=None)

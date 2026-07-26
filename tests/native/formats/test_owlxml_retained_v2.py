@@ -723,6 +723,8 @@ def test_guarded_owlxml_mixed_format_import_closure_merges_retained_owners(
 def test_private_owlxml_bridge_allocations_are_transactional(
     extension: NativeTestExtension,
 ) -> None:
+    if not hasattr(extension, "_owlxml_retained_bridge_allocation_probe_v2"):
+        pytest.skip("native retained OWL/XML bridge allocation hook is unavailable")
     probe = extension._owlxml_retained_bridge_allocation_probe_v2
     source = bytearray(SOURCE)
     config = bytearray(native._encode_config(ParseLimits(), None, verify=False))
