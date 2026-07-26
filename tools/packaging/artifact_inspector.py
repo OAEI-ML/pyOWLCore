@@ -176,6 +176,13 @@ class _SdistReader:
     def unsafe_links(self) -> tuple[str, ...]:
         return tuple(entry.name for entry in self._entries if entry.issym() or entry.islnk())
 
+    def special_members(self) -> tuple[str, ...]:
+        return tuple(
+            entry.name
+            for entry in self._entries
+            if not (entry.isfile() or entry.isdir() or entry.issym() or entry.islnk())
+        )
+
     def close(self) -> None:
         self._archive.close()
 
@@ -371,11 +378,15 @@ def _validate_metadata(
     return errors, blockers
 
 
-def _validate_common(reader: ArchiveReader) -> tuple[list[str], int, bool]:
+def _validate_common(
+    reader: ArchiveReader,
+    *,
+    payload_safe: bool = True,
+) -> tuple[list[str], int, bool]:
     errors: list[str] = []
     names = reader.names()
     sizes = reader.sizes()
-    resource_safe = True
+    resource_safe = payload_safe
     if len(sizes) != len(names):
         errors.append("archive: member metadata count does not match member names")
         resource_safe = False
@@ -792,8 +803,6 @@ def _validate_sdist(
 ) -> list[str]:
     errors: list[str] = []
     names = reader.names()
-    if reader.unsafe_links():
-        errors.append(f"sdist: links are forbidden: {', '.join(reader.unsafe_links())}")
     distribution = re.sub(r"[-_.]+", "_", "pyowl-core")
     expected_root = f"{distribution}-{expected_version}"
     roots = {
@@ -847,7 +856,21 @@ def inspect_artifact(
     reader = _WheelReader(path) if kind == "wheel" else _SdistReader(path)
     try:
         variant: ArtifactVariant = _wheel_variant(reader) if kind == "wheel" else "sdist"
-        errors, total, resource_safe = _validate_common(reader)
+        preflight_errors: list[str] = []
+        if isinstance(reader, _SdistReader):
+            links = reader.unsafe_links()
+            if links:
+                preflight_errors.append(f"sdist: links are forbidden: {', '.join(links)}")
+            special_members = reader.special_members()
+            if special_members:
+                preflight_errors.append(
+                    f"sdist: special members are forbidden: {', '.join(special_members)}"
+                )
+        errors, total, resource_safe = _validate_common(
+            reader,
+            payload_safe=not preflight_errors,
+        )
+        errors.extend(preflight_errors)
         if expected_variant is not None and variant != expected_variant:
             errors.append(f"artifact: detected variant {variant!r}, expected {expected_variant!r}")
         if not resource_safe:

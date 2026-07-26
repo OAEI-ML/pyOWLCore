@@ -120,10 +120,12 @@ def _sdist(
     tmp_path: Path,
     *,
     duplicate_member: str | None = None,
+    link_member: str | None = None,
     metadata: bytes = _METADATA,
     package_init: bytes = b'__version__ = "0.1.0.dev0"\n',
     pyproject: bytes = _PYPROJECT,
     root: str = "pyowl_core-0.1.0.dev0",
+    special_member: str | None = None,
 ) -> Path:
     entries = {
         f"{root}/PKG-INFO": metadata,
@@ -144,6 +146,19 @@ def _sdist(
             info.mode = 0o644
             info.mtime = 1_735_689_600
             archive.addfile(info, io.BytesIO(payload))
+        if link_member is not None:
+            info = tarfile.TarInfo(f"{root}/{link_member}")
+            info.type = tarfile.SYMTYPE
+            info.linkname = f"{root}/PKG-INFO"
+            info.mode = 0o777
+            info.mtime = 1_735_689_600
+            archive.addfile(info)
+        if special_member is not None:
+            info = tarfile.TarInfo(f"{root}/{special_member}")
+            info.type = tarfile.FIFOTYPE
+            info.mode = 0o644
+            info.mtime = 1_735_689_600
+            archive.addfile(info)
         if duplicate_member is not None:
             name = f"{root}/{duplicate_member}"
             payload = b"ambiguous replacement"
@@ -418,6 +433,37 @@ def test_sdist_duplicate_member_blocks_before_ambiguous_payload_read(
     assert not result.ok
     assert result.metadata == {}
     assert "archive: duplicate member name" in result.errors
+
+
+@pytest.mark.parametrize(
+    ("member_kind", "expected_error"),
+    (
+        ("link", "sdist: links are forbidden: pyowl_core-0.1.0.dev0/alias"),
+        ("special", "sdist: special members are forbidden: pyowl_core-0.1.0.dev0/pipe"),
+    ),
+)
+def test_sdist_unsafe_member_type_blocks_before_payload_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    member_kind: str,
+    expected_error: str,
+) -> None:
+    archive = (
+        _sdist(tmp_path, link_member="alias")
+        if member_kind == "link"
+        else _sdist(tmp_path, special_member="pipe")
+    )
+    monkeypatch.setattr(
+        artifact_inspector._SdistReader,
+        "read",
+        lambda *args: pytest.fail("unsafe archive payload was read"),
+    )
+
+    result = inspect_artifact(archive)
+
+    assert not result.ok
+    assert result.metadata == {}
+    assert expected_error in result.errors
 
 
 def test_record_tampering_is_rejected(tmp_path: Path) -> None:
