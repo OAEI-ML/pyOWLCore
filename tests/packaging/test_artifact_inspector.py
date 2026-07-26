@@ -121,6 +121,7 @@ def _sdist(
     *,
     duplicate_member: str | None = None,
     metadata: bytes = _METADATA,
+    package_init: bytes = b'__version__ = "0.1.0.dev0"\n',
     pyproject: bytes = _PYPROJECT,
     root: str = "pyowl_core-0.1.0.dev0",
 ) -> Path:
@@ -128,7 +129,7 @@ def _sdist(
         f"{root}/PKG-INFO": metadata,
         f"{root}/pyproject.toml": pyproject,
         f"{root}/setup.py": b"from setuptools import setup\nsetup()\n",
-        f"{root}/src/pyowl_core/__init__.py": b"",
+        f"{root}/src/pyowl_core/__init__.py": package_init,
         f"{root}/native/Cargo.lock": b"version = 4\n",
         f"{root}/native/Cargo.toml": b"[package]\n",
         f"{root}/native/src/lib.rs": b"",
@@ -304,6 +305,26 @@ def test_wheel_metadata_root_must_match_project_identity(tmp_path: Path) -> None
     assert not result.ok
     assert "wheel: dist-info root does not exactly match project identity" in result.errors
     assert any(error.startswith("wheel: missing identity member(s):") for error in result.errors)
+
+
+@pytest.mark.parametrize("kind", ("wheel", "sdist"))
+def test_artifact_rejects_package_version_metadata_drift(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    package_init = b'__version__ = "9.9.9"\n'
+    if kind == "wheel":
+        artifact = _wheel(
+            tmp_path,
+            extra_entries={"pyowl_core/__init__.py": package_init},
+        )
+    else:
+        artifact = _sdist(tmp_path, package_init=package_init)
+
+    result = inspect_artifact(artifact)
+
+    assert not result.ok
+    assert f"{kind}: pyowl_core.__version__ is '9.9.9', expected '0.1.0.dev0'" in result.errors
 
 
 def test_metadata_rejects_optional_marker_with_runtime_escape(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import csv
 import hashlib
@@ -473,6 +474,43 @@ def _legal_payload_sha256(reader: ArchiveReader) -> str:
     return digest.hexdigest()
 
 
+def _validate_package_version(
+    reader: ArchiveReader,
+    member: str,
+    kind: ArtifactKind,
+    expected_version: str,
+) -> list[str]:
+    if member not in reader.names():
+        return []
+    try:
+        module = ast.parse(reader.read(member).decode("utf-8"), filename=member)
+    except (SyntaxError, UnicodeDecodeError) as error:
+        return [f"{kind}: cannot parse package version declaration: {error}"]
+    declarations: list[object] = []
+    for statement in module.body:
+        if isinstance(statement, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__version__"
+            for target in statement.targets
+        ):
+            declarations.append(
+                statement.value.value if isinstance(statement.value, ast.Constant) else None
+            )
+        elif (
+            isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and statement.target.id == "__version__"
+        ):
+            value = statement.value
+            declarations.append(value.value if isinstance(value, ast.Constant) else None)
+    if len(declarations) != 1 or not isinstance(declarations[0], str):
+        return [f"{kind}: package __version__ must be one literal string assignment"]
+    if declarations[0] != expected_version:
+        return [
+            f"{kind}: pyowl_core.__version__ is {declarations[0]!r}, expected {expected_version!r}"
+        ]
+    return []
+
+
 def _wheel_variant(reader: ArchiveReader) -> ArtifactVariant:
     binaries = [
         name
@@ -555,6 +593,14 @@ def _validate_wheel(
     missing_identity = sorted(required_identity_members - set(names))
     if missing_identity:
         errors.append("wheel: missing identity member(s): " + ", ".join(missing_identity))
+    errors.extend(
+        _validate_package_version(
+            reader,
+            "pyowl_core/__init__.py",
+            "wheel",
+            expected_version,
+        )
+    )
     dist_info_roots = {
         PurePosixPath(name).parts[0]
         for name in names
@@ -769,6 +815,14 @@ def _validate_sdist(
     for relative_path in sorted(required_sources):
         if f"{expected_root}/{relative_path}" not in names:
             errors.append(f"sdist: missing required source {relative_path}")
+    errors.extend(
+        _validate_package_version(
+            reader,
+            f"{expected_root}/src/pyowl_core/__init__.py",
+            "sdist",
+            expected_version,
+        )
+    )
     if filename != f"{expected_root}.tar.gz":
         errors.append("sdist: filename does not match project name/version")
     binaries = [name for name in names if name.casefold().endswith(_NATIVE_SUFFIXES)]
