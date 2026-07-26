@@ -29,6 +29,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pyowl-core"
 version = "0.1.0.dev0"
+requires-python = ">=3.10"
+license = "Apache-2.0"
 dependencies = []
 
 [project.optional-dependencies]
@@ -58,6 +60,8 @@ Name: pyowl-core
 Version: 0.1.0.dev0
 Requires-Python: >=3.10
 License-Expression: Apache-2.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
 
 fixture
 """
@@ -65,9 +69,11 @@ fixture
 _LICENSE_FILES = {
     "LICENSE": b"Apache License 2.0",
     "NOTICE": b"pyowl-core",
-    "LLVM-exception.txt": b"LLVM exception",
-    "Unicode-3.0.txt": b"Unicode License v3",
-    "inventory.toml": b"schema = 1",
+    "THIRD_PARTY_LICENSES/LLVM-exception.txt": b"LLVM exception",
+    "THIRD_PARTY_LICENSES/README.md": b"license inventory",
+    "THIRD_PARTY_LICENSES/Unicode-3.0.txt": b"Unicode License v3",
+    "THIRD_PARTY_LICENSES/W3C-RDF-tests-BSD-3-Clause.txt": b"W3C test license",
+    "THIRD_PARTY_LICENSES/inventory.toml": b"schema = 1",
 }
 
 
@@ -704,10 +710,15 @@ def _wheel(
     entries = {
         "pyowl_core/__init__.py": b'__version__ = "0.1.0.dev0"\n',
         f"{dist_info}/METADATA": _METADATA,
-        f"{dist_info}/WHEEL": f"Wheel-Version: 1.0\nTag: {tag}\n".encode(),
+        f"{dist_info}/WHEEL": (
+            "Wheel-Version: 1.0\n"
+            "Generator: pyowl-core-test-fixture\n"
+            f"Root-Is-Purelib: {'true' if variant == 'pure' else 'false'}\n"
+            f"Tag: {tag}\n"
+        ).encode(),
     }
     for name, payload in _LICENSE_FILES.items():
-        entries[f"{dist_info}/licenses/THIRD_PARTY_LICENSES/{name}"] = payload
+        entries[f"{dist_info}/licenses/{name}"] = payload
     if variant == "native":
         entries["pyowl_core/_native.cpython-310-x86_64-linux-gnu.so"] = b"native-fixture"
     entries.update(additions)
@@ -736,13 +747,13 @@ def _sdist(
         f"{source_root}/PKG-INFO": _METADATA,
         f"{source_root}/pyproject.toml": _PYPROJECT.encode(),
         f"{source_root}/setup.py": b"from setuptools import setup\nsetup()\n",
-        f"{source_root}/src/pyowl_core/__init__.py": b"",
+        f"{source_root}/src/pyowl_core/__init__.py": b'__version__ = "0.1.0.dev0"\n',
         f"{source_root}/native/Cargo.lock": b"version = 4\n",
         f"{source_root}/native/Cargo.toml": (b'[package]\nname = "fixture"\nversion = "0.0.0"\n'),
         f"{source_root}/native/src/lib.rs": b"",
     }
     for name, payload in _LICENSE_FILES.items():
-        entries[f"{source_root}/THIRD_PARTY_LICENSES/{name}"] = payload
+        entries[f"{source_root}/{name}"] = payload
     entries.update(additions)
     for name in omit:
         entries.pop(name, None)
