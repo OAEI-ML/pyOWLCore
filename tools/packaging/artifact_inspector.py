@@ -311,8 +311,36 @@ def _validate_record(reader: ArchiveReader) -> list[str]:
     return errors
 
 
-def _validate_wheel(reader: ArchiveReader, variant: ArtifactVariant, filename: str) -> list[str]:
+def _validate_wheel(
+    reader: ArchiveReader,
+    variant: ArtifactVariant,
+    filename: str,
+    expected_version: str,
+) -> list[str]:
     errors = _validate_record(reader)
+    names = reader.names()
+    distribution = re.sub(r"[-_.]+", "_", "pyowl-core")
+    version = expected_version.replace("-", "_")
+    dist_info = f"{distribution}-{version}.dist-info"
+    required_identity_members = {
+        f"{dist_info}/METADATA",
+        f"{dist_info}/RECORD",
+        f"{dist_info}/WHEEL",
+        "pyowl_core/__init__.py",
+    }
+    missing_identity = sorted(required_identity_members - set(names))
+    if missing_identity:
+        errors.append("wheel: missing identity member(s): " + ", ".join(missing_identity))
+    dist_info_roots = {
+        PurePosixPath(name).parts[0]
+        for name in names
+        if PurePosixPath(name).parts
+        and PurePosixPath(name).parts[0].casefold().endswith(".dist-info")
+    }
+    if dist_info_roots != {dist_info}:
+        errors.append("wheel: dist-info root does not exactly match project identity")
+    if not filename.startswith(f"{distribution}-{version}-"):
+        errors.append("wheel: filename does not match project name/version")
     wheel_files = [name for name in reader.names() if name.endswith(".dist-info/WHEEL")]
     if len(wheel_files) != 1:
         return [*errors, f"wheel: expected exactly one WHEEL file, found {len(wheel_files)}"]
@@ -359,22 +387,38 @@ def _validate_wheel(reader: ArchiveReader, variant: ArtifactVariant, filename: s
     return errors
 
 
-def _validate_sdist(reader: _SdistReader) -> list[str]:
+def _validate_sdist(
+    reader: _SdistReader,
+    filename: str,
+    expected_version: str,
+) -> list[str]:
     errors: list[str] = []
     names = reader.names()
     if reader.unsafe_links():
         errors.append(f"sdist: links are forbidden: {', '.join(reader.unsafe_links())}")
-    required_suffixes = {
-        "/native/Cargo.lock",
-        "/native/Cargo.toml",
-        "/native/src/lib.rs",
-        "/pyproject.toml",
-        "/setup.py",
-        "/src/pyowl_core/__init__.py",
+    distribution = re.sub(r"[-_.]+", "_", "pyowl-core")
+    expected_root = f"{distribution}-{expected_version}"
+    roots = {
+        PurePosixPath(name.replace("\\", "/")).parts[0]
+        for name in names
+        if PurePosixPath(name.replace("\\", "/")).parts
     }
-    for suffix in sorted(required_suffixes):
-        if not any(name.endswith(suffix) for name in names):
-            errors.append(f"sdist: missing required source {suffix.lstrip('/')}")
+    if roots != {expected_root}:
+        errors.append("sdist: archive root does not exactly match project identity")
+    required_sources = {
+        "PKG-INFO",
+        "native/Cargo.lock",
+        "native/Cargo.toml",
+        "native/src/lib.rs",
+        "pyproject.toml",
+        "setup.py",
+        "src/pyowl_core/__init__.py",
+    }
+    for relative_path in sorted(required_sources):
+        if f"{expected_root}/{relative_path}" not in names:
+            errors.append(f"sdist: missing required source {relative_path}")
+    if filename != f"{expected_root}.tar.gz":
+        errors.append("sdist: filename does not match project name/version")
     binaries = [name for name in names if name.casefold().endswith(_NATIVE_SUFFIXES)]
     if binaries:
         errors.append(f"sdist: platform binary is forbidden: {', '.join(binaries)}")
@@ -411,7 +455,7 @@ def inspect_artifact(
         errors.extend(_validate_licenses(reader.names(), kind))
         deferred: list[str] = []
         if kind == "wheel":
-            errors.extend(_validate_wheel(reader, variant, path.name))
+            errors.extend(_validate_wheel(reader, variant, path.name, expected_version))
             if variant == "native":
                 deferred.append(
                     "native dynamic dependencies/rpaths/symbols require the "
@@ -419,7 +463,7 @@ def inspect_artifact(
                 )
         else:
             assert isinstance(reader, _SdistReader)
-            errors.extend(_validate_sdist(reader))
+            errors.extend(_validate_sdist(reader, path.name, expected_version))
         return InspectionResult(
             path=str(path),
             kind=kind,

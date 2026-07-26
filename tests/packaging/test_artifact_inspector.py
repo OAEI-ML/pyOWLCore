@@ -46,10 +46,10 @@ def _wheel(
     tmp_path: Path,
     variant: str = "pure",
     *,
+    dist_info: str = "pyowl_core-0.1.0.dev0.dist-info",
     extra_binary: str | None = None,
     internal_tag: str | None = None,
 ) -> Path:
-    dist_info = "pyowl_core-0.1.0.dev0.dist-info"
     tag = "py3-none-any" if variant == "pure" else "cp310-cp310-manylinux_2_28_x86_64"
     entries = {
         "pyowl_core/__init__.py": b'__version__ = "0.1.0.dev0"\n',
@@ -73,8 +73,11 @@ def _wheel(
     return path
 
 
-def _sdist(tmp_path: Path) -> Path:
-    root = "pyowl_core-0.1.0.dev0"
+def _sdist(
+    tmp_path: Path,
+    *,
+    root: str = "pyowl_core-0.1.0.dev0",
+) -> Path:
     entries = {
         f"{root}/PKG-INFO": _METADATA,
         f"{root}/pyproject.toml": b"[build-system]\n",
@@ -156,10 +159,29 @@ def test_native_wheel_rejects_additional_binary_outside_package(tmp_path: Path) 
     )
 
 
+def test_wheel_metadata_root_must_match_project_identity(tmp_path: Path) -> None:
+    result = inspect_artifact(_wheel(tmp_path, dist_info="foreign-0.1.0.dev0.dist-info"))
+
+    assert not result.ok
+    assert "wheel: dist-info root does not exactly match project identity" in result.errors
+    assert any(error.startswith("wheel: missing identity member(s):") for error in result.errors)
+
+
 def test_sdist_contains_complete_sources_without_binaries(tmp_path: Path) -> None:
     result = inspect_artifact(_sdist(tmp_path), expected_variant="sdist")
     assert result.ok
     assert result.variant == "sdist"
+
+
+def test_sdist_root_must_match_project_identity(tmp_path: Path) -> None:
+    result = inspect_artifact(
+        _sdist(tmp_path, root="foreign-0.1.0.dev0"),
+        expected_variant="sdist",
+    )
+
+    assert not result.ok
+    assert "sdist: archive root does not exactly match project identity" in result.errors
+    assert "sdist: missing required source PKG-INFO" in result.errors
 
 
 def test_record_tampering_is_rejected(tmp_path: Path) -> None:
