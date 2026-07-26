@@ -171,6 +171,55 @@ def test_release_report_rejects_unapproved_native_wheel(
     assert f"artifact set contains unexpected artifact: {unexpected.name}" in blockers
 
 
+def test_release_report_rejects_symlinked_artifact(
+    tmp_path: Path,
+) -> None:
+    paths = _artifacts(tmp_path, complete=True)
+    artifact = paths[0]
+    target = tmp_path.parent / f"{tmp_path.name}-{artifact.name}"
+    target.write_bytes(artifact.read_bytes())
+    artifact.unlink()
+    try:
+        artifact.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    with pytest.raises(ValueError, match="regular non-symlink file"):
+        release_report.build_release_report(
+            tmp_path,
+            source_revision=REVISION,
+            gates={},
+        )
+
+
+def test_release_report_rejects_artifact_changed_during_inspection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _artifacts(tmp_path, complete=True)
+    changed = paths[0]
+
+    def inspect(path: Path, **kwargs: object) -> InspectionResult:
+        del kwargs
+        if path == changed:
+            path.write_bytes(b"changed-during-inspection")
+        if path.name.endswith(".tar.gz"):
+            variant = "sdist"
+        elif "py3-none-any" in path.name:
+            variant = "pure"
+        else:
+            variant = "native"
+        return _result(path, variant)
+
+    monkeypatch.setattr(release_report, "inspect_artifact", inspect)
+    with pytest.raises(ValueError, match=f"artifact changed during inspection: {changed.name}"):
+        release_report.build_release_report(
+            tmp_path,
+            source_revision=REVISION,
+            gates={},
+        )
+
+
 @pytest.mark.parametrize("revision", ["main", "A" * 40, "a" * 39, "a" * 41])
 def test_source_revision_must_be_an_exact_commit(
     tmp_path: Path,

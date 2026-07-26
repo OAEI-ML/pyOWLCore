@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -94,11 +95,13 @@ def _sha256(path: Path) -> str:
 
 
 def _artifact_paths(directory: Path) -> tuple[Path, ...]:
-    paths = [
-        path
-        for path in directory.iterdir()
-        if path.is_file() and (path.suffix == ".whl" or path.name.endswith(".tar.gz"))
-    ]
+    paths: list[Path] = []
+    for path in directory.iterdir():
+        if path.suffix != ".whl" and not path.name.endswith(".tar.gz"):
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"artifact path must be a regular non-symlink file: {path.name}")
+        paths.append(path)
     return tuple(sorted(paths, key=lambda path: path.name))
 
 
@@ -137,13 +140,37 @@ def build_release_report(
     artifacts: list[dict[str, object]] = []
     results: list[InspectionResult] = []
     for path in paths:
+        initial_stat = path.lstat()
+        if not stat.S_ISREG(initial_stat.st_mode):
+            raise ValueError(f"artifact path must remain a regular file: {path.name}")
+        initial_sha256 = _sha256(path)
         result = inspect_artifact(path, expected_version=expected_version)
+        final_sha256 = _sha256(path)
+        final_stat = path.lstat()
+        initial_identity = (
+            initial_stat.st_dev,
+            initial_stat.st_ino,
+            initial_stat.st_size,
+            initial_stat.st_mtime_ns,
+        )
+        final_identity = (
+            final_stat.st_dev,
+            final_stat.st_ino,
+            final_stat.st_size,
+            final_stat.st_mtime_ns,
+        )
+        if (
+            not stat.S_ISREG(final_stat.st_mode)
+            or initial_sha256 != final_sha256
+            or initial_identity != final_identity
+        ):
+            raise ValueError(f"artifact changed during inspection: {path.name}")
         results.append(result)
         artifacts.append(
             {
                 "filename": path.name,
-                "sha256": _sha256(path),
-                "bytes": path.stat().st_size,
+                "sha256": final_sha256,
+                "bytes": final_stat.st_size,
                 "kind": result.kind,
                 "variant": result.variant,
                 "inspection_ok": result.ok,
