@@ -56,8 +56,9 @@ def main() -> None:
     probe = native.probe(refresh=True)
     if not probe.available or "parse-functional-v1" not in probe.features:
         raise RuntimeError(probe.reason or "native Functional parser is unavailable")
-    if not hasattr(core_extension, "_parse_rdfxml_retained_v2"):
-        raise RuntimeError("native artifact lacks the guarded retained RDF/XML parser")
+    for hook in ("_parse_rdfxml_retained_v2", "_parse_turtle_retained_v2"):
+        if not hasattr(core_extension, hook):
+            raise RuntimeError(f"native artifact lacks the guarded retained parser {hook}")
     pyelk_native = _load_pyelk_extension(Path(os.environ["PYOWL_CORE_TEST_PYELK_NATIVE_LIBRARY"]))
     from pyelk import Reasoner, ReasonerConfig  # type: ignore[import-not-found]
     from pyelk.indexing.encoded import (  # type: ignore[import-not-found]
@@ -94,20 +95,22 @@ def main() -> None:
             collect_provenance=True,
         )
 
-    def as_rdfxml(source: bytes) -> bytes:
+    def render_source(source: bytes, format: DocumentFormat) -> bytes:
         seed = load_snapshot(
             source,
             options=options(DocumentFormat.FUNCTIONAL, BackendPreference.PYTHON),
         )
         try:
-            return render_document(seed.root, format=DocumentFormat.RDF_XML)
+            return render_document(seed.root, format=format)
         finally:
             close_seed = getattr(seed, "close", None)
             if callable(close_seed):
                 close_seed()
 
-    rdfxml_source = as_rdfxml(functional_source)
-    right_rdfxml_source = as_rdfxml(right_functional_source)
+    rdfxml_source = render_source(functional_source, DocumentFormat.RDF_XML)
+    right_rdfxml_source = render_source(right_functional_source, DocumentFormat.RDF_XML)
+    turtle_source = render_source(functional_source, DocumentFormat.TURTLE)
+    right_turtle_source = render_source(right_functional_source, DocumentFormat.TURTLE)
 
     def exercise(
         source: bytes,
@@ -125,6 +128,10 @@ def main() -> None:
         )
         with ExitStack() as stack:
             if guarded_candidate:
+                parser_name = {
+                    DocumentFormat.RDF_XML: "parse_rdfxml",
+                    DocumentFormat.TURTLE: "parse_turtle",
+                }[format]
                 stack.enter_context(
                     patch(
                         "pyowl_core.backends.parser._NativeBackendDriver.select",
@@ -134,9 +141,9 @@ def main() -> None:
                 )
                 stack.enter_context(
                     patch(
-                        "pyowl_core.backends.python.parser.parse_rdfxml",
+                        f"pyowl_core.backends.python.parser.{parser_name}",
                         side_effect=AssertionError(
-                            "guarded RDF/XML pyELK handoff crossed the Python parser"
+                            f"guarded {format.value} pyELK handoff crossed the Python parser"
                         ),
                     )
                 )
@@ -555,7 +562,11 @@ def main() -> None:
 
     def native_snapshot(source: bytes, format: DocumentFormat) -> Any:
         with ExitStack() as stack:
-            if format is DocumentFormat.RDF_XML:
+            if format in {DocumentFormat.RDF_XML, DocumentFormat.TURTLE}:
+                parser_name = {
+                    DocumentFormat.RDF_XML: "parse_rdfxml",
+                    DocumentFormat.TURTLE: "parse_turtle",
+                }[format]
                 stack.enter_context(
                     patch(
                         "pyowl_core.backends.parser._NativeBackendDriver.select",
@@ -565,9 +576,9 @@ def main() -> None:
                 )
                 stack.enter_context(
                     patch(
-                        "pyowl_core.backends.python.parser.parse_rdfxml",
+                        f"pyowl_core.backends.python.parser.{parser_name}",
                         side_effect=AssertionError(
-                            "guarded RDF/XML owner matrix crossed the Python parser"
+                            f"guarded {format.value} owner matrix crossed the Python parser"
                         ),
                     )
                 )
@@ -704,8 +715,13 @@ def main() -> None:
             DocumentFormat.RDF_XML,
             guarded_candidate=True,
         ),
+        "turtle": exercise(
+            turtle_source,
+            DocumentFormat.TURTLE,
+            guarded_candidate=True,
+        ),
     }
-    if observed["functional"]["compiler_digest"] != observed["rdfxml"]["compiler_digest"]:
+    if len({result["compiler_digest"] for result in observed.values()}) != 1:
         raise AssertionError("format-equivalent retained owners produced different pyELK compilers")
     owner_matrix = {
         "functional": exercise_owner_matrix(
@@ -718,6 +734,11 @@ def main() -> None:
             right_rdfxml_source,
             DocumentFormat.RDF_XML,
         ),
+        "turtle": exercise_owner_matrix(
+            turtle_source,
+            right_turtle_source,
+            DocumentFormat.TURTLE,
+        ),
     }
 
     def owner_digest(format_name: str, owner_name: str) -> str:
@@ -727,12 +748,20 @@ def main() -> None:
         return value
 
     semantic_owners = ("direct", "decoded", "mmap", "overlay")
-    for format_name in ("functional", "rdfxml"):
+    for format_name in ("functional", "rdfxml", "turtle"):
         semantic_digests = {owner_digest(format_name, owner_name) for owner_name in semantic_owners}
         if semantic_digests != {observed[format_name]["compiler_digest"]}:
             raise AssertionError("direct, decoded, mmap, no-op overlay, and scalar digests diverge")
     for owner_name in (*semantic_owners, "composite"):
-        if owner_digest("functional", owner_name) != owner_digest("rdfxml", owner_name):
+        if (
+            len(
+                {
+                    owner_digest(format_name, owner_name)
+                    for format_name in ("functional", "rdfxml", "turtle")
+                }
+            )
+            != 1
+        ):
             raise AssertionError(f"format-equivalent {owner_name} owner digests diverge")
     print(json.dumps({"formats": observed, "owners": owner_matrix}, sort_keys=True))
 

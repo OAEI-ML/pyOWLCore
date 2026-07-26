@@ -67,8 +67,8 @@ def test_real_retained_owner_crosses_pyelk_without_scalar_materialization() -> N
         env=environment,
     )
     observed = json.loads(completed.stdout)
-    assert set(observed["formats"]) == {"functional", "rdfxml"}
-    assert set(observed["owners"]) == {"functional", "rdfxml"}
+    assert set(observed["formats"]) == {"functional", "rdfxml", "turtle"}
+    assert set(observed["owners"]) == {"functional", "rdfxml", "turtle"}
     digests = set()
     for result in observed["formats"].values():
         assert result["encoded_buffers"] == 11
