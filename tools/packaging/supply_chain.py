@@ -9,7 +9,7 @@ import re
 import sys
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 if sys.version_info >= (3, 11):
@@ -22,6 +22,20 @@ _LOCAL_NATIVE_CRATE = "pyowl-core-native"
 _FORBIDDEN_COMPONENTS = {"deeponto", "jpype", "jpype1", "mowl", "owlapi", "robot"}
 _NOTICE_INVENTORY_START = "<!-- pyowl-core-native-inventory:start -->"
 _NOTICE_INVENTORY_END = "<!-- pyowl-core-native-inventory:end -->"
+_LICENSE_SELECTION_POLICY = (
+    "Apache-2.0 is selected where the resolved crate offers MIT OR Apache-2.0"
+)
+_LICENSE_SELECTIONS = {
+    "Apache-2.0 OR MIT": "Apache-2.0",
+    "MIT OR Apache-2.0": "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception": "Apache-2.0 WITH LLVM-exception",
+    "(MIT OR Apache-2.0) AND Unicode-3.0": "Apache-2.0 AND Unicode-3.0",
+}
+_ADDITIONAL_LICENSE_FILES = {
+    "Apache-2.0 WITH LLVM-exception": "THIRD_PARTY_LICENSES/LLVM-exception.txt",
+    "Apache-2.0 AND Unicode-3.0": "THIRD_PARTY_LICENSES/Unicode-3.0.txt",
+}
+_DEVELOPMENT_LICENSE_FILES = {"W3C-RDF-tests-BSD-3-Clause.txt"}
 _BUILD_INPUT_PATHS = (
     ".github/workflows/native-safety.yml",
     ".github/workflows/wheels.yml",
@@ -75,6 +89,7 @@ class Inventory:
 
     schema: int
     lockfile: str
+    selection: str
     legal_approval: bool
     components: tuple[InventoryComponent, ...]
 
@@ -85,6 +100,13 @@ def _load_toml(path: Path) -> dict[str, Any]:
     if not isinstance(loaded, dict):  # pragma: no cover - tomllib contract
         raise ValueError(f"{path} did not contain a TOML table")
     return loaded
+
+
+def _required_string(values: dict[str, Any], field: str, *, context: str) -> str:
+    value = values.get(field)
+    if type(value) is not str or not value:
+        raise ValueError(f"{context} {field} must be a non-empty string")
+    return value
 
 
 def load_locked_packages(path: Path) -> tuple[LockedPackage, ...]:
@@ -104,13 +126,17 @@ def load_locked_packages(path: Path) -> tuple[LockedPackage, ...]:
             raise ValueError("Cargo.lock dependencies must be strings")
         checksum = raw.get("checksum")
         source = raw.get("source")
+        if checksum is not None and type(checksum) is not str:
+            raise ValueError("Cargo.lock checksum must be a string")
+        if source is not None and type(source) is not str:
+            raise ValueError("Cargo.lock source must be a string")
         packages.append(
             LockedPackage(
-                name=str(raw["name"]),
-                version=str(raw["version"]),
-                checksum=str(checksum) if checksum is not None else None,
+                name=_required_string(raw, "name", context="Cargo.lock package"),
+                version=_required_string(raw, "version", context="Cargo.lock package"),
+                checksum=checksum,
                 dependencies=tuple(dependencies),
-                source=str(source) if source is not None else None,
+                source=source,
             )
         )
     return tuple(packages)
@@ -120,6 +146,24 @@ def load_inventory(path: Path) -> Inventory:
     """Load the reviewed inventory with strict required fields."""
 
     raw = _load_toml(path)
+    expected_root_fields = {
+        "schema",
+        "lockfile",
+        "selection",
+        "legal_approval",
+        "component",
+    }
+    if set(raw) != expected_root_fields:
+        raise ValueError(
+            "inventory root fields must be exactly "
+            f"{sorted(expected_root_fields)!r}, got {sorted(raw)!r}"
+        )
+    schema = raw.get("schema")
+    legal_approval = raw.get("legal_approval")
+    if type(schema) is not int:
+        raise ValueError("inventory schema must be an integer")
+    if type(legal_approval) is not bool:
+        raise ValueError("inventory legal_approval must be a boolean")
     raw_components = raw.get("component", [])
     if not isinstance(raw_components, list):
         raise ValueError("inventory component field must be an array")
@@ -127,21 +171,36 @@ def load_inventory(path: Path) -> Inventory:
     for entry in raw_components:
         if not isinstance(entry, dict):
             raise ValueError("inventory component entry must be a table")
+        required_fields = {"name", "version", "license", "selected_license", "scope"}
+        allowed_fields = {*required_fields, "additional_license_file"}
+        if not required_fields <= set(entry) or not set(entry) <= allowed_fields:
+            raise ValueError("inventory component fields must be exactly the reviewed schema")
         additional = entry.get("additional_license_file")
+        if additional is not None and (type(additional) is not str or not additional):
+            raise ValueError("inventory additional_license_file must be a non-empty string")
         components.append(
             InventoryComponent(
-                name=str(entry["name"]),
-                version=str(entry["version"]),
-                license_expression=str(entry["license"]),
-                selected_license=str(entry["selected_license"]),
-                scope=str(entry["scope"]),
-                additional_license_file=str(additional) if additional is not None else None,
+                name=_required_string(entry, "name", context="inventory component"),
+                version=_required_string(entry, "version", context="inventory component"),
+                license_expression=_required_string(
+                    entry,
+                    "license",
+                    context="inventory component",
+                ),
+                selected_license=_required_string(
+                    entry,
+                    "selected_license",
+                    context="inventory component",
+                ),
+                scope=_required_string(entry, "scope", context="inventory component"),
+                additional_license_file=additional,
             )
         )
     return Inventory(
-        schema=int(raw["schema"]),
-        lockfile=str(raw["lockfile"]),
-        legal_approval=bool(raw["legal_approval"]),
+        schema=schema,
+        lockfile=_required_string(raw, "lockfile", context="inventory"),
+        selection=_required_string(raw, "selection", context="inventory"),
+        legal_approval=legal_approval,
         components=tuple(components),
     )
 
@@ -195,6 +254,8 @@ def validate_inventory(root: Path) -> list[str]:
         violations.append(
             f"inventory: lockfile must be exactly native/Cargo.lock, got {inventory.lockfile!r}"
         )
+    if inventory.selection != _LICENSE_SELECTION_POLICY:
+        violations.append("inventory: license selection policy differs from the reviewed policy")
     lock_path = root / "native" / "Cargo.lock"
     try:
         all_locked = load_locked_packages(lock_path)
@@ -202,7 +263,18 @@ def validate_inventory(root: Path) -> list[str]:
         manifest_package = manifest["package"]
         if not isinstance(manifest_package, dict):
             raise ValueError("native Cargo.toml package field must be a table")
-        local_key = (str(manifest_package["name"]), str(manifest_package["version"]))
+        local_key = (
+            _required_string(
+                manifest_package,
+                "name",
+                context="native Cargo.toml package",
+            ),
+            _required_string(
+                manifest_package,
+                "version",
+                context="native Cargo.toml package",
+            ),
+        )
     except (KeyError, OSError, TypeError, ValueError) as error:
         return [f"inventory: cannot load native dependency manifests: {error}"]
 
@@ -236,26 +308,87 @@ def validate_inventory(root: Path) -> list[str]:
         violations.append(f"inventory: component is not locked {key[0]} {key[1]}")
 
     for package in locked:
-        if package.checksum is None:
+        if package.checksum is None or re.fullmatch(r"[0-9a-f]{64}", package.checksum) is None:
             violations.append(
-                f"inventory: registry component lacks checksum {package.name} {package.version}"
+                "inventory: registry component lacks a lowercase SHA-256 checksum "
+                f"{package.name} {package.version}"
             )
         if package.name.casefold() in _FORBIDDEN_COMPONENTS:
             violations.append(f"inventory: forbidden Java/JVM component {package.name}")
+    expected_legal_files = {
+        "README.md",
+        "inventory.toml",
+        *_DEVELOPMENT_LICENSE_FILES,
+    }
     for component in inventory.components:
-        if not component.license_expression.strip() or not component.selected_license.strip():
+        expected_selection = _LICENSE_SELECTIONS.get(component.license_expression)
+        if expected_selection is None:
             violations.append(
-                f"inventory: missing license selection {component.name} {component.version}"
+                "inventory: unreviewed SPDX expression "
+                f"{component.license_expression!r} for {component.name}"
+            )
+        elif component.selected_license != expected_selection:
+            violations.append(
+                "inventory: selected license does not match reviewed SPDX expression "
+                f"for {component.name} {component.version}; expected "
+                f"{expected_selection!r}, got {component.selected_license!r}"
             )
         if component.scope not in {"native-build", "native-runtime"}:
             violations.append(f"inventory: invalid scope {component.scope!r} for {component.name}")
-        if component.additional_license_file is not None:
-            license_path = root / component.additional_license_file
-            if not license_path.is_file() or not license_path.read_text(encoding="utf-8").strip():
-                violations.append(
-                    "inventory: missing additional license file "
-                    f"{component.additional_license_file}"
-                )
+        expected_additional = _ADDITIONAL_LICENSE_FILES.get(component.selected_license)
+        if component.additional_license_file != expected_additional:
+            violations.append(
+                "inventory: additional license file does not match selected license "
+                f"for {component.name} {component.version}; expected "
+                f"{expected_additional!r}, got {component.additional_license_file!r}"
+            )
+        if component.additional_license_file is None:
+            continue
+        relative = PurePosixPath(component.additional_license_file)
+        if (
+            relative.is_absolute()
+            or len(relative.parts) != 2
+            or relative.parts[0] != "THIRD_PARTY_LICENSES"
+            or relative.parts[1] in {"", ".", ".."}
+        ):
+            violations.append(
+                f"inventory: unsafe additional license path {component.additional_license_file!r}"
+            )
+            continue
+        expected_legal_files.add(relative.name)
+        license_path = root / component.additional_license_file
+        if (
+            license_path.is_symlink()
+            or not license_path.is_file()
+            or not license_path.read_text(encoding="utf-8").strip()
+        ):
+            violations.append(
+                f"inventory: missing additional license file {component.additional_license_file}"
+            )
+    legal_root = root / "THIRD_PARTY_LICENSES"
+    try:
+        legal_entries = tuple(legal_root.iterdir())
+    except OSError as error:
+        violations.append(f"inventory: cannot enumerate legal payloads: {error}")
+    else:
+        unsafe_legal_entries = sorted(
+            path.name for path in legal_entries if path.is_symlink() or not path.is_file()
+        )
+        if unsafe_legal_entries:
+            violations.append(
+                f"inventory: legal payload entries must be regular files {unsafe_legal_entries}"
+            )
+        actual_legal_files = {
+            path.name for path in legal_entries if path.is_file() and not path.is_symlink()
+        }
+        missing_legal_files = sorted(expected_legal_files - actual_legal_files)
+        if missing_legal_files:
+            violations.append(f"inventory: missing legal payload files {missing_legal_files}")
+        unexpected_legal_files = sorted(actual_legal_files - expected_legal_files)
+        if unexpected_legal_files:
+            violations.append(
+                f"inventory: unreferenced legal payload files {unexpected_legal_files}"
+            )
     return sorted(violations)
 
 
@@ -505,6 +638,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument(
+        "--require-approval",
+        action="store_true",
+        help="fail unless the reviewed inventory records release-owner legal approval",
+    )
     args = parser.parse_args(argv)
     root = args.root.resolve()
     output_dir = (
@@ -513,6 +651,12 @@ def main(argv: list[str] | None = None) -> int:
         else root / "reports" / "release" / _project_version(root)
     )
     violations = validate_inventory(root)
+    if not violations and args.require_approval:
+        inventory = load_inventory(root / "THIRD_PARTY_LICENSES" / "inventory.toml")
+        if not inventory.legal_approval:
+            violations.append(
+                "release: third-party license review requires release-owner or counsel approval"
+            )
     if not violations:
         violations.extend(generate_evidence(root, output_dir, check=args.check))
     for violation in violations:

@@ -124,6 +124,22 @@ def test_all_evidenced_gates_can_close_a_complete_artifact_set(
     assert isinstance(artifacts, list)
     expected_hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
     assert {row["filename"]: row["sha256"] for row in artifacts} == expected_hashes
+    assert len(artifacts) == len(paths) == 27
+    by_filename = {row["filename"]: row for row in artifacts}
+    for path in paths:
+        row = by_filename[path.name]
+        expected_variant = (
+            "sdist"
+            if path.name.endswith(".tar.gz")
+            else "pure"
+            if "py3-none-any" in path.name
+            else "native"
+        )
+        assert row["bytes"] == path.stat().st_size
+        assert row["kind"] == ("sdist" if expected_variant == "sdist" else "wheel")
+        assert row["variant"] == expected_variant
+        assert row["inspection_ok"] is True
+        assert row["legal_payload_sha256"] == "e" * 64
 
 
 def test_release_report_rejects_missing_supported_native_wheel(

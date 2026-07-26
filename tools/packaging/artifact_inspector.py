@@ -82,12 +82,19 @@ _DEPENDENCY_FILENAMES = {
     "setup.cfg",
     "setup.py",
 }
-_REQUIRED_LICENSE_BASENAMES = {
+_REQUIRED_LEGAL_PATHS = {
     "LICENSE",
     "NOTICE",
-    "LLVM-exception.txt",
-    "Unicode-3.0.txt",
-    "inventory.toml",
+    "THIRD_PARTY_LICENSES/LLVM-exception.txt",
+    "THIRD_PARTY_LICENSES/README.md",
+    "THIRD_PARTY_LICENSES/Unicode-3.0.txt",
+    "THIRD_PARTY_LICENSES/W3C-RDF-tests-BSD-3-Clause.txt",
+    "THIRD_PARTY_LICENSES/inventory.toml",
+}
+_SENSITIVE_LEGAL_BASENAMES = {
+    PurePosixPath(path).name
+    for path in _REQUIRED_LEGAL_PATHS
+    if PurePosixPath(path).name != "README.md"
 }
 
 
@@ -454,30 +461,57 @@ def _validate_common(
     return errors, total, True
 
 
+def _legal_payload_members(
+    names: tuple[str, ...],
+    kind: ArtifactKind,
+) -> dict[str, str]:
+    members: dict[str, str] = {}
+    for name in names:
+        if name.endswith("/"):
+            continue
+        parts = PurePosixPath(name).parts
+        relative: str | None = None
+        if (
+            kind == "wheel"
+            and len(parts) >= 3
+            and parts[0].casefold().endswith(".dist-info")
+            and parts[1] == "licenses"
+        ):
+            relative = PurePosixPath(*parts[2:]).as_posix()
+        elif kind == "sdist" and len(parts) >= 2:
+            candidate = PurePosixPath(*parts[1:]).as_posix()
+            if candidate in {"LICENSE", "NOTICE"} or candidate.startswith("THIRD_PARTY_LICENSES/"):
+                relative = candidate
+        if relative is not None:
+            members[relative] = name
+    return members
+
+
 def _validate_licenses(names: tuple[str, ...], kind: ArtifactKind) -> list[str]:
-    basenames = [PurePosixPath(name).name for name in names]
-    missing = sorted(_REQUIRED_LICENSE_BASENAMES - set(basenames))
+    legal_members = _legal_payload_members(names, kind)
+    actual = set(legal_members)
+    missing = sorted(_REQUIRED_LEGAL_PATHS - actual)
+    unexpected = sorted(actual - _REQUIRED_LEGAL_PATHS)
+    basenames = [PurePosixPath(name).name for name in names if not name.endswith("/")]
     duplicates = sorted(
-        basename for basename in _REQUIRED_LICENSE_BASENAMES if basenames.count(basename) > 1
+        basename for basename in _SENSITIVE_LEGAL_BASENAMES if basenames.count(basename) > 1
     )
     errors: list[str] = []
     if missing:
         errors.append(f"license: missing required files in {kind}: {', '.join(missing)}")
+    if unexpected:
+        errors.append(f"license: unexpected files in {kind}: {', '.join(unexpected)}")
     if duplicates:
         errors.append(f"license: duplicate required files in {kind}: {', '.join(duplicates)}")
     return errors
 
 
-def _legal_payload_sha256(reader: ArchiveReader) -> str:
-    by_basename = {
-        PurePosixPath(name).name: name
-        for name in reader.names()
-        if PurePosixPath(name).name in _REQUIRED_LICENSE_BASENAMES
-    }
-    digest = hashlib.sha256(b"pyowl-core:legal-payload:v1\0")
-    for basename in sorted(by_basename):
-        encoded_name = basename.encode("utf-8")
-        payload = reader.read(by_basename[basename])
+def _legal_payload_sha256(reader: ArchiveReader, kind: ArtifactKind) -> str:
+    members = _legal_payload_members(reader.names(), kind)
+    digest = hashlib.sha256(b"pyowl-core:legal-payload:v2\0")
+    for relative_path in sorted(members):
+        encoded_name = relative_path.encode("utf-8")
+        payload = reader.read(members[relative_path])
         digest.update(len(encoded_name).to_bytes(8, "big"))
         digest.update(encoded_name)
         digest.update(len(payload).to_bytes(8, "big"))
@@ -919,7 +953,7 @@ def inspect_artifact(
             non_native_payload_sha256=(
                 _non_native_payload_sha256(reader) if kind == "wheel" and not errors else None
             ),
-            legal_payload_sha256=_legal_payload_sha256(reader) if not errors else None,
+            legal_payload_sha256=_legal_payload_sha256(reader, kind) if not errors else None,
         )
     finally:
         reader.close()

@@ -37,9 +37,11 @@ dev = ["pytest>=8"]
 _LICENSE_FILES = {
     "LICENSE": b"Apache License 2.0",
     "NOTICE": b"pyowl-core",
-    "LLVM-exception.txt": b"LLVM exception",
-    "Unicode-3.0.txt": b"Unicode License v3",
-    "inventory.toml": b"schema = 1",
+    "THIRD_PARTY_LICENSES/LLVM-exception.txt": b"LLVM exception",
+    "THIRD_PARTY_LICENSES/README.md": b"license inventory",
+    "THIRD_PARTY_LICENSES/Unicode-3.0.txt": b"Unicode License v3",
+    "THIRD_PARTY_LICENSES/W3C-RDF-tests-BSD-3-Clause.txt": b"W3C test license",
+    "THIRD_PARTY_LICENSES/inventory.toml": b"schema = 1",
 }
 
 
@@ -74,6 +76,7 @@ def _wheel(
     internal_tag: str | None = None,
     malformed_record_row: bool = False,
     metadata: bytes = _METADATA,
+    omitted_legal_path: str | None = None,
     record_duplicate: str | None = None,
     root_is_purelib: str | None = None,
     wheel_version: str = "1.0",
@@ -93,7 +96,8 @@ def _wheel(
         ).encode(),
     }
     for name, payload in _LICENSE_FILES.items():
-        entries[f"{dist_info}/licenses/THIRD_PARTY_LICENSES/{name}"] = payload
+        if name != omitted_legal_path:
+            entries[f"{dist_info}/licenses/{name}"] = payload
     if variant == "native":
         entries["pyowl_core/_native.cpython-310-x86_64-linux-gnu.so"] = b"native-fixture"
     if extra_binary is not None:
@@ -120,8 +124,10 @@ def _sdist(
     tmp_path: Path,
     *,
     duplicate_member: str | None = None,
+    extra_entries: Mapping[str, bytes] | None = None,
     link_member: str | None = None,
     metadata: bytes = _METADATA,
+    omitted_legal_path: str | None = None,
     package_init: bytes = b'__version__ = "0.1.0.dev0"\n',
     pyproject: bytes = _PYPROJECT,
     root: str = "pyowl_core-0.1.0.dev0",
@@ -137,7 +143,10 @@ def _sdist(
         f"{root}/native/src/lib.rs": b"",
     }
     for name, payload in _LICENSE_FILES.items():
-        entries[f"{root}/THIRD_PARTY_LICENSES/{name}"] = payload
+        if name != omitted_legal_path:
+            entries[f"{root}/{name}"] = payload
+    if extra_entries is not None:
+        entries.update({f"{root}/{name}": payload for name, payload in extra_entries.items()})
     path = tmp_path / "pyowl_core-0.1.0.dev0.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
         for name, payload in entries.items():
@@ -224,14 +233,54 @@ def test_legal_payload_fingerprint_matches_sdist_and_detects_tampering(
             tampered_root,
             extra_entries={
                 "pyowl_core-0.1.0.dev0.dist-info/"
-                "licenses/THIRD_PARTY_LICENSES/NOTICE": b"tampered notice"
+                "licenses/THIRD_PARTY_LICENSES/"
+                "W3C-RDF-tests-BSD-3-Clause.txt": b"tampered license"
             },
         )
     )
 
-    assert wheel.legal_payload_sha256 is not None
+    expected = hashlib.sha256(b"pyowl-core:legal-payload:v2\0")
+    for name, payload in sorted(_LICENSE_FILES.items()):
+        encoded_name = name.encode()
+        expected.update(len(encoded_name).to_bytes(8, "big"))
+        expected.update(encoded_name)
+        expected.update(len(payload).to_bytes(8, "big"))
+        expected.update(payload)
+    assert wheel.legal_payload_sha256 == expected.hexdigest()
     assert sdist.legal_payload_sha256 == wheel.legal_payload_sha256
     assert tampered.legal_payload_sha256 != wheel.legal_payload_sha256
+
+
+@pytest.mark.parametrize("kind", ("wheel", "sdist"))
+def test_artifact_rejects_incomplete_legal_payload(tmp_path: Path, kind: str) -> None:
+    missing = "THIRD_PARTY_LICENSES/W3C-RDF-tests-BSD-3-Clause.txt"
+    artifact = (
+        _wheel(tmp_path, omitted_legal_path=missing)
+        if kind == "wheel"
+        else _sdist(tmp_path, omitted_legal_path=missing)
+    )
+
+    result = inspect_artifact(artifact)
+
+    assert not result.ok
+    assert f"license: missing required files in {kind}: {missing}" in result.errors
+
+
+@pytest.mark.parametrize("kind", ("wheel", "sdist"))
+def test_artifact_rejects_unreviewed_legal_payload(tmp_path: Path, kind: str) -> None:
+    extra = "THIRD_PARTY_LICENSES/unreviewed.txt"
+    if kind == "wheel":
+        artifact = _wheel(
+            tmp_path,
+            extra_entries={f"pyowl_core-0.1.0.dev0.dist-info/licenses/{extra}": b"unreviewed"},
+        )
+    else:
+        artifact = _sdist(tmp_path, extra_entries={extra: b"unreviewed"})
+
+    result = inspect_artifact(artifact)
+
+    assert not result.ok
+    assert f"license: unexpected files in {kind}: {extra}" in result.errors
 
 
 def test_native_wheel_internal_tag_must_match_filename(tmp_path: Path) -> None:
