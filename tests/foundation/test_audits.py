@@ -42,6 +42,24 @@ class AuditFixtureTests(unittest.TestCase):
             self.assertTrue(any("bad.jar" in item for item in violations))
             self.assertTrue(any("Bad.class" in item for item in violations))
 
+    def test_java_audit_ignores_local_build_and_environment_trees(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "src" / "pyowl_core").mkdir(parents=True)
+            for generated in (
+                root / "native" / "target",
+                root / ".venv" / "lib",
+                root / "benchmarks" / "comparators" / "runners" / "owlapi" / "runtime",
+            ):
+                generated.mkdir(parents=True)
+                (generated / "generated.jar").write_bytes(b"local build artifact")
+                (generated / "pyproject.toml").write_text(
+                    '[project]\ndependencies = ["JPype1>=1"]\n',
+                    encoding="utf-8",
+                )
+
+            self.assertEqual(audit_java(root), [])
+
     def test_provenance_audit_requires_every_external_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

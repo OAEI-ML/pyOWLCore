@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import tarfile
 import zipfile
@@ -14,7 +15,21 @@ _ARTIFACT_SUFFIXES = {".class", ".ear", ".jar", ".jmod", ".war"}
 _ARCHIVE_SUFFIXES = {".bz2", ".gz", ".tar", ".tgz", ".whl", ".xz", ".zip"}
 _MAX_ARCHIVE_MEMBERS = 100_000
 _MAX_SCANNED_TEXT_BYTES = 4 * 1024**2
-_SKIP_PARTS = {".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", "build", "dist"}
+_SKIP_PARTS = {
+    ".git",
+    ".mypy_cache",
+    ".nox",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "target",
+    "venv",
+}
+_SKIP_PREFIXES = (("benchmarks", "comparators", "runners", "owlapi", "runtime"),)
 _TEXT_NAMES = {
     "cargo.lock",
     "cargo.toml",
@@ -37,16 +52,25 @@ _SOURCE_PATTERNS = (
 )
 
 
+def _is_skipped(parts: tuple[str, ...]) -> bool:
+    return any(part in _SKIP_PARTS for part in parts) or any(
+        parts[: len(prefix)] == prefix for prefix in _SKIP_PREFIXES
+    )
+
+
 def _files(root: Path) -> Iterable[Path]:
-    for path in root.rglob("*"):
+    for directory, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+        selected = Path(directory)
         try:
-            relative_parts = path.relative_to(root).parts
+            relative_parts = selected.relative_to(root).parts
         except ValueError:
+            dirnames.clear()
             continue
-        if any(part in _SKIP_PARTS for part in relative_parts):
-            continue
-        if path.is_file():
-            yield path
+        dirnames[:] = sorted(name for name in dirnames if not _is_skipped((*relative_parts, name)))
+        for name in sorted(filenames):
+            path = selected / name
+            if path.is_file():
+                yield path
 
 
 def _scan_archive_text(label: str, name: str, payload: bytes) -> list[str]:
