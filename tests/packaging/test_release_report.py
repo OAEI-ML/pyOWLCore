@@ -14,7 +14,12 @@ REVISION = "a" * 40
 VERSION = "0.1.0.dev0"
 
 
-def _result(path: Path, variant: str) -> InspectionResult:
+def _result(
+    path: Path,
+    variant: str,
+    *,
+    payload_sha256: str = "c" * 64,
+) -> InspectionResult:
     return InspectionResult(
         path=str(path),
         kind="sdist" if variant == "sdist" else "wheel",
@@ -27,6 +32,7 @@ def _result(path: Path, variant: str) -> InspectionResult:
         deferred_platform_checks=(
             ("target platform audit required",) if variant == "native" else ()
         ),
+        non_native_payload_sha256=(None if variant == "sdist" else payload_sha256),
     )
 
 
@@ -169,6 +175,42 @@ def test_release_report_rejects_unapproved_native_wheel(
     assert isinstance(blockers, list)
     assert f"artifact set is missing required artifact: {source.name}" in blockers
     assert f"artifact set contains unexpected artifact: {unexpected.name}" in blockers
+
+
+def test_release_report_rejects_native_python_payload_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _artifacts(tmp_path, complete=True)
+    drifted = next(path for path in paths if "-cp314-cp314-win_amd64.whl" in path.name)
+
+    def inspect(path: Path, **kwargs: object) -> InspectionResult:
+        del kwargs
+        if path.name.endswith(".tar.gz"):
+            variant = "sdist"
+        elif "py3-none-any" in path.name:
+            variant = "pure"
+        else:
+            variant = "native"
+        fingerprint = "d" * 64 if path == drifted else "c" * 64
+        return _result(path, variant, payload_sha256=fingerprint)
+
+    monkeypatch.setattr(release_report, "inspect_artifact", inspect)
+    gates = {
+        name: ReleaseGate(status="passed", evidence=f"evidence/{name}.json")
+        for name in REQUIRED_RELEASE_GATES
+    }
+
+    report = release_report.build_release_report(
+        tmp_path,
+        source_revision=REVISION,
+        gates=gates,
+    )
+
+    assert not report["release_ready"]
+    blockers = report["blockers"]
+    assert isinstance(blockers, list)
+    assert f"artifact non-native payload differs from pure wheel: {drifted.name}" in blockers
 
 
 def test_release_report_rejects_symlinked_artifact(

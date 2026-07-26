@@ -200,6 +200,24 @@ def build_release_report(
             "artifact set must contain exactly "
             f"{expected_native_count} native wheels; found {native_count}"
         )
+    if pure_count == 1:
+        pure_result = next(result for result in results if result.variant == "pure")
+        pure_fingerprint = pure_result.non_native_payload_sha256
+        if pure_fingerprint is None:
+            set_errors.append("artifact set pure wheel has no non-native payload fingerprint")
+        else:
+            for result in results:
+                if result.variant != "native":
+                    continue
+                if result.non_native_payload_sha256 is None:
+                    set_errors.append(
+                        f"artifact has no non-native payload fingerprint: {Path(result.path).name}"
+                    )
+                elif result.non_native_payload_sha256 != pure_fingerprint:
+                    set_errors.append(
+                        "artifact non-native payload differs from pure wheel: "
+                        f"{Path(result.path).name}"
+                    )
 
     blockers = list(set_errors)
     for result in results:

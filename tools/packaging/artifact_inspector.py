@@ -100,6 +100,7 @@ class InspectionResult:
     errors: tuple[str, ...]
     release_blockers: tuple[str, ...]
     deferred_platform_checks: tuple[str, ...]
+    non_native_payload_sha256: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -473,6 +474,28 @@ def _validate_record(reader: ArchiveReader) -> list[str]:
     return errors
 
 
+def _non_native_payload_sha256(reader: ArchiveReader) -> str:
+    digest = hashlib.sha256(b"pyowl-core:wheel-non-native-payload:v1\0")
+    names: list[str] = []
+    for name in reader.names():
+        parts = PurePosixPath(name).parts
+        if (
+            parts
+            and not name.endswith("/")
+            and not parts[0].casefold().endswith(".dist-info")
+            and not name.casefold().endswith(_NATIVE_SUFFIXES)
+        ):
+            names.append(name)
+    for name in sorted(names):
+        encoded_name = name.encode("utf-8")
+        payload = reader.read(name)
+        digest.update(len(encoded_name).to_bytes(8, "big"))
+        digest.update(encoded_name)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
 def _validate_wheel(
     reader: ArchiveReader,
     variant: ArtifactVariant,
@@ -658,6 +681,9 @@ def inspect_artifact(
             errors=tuple(sorted(set(errors))),
             release_blockers=tuple(sorted(set(blockers))),
             deferred_platform_checks=tuple(sorted(set(deferred))),
+            non_native_payload_sha256=(
+                _non_native_payload_sha256(reader) if kind == "wheel" and not errors else None
+            ),
         )
     finally:
         reader.close()

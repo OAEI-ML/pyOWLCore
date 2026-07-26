@@ -153,6 +153,26 @@ def test_native_wheel_is_not_mislabeled_as_universal_or_release_ready(tmp_path: 
     assert not result.release_ready
 
 
+def test_wheel_payload_fingerprint_excludes_only_native_extension(
+    tmp_path: Path,
+) -> None:
+    pure = inspect_artifact(_wheel(tmp_path))
+    native = inspect_artifact(_wheel(tmp_path, "native"))
+    drift_root = tmp_path / "drift"
+    drift_root.mkdir()
+    drifted = inspect_artifact(
+        _wheel(
+            drift_root,
+            "native",
+            extra_entries={"pyowl_core/__init__.py": b"platform-specific drift\n"},
+        )
+    )
+
+    assert pure.non_native_payload_sha256 is not None
+    assert native.non_native_payload_sha256 == pure.non_native_payload_sha256
+    assert drifted.non_native_payload_sha256 != pure.non_native_payload_sha256
+
+
 def test_native_wheel_internal_tag_must_match_filename(tmp_path: Path) -> None:
     wheel = _wheel(
         tmp_path,
