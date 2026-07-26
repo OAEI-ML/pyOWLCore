@@ -205,6 +205,42 @@ class _NativeBackendDriver:
             native_summary=retained.summary,
         )
 
+    def parse_owlxml(
+        self,
+        data: bytes,
+        *,
+        document_iri: IRI | None,
+        limits: ParseLimits,
+        cancellation_token: CancellationToken | None,
+        allow_swrl: bool,
+        retain_native_storage: bool,
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        require_empty_imports: bool,
+    ) -> _ParsedPayloadResult:
+        if not retain_native_storage:
+            raise AssertionError("native OWL/XML selection requires retained-load orchestration")
+        from pyowl_core.backends.native import _parse_owlxml_retained_v2
+
+        retained = _parse_owlxml_retained_v2(
+            data,
+            document_iri=None if document_iri is None else document_iri.value,
+            limits=limits,
+            collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
+            allow_swrl=allow_swrl,
+            require_empty_imports=require_empty_imports,
+            cancellation_token=cancellation_token,
+        )
+        if retained.summary is None:
+            raise AssertionError("retained OWL/XML parser returned no bounded summary")
+        return _ParsedPayloadResult(
+            ontology=None,
+            native_storage=retained.storage,
+            phase_timings=retained.phase_timings,
+            native_summary=retained.summary,
+        )
+
     def fork_retained_storage(
         self,
         parsed_native_storage: object,
@@ -327,6 +363,41 @@ class _NativeBackendDriver:
             load_started=load_started,
             root_parse_started=root_parse_started,
             allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+        )
+
+    def publish_retained_owlxml(
+        self,
+        summary: bytes,
+        *,
+        parsed_native_storage: object,
+        phase_timings: tuple[tuple[str, float], ...],
+        payload: SourcePayload,
+        detection: FormatDetection,
+        document_iri: IRI | None,
+        media_type: str | None,
+        options: LoadOptions,
+        resolver: ImportResolver | None,
+        cancellation_token: CancellationToken | None,
+        load_started: float,
+        root_parse_started: float,
+    ) -> OntologySnapshot:
+        from pyowl_core.backends.native_ingestion import (
+            publish_retained_owlxml_snapshot_v2,
+        )
+
+        return publish_retained_owlxml_snapshot_v2(
+            summary,
+            parsed_native_storage=parsed_native_storage,
+            phase_timings=phase_timings,
+            payload=payload,
+            detection=detection,
+            document_iri=document_iri,
+            media_type=media_type,
+            options=options,
+            resolver=resolver,
+            cancellation_token=cancellation_token,
+            load_started=load_started,
+            root_parse_started=root_parse_started,
         )
 
     def decode_functional(
