@@ -32,12 +32,23 @@ _LICENSE_FILES = {
 }
 
 
-def _record(entries: dict[str, bytes], record_name: str) -> bytes:
+def _record(
+    entries: dict[str, bytes],
+    record_name: str,
+    *,
+    duplicate_member: str | None = None,
+    malformed_row: bool = False,
+) -> bytes:
     output = io.StringIO(newline="")
     writer = csv.writer(output, lineterminator="\n")
     for name, payload in entries.items():
         digest = base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=")
-        writer.writerow((name, "sha256=" + digest.decode("ascii"), len(payload)))
+        row = (name, "sha256=" + digest.decode("ascii"), len(payload))
+        writer.writerow(row)
+        if name == duplicate_member:
+            writer.writerow(row)
+    if malformed_row:
+        writer.writerow(("unexpected", "extra"))
     writer.writerow((record_name, "", ""))
     return output.getvalue().encode("utf-8")
 
@@ -49,6 +60,8 @@ def _wheel(
     dist_info: str = "pyowl_core-0.1.0.dev0.dist-info",
     extra_binary: str | None = None,
     internal_tag: str | None = None,
+    malformed_record_row: bool = False,
+    record_duplicate: str | None = None,
 ) -> Path:
     tag = "py3-none-any" if variant == "pure" else "cp310-cp310-manylinux_2_28_x86_64"
     entries = {
@@ -63,7 +76,12 @@ def _wheel(
     if extra_binary is not None:
         entries[extra_binary] = b"unapproved-native-fixture"
     record_name = f"{dist_info}/RECORD"
-    entries[record_name] = _record(entries, record_name)
+    entries[record_name] = _record(
+        entries,
+        record_name,
+        duplicate_member=record_duplicate,
+        malformed_row=malformed_record_row,
+    )
     path = tmp_path / f"pyowl_core-0.1.0.dev0-{tag}.whl"
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, payload in entries.items():
@@ -197,6 +215,20 @@ def test_record_tampering_is_rejected(tmp_path: Path) -> None:
     result = inspect_artifact(wheel)
     assert not result.ok
     assert any("RECORD digest mismatch" in error for error in result.errors)
+
+
+def test_record_rejects_duplicate_member_rows(tmp_path: Path) -> None:
+    result = inspect_artifact(_wheel(tmp_path, record_duplicate="pyowl_core/__init__.py"))
+
+    assert not result.ok
+    assert "wheel: RECORD contains duplicate member rows" in result.errors
+
+
+def test_record_rejects_malformed_extra_rows(tmp_path: Path) -> None:
+    result = inspect_artifact(_wheel(tmp_path, malformed_record_row=True))
+
+    assert not result.ok
+    assert "wheel: RECORD contains malformed rows" in result.errors
 
 
 def test_java_artifact_and_unsafe_member_are_rejected(tmp_path: Path) -> None:

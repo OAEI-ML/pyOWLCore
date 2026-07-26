@@ -293,7 +293,13 @@ def _validate_record(reader: ArchiveReader) -> list[str]:
         return [f"wheel: expected exactly one RECORD, found {len(candidates)}"]
     record_name = candidates[0]
     rows = list(csv.reader(io.StringIO(reader.read(record_name).decode("utf-8"))))
-    recorded = {row[0]: row for row in rows if len(row) == 3}
+    valid_rows = [row for row in rows if len(row) == 3 and row[0]]
+    if len(valid_rows) != len(rows):
+        errors.append("wheel: RECORD contains malformed rows")
+    recorded_names = [row[0] for row in valid_rows]
+    if len(set(recorded_names)) != len(recorded_names):
+        errors.append("wheel: RECORD contains duplicate member rows")
+    recorded = {row[0]: row for row in valid_rows}
     if set(recorded) != set(reader.names()):
         errors.append("wheel: RECORD member set does not match archive")
     for name, row in recorded.items():
