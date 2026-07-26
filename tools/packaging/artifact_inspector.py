@@ -211,9 +211,7 @@ def _validate_metadata(
     }
     for field, value in expected.items():
         if metadata.get(field) != value:
-            errors.append(
-                f"metadata: {field} is {metadata.get(field, '')!r}, expected {value!r}"
-            )
+            errors.append(f"metadata: {field} is {metadata.get(field, '')!r}, expected {value!r}")
     if "Runtime-Requires-Dist" in metadata:
         errors.append(
             f"metadata: unexpected runtime dependency {metadata['Runtime-Requires-Dist']}"
@@ -255,9 +253,8 @@ def _validate_common(reader: ArchiveReader) -> tuple[list[str], int]:
         if len(payload) > _MAX_MEMBER_BYTES:
             errors.append(f"archive: member exceeds byte limit {name}")
         if suffix in _TEXT_SUFFIXES and len(payload) <= 4 * 1024**2:
-            if (
-                normalized.name.casefold() in _DEPENDENCY_FILENAMES
-                and _JAVA_DEPENDENCY_TEXT.search(payload)
+            if normalized.name.casefold() in _DEPENDENCY_FILENAMES and _JAVA_DEPENDENCY_TEXT.search(
+                payload
             ):
                 errors.append(f"java: forbidden dependency declaration {name}")
             normalized_text_path = "/" + normalized.as_posix().lstrip("/")
@@ -342,6 +339,12 @@ def _validate_wheel(reader: ArchiveReader, variant: ArtifactVariant, filename: s
         joined_tags = " ".join(tags).casefold()
         if not tags or "none-any" in joined_tags or "abi3" in joined_tags:
             errors.append(f"wheel: native artifact has unsupported tags {tags!r}")
+        filename_parts = filename.removesuffix(".whl").rsplit("-", 3)
+        filename_tag = "-".join(filename_parts[-3:]) if len(filename_parts) == 4 else None
+        if filename_tag is None or tags != [filename_tag]:
+            errors.append(
+                f"wheel: native WHEEL tags {tags!r} do not match filename tag {filename_tag!r}"
+            )
         if any(re.search(r"cp\d+t(?:-|_)", tag.casefold()) for tag in tags):
             errors.append("wheel: free-threaded native tag is not approved")
     for name in reader.names():
@@ -396,9 +399,7 @@ def inspect_artifact(
         variant: ArtifactVariant = _wheel_variant(reader) if kind == "wheel" else "sdist"
         errors, total = _validate_common(reader)
         if expected_variant is not None and variant != expected_variant:
-            errors.append(
-                f"artifact: detected variant {variant!r}, expected {expected_variant!r}"
-            )
+            errors.append(f"artifact: detected variant {variant!r}, expected {expected_variant!r}")
         metadata, metadata_error = _metadata(reader, kind)
         if metadata_error is not None:
             errors.append(metadata_error)

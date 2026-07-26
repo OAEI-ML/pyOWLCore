@@ -42,13 +42,18 @@ def _record(entries: dict[str, bytes], record_name: str) -> bytes:
     return output.getvalue().encode("utf-8")
 
 
-def _wheel(tmp_path: Path, variant: str = "pure") -> Path:
+def _wheel(
+    tmp_path: Path,
+    variant: str = "pure",
+    *,
+    internal_tag: str | None = None,
+) -> Path:
     dist_info = "pyowl_core-0.1.0.dev0.dist-info"
     tag = "py3-none-any" if variant == "pure" else "cp310-cp310-manylinux_2_28_x86_64"
     entries = {
         "pyowl_core/__init__.py": b'__version__ = "0.1.0.dev0"\n',
         f"{dist_info}/METADATA": _METADATA,
-        f"{dist_info}/WHEEL": f"Wheel-Version: 1.0\nTag: {tag}\n".encode(),
+        f"{dist_info}/WHEEL": (f"Wheel-Version: 1.0\nTag: {internal_tag or tag}\n".encode()),
     }
     for name, payload in _LICENSE_FILES.items():
         entries[f"{dist_info}/licenses/THIRD_PARTY_LICENSES/{name}"] = payload
@@ -107,6 +112,22 @@ def test_native_wheel_is_not_mislabeled_as_universal_or_release_ready(tmp_path: 
         "native dynamic dependencies/rpaths/symbols require the target-platform audit job",
     )
     assert not result.release_ready
+
+
+def test_native_wheel_internal_tag_must_match_filename(tmp_path: Path) -> None:
+    wheel = _wheel(
+        tmp_path,
+        "native",
+        internal_tag="cp310-cp310-manylinux_2_17_x86_64",
+    )
+
+    result = inspect_artifact(wheel, expected_variant="native")
+
+    assert not result.ok
+    assert (
+        "wheel: native WHEEL tags ['cp310-cp310-manylinux_2_17_x86_64'] "
+        "do not match filename tag 'cp310-cp310-manylinux_2_28_x86_64'" in result.errors
+    )
 
 
 def test_sdist_contains_complete_sources_without_binaries(tmp_path: Path) -> None:
