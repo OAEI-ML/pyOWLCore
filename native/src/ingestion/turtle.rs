@@ -914,22 +914,60 @@ fn decode_pname<'text>(
     value: &'text str,
     session: &mut Session<'_>,
 ) -> NativeResult<Cow<'text, str>> {
-    let decoded = decode_uchar(value, session)?;
-    if !decoded.contains('\\') {
-        return Ok(decoded);
+    if !value.contains('\\') {
+        return Ok(Cow::Borrowed(value));
     }
     let mut output = String::new();
-    let mut characters = decoded.chars();
-    while let Some(character) = characters.next() {
+    let mut cursor = 0_usize;
+    while let Some(relative) = value[cursor..].find('\\') {
         session.step(1)?;
-        if character == '\\' {
-            let escaped = characters.next().ok_or_else(turtle_syntax)?;
-            push_character_tracked(&mut output, escaped, session)?;
+        let offset = cursor + relative;
+        push_tracked(&mut output, &value[cursor..offset], session)?;
+        let marker = value
+            .as_bytes()
+            .get(offset + 1)
+            .copied()
+            .ok_or_else(turtle_syntax)?;
+        let (decoded, end) = if matches!(marker, b'u' | b'U') {
+            decode_unicode_escape(value, offset)?
         } else {
-            push_character_tracked(&mut output, character, session)?;
-        }
+            let escaped = value[offset + 1..]
+                .chars()
+                .next()
+                .filter(|value| is_pname_local_escape(*value))
+                .ok_or_else(turtle_syntax)?;
+            (escaped, offset + 1 + escaped.len_utf8())
+        };
+        push_character_tracked(&mut output, decoded, session)?;
+        cursor = end;
     }
+    push_tracked(&mut output, &value[cursor..], session)?;
     Ok(Cow::Owned(output))
+}
+
+const fn is_pname_local_escape(value: char) -> bool {
+    matches!(
+        value,
+        '_' | '~'
+            | '.'
+            | '-'
+            | '!'
+            | '$'
+            | '&'
+            | '\''
+            | '('
+            | ')'
+            | '*'
+            | '+'
+            | ','
+            | ';'
+            | '='
+            | '/'
+            | '?'
+            | '#'
+            | '@'
+            | '%'
+    )
 }
 
 fn decode_unicode_escape(source: &str, offset: usize) -> NativeResult<(char, usize)> {
@@ -1180,6 +1218,27 @@ mod tests {
         assert_eq!(turtle_document.ontology_iri, rdfxml_document.ontology_iri);
         assert_eq!(turtle_document.axioms, rdfxml_document.axioms);
         assert_eq!(turtle_document.extensions, rdfxml_document.extensions);
+    }
+
+    #[test]
+    fn turtle_decodes_only_standard_prefixed_name_escapes() {
+        let escaped = br#"
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix ex: <urn:turtle:pname:> .
+            ex:ontology a owl:Ontology .
+            ex:Class\~Name a owl:Class .
+        "#;
+        let document = parse(escaped).expect("escaped prefixed name");
+        assert_eq!(document.axioms.len(), 1);
+
+        let invalid = br#"
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix ex: <urn:turtle:pname:> .
+            ex:ontology a owl:Ontology .
+            ex:Class\qName a owl:Class .
+        "#;
+        let error = parse(invalid).expect_err("invalid prefixed-name escape");
+        assert_eq!(error.code, "NATIVE_TURTLE_SYNTAX");
     }
 
     #[test]

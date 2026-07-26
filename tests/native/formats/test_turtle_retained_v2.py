@@ -71,6 +71,34 @@ TURTLE_IMPORT_CHILD = rb"""
     ex:Child a owl:Class .
 """
 
+TURTLE_LEXICAL_SOURCES = (
+    b"\xef\xbb\xbfBASE <https://example.test/base/> "
+    b"PREFIX owl: <http://www.w3.org/2002/07/owl#> "
+    b"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> "
+    b"<ontology> a owl:Ontology . "
+    b"<A> a owl:Class ; rdfs:subClassOf <B> . "
+    b"<B> a owl:Class .",
+    rb'''
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix ex: <urn:turtle-lexical:> .
+        ex:ontology a owl:Ontology .
+        ex:note a owl:AnnotationProperty .
+        ex:subject ex:note """line\n\u0041"""@EN-us, 'plain', 1, +2.5, -3e2, true .
+    ''',
+    rb"""
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix ex: <urn:turtle-lexical:> .
+        ex:ontology a owl:Ontology .
+        ex:Class\~Name a owl:Class ;
+            owl:equivalentClass [
+                a owl:Class ;
+                owl:intersectionOf ( ex:B ex:C )
+            ] .
+        ex:B a owl:Class .
+        ex:C a owl:Class .
+    """,
+)
+
 
 @pytest.fixture(scope="module", autouse=True)
 def extension() -> NativeTestExtension:
@@ -134,6 +162,18 @@ def test_private_turtle_seam_fails_closed_and_retries_without_fallback(
             document_iri=None,
         )
     assert malformed.value.code == "TURTLE_SYNTAX"
+
+    with pytest.raises(OntologySyntaxError) as invalid_pname:
+        native._parse_turtle_retained_v2(
+            rb"""
+                @prefix owl: <http://www.w3.org/2002/07/owl#> .
+                @prefix ex: <urn:ex:> .
+                ex:ontology a owl:Ontology .
+                ex:Class\qName a owl:Class .
+            """,
+            document_iri=None,
+        )
+    assert invalid_pname.value.code == "TURTLE_SYNTAX"
 
     with pytest.raises(OntologySyntaxError) as encoding:
         native._parse_turtle_retained_v2(b"\xff", document_iri=None)
@@ -345,6 +385,60 @@ def test_guarded_public_turtle_every_constructor_is_owner_first() -> None:
         assert publication.parser_bytes == len(source)
         assert publication.publication_structural_rows_copied == 0
         assert publication.publication_structural_bytes_copied == 0
+    finally:
+        selected.close()
+
+
+@pytest.mark.parametrize(
+    "source",
+    TURTLE_LEXICAL_SOURCES,
+    ids=("bom-base-sparql-directives", "literal-forms", "pname-blank-list"),
+)
+def test_guarded_public_turtle_lexical_forms_match_python(source: bytes) -> None:
+    document_iri = IRI("https://example.test/source/document.ttl")
+    reference = load_snapshot(
+        source,
+        document_iri=document_iri,
+        options=LoadOptions(
+            format=DocumentFormat.TURTLE,
+            imports=ImportPolicy.IGNORE,
+            backend=BackendPreference.PYTHON,
+            collect_provenance=True,
+            preserve_source_map=True,
+        ),
+    )
+    unexpected = AssertionError("guarded Turtle lexical form crossed the Python parser")
+    with (
+        patch(
+            "pyowl_core.backends.parser._NativeBackendDriver.select",
+            autospec=True,
+            return_value="native",
+        ),
+        patch("pyowl_core.backends.python.parser.parse_turtle", side_effect=unexpected),
+    ):
+        selected = cast(
+            Any,
+            load_snapshot(
+                source,
+                document_iri=document_iri,
+                options=LoadOptions(
+                    format=DocumentFormat.TURTLE,
+                    imports=ImportPolicy.IGNORE,
+                    backend=BackendPreference.NATIVE,
+                    collect_provenance=True,
+                    preserve_source_map=True,
+                ),
+            ),
+        )
+
+    try:
+        assert selected == reference
+        assert selected.root.source_map == reference.root.source_map
+        assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+        assert selected.structural_fingerprint == reference.structural_fingerprint
+        assert selected.logical_fingerprint == reference.logical_fingerprint
+        assert selected.signature_fingerprint == reference.signature_fingerprint
+        assert encode_snapshot(selected) == encode_snapshot(reference)
     finally:
         selected.close()
 

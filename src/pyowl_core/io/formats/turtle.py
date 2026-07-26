@@ -35,6 +35,7 @@ _NUMBER = re.compile(
 _LANG = re.compile(r"@[A-Za-z]+(?:-[A-Za-z0-9]+)*")
 _UCHAR = re.compile(r"\\u([0-9A-Fa-f]{4})|\\U([0-9A-Fa-f]{8})")
 _WORD_STOP = frozenset(" \t\r\n;,[]()<>\"'^")
+_PN_LOCAL_ESCAPES = frozenset("_~.-!$&'()*+,;=/?#@%")
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,10 +505,7 @@ def _number_boundary(text: str, end: int) -> bool:
 
 def _decode_uchar(value: str, fail: Callable[[str], NoReturn]) -> str:
     def replace(match: re.Match[str]) -> str:
-        codepoint = int(match.group(1) or match.group(2), 16)
-        if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
-            fail("invalid Unicode escape")
-        return chr(codepoint)
+        return _decode_uchar_match(match, fail)
 
     result = _UCHAR.sub(replace, value)
     if "\\" in result:
@@ -515,19 +513,36 @@ def _decode_uchar(value: str, fail: Callable[[str], NoReturn]) -> str:
     return result
 
 
+def _decode_uchar_match(
+    match: re.Match[str],
+    fail: Callable[[str], NoReturn],
+) -> str:
+    codepoint = int(match.group(1) or match.group(2), 16)
+    if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+        fail("invalid Unicode escape")
+    return chr(codepoint)
+
+
 def _decode_pname(value: str, fail: Callable[[str], NoReturn]) -> str:
-    value = _decode_uchar(value, fail)
     output: list[str] = []
     index = 0
     while index < len(value):
-        if value[index] == "\\":
-            if index + 1 == len(value):
-                fail("truncated prefixed-name escape")
-            output.append(value[index + 1])
-            index += 2
-        else:
+        if value[index] != "\\":
             output.append(value[index])
             index += 1
+            continue
+        uchar = _UCHAR.match(value, index)
+        if uchar is not None:
+            output.append(_decode_uchar_match(uchar, fail))
+            index = uchar.end()
+            continue
+        if index + 1 == len(value):
+            fail("truncated prefixed-name escape")
+        escaped = value[index + 1]
+        if escaped not in _PN_LOCAL_ESCAPES:
+            fail("invalid prefixed-name escape")
+        output.append(escaped)
+        index += 2
     return "".join(output)
 
 
