@@ -77,6 +77,7 @@ _INGESTION_FEATURE_LEDGER = frozenset(
         "parse-turtle-v1",
     }
 )
+_VIEW_FEATURE_LEDGER = frozenset({"pyowl-core/structural-columns"})
 
 
 class _NativeCancellation(Protocol):

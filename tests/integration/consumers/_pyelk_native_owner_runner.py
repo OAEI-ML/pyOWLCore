@@ -70,6 +70,11 @@ def main() -> None:
         ENCODED_SCHEMA_VERSION,
     )
 
+    expected_core_schemas = {ENCODED_SCHEMA_NAME: ENCODED_SCHEMA_VERSION}
+    if core_extension.VIEW_FEATURES != (ENCODED_SCHEMA_NAME,):
+        raise AssertionError("pyOWLCore did not advertise its frozen encoded-view schema")
+    if ENCODED_SCHEMA_NAME not in probe.features:
+        raise AssertionError("pyOWLCore probe omitted its encoded-view capability")
     if cast(Any, pyelk_native).encoded_view_schemas():
         raise AssertionError("pyELK fixture advertised an unfinished encoded input capability")
 
@@ -141,13 +146,6 @@ def main() -> None:
                 }[format]
                 stack.enter_context(
                     patch(
-                        "pyowl_core.backends.parser._NativeBackendDriver.select",
-                        autospec=True,
-                        return_value="native",
-                    )
-                )
-                stack.enter_context(
-                    patch(
                         f"pyowl_core.backends.python.parser.{parser_name}",
                         side_effect=AssertionError(
                             f"guarded {format.value} pyELK handoff crossed the Python parser"
@@ -161,9 +159,9 @@ def main() -> None:
         try:
             if selected.capabilities.backend != "native":
                 raise AssertionError("public forced-native load did not retain the V2 owner")
-            if selected.capabilities.encoded_view_schemas:
+            if dict(selected.capabilities.encoded_view_schemas) != expected_core_schemas:
                 raise AssertionError(
-                    "retained-load fixture advertised an unfinished view capability"
+                    "retained-load fixture omitted the frozen encoded-view capability"
                 )
             if (
                 selected.structural_fingerprint != reference.structural_fingerprint
@@ -177,15 +175,9 @@ def main() -> None:
             if type(raw_owner) is not cast(Any, core_extension)._NativeSnapshotHandle:
                 raise AssertionError("public load did not retain the exact Rust snapshot owner")
             before = cast(Any, raw_owner)._publication_counters_v2()
-            state = cast(Any, selected)._native_snapshot_state
-            advertised = replace(
-                state.capabilities,
-                encoded_view_schemas={ENCODED_SCHEMA_NAME: ENCODED_SCHEMA_VERSION},
-            )
             scalar_error = AssertionError("pyELK handoff crossed scalar ontology traversal")
             with (
                 ExitStack() as reasoner_stack,
-                patch.object(state, "capabilities", advertised),
                 patch.object(
                     pyelk_native,
                     "encoded_view_schemas",
@@ -275,8 +267,8 @@ def main() -> None:
                     "public_operations": len(actual_results),
                     "scalar_facade_rows": after.rows_emitted - before.rows_emitted,
                 }
-            if selected.capabilities.encoded_view_schemas:
-                raise AssertionError("test-local core capability leaked into the public snapshot")
+            if dict(selected.capabilities.encoded_view_schemas) != expected_core_schemas:
+                raise AssertionError("public core capability changed after pyELK use")
             if cast(Any, pyelk_native).encoded_view_schemas():
                 raise AssertionError("test-local pyELK capability leaked into the native module")
             return result
@@ -319,10 +311,8 @@ def main() -> None:
                     base._native_ingestion_counters_v2(),
                 )
             )
-        advertised = replace(
-            candidate.capabilities,
-            encoded_view_schemas={ENCODED_SCHEMA_NAME: ENCODED_SCHEMA_VERSION},
-        )
+        if dict(candidate.capabilities.encoded_view_schemas) != expected_core_schemas:
+            raise AssertionError("public pyELK owner matrix lacks the core encoded capability")
         scalar_error = AssertionError("public pyELK owner matrix crossed scalar traversal")
         fingerprint_names = (
             "structural_fingerprint",
@@ -333,14 +323,6 @@ def main() -> None:
         result: dict[str, object]
         try:
             with ExitStack() as stack:
-                stack.enter_context(
-                    patch.object(
-                        type(candidate),
-                        "capabilities",
-                        new_callable=PropertyMock,
-                        return_value=advertised,
-                    )
-                )
                 stack.enter_context(
                     patch.object(
                         pyelk_native,
@@ -561,8 +543,8 @@ def main() -> None:
             )
         result["encoded_view_request_deltas"] = request_deltas
         result["fingerprint_accesses"] = dict(fingerprint_accesses)
-        if candidate.capabilities.encoded_view_schemas:
-            raise AssertionError("test-local owner capability leaked after public pyELK use")
+        if dict(candidate.capabilities.encoded_view_schemas) != expected_core_schemas:
+            raise AssertionError("public core capability changed after owner-matrix use")
         if cast(Any, pyelk_native).encoded_view_schemas():
             raise AssertionError("test-local pyELK capability leaked after owner-matrix use")
         return result

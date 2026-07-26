@@ -41,6 +41,10 @@ def main() -> None:
         render_document,
     )
     from pyowl_core.backends import native
+    from pyowl_core.backends.native_views import (
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+    )
     from pyowl_core.model import canonical_bytes
     from tests.conformance._support import every_constructor_document
     from tests.native.encoded_views import _independent as independent_decoder
@@ -74,6 +78,14 @@ def main() -> None:
         raise AssertionError("installed native ingestion capability partition is incomplete")
     if not set(expected_ingestion_features).issubset(probe.features):
         raise AssertionError("installed native feature ledger omits an ingestion capability")
+    expected_view_features = (ENCODED_STRUCTURAL_SCHEMA_NAME_V1,)
+    expected_view_schemas = {
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V1: ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+    }
+    if expected_view_features != extension.VIEW_FEATURES:
+        raise AssertionError("installed native view capability partition is incomplete")
+    if not set(expected_view_features).issubset(probe.features):
+        raise AssertionError("installed native feature ledger omits the encoded view")
 
     formats = (
         DocumentFormat.FUNCTIONAL,
@@ -221,6 +233,11 @@ def main() -> None:
             raise AssertionError(f"{format_value.value} did not publish a native snapshot")
         if type(right_selected).__name__ != "_NativeOntologySnapshot":
             raise AssertionError(f"{format_value.value} did not publish the right native snapshot")
+        for candidate in (reference, right_reference, selected, right_selected):
+            if dict(candidate.capabilities.encoded_view_schemas) != expected_view_schemas:
+                raise AssertionError(
+                    f"{format_value.value} owner omitted the encoded-view capability"
+                )
         handle = selected._native_snapshot_state.owner.handle
         raw_owner = object.__getattribute__(handle, "_owner_v2")
         right_handle = right_selected._native_snapshot_state.owner.handle
@@ -325,6 +342,10 @@ def main() -> None:
             wire_path = Path(temporary) / "snapshot.pyocore"
             wire_path.write_bytes(selected_wire)
             mapped = open_snapshot(wire_path, mmap=True, verify=True)
+            if dict(mapped.capabilities.encoded_view_schemas) != expected_view_schemas:
+                raise AssertionError(
+                    f"{format_value.value} mmap owner omitted the encoded-view capability"
+                )
             mapped_encoded = mapped.view(EncodedStructuralView)
             mapped_roots = decode_root_canonical_bytes(mapped_encoded.buffers)
 
@@ -370,6 +391,13 @@ def main() -> None:
         source_map_parity = tuple(item.source_map for item in selected.documents) == tuple(
             item.source_map for item in reference.documents
         )
+        if any(
+            dict(candidate.capabilities.encoded_view_schemas) != expected_view_schemas
+            for candidate in (overlay, scalar_composite, composite, decoded)
+        ):
+            raise AssertionError(
+                f"{format_value.value} derived owner omitted the encoded-view capability"
+            )
 
         observed[format_value.value] = {
             "cancellation_error_code": cancellation_error_code,
@@ -444,6 +472,8 @@ def main() -> None:
         "probe_contains_ingestion_partition": set(extension.INGESTION_FEATURES).issubset(
             probe.features
         ),
+        "encoded_view_schemas": expected_view_schemas,
+        "probe_contains_view_partition": set(extension.VIEW_FEATURES).issubset(probe.features),
         "view_features": list(extension.VIEW_FEATURES),
     }
 

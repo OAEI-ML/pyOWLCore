@@ -49,6 +49,21 @@ from .provenance import OriginIndex, OriginOccurrence
 A = TypeVar("A", bound=AxiomNode)
 V = TypeVar("V")
 
+_ENCODED_STRUCTURAL_VIEW_FEATURE = "encoded-structural-view"
+
+
+def _encoded_view_schemas_v1() -> dict[str, int]:
+    """Return the advertised frozen schema without creating an import cycle."""
+
+    from pyowl_core.backends.native_views import (
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+    )
+
+    return {
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V1: ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+    }
+
 
 class AxiomScope(str, Enum):
     ROOT = "root"
@@ -396,6 +411,7 @@ class OntologySnapshot:
                     "document-scoped-anonymous",
                     "structural-indexes",
                     "ontology-identity-index",
+                    _ENCODED_STRUCTURAL_VIEW_FEATURE,
                 }
                 | ({"materialized-view"} if self._structural_context is not None else set())
                 | (
@@ -406,7 +422,7 @@ class OntologySnapshot:
                 | ({"owl2-dl-validated"} if owl2_dl_report is not None else set())
                 | ({"wire-v1", "wire-verified"} if self._wire_verified else set())
             ),
-            {},
+            _encoded_view_schemas_v1(),
             "python",
         )
         if self._structural_fingerprint_override is not None:

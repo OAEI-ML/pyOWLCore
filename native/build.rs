@@ -60,8 +60,8 @@ fn generate_encoded_view_schema() -> Result<(), String> {
     if name.is_empty() || !name.is_ascii() {
         return Err("schema name must be nonempty ASCII".to_owned());
     }
-    if status != "frozen-unadvertised" || advertised {
-        return Err("native schema must remain frozen and unadvertised".to_owned());
+    if status != "frozen-advertised" || !advertised {
+        return Err("native schema must remain frozen and advertised".to_owned());
     }
     if descriptor_format != "canonical-json-sorted-keys-compact-ascii" {
         return Err("native schema requires the supported canonical JSON format".to_owned());

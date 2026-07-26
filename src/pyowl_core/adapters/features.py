@@ -31,6 +31,7 @@ class CoreFeature(str, Enum):
     ONTOLOGY_COMPOSITE = "ontology-composite"
     ZERO_COPY_VIEW = "zero-copy-view"
     MEMBER_PROVENANCE = "member-provenance"
+    ENCODED_STRUCTURAL_VIEW = "encoded-structural-view"
 
 
 KNOWN_CORE_FEATURES = frozenset(feature.value for feature in CoreFeature)

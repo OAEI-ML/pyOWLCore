@@ -100,7 +100,14 @@ from .provenance import (
     SourceMap,
     SourceOccurrence,
 )
-from .snapshot import AxiomScope, CoreCapabilities, LoadReport, OntologySnapshot
+from .snapshot import (
+    _ENCODED_STRUCTURAL_VIEW_FEATURE,
+    AxiomScope,
+    CoreCapabilities,
+    LoadReport,
+    OntologySnapshot,
+    _encoded_view_schemas_v1,
+)
 
 T = TypeVar("T", bound=StructuralNode)
 A = TypeVar("A", bound=AxiomNode)
@@ -2426,6 +2433,7 @@ def _capabilities(publication: NativeSnapshotPublicationV2) -> CoreCapabilities:
         "structural-indexes",
         "ontology-identity-index",
         "lazy-model",
+        _ENCODED_STRUCTURAL_VIEW_FEATURE,
     }
     if publication.capability_bits & 8:
         features.add("source-map")
@@ -2436,7 +2444,7 @@ def _capabilities(publication: NativeSnapshotPublicationV2) -> CoreCapabilities:
         publication.report.model_schema,
         (1, 1),
         frozenset(features),
-        {},
+        _encoded_view_schemas_v1(),
         "native",
     )
 

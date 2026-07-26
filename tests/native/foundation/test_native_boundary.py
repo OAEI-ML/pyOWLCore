@@ -47,7 +47,10 @@ class NativeBoundaryTests(unittest.TestCase):
             extension.INGESTION_FEATURES,
             tuple(sorted(native._INGESTION_FEATURE_LEDGER)),
         )
-        self.assertEqual(extension.VIEW_FEATURES, ())
+        self.assertEqual(
+            extension.VIEW_FEATURES,
+            tuple(sorted(native._VIEW_FEATURE_LEDGER)),
+        )
         self.assertIn("safe-rust", extension.FEATURES)
         self.assertNotIn("parse-functional", extension.FEATURES)
         extension.self_test()

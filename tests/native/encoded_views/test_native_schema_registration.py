@@ -46,11 +46,11 @@ def test_native_registration_matches_the_frozen_python_descriptor(
         ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
         ENCODED_STRUCTURAL_DESCRIPTOR_V1,
         ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
-        "frozen-unadvertised",
-        False,
+        "frozen-advertised",
+        True,
     )
-    assert extension.VIEW_FEATURES == ()
-    assert ENCODED_STRUCTURAL_SCHEMA_NAME_V1 not in extension.FEATURES
+    assert extension.VIEW_FEATURES == (ENCODED_STRUCTURAL_SCHEMA_NAME_V1,)
+    assert ENCODED_STRUCTURAL_SCHEMA_NAME_V1 in extension.FEATURES
 
 
 def test_native_registration_rejects_a_descriptor_digest_mismatch(

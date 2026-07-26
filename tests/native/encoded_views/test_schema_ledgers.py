@@ -35,15 +35,15 @@ def test_generated_schema_and_version_decision_are_current() -> None:
 
     assert schema["name"] == ENCODED_STRUCTURAL_SCHEMA_NAME_V1
     assert schema["schema"] == schema["model_schema"] == 1
-    assert schema["status"] == "frozen-unadvertised"
-    assert schema["capability_advertised"] is False
+    assert schema["status"] == "frozen-advertised"
+    assert schema["capability_advertised"] is True
     assert schema["descriptor_sha256"] == ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1.hex()
     assert (
         hashlib.sha256(ENCODED_STRUCTURAL_DESCRIPTOR_V1).hexdigest() == schema["descriptor_sha256"]
     )
 
-    assert decision["status"] == "frozen-unadvertised"
-    assert decision["capability_advertised"] is False
+    assert decision["status"] == "frozen-advertised"
+    assert decision["capability_advertised"] is True
     assert decision["public_contract"] == {
         "descriptor_digest_export": "pyowl_core.ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1",
         "request_type_digest_attribute": "pyowl_core.EncodedStructuralView.DESCRIPTOR_SHA256",
@@ -96,7 +96,9 @@ def test_schema_constructor_and_descriptor_rows_cover_exact_registry() -> None:
     assert len({row["tag"] for row in expected}) == len(m.CONSTRUCTOR_SPECS)
 
 
-def test_fallback_exists_without_advertising_encoded_capability() -> None:
+def test_scalar_fallback_advertises_the_frozen_encoded_capability() -> None:
     snapshot = complete_constructor_snapshot()
-    assert ENCODED_STRUCTURAL_SCHEMA_NAME_V1 not in snapshot.capabilities.encoded_view_schemas
-    assert "encoded-structural-view" not in snapshot.capabilities.features
+    assert snapshot.capabilities.encoded_view_schemas == {
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V1: 1,
+    }
+    assert "encoded-structural-view" in snapshot.capabilities.features

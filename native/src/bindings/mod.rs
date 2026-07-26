@@ -77,8 +77,17 @@ mod tests {
                 "parse-turtle-v1",
             ]
         );
-        assert!(features.views.is_empty());
-        assert_eq!(features.combined().unwrap(), features.ingestion);
+        assert_eq!(features.views, &["pyowl-core/structural-columns"]);
+        assert_eq!(
+            features.combined().unwrap(),
+            &[
+                "parse-functional-v1",
+                "parse-owlxml-v1",
+                "parse-rdfxml-v1",
+                "parse-turtle-v1",
+                "pyowl-core/structural-columns",
+            ]
+        );
     }
 
     #[test]

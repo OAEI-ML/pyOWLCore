@@ -1,8 +1,7 @@
 //! WP17-owned native view/index/wire registration seam.
 //!
-//! WP15 intentionally publishes no successor view capability. WP17 may add
-//! functions/classes and feature names here without editing the shared module
-//! registry or the ingestion module.
+//! WP17 publishes the frozen encoded-view capability from this partition
+//! without coupling the shared module registry to view implementations.
 
 use std::sync::Arc;
 
@@ -16,7 +15,7 @@ use crate::publication::{
     NativeDocumentHandle, NativeSnapshotHandle, PublicationStorageV2, TypedFacadeScopeV2,
 };
 
-#[cfg(any(test, feature = "test-hooks"))]
+#[allow(dead_code)]
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/encoded_view_v1.rs"));
 }
@@ -99,7 +98,12 @@ impl EncodedBridgeAllocationProbe {
     }
 }
 
-pub(super) const FEATURES: &[&str] = &[];
+const ADVERTISED_FEATURES: &[&str] = &[generated::NAME];
+pub(super) const FEATURES: &[&str] = if generated::CAPABILITY_ADVERTISED {
+    ADVERTISED_FEATURES
+} else {
+    &[]
+};
 
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
     _module.add_class::<NativeRetainedAxiomTypeIndexV1>()?;
@@ -438,8 +442,7 @@ fn retained_identity_index_with_allocations(
 }
 
 /// Private owner for constructor postings built directly over retained arena
-/// root identifiers. The class and operation remain absent from VIEW_FEATURES
-/// until the complete installed consumer matrix closes.
+/// root identifiers. It is not a separately advertised view capability.
 #[pyclass(
     module = "pyowl_core._native",
     frozen,
@@ -1062,8 +1065,7 @@ fn _encoded_structural_document_columns_v1<'py>(
 }
 
 /// Exercise the direct retained-column path through an open V2 snapshot owner.
-/// The private operation remains unadvertised until the installed-wheel
-/// lifetime/copy matrix permits exposing the frozen view capability.
+/// The operation implements the advertised frozen structural-column schema.
 #[pyfunction]
 #[pyo3(signature = (handle, scope, document_ordinal, config, cancel=None))]
 fn _encoded_structural_columns_v1<'py>(
@@ -1362,7 +1364,7 @@ fn registered_schema(
         || version != schema.version
         || model_schema != schema.model_schema
         || descriptor_sha256 != schema.descriptor_sha256
-        || schema.capability_advertised
+        || !schema.capability_advertised
     {
         return Err(NativeError::protocol(
             "native encoded-view schema registration mismatch",
@@ -1371,7 +1373,7 @@ fn registered_schema(
     Ok(schema)
 }
 
-/// Validate and observe the frozen descriptor without advertising a capability.
+/// Validate and observe the frozen advertised descriptor.
 #[cfg(feature = "test-hooks")]
 #[pyfunction]
 fn _encoded_view_schema_v1(
@@ -1417,8 +1419,8 @@ mod tests {
             schema.descriptor_sha256
         );
         assert!(schema.descriptor.is_ascii());
-        assert!(!schema.capability_advertised);
-        assert!(FEATURES.is_empty());
+        assert!(schema.capability_advertised);
+        assert_eq!(FEATURES, &[generated::NAME]);
     }
 
     #[test]

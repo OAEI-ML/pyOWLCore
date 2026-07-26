@@ -42,7 +42,7 @@ def test_public_request_type_routes_through_cached_snapshot_view_boundary() -> N
     assert encoded.owner is snapshot
     assert encoded is snapshot.view(pyowl_core.EncodedStructuralView, schema_version=1)
     assert decode_root_canonical_bytes(encoded.buffers) == scalar_root_bytes(snapshot)
-    assert encoded.schema_name not in snapshot.capabilities.encoded_view_schemas
+    assert snapshot.capabilities.encoded_view_schemas[encoded.schema_name] == 1
 
     with pytest.raises(ValueError, match="schema_version"):
         snapshot.view(pyowl_core.EncodedStructuralView, schema_version=2)
@@ -56,7 +56,7 @@ def test_retained_v2_snapshot_uses_the_same_public_fallback_boundary() -> None:
     assert encoded.owner is snapshot
     assert encoded is snapshot.view(pyowl_core.EncodedStructuralView, schema_version=1)
     assert decode_root_canonical_bytes(encoded.buffers) == scalar_root_bytes(snapshot)
-    assert encoded.schema_name not in snapshot.capabilities.encoded_view_schemas
+    assert snapshot.capabilities.encoded_view_schemas[encoded.schema_name] == 1
 
 
 def test_tight_cache_policy_fails_before_retained_scalar_traversal() -> None:

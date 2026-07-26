@@ -22,10 +22,12 @@ from pyowl_core.document.identity import _OntologyIdentityMetadata
 from pyowl_core.document.imports import DocumentRecord, ImportManifest
 from pyowl_core.document.provenance import OriginIndex
 from pyowl_core.document.snapshot import (
+    _ENCODED_STRUCTURAL_VIEW_FEATURE,
     AxiomScope,
     CoreCapabilities,
     LoadReport,
     OntologySnapshot,
+    _encoded_view_schemas_v1,
 )
 from pyowl_core.exceptions import (
     ClosedSnapshotError,
@@ -114,6 +116,7 @@ class _MappedState:
             "wire-v1",
             "mmap-snapshot",
             "lazy-model",
+            _ENCODED_STRUCTURAL_VIEW_FEATURE,
         }
         if verified:
             features.add("wire-verified")
@@ -124,7 +127,7 @@ class _MappedState:
             1,
             (1, 1),
             frozenset(features),
-            {},
+            _encoded_view_schemas_v1(),
             "python",
         )
         from pyowl_core.index.cache import create_index_cache

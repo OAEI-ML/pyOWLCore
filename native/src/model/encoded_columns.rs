@@ -2898,12 +2898,12 @@ mod tests {
     }
 
     #[test]
-    fn frozen_descriptor_stays_unadvertised_and_names_exact_buffers() {
+    fn frozen_advertised_descriptor_names_exact_buffers() {
         assert_eq!(generated::NAME, ENCODED_STRUCTURAL_SCHEMA_NAME_V1);
         assert_eq!(generated::VERSION, ENCODED_STRUCTURAL_SCHEMA_VERSION_V1);
         assert_eq!(generated::MODEL_SCHEMA, ENCODED_STRUCTURAL_MODEL_SCHEMA_V1);
-        assert_eq!(generated::STATUS, "frozen-unadvertised");
-        assert!(!std::hint::black_box(generated::CAPABILITY_ADVERTISED));
+        assert_eq!(generated::STATUS, "frozen-advertised");
+        assert!(std::hint::black_box(generated::CAPABILITY_ADVERTISED));
         assert_eq!(
             crate::hash::sha256(generated::DESCRIPTOR),
             generated::DESCRIPTOR_SHA256

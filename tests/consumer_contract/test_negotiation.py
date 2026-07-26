@@ -36,12 +36,15 @@ def test_current_snapshot_negotiates_and_preserves_identity() -> None:
     assert report.compatible
     assert report.issues == ()
     assert require_compatible_view(snapshot, requirement()) is snapshot
+    assert dict(snapshot.capabilities.encoded_view_schemas) == {
+        "pyowl-core/structural-columns": 1,
+    }
     assert report.to_dict()["view"] == {
         "adapter_protocol": 1,
         "model_schema": 1,
         "wire_format": [1, 1],
         "features": sorted(snapshot.capabilities.features),
-        "encoded_view_schemas": {},
+        "encoded_view_schemas": dict(snapshot.capabilities.encoded_view_schemas),
         "backend": "python",
     }
 

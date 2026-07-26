@@ -43,8 +43,10 @@ def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -
             "parse-rdfxml-v1",
             "parse-turtle-v1",
         ],
+        "encoded_view_schemas": {"pyowl-core/structural-columns": 1},
         "probe_contains_ingestion_partition": True,
-        "view_features": [],
+        "probe_contains_view_partition": True,
+        "view_features": ["pyowl-core/structural-columns"],
     }
     mixed_closure = observed.pop("mixed_closure")
     assert mixed_closure == {

@@ -220,7 +220,7 @@ class _NativeCancellationRelay(Protocol):
 
 
 class EncodedStructuralPublicationV1(Protocol):
-    """Structural surface accepted from a future native producer."""
+    """Structural surface accepted from a registered native producer."""
 
     schema_name: str
     schema_version: int

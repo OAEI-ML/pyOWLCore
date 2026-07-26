@@ -34,6 +34,10 @@ from pyowl_core import (
     load_snapshot,
 )
 from pyowl_core.backends import native, native_handoff_v2, native_ingestion
+from pyowl_core.backends.native_views import (
+    ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
+    ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+)
 from pyowl_core.exceptions import (
     BackendProtocolError,
     BackendUnavailableError,
@@ -57,6 +61,9 @@ AUTO_SOURCE = (
 )
 ROOT = Path(__file__).parents[3]
 RUNNER = Path(__file__).with_name("_retained_load_runner.py")
+EXPECTED_ENCODED_VIEW_SCHEMAS = {
+    ENCODED_STRUCTURAL_SCHEMA_NAME_V1: ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+}
 
 
 class _UnreadableFunctional(io.BytesIO):
@@ -957,8 +964,8 @@ def test_large_auto_load_retains_parser_arena_with_ignored_import_metadata(
     assert encode_snapshot(selected) == encode_snapshot(reference)
     after_wire_python = cast(Any, selected)._native_python_counters()
     assert after_wire_python.model_rows_materialized == before_python.model_rows_materialized
-    assert extension.VIEW_FEATURES == ()
-    assert not selected.capabilities.encoded_view_schemas
+    assert tuple(sorted(native._VIEW_FEATURE_LEDGER)) == extension.VIEW_FEATURES
+    assert selected.capabilities.encoded_view_schemas == EXPECTED_ENCODED_VIEW_SCHEMAS
 
     selected.close()
     assert selected.closed
@@ -1029,7 +1036,7 @@ def test_retained_load_stays_unadvertised_and_ineligible_shape_skips_owner_const
 
     assert calls == 0
     assert "retained-structural-snapshot-v2" not in extension.FEATURES
-    assert not imported.capabilities.encoded_view_schemas
+    assert imported.capabilities.encoded_view_schemas == EXPECTED_ENCODED_VIEW_SCHEMAS
 
 
 def test_forced_native_validation_is_rejected_before_source_acquisition() -> None:
@@ -1462,7 +1469,7 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
 
     assert type(selected).__name__ == "_NativeOntologySnapshot"
     assert selected.capabilities.backend == "native"
-    assert not selected.capabilities.encoded_view_schemas
+    assert selected.capabilities.encoded_view_schemas == EXPECTED_ENCODED_VIEW_SCHEMAS
     assert len(selected.documents) == len(reference.documents) == 4
     assert len(selected.import_manifest.edges) == 4
     assert selected.import_manifest == reference.import_manifest
@@ -3002,8 +3009,8 @@ def test_isolated_installed_artifact_crosses_direct_wire_and_mmap_owners() -> No
         "leaf": 1,
     }
     assert observed["ingestion_features"] == sorted(native._INGESTION_FEATURE_LEDGER)
-    assert observed["view_features"] == []
-    assert observed["encoded_view_schemas"] == {}
+    assert observed["view_features"] == sorted(native._VIEW_FEATURE_LEDGER)
+    assert observed["encoded_view_schemas"] == EXPECTED_ENCODED_VIEW_SCHEMAS
     assert observed["wire_model_rows_materialized"] == 0
     assert observed["wire_encoded_view_requests"] == 1
     assert observed["wire_page_requests"] == 1
