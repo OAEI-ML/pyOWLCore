@@ -310,6 +310,54 @@ def test_java_artifact_and_unsafe_member_are_rejected(tmp_path: Path) -> None:
     assert any("forbidden artifact" in error for error in result.errors)
 
 
+def test_declared_member_limit_blocks_before_payload_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel = _wheel(tmp_path)
+
+    def sizes(reader: artifact_inspector.ArchiveReader) -> tuple[int, ...]:
+        names = reader.names()
+        return (artifact_inspector._MAX_MEMBER_BYTES + 1, *(0 for _ in names[1:]))
+
+    monkeypatch.setattr(artifact_inspector._WheelReader, "sizes", sizes)
+    monkeypatch.setattr(
+        artifact_inspector._WheelReader,
+        "read",
+        lambda *args: pytest.fail("oversized archive payload was read"),
+    )
+
+    result = inspect_artifact(wheel)
+
+    assert not result.ok
+    assert any("archive: member exceeds byte limit" in error for error in result.errors)
+
+
+def test_declared_total_limit_blocks_before_payload_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel = _wheel(tmp_path)
+
+    def sizes(reader: artifact_inspector.ArchiveReader) -> tuple[int, ...]:
+        names = reader.names()
+        per_member = artifact_inspector._MAX_TOTAL_BYTES // len(names) + 1
+        assert per_member <= artifact_inspector._MAX_MEMBER_BYTES
+        return (per_member,) * len(names)
+
+    monkeypatch.setattr(artifact_inspector._WheelReader, "sizes", sizes)
+    monkeypatch.setattr(
+        artifact_inspector._WheelReader,
+        "read",
+        lambda *args: pytest.fail("oversized archive payload was read"),
+    )
+
+    result = inspect_artifact(wheel)
+
+    assert not result.ok
+    assert any("archive: uncompressed bytes" in error for error in result.errors)
+
+
 def test_release_mode_requires_real_project_urls(tmp_path: Path) -> None:
     result = inspect_artifact(_wheel(tmp_path), require_project_urls=True)
     assert not result.ok

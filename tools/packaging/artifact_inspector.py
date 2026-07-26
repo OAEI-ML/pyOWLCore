@@ -84,6 +84,8 @@ class ArchiveReader(Protocol):
 
     def mode(self, name: str) -> int: ...
 
+    def sizes(self) -> tuple[int, ...]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class InspectionResult:
@@ -342,16 +344,32 @@ def _validate_metadata(
     return errors, blockers
 
 
-def _validate_common(reader: ArchiveReader) -> tuple[list[str], int]:
+def _validate_common(reader: ArchiveReader) -> tuple[list[str], int, bool]:
     errors: list[str] = []
     names = reader.names()
+    sizes = reader.sizes()
+    resource_safe = True
+    if len(sizes) != len(names):
+        errors.append("archive: member metadata count does not match member names")
+        resource_safe = False
     if len(names) > _MAX_MEMBERS:
         errors.append(f"archive: member count {len(names)} exceeds {_MAX_MEMBERS}")
+        resource_safe = False
     if len(set(names)) != len(names):
         errors.append("archive: duplicate member name")
     if len({name.casefold() for name in names}) != len(names):
         errors.append("archive: case-insensitive member collision")
-    total = 0
+    total = sum(max(size, 0) for size in sizes)
+    for name, size in zip(names, sizes, strict=False):
+        if size < 0:
+            errors.append(f"archive: member has negative byte size {name}")
+            resource_safe = False
+        elif size > _MAX_MEMBER_BYTES:
+            errors.append(f"archive: member exceeds byte limit {name}")
+            resource_safe = False
+    if total > _MAX_TOTAL_BYTES:
+        errors.append(f"archive: uncompressed bytes {total} exceed {_MAX_TOTAL_BYTES}")
+        resource_safe = False
     for name in names:
         normalized = _normalized_member(name)
         if normalized is None:
@@ -365,10 +383,16 @@ def _validate_common(reader: ArchiveReader) -> tuple[list[str], int]:
         suffix = normalized.suffix.casefold()
         if suffix in _JAVA_SUFFIXES:
             errors.append(f"java: forbidden artifact {name}")
+    if not resource_safe:
+        return errors, total, False
+    for name, declared_size in zip(names, sizes, strict=True):
+        normalized = _normalized_member(name)
+        if normalized is None:
+            normalized = PurePosixPath(name.replace("\\", "/"))
+        suffix = normalized.suffix.casefold()
         payload = reader.read(name)
-        total += len(payload)
-        if len(payload) > _MAX_MEMBER_BYTES:
-            errors.append(f"archive: member exceeds byte limit {name}")
+        if len(payload) != declared_size:
+            errors.append(f"archive: member byte size differs from archive metadata {name}")
         if suffix in _TEXT_SUFFIXES and len(payload) <= 4 * 1024**2:
             if normalized.name.casefold() in _DEPENDENCY_FILENAMES and _JAVA_DEPENDENCY_TEXT.search(
                 payload
@@ -381,9 +405,7 @@ def _validate_common(reader: ArchiveReader) -> tuple[list[str], int]:
                 errors.append(f"java: forbidden runtime integration {name}")
         if suffix == ".pth":
             errors.append(f"side-effect: .pth startup hook is forbidden: {name}")
-    if total > _MAX_TOTAL_BYTES:
-        errors.append(f"archive: uncompressed bytes {total} exceed {_MAX_TOTAL_BYTES}")
-    return errors, total
+    return errors, total, True
 
 
 def _validate_licenses(names: tuple[str, ...], kind: ArtifactKind) -> list[str]:
@@ -573,9 +595,21 @@ def inspect_artifact(
     reader = _WheelReader(path) if kind == "wheel" else _SdistReader(path)
     try:
         variant: ArtifactVariant = _wheel_variant(reader) if kind == "wheel" else "sdist"
-        errors, total = _validate_common(reader)
+        errors, total, resource_safe = _validate_common(reader)
         if expected_variant is not None and variant != expected_variant:
             errors.append(f"artifact: detected variant {variant!r}, expected {expected_variant!r}")
+        if not resource_safe:
+            return InspectionResult(
+                path=str(path),
+                kind=kind,
+                variant=variant,
+                member_count=len(reader.names()),
+                uncompressed_bytes=total,
+                metadata={},
+                errors=tuple(sorted(set(errors))),
+                release_blockers=(),
+                deferred_platform_checks=(),
+            )
         metadata, metadata_error = _metadata(reader, kind)
         if metadata_error is not None:
             errors.append(metadata_error)
