@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+import pyowl_core.model as m
 from pyowl_core import (
     IRI,
     AcquisitionCache,
@@ -26,10 +27,12 @@ from pyowl_core import (
     encode_snapshot,
     load_snapshot,
     parse_document,
+    render_document,
 )
 from pyowl_core.backends import native, native_ingestion
 from pyowl_core.io.formats.detection import detect_format
 from pyowl_core.io.source import acquire_source
+from tests.conformance._support import every_constructor_document
 from tests.native.foundation._support import NativeTestExtension, load_extension
 
 TURTLE_SOURCE = rb"""
@@ -289,6 +292,61 @@ def test_guarded_public_turtle_routes_through_the_retained_owner(
     assert publication.parser_bytes == len(TURTLE_SOURCE)
     assert publication.publication_structural_rows_copied == 0
     assert publication.publication_structural_bytes_copied == 0
+
+
+def test_guarded_public_turtle_every_constructor_is_owner_first() -> None:
+    source = render_document(
+        every_constructor_document(),
+        format=DocumentFormat.TURTLE,
+    )
+    python_options = LoadOptions(
+        format=DocumentFormat.TURTLE,
+        imports=ImportPolicy.IGNORE,
+        backend=BackendPreference.PYTHON,
+        collect_provenance=True,
+        preserve_source_map=True,
+    )
+    reference = load_snapshot(source, options=python_options)
+    unexpected = AssertionError("every-constructor Turtle crossed the Python parser")
+    with (
+        patch(
+            "pyowl_core.backends.parser._NativeBackendDriver.select",
+            autospec=True,
+            return_value="native",
+        ),
+        patch("pyowl_core.backends.python.parser.parse_turtle", side_effect=unexpected),
+    ):
+        selected = cast(
+            Any,
+            load_snapshot(
+                source,
+                options=LoadOptions(
+                    format=DocumentFormat.TURTLE,
+                    imports=ImportPolicy.IGNORE,
+                    backend=BackendPreference.NATIVE,
+                    collect_provenance=True,
+                    preserve_source_map=True,
+                ),
+            ),
+        )
+
+    try:
+        assert set(m.AXIOM_TYPES) <= {type(value) for value in reference.root.axioms}
+        assert selected.root.axioms == reference.root.axioms
+        assert selected.root.source_map == reference.root.source_map
+        assert selected.root.rdf_mapping_report == reference.root.rdf_mapping_report
+        assert selected.structural_fingerprint == reference.structural_fingerprint
+        assert selected.logical_fingerprint == reference.logical_fingerprint
+        assert selected.signature_fingerprint == reference.signature_fingerprint
+        assert encode_snapshot(selected) == encode_snapshot(reference)
+        publication = (
+            selected._native_snapshot_state.owner.handle._owner_v2._publication_counters_v2()
+        )
+        assert publication.parser_bytes == len(source)
+        assert publication.publication_structural_rows_copied == 0
+        assert publication.publication_structural_bytes_copied == 0
+    finally:
+        selected.close()
 
 
 @pytest.mark.parametrize("loader", (load_snapshot, parse_document))
