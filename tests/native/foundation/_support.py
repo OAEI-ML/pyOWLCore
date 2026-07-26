@@ -114,6 +114,62 @@ class NativeTestExtension(Protocol):
         anonymous_scope_targets: object | None = None,
     ) -> object: ...
 
+    def _prepare_parsed_structural_closure_v2(
+        self,
+        parsed_documents: tuple[object, ...],
+        manifest: bytes,
+        root_document_key: str,
+        document_keys: tuple[str, ...],
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        config: object,
+        cancel: NativeTestCancellation | None = None,
+        *,
+        effective_document_ordinals: object | None = None,
+        closure_document_ordinals: object | None = None,
+        anonymous_scope_targets: object | None = None,
+    ) -> tuple[bytes, object]: ...
+
+    def _prepare_parsed_structural_closure_bridge_allocation_probe_v2(
+        self,
+        parsed_documents: tuple[object, ...],
+        manifest: bytes,
+        root_document_key: str,
+        document_keys: tuple[str, ...],
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        config: object,
+        fail_after: int | None = None,
+        *,
+        effective_document_ordinals: object | None = None,
+        closure_document_ordinals: object | None = None,
+        anonymous_scope_targets: object | None = None,
+    ) -> tuple[bytes, object, int]: ...
+
+    def _prepare_parsed_structural_closure_auxiliary_failure_probe_v2(
+        self,
+        parsed_documents: tuple[object, ...],
+        manifest: bytes,
+        root_document_key: str,
+        document_keys: tuple[str, ...],
+        collect_provenance: bool,
+        preserve_source_map: bool,
+        config: object,
+        *,
+        effective_document_ordinals: object | None = None,
+        closure_document_ordinals: object | None = None,
+        anonymous_scope_targets: object | None = None,
+    ) -> tuple[bytes, object]: ...
+
+    def _finalize_parsed_structural_closure_v2(
+        self,
+        parsed_documents: tuple[object, ...],
+        prepared_closure: object,
+        prepared_summary: bytes,
+        attestation: object,
+        cancel: NativeTestCancellation | None = None,
+    ) -> object: ...
+
     def _merge_parsed_structural_bridge_allocation_probe_v2(
         self,
         parsed_documents: tuple[object, ...],

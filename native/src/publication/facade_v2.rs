@@ -1293,198 +1293,51 @@ impl PublicationStorageV2 {
         rdf_reports: Option<Vec<Option<TypedRdfReportRowsV2>>>,
         parser_bytes: u64,
     ) -> NativeResult<Arc<Self>> {
-        if attestation.version != PUBLICATION_VERSION_V2
-            || attestation.ledger_sha256 != PUBLICATION_LEDGER_SHA256_V2
-            || attestation.facade_access_schema_sha256 != FACADE_ACCESS_SCHEMA_SHA256_V2
-            || attestation.auxiliary_codec_schema_sha256 != AUXILIARY_CODEC_SCHEMA_SHA256_V2
-            || attestation.model_schema != 1
-        {
-            return Err(NativeError::protocol(
-                "typed V2 publication attestation schema differs",
-            ));
-        }
-        let retains_origins = origin_rows.is_some();
-        if raw_origin_rows.is_some() && !retains_origins {
-            return Err(NativeError::protocol(
-                "typed V2 raw origins require effective origins",
-            ));
-        }
-        let origins = origin_rows.unwrap_or_default();
-        let origin_count = origin_row_count_v2(&origins)?;
-        let raw_origin_count = raw_origin_rows
-            .as_ref()
-            .map_or(Ok(origin_count), |rows| origin_row_count_v2(rows))?;
-        let origin_maximum = origins
-            .iter()
-            .flatten()
-            .chain(
-                raw_origin_rows
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .flatten(),
-            )
-            .try_fold(1_u64, |maximum, row| {
-                if row.len() < 32 {
-                    return Err(NativeError::protocol(
-                        "typed V2 retained origin row is truncated",
-                    ));
-                }
-                Ok(maximum.max(
-                    u64::try_from(row.len())
-                        .map_err(|_| NativeError::limit("typed V2 origin row exceeds u64"))?,
-                ))
-            })?;
-        let retained_source = retain_source_tables_v2(source_maps, attestation.document_count)?;
-        let retained_rdf = retain_rdf_tables_v2(rdf_reports, attestation.document_count)?;
-        let structural_counts = typed_structural.structural_counts()?;
-        if attestation.document_count != typed_structural.document_count()
-            || attestation.max_facade_row_bytes
-                != typed_structural
-                    .maximum_row_bytes()
-                    .max(origin_maximum)
-                    .max(retained_source.maximum_row_bytes)
-                    .max(retained_rdf.maximum_row_bytes)
-            || attestation.ontology_annotation_count != structural_counts.ontology_annotations
-            || attestation.stored_axiom_count != structural_counts.stored_axioms
-            || attestation.effective_axiom_count != structural_counts.effective_axioms
-            || attestation.extension_count != structural_counts.extensions
-        {
-            return Err(NativeError::protocol(
-                "typed V2 structural owner diverges from its attestation",
-            ));
-        }
-        let expected_capability_bits = 7
-            | if retained_source.present { 8 } else { 0 }
-            | if retains_origins { 16 } else { 0 }
-            | if retained_rdf.present { 32 } else { 0 };
-        if attestation.capability_bits != expected_capability_bits
-            || attestation.source_map_entry_count != retained_source.row_counts[0]
-            || attestation.origin_entry_count != raw_origin_count
-            || attestation.rdf_mapping_report_count != retained_rdf.report_count
-            || attestation.owl2_dl_report_summary.is_some()
-            || attestation.owl2_dl_validated
-            || attestation.owl2_dl_conforms.is_some()
-            || attestation.owl2_dl_report_sha256.is_some()
-        {
-            return Err(NativeError::protocol(
-                "typed V2 owner attests unsupported auxiliary collections",
-            ));
-        }
-        if parser_bytes != 0 && parser_bytes != attestation.total_source_bytes {
-            return Err(NativeError::protocol(
-                "typed V2 parser byte count diverges from its attestation",
-            ));
-        }
-        let typed_structural = Arc::new(typed_structural);
-        let mut initial = typed_initial_counters(&typed_structural, &attestation)?;
-        initial[PARSER_BYTES] = parser_bytes;
-        let mut retained_origins = if retains_origins {
-            retain_origin_tables_v2(origins, raw_origin_rows, attestation.document_count)?
-        } else {
-            RetainedOriginTablesV2::default()
-        };
-        retained_origins
-            .effective_tables
-            .extend(retained_source.effective_tables);
-        retained_origins
-            .effective_tables
-            .extend(retained_rdf.effective_tables);
-        retained_origins
-            .effective_tables
-            .sort_unstable_by_key(|table| table.coordinate);
-        reject_duplicate_coordinates(&retained_origins.effective_tables)?;
-        if retains_origins {
-            initial[RETAINED_ROW_FIRST + 5] = retained_origins.row_count;
-            initial[RETAINED_ORIGIN_BYTES] = retained_origins.payload_bytes;
-            initial[RETAINED_METADATA_BYTES] = checked_add(
-                initial[RETAINED_METADATA_BYTES],
-                retained_origins.metadata_bytes,
-            )?;
-            let retained_delta = checked_add(
-                retained_origins.payload_bytes,
-                retained_origins.metadata_bytes,
-            )?;
-            initial[RETAINED_OWNER_BYTES] =
-                checked_add(initial[RETAINED_OWNER_BYTES], retained_delta)?;
-            initial[PEAK_BUILDER_BYTES] =
-                initial[PEAK_BUILDER_BYTES].max(initial[RETAINED_OWNER_BYTES]);
-            initial[PEAK_FREEZE_BYTES] =
-                initial[PEAK_FREEZE_BYTES].max(initial[RETAINED_OWNER_BYTES]);
-            if typed_structural
-                .max_memory_bytes()
-                .is_some_and(|maximum| initial[RETAINED_OWNER_BYTES] > maximum)
-            {
-                return Err(NativeError::limit(
-                    "typed V2 origin attachment exceeds max_memory_bytes",
-                ));
-            }
-            validate_retained_total(&initial)?;
-        }
-        if retained_source.present {
-            initial[RETAINED_ROW_FIRST + 3] = retained_source.row_counts[0];
-            initial[RETAINED_ROW_FIRST + 4] = retained_source.row_counts[1];
-            initial[RETAINED_SOURCE_BYTES] = retained_source.payload_bytes;
-            initial[RETAINED_METADATA_BYTES] = checked_add(
-                initial[RETAINED_METADATA_BYTES],
-                retained_source.metadata_bytes,
-            )?;
-            let retained_delta = checked_add(
-                retained_source.payload_bytes,
-                retained_source.metadata_bytes,
-            )?;
-            initial[RETAINED_OWNER_BYTES] =
-                checked_add(initial[RETAINED_OWNER_BYTES], retained_delta)?;
-            initial[PEAK_BUILDER_BYTES] =
-                initial[PEAK_BUILDER_BYTES].max(initial[RETAINED_OWNER_BYTES]);
-            initial[PEAK_FREEZE_BYTES] =
-                initial[PEAK_FREEZE_BYTES].max(initial[RETAINED_OWNER_BYTES]);
-            if typed_structural
-                .max_memory_bytes()
-                .is_some_and(|maximum| initial[RETAINED_OWNER_BYTES] > maximum)
-            {
-                return Err(NativeError::limit(
-                    "typed V2 source-map attachment exceeds max_memory_bytes",
-                ));
-            }
-            validate_retained_total(&initial)?;
-        }
-        if retained_rdf.present {
-            for (offset, count) in retained_rdf.row_counts.into_iter().enumerate() {
-                initial[RETAINED_ROW_FIRST + 6 + offset] = count;
-            }
-            initial[RETAINED_RDF_BYTES] = retained_rdf.payload_bytes;
-            initial[RETAINED_METADATA_BYTES] = checked_add(
-                initial[RETAINED_METADATA_BYTES],
-                retained_rdf.metadata_bytes,
-            )?;
-            let retained_delta =
-                checked_add(retained_rdf.payload_bytes, retained_rdf.metadata_bytes)?;
-            initial[RETAINED_OWNER_BYTES] =
-                checked_add(initial[RETAINED_OWNER_BYTES], retained_delta)?;
-            initial[PEAK_BUILDER_BYTES] =
-                initial[PEAK_BUILDER_BYTES].max(initial[RETAINED_OWNER_BYTES]);
-            initial[PEAK_FREEZE_BYTES] =
-                initial[PEAK_FREEZE_BYTES].max(initial[RETAINED_OWNER_BYTES]);
-            if typed_structural
-                .max_memory_bytes()
-                .is_some_and(|maximum| initial[RETAINED_OWNER_BYTES] > maximum)
-            {
-                return Err(NativeError::limit(
-                    "typed V2 RDF report attachment exceeds max_memory_bytes",
-                ));
-            }
-            validate_retained_total(&initial)?;
-        }
-        Ok(Arc::new(Self {
+        let cancellation = Cancellation::with_duration(None);
+        let mut unbounded_workspace = |_additional_bytes: usize| Ok(());
+        let prepared = prepare_typed_auxiliary_documents_v2(
+            origin_rows,
+            raw_origin_rows,
+            source_maps,
+            rdf_reports,
+            attestation.document_count,
+            &cancellation,
+            &mut unbounded_workspace,
+        )?;
+        let validated = prepared.validate_commit(&attestation, &typed_structural, parser_bytes)?;
+        Ok(Self::commit_typed_auxiliary(
             attestation,
-            effective_tables: retained_origins.effective_tables,
-            raw_document_tables: retained_origins
+            typed_structural,
+            prepared,
+            validated,
+        ))
+    }
+
+    pub(crate) fn validate_prepared_typed_auxiliary(
+        attestation: &NativeSnapshotAttestationV2,
+        typed_structural: &TypedFacadeStorageV2,
+        prepared: &PreparedTypedAuxiliaryV2,
+        parser_bytes: u64,
+    ) -> NativeResult<ValidatedTypedAuxiliaryCommitV2> {
+        prepared.validate_commit(attestation, typed_structural, parser_bytes)
+    }
+
+    pub(crate) fn commit_typed_auxiliary(
+        attestation: NativeSnapshotAttestationV2,
+        typed_structural: TypedFacadeStorageV2,
+        prepared: PreparedTypedAuxiliaryV2,
+        validated: ValidatedTypedAuxiliaryCommitV2,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            attestation,
+            effective_tables: prepared.retained.effective_tables,
+            raw_document_tables: prepared
+                .retained
                 .raw_document_override
-                .then_some(retained_origins.raw_document_tables),
-            typed_structural: Some(typed_structural),
-            counters: CounterStateV2::new(initial),
-        }))
+                .then_some(prepared.retained.raw_document_tables),
+            typed_structural: Some(Arc::new(typed_structural)),
+            counters: CounterStateV2::new(validated.initial),
+        })
     }
 
     #[cfg(feature = "test-hooks")]
@@ -1855,13 +1708,15 @@ struct RetainedSourceTablesV2 {
     row_counts: [u64; 2],
     payload_bytes: u64,
     metadata_bytes: u64,
+    table_metadata_bytes: u64,
     maximum_row_bytes: u64,
     present: bool,
 }
 
-fn retain_source_tables_v2(
+fn retain_source_tables_with_budget_v2(
     source_maps: Option<Vec<TypedSourceMapRowsV2>>,
     document_count: u64,
+    budget: &mut AuxiliaryPreparationBudget<'_>,
 ) -> NativeResult<RetainedSourceTablesV2> {
     let Some(source_maps) = source_maps else {
         return Ok(RetainedSourceTablesV2 {
@@ -1876,30 +1731,42 @@ fn retain_source_tables_v2(
             "typed V2 source-map document tables diverge from the structural owner",
         ));
     }
+    let source_map_input_bytes = source_maps
+        .capacity()
+        .checked_mul(size_of::<TypedSourceMapRowsV2>())
+        .ok_or_else(|| NativeError::limit("typed V2 source-map input size overflow"))?;
     let mut result = RetainedSourceTablesV2 {
         maximum_row_bytes: 1,
         present: true,
         ..RetainedSourceTablesV2::default()
     };
-    let table_capacity = source_maps
-        .len()
-        .checked_mul(2)
-        .ok_or_else(|| NativeError::limit("typed V2 source-map table count overflow"))?;
+    let table_capacity = source_maps.iter().try_fold(0_usize, |count, source_map| {
+        count
+            .checked_add(usize::from(!source_map.entries.is_empty()))
+            .and_then(|value| value.checked_add(usize::from(!source_map.prefixes.is_empty())))
+            .ok_or_else(|| NativeError::limit("typed V2 source-map table count overflow"))
+    })?;
+    let predicted_table_bytes = table_capacity
+        .checked_mul(size_of::<FacadeTableV2>())
+        .ok_or_else(|| NativeError::limit("typed V2 source-map table size overflow"))?;
+    budget.preflight_allocation(predicted_table_bytes)?;
     result
         .effective_tables
         .try_reserve_exact(table_capacity)
         .map_err(|_| NativeError::limit("typed V2 source-map table allocation failed"))?;
-    result.metadata_bytes = checked_add(
-        result.metadata_bytes,
-        u64::try_from(
-            result
-                .effective_tables
-                .capacity()
-                .checked_mul(size_of::<FacadeTableV2>())
-                .ok_or_else(|| NativeError::limit("typed V2 source-map table size overflow"))?,
-        )
-        .map_err(|_| NativeError::limit("typed V2 source-map table size exceeds u64"))?,
+    result.table_metadata_bytes = u64::try_from(
+        result
+            .effective_tables
+            .capacity()
+            .checked_mul(size_of::<FacadeTableV2>())
+            .ok_or_else(|| NativeError::limit("typed V2 source-map table size overflow"))?,
+    )
+    .map_err(|_| NativeError::limit("typed V2 source-map table size exceeds u64"))?;
+    budget.retain_allocation(
+        usize::try_from(result.table_metadata_bytes)
+            .map_err(|_| NativeError::limit("typed V2 source-map table size exceeds usize"))?,
     )?;
+    result.metadata_bytes = checked_add(result.metadata_bytes, result.table_metadata_bytes)?;
     for (document_ordinal, source_map) in source_maps.into_iter().enumerate() {
         validate_source_map_entries_v2(&source_map.entries)?;
         validate_source_map_prefixes_v2(&source_map.prefixes)?;
@@ -1915,9 +1782,21 @@ fn retain_source_tables_v2(
                 )
                 .ok_or_else(|| NativeError::limit("typed V2 source-map row count overflow"))?;
             if rows.is_empty() {
+                budget.release_input_allocation(
+                    rows.capacity()
+                        .checked_mul(size_of::<Vec<u8>>())
+                        .ok_or_else(|| {
+                            NativeError::limit("typed V2 source-map row size overflow")
+                        })?,
+                )?;
                 continue;
             }
-            let retained = retain_auxiliary_rows_v2(rows, "typed V2 source-map")?;
+            let retained = retain_auxiliary_rows_v2(
+                rows,
+                "typed V2 source-map",
+                AuxiliaryOuterAllocationV2::Input,
+                budget,
+            )?;
             result.payload_bytes = checked_add(result.payload_bytes, retained.payload_bytes)?;
             result.metadata_bytes = checked_add(result.metadata_bytes, retained.metadata_bytes)?;
             result.maximum_row_bytes = result.maximum_row_bytes.max(retained.maximum_row_bytes);
@@ -1936,7 +1815,20 @@ fn retain_source_tables_v2(
             });
         }
     }
+    budget.release_input_allocation(source_map_input_bytes)?;
     Ok(result)
+}
+
+#[cfg(test)]
+fn retain_source_tables_v2(
+    source_maps: Option<Vec<TypedSourceMapRowsV2>>,
+    document_count: u64,
+) -> NativeResult<RetainedSourceTablesV2> {
+    let releasable =
+        releasable_auxiliary_input_metadata_v2(None, None, source_maps.as_ref(), None)?;
+    let mut check = |_additional: usize| Ok(());
+    let mut budget = AuxiliaryPreparationBudget::new(&mut check, releasable)?;
+    retain_source_tables_with_budget_v2(source_maps, document_count, &mut budget)
 }
 
 fn validate_source_map_entries_v2(rows: &[Vec<u8>]) -> NativeResult<()> {
@@ -2066,6 +1958,8 @@ struct RetainedOriginTablesV2 {
     row_count: u64,
     payload_bytes: u64,
     metadata_bytes: u64,
+    effective_table_metadata_bytes: u64,
+    raw_table_metadata_bytes: u64,
 }
 
 #[derive(Debug, Default)]
@@ -2075,10 +1969,11 @@ struct RetainedOriginPayloadV2 {
     metadata_bytes: u64,
 }
 
-fn retain_origin_tables_v2(
+fn retain_origin_tables_with_budget_v2(
     rows: Vec<Vec<Vec<u8>>>,
     raw_document_rows: Option<Vec<Vec<Vec<u8>>>>,
     document_count: u64,
+    budget: &mut AuxiliaryPreparationBudget<'_>,
 ) -> NativeResult<RetainedOriginTablesV2> {
     let raw_document_override = raw_document_rows.is_some();
     let expected_document_count = usize::try_from(document_count)
@@ -2092,6 +1987,18 @@ fn retain_origin_tables_v2(
             "typed V2 origin document tables diverge from the structural owner",
         ));
     }
+    let effective_input_bytes = rows
+        .capacity()
+        .checked_mul(size_of::<Vec<Vec<u8>>>())
+        .ok_or_else(|| NativeError::limit("typed V2 origin input size overflow"))?;
+    let raw_input_bytes = raw_document_rows
+        .as_ref()
+        .map_or(Ok(0_usize), |documents| {
+            documents
+                .capacity()
+                .checked_mul(size_of::<Vec<Vec<u8>>>())
+                .ok_or_else(|| NativeError::limit("typed V2 raw-origin input size overflow"))
+        })?;
     for document_rows in &rows {
         validate_effective_origin_rows_v2(document_rows)?;
     }
@@ -2105,6 +2012,11 @@ fn retain_origin_tables_v2(
         .as_ref()
         .map_or(Ok(effective_count), |raw| origin_row_count_v2(raw))?;
     let mut closure_rows = Vec::new();
+    let predicted_closure_bytes = usize::try_from(effective_count)
+        .ok()
+        .and_then(|count| count.checked_mul(size_of::<Arc<Vec<u8>>>()))
+        .ok_or_else(|| NativeError::limit("typed V2 origin closure size overflow"))?;
+    budget.preflight_allocation(predicted_closure_bytes)?;
     closure_rows
         .try_reserve_exact(
             usize::try_from(effective_count)
@@ -2118,6 +2030,12 @@ fn retain_origin_tables_v2(
             .ok_or_else(|| NativeError::limit("typed V2 origin closure size overflow"))?,
     )
     .map_err(|_| NativeError::limit("typed V2 origin closure size exceeds u64"))?;
+    budget.retain_allocation(
+        closure_rows
+            .capacity()
+            .checked_mul(size_of::<Arc<Vec<u8>>>())
+            .ok_or_else(|| NativeError::limit("typed V2 origin closure size overflow"))?,
+    )?;
     let mut payload_bytes = 0_u64;
 
     let effective_table_count = rows
@@ -2126,22 +2044,28 @@ fn retain_origin_tables_v2(
         .count()
         + usize::from(effective_count != 0);
     let mut effective_tables = Vec::new();
+    let predicted_effective_table_bytes = effective_table_count
+        .checked_mul(size_of::<FacadeTableV2>())
+        .ok_or_else(|| NativeError::limit("typed V2 origin table size overflow"))?;
+    budget.preflight_allocation(predicted_effective_table_bytes)?;
     effective_tables
         .try_reserve_exact(effective_table_count)
         .map_err(|_| NativeError::limit("typed V2 origin table allocation failed"))?;
-    metadata_bytes = checked_add(
-        metadata_bytes,
-        u64::try_from(
-            effective_tables
-                .capacity()
-                .checked_mul(size_of::<FacadeTableV2>())
-                .ok_or_else(|| NativeError::limit("typed V2 origin table size overflow"))?,
-        )
-        .map_err(|_| NativeError::limit("typed V2 origin table size exceeds u64"))?,
+    let effective_table_metadata_bytes = u64::try_from(
+        effective_tables
+            .capacity()
+            .checked_mul(size_of::<FacadeTableV2>())
+            .ok_or_else(|| NativeError::limit("typed V2 origin table size overflow"))?,
+    )
+    .map_err(|_| NativeError::limit("typed V2 origin table size exceeds u64"))?;
+    budget.retain_allocation(
+        usize::try_from(effective_table_metadata_bytes)
+            .map_err(|_| NativeError::limit("typed V2 origin table size exceeds usize"))?,
     )?;
+    metadata_bytes = checked_add(metadata_bytes, effective_table_metadata_bytes)?;
 
     for (ordinal, document_rows) in rows.into_iter().enumerate() {
-        let retained = retain_origin_payload_v2(document_rows)?;
+        let retained = retain_origin_payload_v2(document_rows, budget)?;
         payload_bytes = checked_add(payload_bytes, retained.payload_bytes)?;
         metadata_bytes = checked_add(metadata_bytes, retained.metadata_bytes)?;
         closure_rows.extend(retained.rows.iter().cloned());
@@ -2163,6 +2087,7 @@ fn retain_origin_tables_v2(
             source_identity: 0,
         });
     }
+    budget.release_input_allocation(effective_input_bytes)?;
     closure_rows.sort_unstable_by(compare_valid_origin_rows_v2);
     if closure_rows
         .windows(2)
@@ -2189,22 +2114,30 @@ fn retain_origin_tables_v2(
     reject_duplicate_coordinates(&effective_tables)?;
 
     let mut raw_document_tables = Vec::new();
+    let mut raw_table_metadata_bytes = 0_u64;
     if let Some(raw_documents) = raw_document_rows {
+        let predicted_raw_table_bytes = raw_documents
+            .len()
+            .checked_mul(size_of::<FacadeTableV2>())
+            .ok_or_else(|| NativeError::limit("typed V2 raw origin table size overflow"))?;
+        budget.preflight_allocation(predicted_raw_table_bytes)?;
         raw_document_tables
             .try_reserve_exact(raw_documents.len())
             .map_err(|_| NativeError::limit("typed V2 raw origin table allocation failed"))?;
-        metadata_bytes = checked_add(
-            metadata_bytes,
-            u64::try_from(
-                raw_document_tables
-                    .capacity()
-                    .checked_mul(size_of::<FacadeTableV2>())
-                    .ok_or_else(|| NativeError::limit("typed V2 raw origin table size overflow"))?,
-            )
-            .map_err(|_| NativeError::limit("typed V2 raw origin table size exceeds u64"))?,
-        )?;
+        raw_table_metadata_bytes = u64::try_from(
+            raw_document_tables
+                .capacity()
+                .checked_mul(size_of::<FacadeTableV2>())
+                .ok_or_else(|| NativeError::limit("typed V2 raw origin table size overflow"))?,
+        )
+        .map_err(|_| NativeError::limit("typed V2 raw origin table size exceeds u64"))?;
+        budget
+            .retain_allocation(usize::try_from(raw_table_metadata_bytes).map_err(|_| {
+                NativeError::limit("typed V2 raw origin table size exceeds usize")
+            })?)?;
+        metadata_bytes = checked_add(metadata_bytes, raw_table_metadata_bytes)?;
         for (ordinal, document_rows) in raw_documents.into_iter().enumerate() {
-            let retained = retain_origin_payload_v2(document_rows)?;
+            let retained = retain_origin_payload_v2(document_rows, budget)?;
             payload_bytes = checked_add(payload_bytes, retained.payload_bytes)?;
             metadata_bytes = checked_add(metadata_bytes, retained.metadata_bytes)?;
             raw_document_tables.push(FacadeTableV2 {
@@ -2221,6 +2154,7 @@ fn retain_origin_tables_v2(
                 source_identity: 0,
             });
         }
+        budget.release_input_allocation(raw_input_bytes)?;
     }
     let row_count = effective_count
         .checked_add(effective_count)
@@ -2239,7 +2173,26 @@ fn retain_origin_tables_v2(
         row_count,
         payload_bytes,
         metadata_bytes,
+        effective_table_metadata_bytes,
+        raw_table_metadata_bytes,
     })
+}
+
+#[cfg(test)]
+fn retain_origin_tables_v2(
+    rows: Vec<Vec<Vec<u8>>>,
+    raw_document_rows: Option<Vec<Vec<Vec<u8>>>>,
+    document_count: u64,
+) -> NativeResult<RetainedOriginTablesV2> {
+    let releasable = releasable_auxiliary_input_metadata_v2(
+        Some(&rows),
+        raw_document_rows.as_ref(),
+        None,
+        None,
+    )?;
+    let mut check = |_additional: usize| Ok(());
+    let mut budget = AuxiliaryPreparationBudget::new(&mut check, releasable)?;
+    retain_origin_tables_with_budget_v2(rows, raw_document_rows, document_count, &mut budget)
 }
 
 fn origin_row_count_v2(rows: &[Vec<Vec<u8>>]) -> NativeResult<u64> {
@@ -2395,8 +2348,21 @@ fn validate_raw_origin_rows_v2(rows: &[Vec<u8>]) -> NativeResult<()> {
     Ok(())
 }
 
-fn retain_origin_payload_v2(rows: Vec<Vec<u8>>) -> NativeResult<RetainedOriginPayloadV2> {
+fn retain_origin_payload_v2(
+    rows: Vec<Vec<u8>>,
+    budget: &mut AuxiliaryPreparationBudget<'_>,
+) -> NativeResult<RetainedOriginPayloadV2> {
+    let input_outer_bytes = rows
+        .capacity()
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit("typed V2 origin row-reference size overflow"))?;
+    let predicted_owner_bytes = predicted_auxiliary_row_owner_v2(&rows)?;
     let mut document_rows = Vec::new();
+    let predicted_reference_bytes = rows
+        .len()
+        .checked_mul(size_of::<Arc<Vec<u8>>>())
+        .ok_or_else(|| NativeError::limit("typed V2 origin row-reference size overflow"))?;
+    budget.preflight_allocation(predicted_reference_bytes)?;
     document_rows
         .try_reserve_exact(rows.len())
         .map_err(|_| NativeError::limit("typed V2 origin row-reference allocation failed"))?;
@@ -2408,6 +2374,12 @@ fn retain_origin_payload_v2(rows: Vec<Vec<u8>>) -> NativeResult<RetainedOriginPa
             .ok_or_else(|| NativeError::limit("typed V2 origin row-reference size overflow"))?,
     )
     .map_err(|_| NativeError::limit("typed V2 origin row-reference size exceeds u64"))?;
+    budget.retain_allocation(
+        document_rows
+            .capacity()
+            .checked_mul(size_of::<Arc<Vec<u8>>>())
+            .ok_or_else(|| NativeError::limit("typed V2 origin row-reference size overflow"))?,
+    )?;
     for row in rows {
         let payload = u64::try_from(row.len())
             .map_err(|_| NativeError::limit("typed V2 origin payload exceeds u64"))?;
@@ -2421,7 +2393,22 @@ fn retain_origin_payload_v2(rows: Vec<Vec<u8>>) -> NativeResult<RetainedOriginPa
                 NativeError::protocol("typed V2 origin allocation accounting underflow")
             })?,
         )?;
+        let arc_bytes = arc_sized_allocation_bytes::<Vec<u8>>()?;
+        budget.preflight_allocation(arc_bytes)?;
         document_rows.push(Arc::new(row));
+        budget.retain_allocation(arc_bytes)?;
+    }
+    budget.release_input_allocation(input_outer_bytes)?;
+    let observed_owner_bytes = usize::try_from(
+        payload_bytes
+            .checked_add(metadata_bytes)
+            .ok_or_else(|| NativeError::limit("typed V2 origin owner size overflow"))?,
+    )
+    .map_err(|_| NativeError::limit("typed V2 origin owner size exceeds usize"))?;
+    if observed_owner_bytes < predicted_owner_bytes {
+        return Err(NativeError::protocol(
+            "typed V2 origin owner accounting diverges",
+        ));
     }
 
     Ok(RetainedOriginPayloadV2 {
@@ -2437,14 +2424,549 @@ struct RetainedRdfTablesV2 {
     row_counts: [u64; 4],
     payload_bytes: u64,
     metadata_bytes: u64,
+    table_metadata_bytes: u64,
     maximum_row_bytes: u64,
     report_count: u64,
     present: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct PreparedTypedAuxiliaryV2 {
+    retained: RetainedOriginTablesV2,
+    retains_origins: bool,
+    raw_origin_count: u64,
+    origin_maximum: u64,
+    source_row_counts: [u64; 2],
+    source_payload_bytes: u64,
+    source_metadata_bytes: u64,
+    source_maximum_row_bytes: u64,
+    source_present: bool,
+    rdf_row_counts: [u64; 4],
+    rdf_payload_bytes: u64,
+    rdf_metadata_bytes: u64,
+    rdf_maximum_row_bytes: u64,
+    rdf_report_count: u64,
+    rdf_present: bool,
+    preparation_peak_additional_bytes: usize,
+}
+
+impl PreparedTypedAuxiliaryV2 {
+    pub(crate) fn preparation_peak_additional_bytes(&self) -> usize {
+        self.preparation_peak_additional_bytes
+    }
+
+    pub(crate) fn retained_owner_bytes(&self) -> NativeResult<usize> {
+        let retained = self
+            .retained
+            .payload_bytes
+            .checked_add(self.retained.metadata_bytes)
+            .and_then(|value| value.checked_add(self.source_payload_bytes))
+            .and_then(|value| value.checked_add(self.source_metadata_bytes))
+            .and_then(|value| value.checked_add(self.rdf_payload_bytes))
+            .and_then(|value| value.checked_add(self.rdf_metadata_bytes))
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary owner size overflow"))?;
+        usize::try_from(retained)
+            .map_err(|_| NativeError::limit("typed V2 auxiliary owner size exceeds usize"))
+    }
+
+    fn validate_commit(
+        &self,
+        attestation: &NativeSnapshotAttestationV2,
+        typed_structural: &TypedFacadeStorageV2,
+        parser_bytes: u64,
+    ) -> NativeResult<ValidatedTypedAuxiliaryCommitV2> {
+        if attestation.version != PUBLICATION_VERSION_V2
+            || attestation.ledger_sha256 != PUBLICATION_LEDGER_SHA256_V2
+            || attestation.facade_access_schema_sha256 != FACADE_ACCESS_SCHEMA_SHA256_V2
+            || attestation.auxiliary_codec_schema_sha256 != AUXILIARY_CODEC_SCHEMA_SHA256_V2
+            || attestation.model_schema != 1
+        {
+            return Err(NativeError::protocol(
+                "typed V2 publication attestation schema differs",
+            ));
+        }
+        let structural_counts = typed_structural.structural_counts()?;
+        if attestation.document_count != typed_structural.document_count()
+            || attestation.max_facade_row_bytes
+                != typed_structural
+                    .maximum_row_bytes()
+                    .max(self.origin_maximum)
+                    .max(self.source_maximum_row_bytes)
+                    .max(self.rdf_maximum_row_bytes)
+            || attestation.ontology_annotation_count != structural_counts.ontology_annotations
+            || attestation.stored_axiom_count != structural_counts.stored_axioms
+            || attestation.effective_axiom_count != structural_counts.effective_axioms
+            || attestation.extension_count != structural_counts.extensions
+        {
+            return Err(NativeError::protocol(
+                "typed V2 structural owner diverges from its attestation",
+            ));
+        }
+        let expected_capability_bits = 7
+            | if self.source_present { 8 } else { 0 }
+            | if self.retains_origins { 16 } else { 0 }
+            | if self.rdf_present { 32 } else { 0 };
+        if attestation.capability_bits != expected_capability_bits
+            || attestation.source_map_entry_count != self.source_row_counts[0]
+            || attestation.origin_entry_count != self.raw_origin_count
+            || attestation.rdf_mapping_report_count != self.rdf_report_count
+            || attestation.owl2_dl_report_summary.is_some()
+            || attestation.owl2_dl_validated
+            || attestation.owl2_dl_conforms.is_some()
+            || attestation.owl2_dl_report_sha256.is_some()
+        {
+            return Err(NativeError::protocol(
+                "typed V2 owner attests unsupported auxiliary collections",
+            ));
+        }
+        if parser_bytes != 0 && parser_bytes != attestation.total_source_bytes {
+            return Err(NativeError::protocol(
+                "typed V2 parser byte count diverges from its attestation",
+            ));
+        }
+
+        let mut initial = typed_initial_counters(typed_structural, attestation)?;
+        initial[PARSER_BYTES] = parser_bytes;
+        initial[RETAINED_METADATA_BYTES] = checked_add(
+            initial[RETAINED_METADATA_BYTES],
+            self.retained.metadata_bytes,
+        )?;
+        initial[RETAINED_OWNER_BYTES] =
+            checked_add(initial[RETAINED_OWNER_BYTES], self.retained.metadata_bytes)?;
+        if self.retains_origins {
+            initial[RETAINED_ROW_FIRST + 5] = self.retained.row_count;
+            initial[RETAINED_ORIGIN_BYTES] = self.retained.payload_bytes;
+            initial[RETAINED_OWNER_BYTES] =
+                checked_add(initial[RETAINED_OWNER_BYTES], self.retained.payload_bytes)?;
+        }
+        if self.source_present {
+            initial[RETAINED_ROW_FIRST + 3] = self.source_row_counts[0];
+            initial[RETAINED_ROW_FIRST + 4] = self.source_row_counts[1];
+            initial[RETAINED_SOURCE_BYTES] = self.source_payload_bytes;
+            initial[RETAINED_METADATA_BYTES] =
+                checked_add(initial[RETAINED_METADATA_BYTES], self.source_metadata_bytes)?;
+            let retained_delta =
+                checked_add(self.source_payload_bytes, self.source_metadata_bytes)?;
+            initial[RETAINED_OWNER_BYTES] =
+                checked_add(initial[RETAINED_OWNER_BYTES], retained_delta)?;
+        }
+        if self.rdf_present {
+            for (offset, count) in self.rdf_row_counts.into_iter().enumerate() {
+                initial[RETAINED_ROW_FIRST + 6 + offset] = count;
+            }
+            initial[RETAINED_RDF_BYTES] = self.rdf_payload_bytes;
+            initial[RETAINED_METADATA_BYTES] =
+                checked_add(initial[RETAINED_METADATA_BYTES], self.rdf_metadata_bytes)?;
+            let retained_delta = checked_add(self.rdf_payload_bytes, self.rdf_metadata_bytes)?;
+            initial[RETAINED_OWNER_BYTES] =
+                checked_add(initial[RETAINED_OWNER_BYTES], retained_delta)?;
+        }
+        initial[PEAK_BUILDER_BYTES] =
+            initial[PEAK_BUILDER_BYTES].max(initial[RETAINED_OWNER_BYTES]);
+        initial[PEAK_FREEZE_BYTES] = initial[PEAK_FREEZE_BYTES].max(initial[RETAINED_OWNER_BYTES]);
+        if typed_structural
+            .max_memory_bytes()
+            .is_some_and(|maximum| initial[RETAINED_OWNER_BYTES] > maximum)
+        {
+            return Err(NativeError::limit(
+                "typed V2 auxiliary attachment exceeds max_memory_bytes",
+            ));
+        }
+        validate_retained_total(&initial)?;
+        Ok(ValidatedTypedAuxiliaryCommitV2 { initial })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ValidatedTypedAuxiliaryCommitV2 {
+    initial: [u64; COUNTER_NAMES.len()],
+}
+
+struct AuxiliaryPreparationBudget<'a> {
+    workspace_check: &'a mut dyn FnMut(usize) -> NativeResult<()>,
+    prepared_bytes: usize,
+    releasable_input_bytes: usize,
+    released_input_bytes: usize,
+    peak_additional_bytes: usize,
+}
+
+impl<'a> AuxiliaryPreparationBudget<'a> {
+    fn new(
+        workspace_check: &'a mut dyn FnMut(usize) -> NativeResult<()>,
+        releasable_input_bytes: usize,
+    ) -> NativeResult<Self> {
+        workspace_check(0)?;
+        Ok(Self {
+            workspace_check,
+            prepared_bytes: 0,
+            releasable_input_bytes,
+            released_input_bytes: 0,
+            peak_additional_bytes: 0,
+        })
+    }
+
+    fn preflight_allocation(&mut self, bytes: usize) -> NativeResult<()> {
+        let following = self
+            .prepared_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary preparation size overflow"))?
+            .saturating_sub(self.released_input_bytes);
+        (self.workspace_check)(following)
+    }
+
+    fn retain_allocation(&mut self, bytes: usize) -> NativeResult<()> {
+        self.prepared_bytes = self
+            .prepared_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary preparation size overflow"))?;
+        let live = self
+            .prepared_bytes
+            .saturating_sub(self.released_input_bytes);
+        (self.workspace_check)(live)?;
+        self.peak_additional_bytes = self.peak_additional_bytes.max(live);
+        Ok(())
+    }
+
+    fn release_input_allocation(&mut self, bytes: usize) -> NativeResult<()> {
+        self.released_input_bytes = self
+            .released_input_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary release size overflow"))?;
+        if self.released_input_bytes > self.releasable_input_bytes {
+            return Err(NativeError::protocol(
+                "typed V2 auxiliary input release accounting diverges",
+            ));
+        }
+        Ok(())
+    }
+
+    fn release_prepared_allocation(&mut self, bytes: usize) -> NativeResult<()> {
+        self.prepared_bytes = self.prepared_bytes.checked_sub(bytes).ok_or_else(|| {
+            NativeError::protocol("typed V2 prepared allocation accounting underflow")
+        })?;
+        Ok(())
+    }
+
+    const fn peak_additional_bytes(&self) -> usize {
+        self.peak_additional_bytes
+    }
+
+    fn finish(&self) -> NativeResult<()> {
+        if self.released_input_bytes != self.releasable_input_bytes {
+            return Err(NativeError::protocol(
+                "typed V2 auxiliary input release accounting is incomplete",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn auxiliary_row_slack_v2(rows: &[Vec<u8>]) -> NativeResult<usize> {
+    rows.iter().try_fold(0_usize, |total, row| {
+        total
+            .checked_add(row.capacity().checked_sub(row.len()).ok_or_else(|| {
+                NativeError::protocol("typed V2 auxiliary row capacity underflow")
+            })?)
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary row slack overflow"))
+    })
+}
+
+fn predicted_auxiliary_row_metadata_v2(rows: &[Vec<u8>]) -> NativeResult<usize> {
+    rows.len()
+        .checked_mul(
+            arc_sized_allocation_bytes::<Vec<u8>>()?
+                .checked_add(size_of::<Arc<Vec<u8>>>())
+                .ok_or_else(|| NativeError::limit("typed V2 auxiliary row metadata overflow"))?,
+        )
+        .ok_or_else(|| NativeError::limit("typed V2 auxiliary row metadata overflow"))
+}
+
+fn predicted_auxiliary_row_owner_v2(rows: &[Vec<u8>]) -> NativeResult<usize> {
+    rows.iter()
+        .try_fold(0_usize, |total, row| {
+            total
+                .checked_add(row.len())
+                .ok_or_else(|| NativeError::limit("typed V2 auxiliary payload overflow"))
+        })?
+        .checked_add(auxiliary_row_slack_v2(rows)?)
+        .and_then(|value| {
+            predicted_auxiliary_row_metadata_v2(rows)
+                .ok()
+                .and_then(|metadata| value.checked_add(metadata))
+        })
+        .ok_or_else(|| NativeError::limit("typed V2 auxiliary owner size overflow"))
+}
+
+fn input_row_table_metadata_v2(rows: &Vec<Vec<u8>>) -> NativeResult<usize> {
+    rows.capacity()
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit("typed V2 auxiliary input metadata overflow"))
+}
+
+fn releasable_auxiliary_input_metadata_v2(
+    origin_rows: Option<&Vec<Vec<Vec<u8>>>>,
+    raw_origin_rows: Option<&Vec<Vec<Vec<u8>>>>,
+    source_maps: Option<&Vec<TypedSourceMapRowsV2>>,
+    rdf_reports: Option<&Vec<Option<TypedRdfReportRowsV2>>>,
+) -> NativeResult<usize> {
+    let mut total = 0_usize;
+    for documents in [origin_rows, raw_origin_rows].into_iter().flatten() {
+        total = total
+            .checked_add(
+                documents
+                    .capacity()
+                    .checked_mul(size_of::<Vec<Vec<u8>>>())
+                    .ok_or_else(|| NativeError::limit("typed V2 origin input metadata overflow"))?,
+            )
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary input metadata overflow"))?;
+        for rows in documents {
+            total = total
+                .checked_add(input_row_table_metadata_v2(rows)?)
+                .ok_or_else(|| NativeError::limit("typed V2 auxiliary input metadata overflow"))?;
+        }
+    }
+    if let Some(documents) = source_maps {
+        total = total
+            .checked_add(
+                documents
+                    .capacity()
+                    .checked_mul(size_of::<TypedSourceMapRowsV2>())
+                    .ok_or_else(|| NativeError::limit("typed V2 source input metadata overflow"))?,
+            )
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary input metadata overflow"))?;
+        for source in documents {
+            for rows in [&source.entries, &source.prefixes] {
+                total = total
+                    .checked_add(input_row_table_metadata_v2(rows)?)
+                    .ok_or_else(|| {
+                        NativeError::limit("typed V2 auxiliary input metadata overflow")
+                    })?;
+            }
+        }
+    }
+    if let Some(documents) = rdf_reports {
+        total = total
+            .checked_add(
+                documents
+                    .capacity()
+                    .checked_mul(size_of::<Option<TypedRdfReportRowsV2>>())
+                    .ok_or_else(|| NativeError::limit("typed V2 RDF input metadata overflow"))?,
+            )
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary input metadata overflow"))?;
+        for report in documents.iter().flatten() {
+            for rows in [
+                &report.unconsumed_triples,
+                &report.rule_ids,
+                &report.diagnostics,
+            ] {
+                total = total
+                    .checked_add(input_row_table_metadata_v2(rows)?)
+                    .ok_or_else(|| {
+                        NativeError::limit("typed V2 auxiliary input metadata overflow")
+                    })?;
+            }
+        }
+    }
+    Ok(total)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_typed_auxiliary_documents_v2(
+    origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+    raw_origin_rows: Option<Vec<Vec<Vec<u8>>>>,
+    source_maps: Option<Vec<TypedSourceMapRowsV2>>,
+    rdf_reports: Option<Vec<Option<TypedRdfReportRowsV2>>>,
+    document_count: u64,
+    cancellation: &Cancellation,
+    workspace_check: &mut dyn FnMut(usize) -> NativeResult<()>,
+) -> NativeResult<PreparedTypedAuxiliaryV2> {
+    let retains_origins = origin_rows.is_some();
+    if raw_origin_rows.is_some() && !retains_origins {
+        return Err(NativeError::protocol(
+            "typed V2 raw origins require effective origins",
+        ));
+    }
+    let expected_document_count = usize::try_from(document_count)
+        .map_err(|_| NativeError::limit("typed V2 document count exceeds usize"))?;
+    for aligned in [
+        origin_rows.as_deref().map(<[Vec<Vec<u8>>]>::len),
+        raw_origin_rows.as_deref().map(<[Vec<Vec<u8>>]>::len),
+        source_maps.as_deref().map(<[TypedSourceMapRowsV2]>::len),
+        rdf_reports
+            .as_deref()
+            .map(<[Option<TypedRdfReportRowsV2>]>::len),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if aligned != expected_document_count {
+            return Err(NativeError::protocol(
+                "typed V2 auxiliary document tables are not aligned",
+            ));
+        }
+    }
+    let releasable_input_bytes = releasable_auxiliary_input_metadata_v2(
+        origin_rows.as_ref(),
+        raw_origin_rows.as_ref(),
+        source_maps.as_ref(),
+        rdf_reports.as_ref(),
+    )?;
+    let mut budget = AuxiliaryPreparationBudget::new(workspace_check, releasable_input_bytes)?;
+    cancellation.checkpoint()?;
+    let origins = origin_rows.unwrap_or_default();
+    let raw_origin_count = raw_origin_rows.as_ref().map_or_else(
+        || origin_row_count_v2(&origins),
+        |rows| origin_row_count_v2(rows),
+    )?;
+    let origin_maximum = origins
+        .iter()
+        .flatten()
+        .chain(
+            raw_origin_rows
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .flatten(),
+        )
+        .try_fold(1_u64, |maximum, row| {
+            if row.len() < 32 {
+                return Err(NativeError::protocol(
+                    "typed V2 retained origin row is truncated",
+                ));
+            }
+            Ok(maximum.max(
+                u64::try_from(row.len())
+                    .map_err(|_| NativeError::limit("typed V2 origin row exceeds u64"))?,
+            ))
+        })?;
+    let retained_source =
+        retain_source_tables_with_budget_v2(source_maps, document_count, &mut budget)?;
+    cancellation.checkpoint()?;
+    let retained_rdf = retain_rdf_tables_v2(rdf_reports, document_count, &mut budget)?;
+    cancellation.checkpoint()?;
+    let mut retained = if retains_origins {
+        retain_origin_tables_with_budget_v2(origins, raw_origin_rows, document_count, &mut budget)?
+    } else {
+        RetainedOriginTablesV2::default()
+    };
+    cancellation.checkpoint()?;
+
+    let additional_tables = retained_source
+        .effective_tables
+        .len()
+        .checked_add(retained_rdf.effective_tables.len())
+        .ok_or_else(|| NativeError::limit("typed V2 auxiliary table count overflow"))?;
+    let old_effective_table_bytes = retained
+        .effective_tables
+        .capacity()
+        .checked_mul(size_of::<FacadeTableV2>())
+        .ok_or_else(|| NativeError::limit("typed V2 auxiliary table size overflow"))?;
+    let old_source_table_bytes = retained_source
+        .effective_tables
+        .capacity()
+        .checked_mul(size_of::<FacadeTableV2>())
+        .ok_or_else(|| NativeError::limit("typed V2 source table size overflow"))?;
+    let old_rdf_table_bytes = retained_rdf
+        .effective_tables
+        .capacity()
+        .checked_mul(size_of::<FacadeTableV2>())
+        .ok_or_else(|| NativeError::limit("typed V2 RDF table size overflow"))?;
+    let spare_capacity = retained
+        .effective_tables
+        .capacity()
+        .saturating_sub(retained.effective_tables.len());
+    if additional_tables > spare_capacity {
+        let predicted_capacity = retained
+            .effective_tables
+            .len()
+            .checked_add(additional_tables)
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary table count overflow"))?;
+        let predicted_bytes = predicted_capacity
+            .checked_mul(size_of::<FacadeTableV2>())
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary table size overflow"))?;
+        budget.preflight_allocation(predicted_bytes)?;
+    }
+    retained
+        .effective_tables
+        .try_reserve_exact(additional_tables)
+        .map_err(|_| NativeError::limit("typed V2 combined auxiliary table allocation failed"))?;
+    let combined_table_metadata_bytes = u64::try_from(
+        retained
+            .effective_tables
+            .capacity()
+            .checked_mul(size_of::<FacadeTableV2>())
+            .ok_or_else(|| NativeError::limit("typed V2 auxiliary table size overflow"))?,
+    )
+    .map_err(|_| NativeError::limit("typed V2 auxiliary table size exceeds u64"))?;
+    let combined_table_bytes = usize::try_from(combined_table_metadata_bytes)
+        .map_err(|_| NativeError::limit("typed V2 auxiliary metadata size exceeds usize"))?;
+    if combined_table_bytes != old_effective_table_bytes {
+        budget.retain_allocation(combined_table_bytes)?;
+        budget.release_prepared_allocation(old_effective_table_bytes)?;
+    }
+
+    let source_row_counts = retained_source.row_counts;
+    let source_payload_bytes = retained_source.payload_bytes;
+    let source_metadata_bytes = retained_source
+        .metadata_bytes
+        .checked_sub(retained_source.table_metadata_bytes)
+        .ok_or_else(|| NativeError::protocol("typed V2 source metadata accounting underflow"))?;
+    let source_maximum_row_bytes = retained_source.maximum_row_bytes;
+    let source_present = retained_source.present;
+    let rdf_row_counts = retained_rdf.row_counts;
+    let rdf_payload_bytes = retained_rdf.payload_bytes;
+    let rdf_metadata_bytes = retained_rdf
+        .metadata_bytes
+        .checked_sub(retained_rdf.table_metadata_bytes)
+        .ok_or_else(|| NativeError::protocol("typed V2 RDF metadata accounting underflow"))?;
+    let rdf_maximum_row_bytes = retained_rdf.maximum_row_bytes;
+    let rdf_report_count = retained_rdf.report_count;
+    let rdf_present = retained_rdf.present;
+    retained
+        .effective_tables
+        .extend(retained_source.effective_tables);
+    budget.release_prepared_allocation(old_source_table_bytes)?;
+    retained
+        .effective_tables
+        .extend(retained_rdf.effective_tables);
+    budget.release_prepared_allocation(old_rdf_table_bytes)?;
+    cancellation.checkpoint()?;
+    retained
+        .effective_tables
+        .sort_unstable_by_key(|table| table.coordinate);
+    reject_duplicate_coordinates(&retained.effective_tables)?;
+    retained.metadata_bytes = retained
+        .metadata_bytes
+        .checked_sub(retained.effective_table_metadata_bytes)
+        .and_then(|value| value.checked_add(combined_table_metadata_bytes))
+        .ok_or_else(|| NativeError::protocol("typed V2 origin metadata accounting underflow"))?;
+    retained.effective_table_metadata_bytes = combined_table_metadata_bytes;
+    budget.finish()?;
+
+    Ok(PreparedTypedAuxiliaryV2 {
+        retained,
+        retains_origins,
+        raw_origin_count,
+        origin_maximum,
+        source_row_counts,
+        source_payload_bytes,
+        source_metadata_bytes,
+        source_maximum_row_bytes,
+        source_present,
+        rdf_row_counts,
+        rdf_payload_bytes,
+        rdf_metadata_bytes,
+        rdf_maximum_row_bytes,
+        rdf_report_count,
+        rdf_present,
+        preparation_peak_additional_bytes: budget.peak_additional_bytes(),
+    })
+}
+
 fn retain_rdf_tables_v2(
     reports: Option<Vec<Option<TypedRdfReportRowsV2>>>,
     document_count: u64,
+    budget: &mut AuxiliaryPreparationBudget<'_>,
 ) -> NativeResult<RetainedRdfTablesV2> {
     let Some(reports) = reports else {
         return Ok(RetainedRdfTablesV2 {
@@ -2457,35 +2979,52 @@ fn retain_rdf_tables_v2(
             "typed V2 RDF document tables are not aligned",
         ));
     }
+    let report_input_bytes = reports
+        .capacity()
+        .checked_mul(size_of::<Option<TypedRdfReportRowsV2>>())
+        .ok_or_else(|| NativeError::limit("typed V2 RDF input size overflow"))?;
     let report_count = u64::try_from(reports.iter().filter(|report| report.is_some()).count())
         .map_err(|_| NativeError::limit("typed V2 RDF report count exceeds u64"))?;
-    let table_capacity = usize::try_from(
-        report_count
-            .checked_mul(4)
-            .ok_or_else(|| NativeError::limit("typed V2 RDF table count overflow"))?,
-    )
-    .map_err(|_| NativeError::limit("typed V2 RDF table count exceeds usize"))?;
+    let table_capacity = reports
+        .iter()
+        .flatten()
+        .try_fold(0_usize, |count, report| {
+            count
+                .checked_add(1)
+                .and_then(|value| {
+                    value.checked_add(usize::from(!report.unconsumed_triples.is_empty()))
+                })
+                .and_then(|value| value.checked_add(usize::from(!report.rule_ids.is_empty())))
+                .and_then(|value| value.checked_add(usize::from(!report.diagnostics.is_empty())))
+                .ok_or_else(|| NativeError::limit("typed V2 RDF table count overflow"))
+        })?;
     let mut result = RetainedRdfTablesV2 {
         maximum_row_bytes: 1,
         report_count,
         present: report_count != 0,
         ..RetainedRdfTablesV2::default()
     };
+    let predicted_table_bytes = table_capacity
+        .checked_mul(size_of::<FacadeTableV2>())
+        .ok_or_else(|| NativeError::limit("typed V2 RDF table size overflow"))?;
+    budget.preflight_allocation(predicted_table_bytes)?;
     result
         .effective_tables
         .try_reserve_exact(table_capacity)
         .map_err(|_| NativeError::limit("typed V2 RDF table allocation failed"))?;
-    result.metadata_bytes = checked_add(
-        result.metadata_bytes,
-        u64::try_from(
-            result
-                .effective_tables
-                .capacity()
-                .checked_mul(size_of::<FacadeTableV2>())
-                .ok_or_else(|| NativeError::limit("typed V2 RDF table size overflow"))?,
-        )
-        .map_err(|_| NativeError::limit("typed V2 RDF table size exceeds u64"))?,
+    result.table_metadata_bytes = u64::try_from(
+        result
+            .effective_tables
+            .capacity()
+            .checked_mul(size_of::<FacadeTableV2>())
+            .ok_or_else(|| NativeError::limit("typed V2 RDF table size overflow"))?,
+    )
+    .map_err(|_| NativeError::limit("typed V2 RDF table size exceeds u64"))?;
+    budget.retain_allocation(
+        usize::try_from(result.table_metadata_bytes)
+            .map_err(|_| NativeError::limit("typed V2 RDF table size exceeds usize"))?,
     )?;
+    result.metadata_bytes = checked_add(result.metadata_bytes, result.table_metadata_bytes)?;
     for (document_ordinal, report) in reports.into_iter().enumerate() {
         let Some(report) = report else {
             continue;
@@ -2515,9 +3054,16 @@ fn retain_rdf_tables_v2(
             ));
         }
         let mut header_rows = Vec::new();
+        budget.preflight_allocation(size_of::<Vec<u8>>())?;
         header_rows
             .try_reserve_exact(1)
             .map_err(|_| NativeError::limit("typed V2 RDF header allocation failed"))?;
+        budget.retain_allocation(
+            header_rows
+                .capacity()
+                .checked_mul(size_of::<Vec<u8>>())
+                .ok_or_else(|| NativeError::limit("typed V2 RDF header size overflow"))?,
+        )?;
         header_rows.push(report.header);
         let collections = [
             (CollectionV2::RdfReportHeader, header_rows),
@@ -2535,9 +3081,23 @@ fn retain_rdf_tables_v2(
                 .map_err(|_| NativeError::limit("typed V2 RDF row count exceeds u64"))?;
             result.row_counts[offset] = checked_add(result.row_counts[offset], row_count)?;
             if rows.is_empty() {
+                budget.release_input_allocation(
+                    rows.capacity()
+                        .checked_mul(size_of::<Vec<u8>>())
+                        .ok_or_else(|| NativeError::limit("typed V2 RDF row size overflow"))?,
+                )?;
                 continue;
             }
-            let retained = retain_auxiliary_rows_v2(rows, "typed V2 RDF")?;
+            let retained = retain_auxiliary_rows_v2(
+                rows,
+                "typed V2 RDF",
+                if offset == 0 {
+                    AuxiliaryOuterAllocationV2::Prepared
+                } else {
+                    AuxiliaryOuterAllocationV2::Input
+                },
+                budget,
+            )?;
             result.payload_bytes = checked_add(result.payload_bytes, retained.payload_bytes)?;
             result.metadata_bytes = checked_add(result.metadata_bytes, retained.metadata_bytes)?;
             result.maximum_row_bytes = result.maximum_row_bytes.max(retained.maximum_row_bytes);
@@ -2554,6 +3114,7 @@ fn retain_rdf_tables_v2(
             });
         }
     }
+    budget.release_input_allocation(report_input_bytes)?;
     Ok(result)
 }
 
@@ -2564,11 +3125,29 @@ struct RetainedAuxiliaryRowsV2 {
     maximum_row_bytes: u64,
 }
 
+#[derive(Clone, Copy)]
+enum AuxiliaryOuterAllocationV2 {
+    Input,
+    Prepared,
+}
+
 fn retain_auxiliary_rows_v2(
     rows: Vec<Vec<u8>>,
     label: &'static str,
+    outer_allocation: AuxiliaryOuterAllocationV2,
+    budget: &mut AuxiliaryPreparationBudget<'_>,
 ) -> NativeResult<RetainedAuxiliaryRowsV2> {
+    let input_outer_bytes = rows
+        .capacity()
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit(label))?;
+    let predicted_owner_bytes = predicted_auxiliary_row_owner_v2(&rows)?;
     let mut retained = Vec::new();
+    let predicted_reference_bytes = rows
+        .len()
+        .checked_mul(size_of::<Arc<Vec<u8>>>())
+        .ok_or_else(|| NativeError::limit(label))?;
+    budget.preflight_allocation(predicted_reference_bytes)?;
     retained
         .try_reserve_exact(rows.len())
         .map_err(|_| NativeError::limit(label))?;
@@ -2580,6 +3159,12 @@ fn retain_auxiliary_rows_v2(
             .ok_or_else(|| NativeError::limit(label))?,
     )
     .map_err(|_| NativeError::limit(label))?;
+    budget.retain_allocation(
+        retained
+            .capacity()
+            .checked_mul(size_of::<Arc<Vec<u8>>>())
+            .ok_or_else(|| NativeError::limit(label))?,
+    )?;
     let mut maximum_row_bytes = 1_u64;
     for row in rows {
         if row.is_empty() {
@@ -2596,7 +3181,29 @@ fn retain_auxiliary_rows_v2(
             })?,
         )?;
         maximum_row_bytes = maximum_row_bytes.max(payload);
+        let arc_bytes = arc_sized_allocation_bytes::<Vec<u8>>()?;
+        budget.preflight_allocation(arc_bytes)?;
         retained.push(Arc::new(row));
+        budget.retain_allocation(arc_bytes)?;
+    }
+    match outer_allocation {
+        AuxiliaryOuterAllocationV2::Input => {
+            budget.release_input_allocation(input_outer_bytes)?;
+        }
+        AuxiliaryOuterAllocationV2::Prepared => {
+            budget.release_prepared_allocation(input_outer_bytes)?;
+        }
+    }
+    let observed_owner_bytes = usize::try_from(
+        payload_bytes
+            .checked_add(metadata_bytes)
+            .ok_or_else(|| NativeError::limit(label))?,
+    )
+    .map_err(|_| NativeError::limit(label))?;
+    if observed_owner_bytes < predicted_owner_bytes {
+        return Err(NativeError::protocol(
+            "typed V2 auxiliary owner accounting diverges",
+        ));
     }
     Ok(RetainedAuxiliaryRowsV2 {
         rows: retained,
@@ -4802,6 +5409,112 @@ mod tests {
         );
         assert!(counters[RETAINED_METADATA_BYTES] > 0);
         validate_retained_total(&counters).expect("source-map owner counters");
+    }
+
+    #[test]
+    fn auxiliary_plan_rejects_one_byte_short_workspace_and_accepts_exact_peak() {
+        fn inputs() -> Vec<TypedSourceMapRowsV2> {
+            let encoded = source_map_row(0x42, 0);
+            let mut entry = Vec::with_capacity(encoded.len() + 97);
+            entry.extend_from_slice(&encoded);
+            vec![TypedSourceMapRowsV2 {
+                entries: vec![entry],
+                prefixes: vec![source_prefix_row("", "urn")],
+            }]
+        }
+
+        let cancellation = Cancellation::with_duration(None);
+        let mut peak = 0_usize;
+        let mut record = |additional: usize| {
+            peak = peak.max(additional);
+            Ok(())
+        };
+        let prepared = prepare_typed_auxiliary_documents_v2(
+            None,
+            None,
+            Some(inputs()),
+            None,
+            1,
+            &cancellation,
+            &mut record,
+        )
+        .expect("unbounded auxiliary preparation");
+        assert!(peak > 1);
+        assert_eq!(prepared.preparation_peak_additional_bytes(), peak);
+        assert!(
+            prepared
+                .retained_owner_bytes()
+                .expect("retained auxiliary bytes")
+                > source_map_row(0x42, 0).len() + source_prefix_row("", "urn").len()
+        );
+        drop(prepared);
+
+        let maximum = peak - 1;
+        let mut one_byte_short = |additional: usize| {
+            if additional > maximum {
+                Err(NativeError::limit(
+                    "injected one-byte-short auxiliary workspace",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        let error = prepare_typed_auxiliary_documents_v2(
+            None,
+            None,
+            Some(inputs()),
+            None,
+            1,
+            &cancellation,
+            &mut one_byte_short,
+        )
+        .expect_err("one-byte-short auxiliary workspace must fail");
+        assert_eq!(error.code, "NATIVE_WIRE_LIMIT");
+
+        let mut exact = |additional: usize| {
+            if additional > peak {
+                Err(NativeError::limit("exact auxiliary workspace exceeded"))
+            } else {
+                Ok(())
+            }
+        };
+        prepare_typed_auxiliary_documents_v2(
+            None,
+            None,
+            Some(inputs()),
+            None,
+            1,
+            &cancellation,
+            &mut exact,
+        )
+        .expect("exact auxiliary workspace");
+    }
+
+    #[test]
+    fn origin_only_auxiliary_plan_does_not_double_count_its_table_buffer() {
+        let row = origin_row(0x42, "d1:first", 0);
+        let payload_capacity = row.capacity();
+        let cancellation = Cancellation::with_duration(None);
+        let mut peak = 0_usize;
+        let mut record = |additional: usize| {
+            peak = peak.max(additional);
+            Ok(())
+        };
+        let prepared = prepare_typed_auxiliary_documents_v2(
+            Some(vec![vec![row]]),
+            None,
+            None,
+            None,
+            1,
+            &cancellation,
+            &mut record,
+        )
+        .expect("origin-only auxiliary preparation");
+        let retained = prepared
+            .retained_owner_bytes()
+            .expect("origin-only retained bytes");
+        assert_eq!(prepared.preparation_peak_additional_bytes(), peak);
+        assert_eq!(peak, retained - payload_capacity);
     }
 
     #[test]

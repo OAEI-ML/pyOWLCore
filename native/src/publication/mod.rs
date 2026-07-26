@@ -17,8 +17,9 @@ use crate::error::{NativeError, NativeResult};
 use crate::model::{validate_iri, Category};
 
 pub(crate) use facade_v2::{
-    NativeSnapshotAttestationV2, PublicationStorageV2, TypedRdfReportRowsV2, TypedSourceMapRowsV2,
-    AUXILIARY_CODEC_SCHEMA_SHA256_V2,
+    prepare_typed_auxiliary_documents_v2, NativeSnapshotAttestationV2, PreparedTypedAuxiliaryV2,
+    PublicationStorageV2, TypedRdfReportRowsV2, TypedSourceMapRowsV2,
+    ValidatedTypedAuxiliaryCommitV2, AUXILIARY_CODEC_SCHEMA_SHA256_V2,
 };
 #[allow(unused_imports)]
 pub(crate) use handle::{register_native_handle_types, NativeDocumentHandle, NativeSnapshotHandle};
@@ -117,6 +118,34 @@ pub(crate) fn typed_structural_closure_handle_from_attestation_v2(
         )
         .map_err(crate::python_error)?;
     Ok(NativeSnapshotHandle::from_storage_v2(publication))
+}
+
+pub(crate) fn validate_typed_structural_auxiliary_commit_v2(
+    attestation: &NativeSnapshotAttestationV2,
+    storage: &TypedFacadeStorageV2,
+    prepared: &PreparedTypedAuxiliaryV2,
+    parser_bytes: u64,
+) -> NativeResult<ValidatedTypedAuxiliaryCommitV2> {
+    PublicationStorageV2::validate_prepared_typed_auxiliary(
+        attestation,
+        storage,
+        prepared,
+        parser_bytes,
+    )
+}
+
+pub(crate) fn commit_typed_structural_auxiliary_handle_v2(
+    attestation: NativeSnapshotAttestationV2,
+    storage: TypedFacadeStorageV2,
+    prepared: PreparedTypedAuxiliaryV2,
+    validated: ValidatedTypedAuxiliaryCommitV2,
+) -> NativeSnapshotHandle {
+    NativeSnapshotHandle::from_storage_v2(PublicationStorageV2::commit_typed_auxiliary(
+        attestation,
+        storage,
+        prepared,
+        validated,
+    ))
 }
 
 #[cfg(feature = "test-hooks")]

@@ -35,6 +35,8 @@ class _RetainedStructuralExtension(NativeIngestionExtension, Protocol):
     _merge_parsed_structural_snapshot_v2: Callable[..., object]
     _prepare_parsed_structural_snapshot_v2: Callable[..., object]
     _finalize_parsed_structural_snapshot_v2: Callable[..., object]
+    _prepare_parsed_structural_closure_v2: Callable[..., object]
+    _finalize_parsed_structural_closure_v2: Callable[..., object]
 
 
 def _closure_publication_checkpoint_v2(
@@ -98,6 +100,37 @@ def _snapshot_anonymous_scope_targets_v2(
             effective_documents,
             strict=True,
         )
+    )
+
+
+def _snapshot_anonymous_scope_candidates_v2(
+    snapshot: OntologySnapshot,
+) -> tuple[bytes | None, ...]:
+    """Return repeated-fingerprint scope candidates using O(documents) metadata."""
+
+    from pyowl_core.model import encode_varint
+
+    records = snapshot.import_manifest.documents
+    grouped: dict[bytes, list[tuple[bytes, str, int]]] = {}
+    for document_ordinal, record in enumerate(records):
+        grouped.setdefault(record.document_fingerprint.digest, []).append(
+            (record.source_sha256, record.document_key, document_ordinal)
+        )
+    ordinals = [0] * len(records)
+    for group in grouped.values():
+        for scope_ordinal, (_source, _key, document_ordinal) in enumerate(sorted(group)):
+            ordinals[document_ordinal] = scope_ordinal
+    return tuple(
+        (
+            hashlib.sha256(
+                b"pyowl-core:snapshot-document-scope:v1\x00"
+                + record.document_fingerprint.digest
+                + encode_varint(scope_ordinal)
+            ).digest()
+            if scope_ordinal > 0
+            else None
+        )
+        for record, scope_ordinal in zip(records, ordinals, strict=True)
     )
 
 
@@ -981,6 +1014,234 @@ def _decode_prepared_retained_publication_v2(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedRetainedClosureDocumentV2:
+    fingerprint: _RetainedFingerprintEvidenceV2
+    raw_counts: tuple[int, int, int]
+    effective_counts: tuple[int, int, int]
+    source_map_rows: int
+    source_prefix_rows: int
+    raw_origin_rows: int
+    effective_origin_rows: int
+    rdf_report: _PreparedRetainedRdfReportV2 | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedRetainedClosureV2:
+    fingerprints: tuple[
+        _RetainedFingerprintEvidenceV2,
+        _RetainedFingerprintEvidenceV2,
+        _RetainedFingerprintEvidenceV2,
+    ]
+    content_digests: tuple[bytes, bytes, bytes, bytes, bytes, bytes]
+    closure_counts: tuple[int, int, int]
+    closure_origin_rows: int
+    max_facade_row_bytes: int
+    parser_summary_bytes_materialized: int
+    canonical_rows_scanned: int
+    structural_occurrence_rows_scanned: int
+    metadata_iri_objects_materialized: int
+    canonical_rows_encoded: int
+    canonical_bytes_encoded: int
+    fingerprint_temporary_bytes: int
+    origin_bytes_retained: int
+    prepare_seconds: float
+    documents: tuple[_PreparedRetainedClosureDocumentV2, ...]
+
+
+def _decode_prepared_retained_closure_v2(
+    encoded: bytes,
+    *,
+    document_count: int,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    allow_partial_rdf_mapping: bool,
+    limits: ParseLimits,
+) -> _PreparedRetainedClosureV2:
+    reader = native._ResultReader(encoded)
+    magic = reader.take(8)
+    schema = _read_u16_v2(reader)
+    flags = _read_u16_v2(reader)
+    observed_documents = reader.u64()
+    expected_flags = int(preserve_source_map) | (int(collect_provenance) << 1)
+    if (
+        magic != native._RETAINED_CLOSURE_PREPARED_MAGIC_V2
+        or schema != 1
+        or flags & ~7
+        or flags & 3 != expected_flags
+        or observed_documents != document_count
+    ):
+        raise BackendProtocolError(
+            "native retained closure summary has incompatible metadata",
+            code="NATIVE_PARSE_VERSION",
+        )
+    fingerprints = cast(
+        tuple[
+            _RetainedFingerprintEvidenceV2,
+            _RetainedFingerprintEvidenceV2,
+            _RetainedFingerprintEvidenceV2,
+        ],
+        tuple(_RetainedFingerprintEvidenceV2(reader.u64(), reader.take(32)) for _ in range(3)),
+    )
+    content = cast(
+        tuple[bytes, bytes, bytes, bytes, bytes, bytes],
+        tuple(reader.take(32) for _ in range(6)),
+    )
+    closure_counts = cast(tuple[int, int, int], tuple(reader.u64() for _ in range(3)))
+    closure_origins = reader.u64()
+    max_row = reader.u64()
+    parser_summary_bytes_materialized = reader.u64()
+    canonical_rows_scanned = reader.u64()
+    structural_occurrence_rows_scanned = reader.u64()
+    metadata_iri_objects_materialized = reader.u64()
+    canonical_rows = reader.u64()
+    canonical_bytes = reader.u64()
+    fingerprint_temporary_bytes = reader.u64()
+    origin_bytes = reader.u64()
+    prepare_ns = reader.u64()
+    documents: list[_PreparedRetainedClosureDocumentV2] = []
+    rdf_count = 0
+    for _ordinal in range(document_count):
+        fingerprint = _RetainedFingerprintEvidenceV2(reader.u64(), reader.take(32))
+        raw_counts = cast(tuple[int, int, int], tuple(reader.u64() for _ in range(3)))
+        effective_counts = cast(tuple[int, int, int], tuple(reader.u64() for _ in range(3)))
+        source_rows = reader.u64()
+        source_prefixes = reader.u64()
+        raw_origins = reader.u64()
+        effective_origins = reader.u64()
+        rdf_marker = reader.u8()
+        rdf_report = None
+        if rdf_marker == 1:
+            rdf_count += 1
+            conformant = reader.u8()
+            if conformant not in {0, 1}:
+                raise BackendProtocolError(
+                    "native closure RDF report has an invalid conformance flag",
+                    code="NATIVE_RDF_REPORT",
+                )
+            rdf_report = _PreparedRetainedRdfReportV2(
+                bool(conformant),
+                reader.u64(),
+                reader.u64(),
+                reader.u64(),
+                reader.u64(),
+                reader.u64(),
+                reader.take(32),
+                reader.u64(),
+            )
+        elif rdf_marker != 0:
+            raise BackendProtocolError(
+                "native closure RDF report has an invalid presence marker",
+                code="NATIVE_RDF_REPORT",
+            )
+        documents.append(
+            _PreparedRetainedClosureDocumentV2(
+                fingerprint,
+                raw_counts,
+                effective_counts,
+                source_rows,
+                source_prefixes,
+                raw_origins,
+                effective_origins,
+                rdf_report,
+            )
+        )
+    reader.finish()
+    if (
+        any(item.preimage_byte_length == 0 for item in fingerprints)
+        or any(document.fingerprint.preimage_byte_length == 0 for document in documents)
+        or max_row == 0
+        or parser_summary_bytes_materialized == 0
+        or canonical_rows_scanned < structural_occurrence_rows_scanned
+        or canonical_rows_scanned < metadata_iri_objects_materialized
+        or (not collect_provenance and (closure_origins != 0 or origin_bytes != 0))
+        or bool(flags & 4) != bool(rdf_count)
+    ):
+        raise BackendProtocolError(
+            "native retained closure summary has inconsistent counters",
+            code="NATIVE_PARSE_MODEL",
+        )
+    for document in documents:
+        limits.enforce("max_annotations", document.raw_counts[0])
+        limits.enforce("max_axioms", document.raw_counts[1])
+        limits.enforce("max_annotations", document.effective_counts[0])
+        limits.enforce("max_axioms", document.effective_counts[1])
+        limits.enforce("max_source_map_entries", document.source_map_rows)
+        limits.enforce("max_origin_entries", document.raw_origin_rows)
+        limits.enforce("max_origin_entries", document.effective_origin_rows)
+        if not preserve_source_map and (
+            document.source_map_rows != 0 or document.source_prefix_rows != 0
+        ):
+            raise BackendProtocolError(
+                "native retained closure source-map counters are inconsistent",
+                code="NATIVE_PARSE_MODEL",
+            )
+        if not collect_provenance and (
+            document.raw_origin_rows != 0 or document.effective_origin_rows != 0
+        ):
+            raise BackendProtocolError(
+                "native retained closure origin counters are inconsistent",
+                code="NATIVE_PARSE_MODEL",
+            )
+        if document.rdf_report is not None:
+            _validate_prepared_closure_rdf_report_v2(
+                document.rdf_report,
+                allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+            )
+    limits.enforce("max_origin_entries", closure_origins)
+    return _PreparedRetainedClosureV2(
+        fingerprints,
+        content,
+        closure_counts,
+        closure_origins,
+        max_row,
+        parser_summary_bytes_materialized,
+        canonical_rows_scanned,
+        structural_occurrence_rows_scanned,
+        metadata_iri_objects_materialized,
+        canonical_rows,
+        canonical_bytes,
+        fingerprint_temporary_bytes,
+        origin_bytes,
+        prepare_ns / 1_000_000_000,
+        tuple(documents),
+    )
+
+
+def _validate_prepared_closure_rdf_report_v2(
+    report: _PreparedRetainedRdfReportV2,
+    *,
+    allow_partial_rdf_mapping: bool,
+) -> None:
+    remaining = report.total_triples - report.consumed_triples
+    conformant_shape = (
+        report.conformant
+        and remaining == 0
+        and report.unconsumed_triple_count == 0
+        and report.rule_count == 0
+        and report.diagnostic_count == 0
+        and report.retained_bytes == 17
+    )
+    partial_shape = (
+        allow_partial_rdf_mapping
+        and not report.conformant
+        and remaining > 0
+        and 0 < report.unconsumed_triple_count <= remaining
+        and report.rule_count == 1
+        and report.diagnostic_count == 0
+        and report.retained_bytes > 17
+    )
+    if (
+        report.consumed_triples > report.total_triples
+        or not (conformant_shape or partial_shape)
+        or len(report.digest) != 32
+    ):
+        raise BackendProtocolError(
+            "native retained closure RDF report summary is inconsistent",
+            code="NATIVE_RDF_REPORT",
+        )
+
+
 def publish_retained_functional_snapshot_v2(
     summary: bytes,
     *,
@@ -1150,10 +1411,7 @@ def _publish_retained_snapshot_v2(
         raise TypeError("retained parser publication received invalid source metadata")
     if (
         options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
-        or (
-            options.preserve_source_map
-            and expected_format not in {"functional", "rdfxml"}
-        )
+        or (options.preserve_source_map and expected_format not in {"functional", "rdfxml"})
         or options.validate_owl2_dl
         or detection.format.value != expected_format
     ):
@@ -1162,9 +1420,7 @@ def _publish_retained_snapshot_v2(
         options.imports in {ImportPolicy.RESOLVE_LOCAL, ImportPolicy.RESOLVE_STRICT}
         or (options.imports is ImportPolicy.RECORD_UNRESOLVED and resolver is not None)
     ):
-        raise AssertionError(
-            "retained publication cannot bypass resolver-backed imports"
-        )
+        raise AssertionError("retained publication cannot bypass resolver-backed imports")
     if cancellation_token is not None:
         cancellation_token.check()
     options.limits.enforce("max_documents", 1)
@@ -1217,19 +1473,15 @@ def _publish_retained_snapshot_v2(
     edges: tuple[ImportEdge, ...]
     public_diagnostics: tuple[Diagnostic, ...]
     if options.imports is ImportPolicy.IGNORE:
-        edges = tuple(
-            ImportEdge(document_key, iri, ImportStatus.IGNORED) for iri in direct_imports
-        )
+        edges = tuple(ImportEdge(document_key, iri, ImportStatus.IGNORED) for iri in direct_imports)
         public_diagnostics = ()
         resolution_attempts = 0
     elif direct_imports:
-        edges, public_diagnostics, resolution_attempts = (
-            _record_unresolved_without_resolver(
-                document_key,
-                document_iri,
-                direct_imports,
-                options,
-            )
+        edges, public_diagnostics, resolution_attempts = _record_unresolved_without_resolver(
+            document_key,
+            document_iri,
+            direct_imports,
+            options,
         )
     else:
         edges = ()
@@ -1274,13 +1526,9 @@ def _publish_retained_snapshot_v2(
         allow_partial_rdf_mapping=allow_partial_rdf_mapping,
     )
     options.limits.enforce("max_origin_entries", prepared.origin_rows_retained)
-    options.limits.enforce(
-        "max_source_map_entries", prepared.source_map_rows_retained
-    )
+    options.limits.enforce("max_source_map_entries", prepared.source_map_rows_retained)
     if prepared.rdf_report is not None:
-        options.limits.enforce(
-            "max_diagnostics", prepared.rdf_report.unconsumed_triple_count
-        )
+        options.limits.enforce("max_diagnostics", prepared.rdf_report.unconsumed_triple_count)
     if (
         options.preserve_source_map
         and prepared.source_map_rows_retained < seed.structural_occurrence_rows_scanned
@@ -1295,16 +1543,13 @@ def _publish_retained_snapshot_v2(
             code="NATIVE_PARSE_MODEL",
         )
     if rdf_total_triples is not None and (
-        prepared.rdf_report is None
-        or prepared.rdf_report.total_triples != rdf_total_triples
+        prepared.rdf_report is None or prepared.rdf_report.total_triples != rdf_total_triples
     ):
         raise BackendProtocolError(
             "native retained RDF report diverges from parser metadata",
             code="NATIVE_RDF_REPORT",
         )
-    fingerprints = tuple(
-        Fingerprint("sha256", 1, item.digest) for item in prepared.fingerprints
-    )
+    fingerprints = tuple(Fingerprint("sha256", 1, item.digest) for item in prepared.fingerprints)
     try:
         inventory_rows = tuple(
             _NativeCommonContractRecordInventoryV1(
@@ -1447,14 +1692,10 @@ def _publish_retained_snapshot_v2(
                 effective_origin_count=prepared.origin_rows_retained,
                 raw_source_prefix_count=prepared.source_prefix_rows_retained,
                 rdf_unconsumed_triple_count=(
-                    0
-                    if retained_rdf is None
-                    else retained_rdf.unconsumed_triple_count
+                    0 if retained_rdf is None else retained_rdf.unconsumed_triple_count
                 ),
                 rdf_rule_count=0 if retained_rdf is None else retained_rdf.rule_count,
-                rdf_diagnostic_count=(
-                    0 if retained_rdf is None else retained_rdf.diagnostic_count
-                ),
+                rdf_diagnostic_count=(0 if retained_rdf is None else retained_rdf.diagnostic_count),
             ),
         ),
         closure=NativeClosureFacadeCardinalitiesV2(
@@ -1544,9 +1785,7 @@ def _publish_retained_snapshot_v2(
             None if prepared.scoped_roots else _WIRE_STRUCTURAL_ALIAS_SEAL_V1
         ),
         _ingestion_counters=ingestion_counters,
-        _anonymous_scope_evidence=(
-            None if prepared.scoped_roots else _NO_ANONYMOUS_SCOPES_SEAL_V2
-        ),
+        _anonymous_scope_evidence=(None if prepared.scoped_roots else _NO_ANONYMOUS_SCOPES_SEAL_V2),
         _common_contract_summary=common_contract_summary,
     )
     for diagnostic in public_diagnostics:
@@ -1596,10 +1835,7 @@ def retain_native_snapshot_v2(
         or not (functional_documents or rdfxml_reports_eligible)
         or any(
             document.provenance.backend != "native"
-            or (
-                functional_documents
-                and document.rdf_mapping_report is not None
-            )
+            or (functional_documents and document.rdf_mapping_report is not None)
             for document in snapshot.documents
         )
     )
@@ -1612,9 +1848,7 @@ def retain_native_snapshot_v2(
         and rdfxml_reports_eligible
         and parsed_native_storage is not None
     )
-    if common_ineligible or not (
-        single_document or retained_closure or retained_rdfxml_single
-    ):
+    if common_ineligible or not (single_document or retained_closure or retained_rdfxml_single):
         return snapshot
     if functional_documents:
         extension = native.require("parse-functional-v1")
@@ -1629,20 +1863,24 @@ def retain_native_snapshot_v2(
             parsed_native_storage
             if type(parsed_native_storage) is tuple
             and len(parsed_native_storage) == len(snapshot.documents)
-            else (
-                (parsed_native_storage,)
-                if retained_rdfxml_single
-                else None
-            )
+            else ((parsed_native_storage,) if retained_rdfxml_single else None)
         )
+        if parsed_native_storages is not None and functional_documents:
+            from pyowl_core.backends.parser import _NativeBackendDriver
+
+            if not _NativeBackendDriver().supports_retained_storage_fork():
+                parsed_native_storages = None
         if rdfxml_documents and parsed_native_storages is None:
             return snapshot
-        required_hook = (
-            "_merge_parsed_structural_snapshot_v2"
+        required_hooks = (
+            (
+                "_prepare_parsed_structural_closure_v2",
+                "_finalize_parsed_structural_closure_v2",
+            )
             if parsed_native_storages is not None
-            else "_retain_structural_snapshot_v2"
+            else ("_retain_structural_snapshot_v2",)
         )
-        if not callable(getattr(extension, required_hook, None)):
+        if any(not callable(getattr(extension, name, None)) for name in required_hooks):
             raise BackendProtocolError(
                 "native closure has no retained publication boundary",
                 code="NATIVE_INGESTION_REGISTRATION",
@@ -1854,9 +2092,7 @@ def _publish_structural_snapshot_v2(
     import_manifest = freeze_native_import_manifest_publication_v1(snapshot.import_manifest)
     sidecars = NativeDiagnosticReferenceSidecarsV2(
         snapshot=tuple(_diagnostic_reference_kinds(value) for value in snapshot.diagnostics),
-        documents=(
-            tuple(_diagnostic_reference_kinds(value) for value in document.diagnostics),
-        ),
+        documents=(tuple(_diagnostic_reference_kinds(value) for value in document.diagnostics),),
         import_edges=tuple(
             None if edge.diagnostic is None else _diagnostic_reference_kinds(edge.diagnostic)
             for edge in snapshot.import_manifest.edges
@@ -2085,6 +2321,329 @@ def _publish_structural_snapshot_v2(
     )
 
 
+def _publish_parsed_structural_closure_snapshot_v2(
+    snapshot: OntologySnapshot,
+    extension: native._Extension,
+    cancellation_token: CancellationToken | None,
+    parsed_native_storages: tuple[object, ...],
+) -> OntologySnapshot:
+    """Publish parser owners from bounded Rust-prepared closure evidence."""
+
+    from dataclasses import fields
+
+    from pyowl_core.backends.native_handoff import (
+        NativeDocumentPublicationV1,
+        NativeLoadReportPublicationV1,
+        freeze_native_diagnostic_publication_v1,
+        freeze_native_import_manifest_publication_v1,
+        freeze_native_provenance_publication_v1,
+    )
+    from pyowl_core.backends.native_handoff_v2 import (
+        NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2,
+        NATIVE_SNAPSHOT_PUBLICATION_VERSION_V2,
+        NativeClosureFacadeCardinalitiesV2,
+        NativeDiagnosticReferenceSidecarsV2,
+        NativeDocumentFacadeCardinalitiesV2,
+        NativeFacadeCardinalitySummaryV2,
+        NativeSnapshotContentDigestsV2,
+        _seal_native_snapshot_owner_v2,
+        freeze_native_snapshot_publication_v2,
+        native_snapshot_publication_attestation_v2,
+    )
+    from pyowl_core.document import Fingerprint
+    from pyowl_core.document.native_storage import (
+        _NativeIngestionCountersV2,
+        ontology_snapshot_from_native_publication_v2,
+    )
+
+    records = snapshot.import_manifest.documents
+    if (
+        type(parsed_native_storages) is not tuple
+        or len(parsed_native_storages) != len(records)
+        or len(snapshot.documents) != len(records)
+    ):
+        raise BackendProtocolError(
+            "native parser-owner closure is not document-aligned",
+            code="NATIVE_PARSE_MODEL",
+        )
+    selected_extension = cast(_RetainedStructuralExtension, extension)
+    prepare = getattr(selected_extension, "_prepare_parsed_structural_closure_v2", None)
+    finalize = getattr(selected_extension, "_finalize_parsed_structural_closure_v2", None)
+    prepared_type = getattr(extension, "_NativePreparedStructuralClosureV2", None)
+    if not callable(prepare) or not callable(finalize) or not isinstance(prepared_type, type):
+        raise BackendProtocolError(
+            "native parser-owner closure lacks its bounded publication seam",
+            code="NATIVE_INGESTION_REGISTRATION",
+        )
+    topology = tuple((ordinal,) for ordinal in range(len(records)))
+    closure_ordinals = tuple(range(len(records)))
+    config = native._encode_config(
+        snapshot.load_options.limits,
+        cancellation_token,
+        verify=False,
+    )
+    with native._relay(extension, snapshot.load_options.limits, cancellation_token) as cancel:
+        result = native._call(
+            extension,
+            lambda: prepare(
+                parsed_native_storages,
+                snapshot.import_manifest.canonical_bytes(),
+                snapshot.root_document_key,
+                tuple(record.document_key for record in records),
+                snapshot.load_options.collect_provenance,
+                snapshot.load_options.preserve_source_map,
+                config,
+                cancel,
+                effective_document_ordinals=topology,
+                closure_document_ordinals=closure_ordinals,
+                anonymous_scope_targets=_snapshot_anonymous_scope_candidates_v2(snapshot),
+            ),
+        )
+    if (
+        type(result) is not tuple
+        or len(result) != 2
+        or type(result[0]) is not bytes
+        or type(result[1]) is not prepared_type
+    ):
+        raise BackendProtocolError(
+            "native closure preparation returned invalid result members",
+            code="NATIVE_RESULT_TYPE",
+        )
+    prepared_encoded = result[0]
+    prepared_owner = result[1]
+    prepared = _decode_prepared_retained_closure_v2(
+        prepared_encoded,
+        document_count=len(records),
+        collect_provenance=snapshot.load_options.collect_provenance,
+        preserve_source_map=snapshot.load_options.preserve_source_map,
+        allow_partial_rdf_mapping=False,
+        limits=snapshot.load_options.limits,
+    )
+    document_fingerprints = tuple(
+        Fingerprint("sha256", 1, document.fingerprint.digest) for document in prepared.documents
+    )
+    global_fingerprints = tuple(
+        Fingerprint("sha256", 1, evidence.digest) for evidence in prepared.fingerprints
+    )
+    if (
+        document_fingerprints
+        != tuple(document.document_fingerprint for document in snapshot.documents)
+        or document_fingerprints != tuple(record.document_fingerprint for record in records)
+        or global_fingerprints
+        != (
+            snapshot.structural_fingerprint,
+            snapshot.logical_fingerprint,
+            snapshot.signature_fingerprint,
+        )
+    ):
+        raise BackendProtocolError(
+            "native prepared closure fingerprints diverge from resolver metadata",
+            code="NATIVE_FINGERPRINT_INPUTS",
+        )
+
+    document_diagnostics = tuple(
+        tuple(freeze_native_diagnostic_publication_v1(value) for value in document.diagnostics)
+        for document in snapshot.documents
+    )
+    documents: list[NativeDocumentPublicationV1] = []
+    for record, document, diagnostics, selected in zip(
+        records,
+        snapshot.documents,
+        document_diagnostics,
+        prepared.documents,
+        strict=True,
+    ):
+        mapping = document.rdf_mapping_report
+        retained_rdf = selected.rdf_report
+        if retained_rdf is None:
+            if mapping is not None:
+                raise BackendProtocolError(
+                    "native closure omitted an RDF mapping report",
+                    code="NATIVE_RDF_REPORT",
+                )
+        elif (
+            mapping is None
+            or mapping.conformant is not retained_rdf.conformant
+            or mapping.consumed_triples != retained_rdf.consumed_triples
+            or mapping.total_triples != retained_rdf.total_triples
+            or len(mapping.unconsumed) != retained_rdf.unconsumed_triple_count
+            or len(mapping.rule_ids) != retained_rdf.rule_count
+            or len(mapping.diagnostics) != retained_rdf.diagnostic_count
+        ):
+            raise BackendProtocolError(
+                "native closure RDF mapping evidence diverges from resolver metadata",
+                code="NATIVE_RDF_REPORT",
+            )
+        documents.append(
+            NativeDocumentPublicationV1(
+                document_key=record.document_key,
+                ontology_id=document.ontology_id,
+                document_iri=document.document_iri,
+                direct_imports=document.direct_imports,
+                provenance=freeze_native_provenance_publication_v1(document.provenance),
+                document_fingerprint=document_fingerprints[len(documents)],
+                diagnostics=diagnostics,
+                ontology_annotation_count=selected.raw_counts[0],
+                axiom_count=selected.raw_counts[1],
+                extension_count=selected.raw_counts[2],
+                source_map_entry_count=selected.source_map_rows,
+                origin_entry_count=selected.raw_origin_rows,
+                rdf_mapping_conformant=(None if retained_rdf is None else retained_rdf.conformant),
+                rdf_mapping_report_sha256=(None if retained_rdf is None else retained_rdf.digest),
+            )
+        )
+    frozen_documents = tuple(documents)
+    diagnostics = tuple(
+        freeze_native_diagnostic_publication_v1(value) for value in snapshot.diagnostics
+    )
+    timings = dict(snapshot.report.timings)
+    timings["native_closure_publication_prepare_seconds"] = prepared.prepare_seconds
+    report = NativeLoadReportPublicationV1(
+        backend="native",
+        api_version=snapshot.report.api_version,
+        model_schema=snapshot.report.model_schema,
+        document_count=len(frozen_documents),
+        total_source_bytes=snapshot.report.total_source_bytes,
+        effective_axiom_count=prepared.closure_counts[1],
+        resolution_attempts=snapshot.report.resolution_attempts,
+        acquisition_cache_hits=snapshot.report.acquisition_cache_hits,
+        document_cache_hits=snapshot.report.document_cache_hits,
+        timings=tuple(sorted(timings.items(), key=lambda item: item[0].encode("utf-8"))),
+        structural_fingerprint=global_fingerprints[0],
+        logical_fingerprint=global_fingerprints[1],
+        signature_fingerprint=global_fingerprints[2],
+        owl2_dl_validated=False,
+        owl2_dl_conforms=None,
+        owl2_dl_report_sha256=None,
+    )
+    capability_bits = (
+        7
+        | (8 if snapshot.load_options.preserve_source_map else 0)
+        | (16 if snapshot.load_options.collect_provenance else 0)
+        | (32 if any(document.rdf_report is not None for document in prepared.documents) else 0)
+    )
+    import_manifest = freeze_native_import_manifest_publication_v1(snapshot.import_manifest)
+    sidecars = NativeDiagnosticReferenceSidecarsV2(
+        snapshot=tuple(_diagnostic_reference_kinds(value) for value in snapshot.diagnostics),
+        documents=tuple(
+            tuple(_diagnostic_reference_kinds(value) for value in document.diagnostics)
+            for document in snapshot.documents
+        ),
+        import_edges=tuple(
+            None if edge.diagnostic is None else _diagnostic_reference_kinds(edge.diagnostic)
+            for edge in snapshot.import_manifest.edges
+        ),
+    )
+    facade_summary = NativeFacadeCardinalitySummaryV2(
+        documents=tuple(
+            NativeDocumentFacadeCardinalitiesV2(
+                document_key=record.document_key,
+                effective_annotation_count=selected.effective_counts[0],
+                effective_axiom_count=selected.effective_counts[1],
+                effective_extension_count=selected.effective_counts[2],
+                effective_origin_count=selected.effective_origin_rows,
+                raw_source_prefix_count=selected.source_prefix_rows,
+                rdf_unconsumed_triple_count=(
+                    0
+                    if selected.rdf_report is None
+                    else selected.rdf_report.unconsumed_triple_count
+                ),
+                rdf_rule_count=(
+                    0 if selected.rdf_report is None else selected.rdf_report.rule_count
+                ),
+                rdf_diagnostic_count=(
+                    0 if selected.rdf_report is None else selected.rdf_report.diagnostic_count
+                ),
+            )
+            for record, selected in zip(records, prepared.documents, strict=True)
+        ),
+        closure=NativeClosureFacadeCardinalitiesV2(
+            effective_annotation_count=prepared.closure_counts[0],
+            effective_axiom_count=prepared.closure_counts[1],
+            effective_extension_count=prepared.closure_counts[2],
+            effective_origin_count=prepared.closure_origin_rows,
+        ),
+    )
+    content = NativeSnapshotContentDigestsV2(
+        root_table_sha256=prepared.content_digests[0],
+        effective_root_table_sha256=prepared.content_digests[1],
+        fingerprint_inputs_sha256=prepared.content_digests[2],
+        source_manifest_sha256=prepared.content_digests[3],
+        provenance_manifest_sha256=prepared.content_digests[4],
+        effective_origin_manifest_sha256=prepared.content_digests[5],
+    )
+    attestation = native_snapshot_publication_attestation_v2(
+        documents=frozen_documents,
+        import_manifest=import_manifest,
+        root_document_key=snapshot.root_document_key,
+        load_options=snapshot.load_options,
+        diagnostics=diagnostics,
+        diagnostic_reference_sidecars=sidecars,
+        facade_cardinality_summary=facade_summary,
+        report=report,
+        capability_bits=capability_bits,
+        content_digests=content,
+        max_facade_row_bytes=prepared.max_facade_row_bytes,
+        owl2_dl_report_summary=None,
+    )
+    with native._relay(extension, snapshot.load_options.limits, cancellation_token) as cancel:
+        raw_owner = native._call(
+            extension,
+            lambda: finalize(
+                parsed_native_storages,
+                prepared_owner,
+                prepared_encoded,
+                attestation,
+                cancel,
+            ),
+        )
+    values: dict[str, object] = {
+        "version": NATIVE_SNAPSHOT_PUBLICATION_VERSION_V2,
+        "ledger_sha256": NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2,
+        "handle": _seal_native_snapshot_owner_v2(raw_owner),
+        "documents": frozen_documents,
+        "import_manifest": import_manifest,
+        "root_document_key": snapshot.root_document_key,
+        "load_options": snapshot.load_options,
+        "diagnostics": diagnostics,
+        "diagnostic_reference_sidecars": sidecars,
+        "facade_cardinality_summary": facade_summary,
+        "report": report,
+        "capability_bits": capability_bits,
+        "max_facade_row_bytes": prepared.max_facade_row_bytes,
+        "owl2_dl_report_summary": None,
+    }
+    for field in fields(content):
+        values[field.name] = getattr(content, field.name)
+    publication = freeze_native_snapshot_publication_v2(values)
+    ingestion_counters = _NativeIngestionCountersV2(
+        parser_result_bytes_scanned=0,
+        parser_summary_bytes_materialized=(
+            prepared.parser_summary_bytes_materialized + len(prepared_encoded)
+        ),
+        canonical_rows_scanned=prepared.canonical_rows_scanned,
+        structural_occurrence_rows_scanned=prepared.structural_occurrence_rows_scanned,
+        structural_root_rows_published=sum(prepared.closure_counts),
+        eager_structural_objects_materialized=0,
+        metadata_iri_objects_materialized=prepared.metadata_iri_objects_materialized,
+        provenance_occurrence_records_materialized=0,
+        canonical_bytes_copied_to_python=0,
+        fingerprint_preimage_bytes_materialized_in_python=0,
+        native_publication_canonical_rows_encoded=prepared.canonical_rows_encoded,
+        native_publication_canonical_bytes_encoded=prepared.canonical_bytes_encoded,
+        native_fingerprint_temporary_bytes=prepared.fingerprint_temporary_bytes,
+        native_origin_rows_retained=prepared.closure_origin_rows,
+        native_origin_bytes_retained=prepared.origin_bytes_retained,
+    )
+    return ontology_snapshot_from_native_publication_v2(
+        publication,
+        _wire_structural_aliases=None,
+        _ingestion_counters=ingestion_counters,
+        _anonymous_scope_evidence=None,
+        _common_contract_summary=None,
+    )
+
+
 def _publish_structural_closure_snapshot_v2(
     snapshot: OntologySnapshot,
     extension: native._Extension,
@@ -2135,14 +2694,19 @@ def _publish_structural_closure_snapshot_v2(
     )
     from pyowl_core.document.snapshot import AxiomScope
 
-    if not snapshot.documents or (
-        len(snapshot.documents) == 1 and parsed_native_storages is None
-    ):
+    if not snapshot.documents or (len(snapshot.documents) == 1 and parsed_native_storages is None):
         raise AssertionError("retained closure publication received an ineligible snapshot")
     records = snapshot.import_manifest.documents
     if len(records) != len(snapshot.documents):
         raise AssertionError("retained closure records are not aligned")
     _closure_publication_checkpoint_v2(cancellation_token)
+    if parsed_native_storages is not None:
+        return _publish_parsed_structural_closure_snapshot_v2(
+            snapshot,
+            extension,
+            cancellation_token,
+            parsed_native_storages,
+        )
 
     raw_documents = tuple(
         (
@@ -2309,10 +2873,7 @@ def _publish_structural_closure_snapshot_v2(
         ...,
     ] = (None,) * len(records)
     rdf_report_digests: tuple[bytes | None, ...] = (None,) * len(records)
-    if all(
-        document.provenance.format.value == "rdfxml"
-        for document in snapshot.documents
-    ):
+    if all(document.provenance.format.value == "rdfxml" for document in snapshot.documents):
         encoded_reports: list[
             tuple[bytes, tuple[bytes, ...], tuple[bytes, ...], tuple[bytes, ...]]
         ] = []
@@ -2349,9 +2910,7 @@ def _publish_structural_closure_snapshot_v2(
             )
             report_digests.append(
                 hashlib.sha256(
-                    NATIVE_RDF_MAPPING_REPORT_DOMAIN_V2.encode("ascii")
-                    + b"\0"
-                    + body
+                    NATIVE_RDF_MAPPING_REPORT_DOMAIN_V2.encode("ascii") + b"\0" + body
                 ).digest()
             )
             _closure_publication_checkpoint_v2(cancellation_token)
@@ -2377,9 +2936,7 @@ def _publish_structural_closure_snapshot_v2(
             extension_count=len(raw_rows[2]),
             source_map_entry_count=len(source_rows[0]),
             origin_entry_count=len(raw_origins),
-            rdf_mapping_conformant=(
-                None if rdf_report is None else True
-            ),
+            rdf_mapping_conformant=(None if rdf_report is None else True),
             rdf_mapping_report_sha256=rdf_digest,
         )
         for (
@@ -2445,10 +3002,7 @@ def _publish_structural_closure_snapshot_v2(
     sidecars = NativeDiagnosticReferenceSidecarsV2(
         snapshot=tuple(_diagnostic_reference_kinds(value) for value in snapshot.diagnostics),
         documents=tuple(
-            tuple(
-                _diagnostic_reference_kinds(value)
-                for value in document.diagnostics
-            )
+            tuple(_diagnostic_reference_kinds(value) for value in document.diagnostics)
             for document in snapshot.documents
         ),
         import_edges=tuple(
@@ -2706,11 +3260,7 @@ def _publish_structural_closure_snapshot_v2(
                 for rows in (entries, prefixes)
                 for row in rows
             ),
-            *(
-                len(rdf_rows[0])
-                for rdf_rows in rdf_report_documents
-                if rdf_rows is not None
-            ),
+            *(len(rdf_rows[0]) for rdf_rows in rdf_report_documents if rdf_rows is not None),
         )
     )
     content = native_snapshot_content_digests_v2(

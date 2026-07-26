@@ -453,6 +453,10 @@ impl TypedFacadeStorageV2 {
     /// Fork one fresh parser document while sharing its immutable component
     /// arena. Only root manifests and their derived indexes are copied; the
     /// canonical component rows remain Arc-owned by the parser arena.
+    //
+    // The error must return the original owner by value so callers can restore
+    // a single-use parser handle without allocating on the rollback path.
+    #[allow(clippy::result_large_err)]
     pub(crate) fn fork_parser_document(
         self,
         cancellation: Cancellation,

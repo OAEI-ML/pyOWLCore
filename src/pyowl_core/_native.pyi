@@ -57,6 +57,8 @@ class _NativeSnapshotHandle:
 
 class _NativeParsedStructuralStorageV2: ...
 
+class _NativePreparedStructuralClosureV2: ...
+
 class _NativeRetainedAxiomTypeIndexV1:
     def _binding_v1(self) -> tuple[bytes, bytes]: ...
     def _canonical_sizes_v1(self) -> tuple[int, ...]: ...
@@ -361,6 +363,54 @@ def _merge_parsed_structural_snapshot_v2(
     effective_document_ordinals: object | None = None,
     closure_document_ordinals: object | None = None,
     anonymous_scope_targets: object | None = None,
+) -> _NativeSnapshotHandle: ...
+def _prepare_parsed_structural_closure_v2(
+    parsed_documents: tuple[_NativeParsedStructuralStorageV2, ...],
+    manifest: bytes,
+    root_document_key: str,
+    document_keys: tuple[str, ...],
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    config: object,
+    cancel: _Cancellation | None = None,
+    *,
+    effective_document_ordinals: object | None = None,
+    closure_document_ordinals: object | None = None,
+    anonymous_scope_targets: object | None = None,
+) -> tuple[bytes, _NativePreparedStructuralClosureV2]: ...
+def _prepare_parsed_structural_closure_bridge_allocation_probe_v2(
+    parsed_documents: tuple[_NativeParsedStructuralStorageV2, ...],
+    manifest: bytes,
+    root_document_key: str,
+    document_keys: tuple[str, ...],
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    config: object,
+    fail_after: int | None = None,
+    *,
+    effective_document_ordinals: object | None = None,
+    closure_document_ordinals: object | None = None,
+    anonymous_scope_targets: object | None = None,
+) -> tuple[bytes, _NativePreparedStructuralClosureV2, int]: ...
+def _prepare_parsed_structural_closure_auxiliary_failure_probe_v2(
+    parsed_documents: tuple[_NativeParsedStructuralStorageV2, ...],
+    manifest: bytes,
+    root_document_key: str,
+    document_keys: tuple[str, ...],
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    config: object,
+    *,
+    effective_document_ordinals: object | None = None,
+    closure_document_ordinals: object | None = None,
+    anonymous_scope_targets: object | None = None,
+) -> tuple[bytes, _NativePreparedStructuralClosureV2]: ...
+def _finalize_parsed_structural_closure_v2(
+    parsed_documents: tuple[_NativeParsedStructuralStorageV2, ...],
+    prepared_closure: _NativePreparedStructuralClosureV2,
+    prepared_summary: bytes,
+    attestation: NativeSnapshotAttestationV2,
+    cancel: _Cancellation | None = None,
 ) -> _NativeSnapshotHandle: ...
 def _fork_parsed_structural_storage_v2(
     parsed: _NativeParsedStructuralStorageV2,

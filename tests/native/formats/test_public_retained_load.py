@@ -243,13 +243,8 @@ def test_record_unresolved_without_resolver_keeps_owner_first_diagnostics_exact(
     assert selected.report.diagnostics == reference.report.diagnostics
     assert selected.report.resolution_attempts == reference.report.resolution_attempts == 2
     assert len(selected.report.diagnostics) == 2
-    assert all(
-        diagnostic.code == "UNRESOLVED_IMPORT"
-        for diagnostic in selected.report.diagnostics
-    )
-    assert all(
-        edge.status is ImportStatus.UNRESOLVED for edge in selected.import_manifest.edges
-    )
+    assert all(diagnostic.code == "UNRESOLVED_IMPORT" for diagnostic in selected.report.diagnostics)
+    assert all(edge.status is ImportStatus.UNRESOLVED for edge in selected.import_manifest.edges)
     assert all(edge.resolver_name == "none" for edge in selected.import_manifest.edges)
     assert all(edge.diagnostic is not None for edge in selected.import_manifest.edges)
     http_edge = next(
@@ -257,9 +252,7 @@ def test_record_unresolved_without_resolver_keeps_owner_first_diagnostics_exact(
         for edge in selected.import_manifest.edges
         if edge.import_iri.value.startswith("https:")
     )
-    assert cast(Any, http_edge.diagnostic).details["import_iri"] == (
-        "https://example.test/child"
-    )
+    assert cast(Any, http_edge.diagnostic).details["import_iri"] == ("https://example.test/child")
     assert selected.structural_fingerprint == reference.structural_fingerprint
     assert selected.logical_fingerprint == reference.logical_fingerprint
     assert selected.signature_fingerprint == reference.signature_fingerprint
@@ -377,8 +370,7 @@ def test_compact_publication_seed_does_not_copy_structural_rows_to_python(
     extension: NativeTestExtension,
 ) -> None:
     declarations = b" ".join(
-        f"Declaration(Class(<urn:retained-bulk:C{index:04d}>))".encode()
-        for index in range(256)
+        f"Declaration(Class(<urn:retained-bulk:C{index:04d}>))".encode() for index in range(256)
     )
     source = b"Ontology(<urn:retained-bulk> " + declarations + b")"
     reference = load_snapshot(source, options=_options(BackendPreference.PYTHON))
@@ -420,6 +412,7 @@ def test_anonymous_re_scope_retains_distinct_raw_and_effective_native_owners(
 ) -> None:
     source = b"Ontology(<urn:retained-anonymous> ClassAssertion(<urn:C> _:person))"
     reference = load_snapshot(source, options=_options(BackendPreference.PYTHON))
+
     def unexpected(*_arguments: object, **_keywords: object) -> object:
         raise AssertionError("anonymous retained load crossed the complete model decoder")
 
@@ -462,10 +455,7 @@ def test_anonymous_re_scope_retains_distinct_raw_and_effective_native_owners(
     after_wire_native = cast(Any, owner)._publication_counters_v2()
     after_wire_python = cast(Any, selected)._native_python_counters()
     assert selected_wire == reference_wire
-    assert (
-        after_wire_native.encoded_view_requests
-        == before_wire_native.encoded_view_requests + 3
-    )
+    assert after_wire_native.encoded_view_requests == before_wire_native.encoded_view_requests + 3
     assert after_wire_python == before_wire_python
 
     after_native = after_wire_native
@@ -1075,10 +1065,7 @@ def test_resolver_built_closure_cancellation_precedes_owner_publication(
         b"Ontology(<urn:retained-cancel:root> Import(<urn:retained-cancel:child>) "
         b"Declaration(Class(<urn:retained-cancel:Root>)))"
     )
-    child = (
-        b"Ontology(<urn:retained-cancel:child> "
-        b"Declaration(Class(<urn:retained-cancel:Child>)))"
-    )
+    child = b"Ontology(<urn:retained-cancel:child> Declaration(Class(<urn:retained-cancel:Child>)))"
     options = LoadOptions(
         format=DocumentFormat.FUNCTIONAL,
         imports=ImportPolicy.RESOLVE_LOCAL,
@@ -1162,8 +1149,7 @@ def test_resolver_built_closure_partial_parse_failure_publishes_no_owner(
     )
     sources = {
         "urn:retained-partial:good": (
-            b"Ontology(<urn:retained-partial:good> "
-            b"Declaration(Class(<urn:retained-partial:Good>)))"
+            b"Ontology(<urn:retained-partial:good> Declaration(Class(<urn:retained-partial:Good>)))"
         ),
         "urn:retained-partial:malformed": (
             b"Ontology(<urn:retained-partial:malformed> this is not valid)"
@@ -1401,24 +1387,34 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         "_parse_functional_retained_v2",
         capture_retained_parse,
     )
-    merge_retained = cast(Any, extension)._merge_parsed_structural_snapshot_v2
+    prepare_retained = cast(Any, extension)._prepare_parsed_structural_closure_v2
     captured: dict[str, object] = {}
 
     def capture(
         parsed_documents: object,
-        origins: object,
-        attestation: object,
+        manifest: object,
+        root_document_key: object,
+        document_keys: object,
+        selected_collect_provenance: object,
+        selected_preserve_source_map: object,
         config: object,
         cancel: object,
         **keywords: object,
     ) -> object:
         captured["parsed_documents"] = parsed_documents
-        captured["origins"] = origins
-        captured.update(keywords)
-        return merge_retained(
+        captured["manifest"] = manifest
+        captured["root_document_key"] = root_document_key
+        captured["document_keys"] = document_keys
+        captured["collect_provenance"] = selected_collect_provenance
+        captured["preserve_source_map"] = selected_preserve_source_map
+        captured["keywords"] = keywords
+        return prepare_retained(
             parsed_documents,
-            origins,
-            attestation,
+            manifest,
+            root_document_key,
+            document_keys,
+            selected_collect_provenance,
+            selected_preserve_source_map,
             config,
             cancel,
             **keywords,
@@ -1428,9 +1424,29 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         raise AssertionError("parser-built closure crossed Python structural retention")
 
     monkeypatch.setattr(
+        native_ingestion,
+        "_closure_canonical_rows_v2",
+        unexpected_structural,
+    )
+    monkeypatch.setattr(
+        native_ingestion,
+        "_fingerprint_preimages_v2",
+        unexpected_structural,
+    )
+    monkeypatch.setattr(
+        native_handoff_v2,
+        "encode_native_auxiliary_row_v2",
+        unexpected_structural,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_prepare_parsed_structural_closure_v2",
+        capture,
+    )
+    monkeypatch.setattr(
         cast(Any, extension),
         "_merge_parsed_structural_snapshot_v2",
-        capture,
+        unexpected_structural,
     )
     monkeypatch.setattr(
         cast(Any, extension),
@@ -1476,41 +1492,32 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         type(value) is cast(Any, extension)._NativeParsedStructuralStorageV2
         for value in parsed_documents
     )
+    assert captured["manifest"] == reference.import_manifest.canonical_bytes()
+    assert captured["root_document_key"] == reference.root_document_key
+    assert captured["document_keys"] == tuple(
+        record.document_key for record in reference.import_manifest.documents
+    )
+    assert captured["collect_provenance"] is collect_provenance
+    assert captured["preserve_source_map"] is preserve_source_map
+    boundary = cast(dict[str, object], captured["keywords"])
+    assert set(boundary) == {
+        "effective_document_ordinals",
+        "closure_document_ordinals",
+        "anonymous_scope_targets",
+    }
+    assert boundary["effective_document_ordinals"] == ((0,), (1,), (2,), (3,))
+    assert boundary["closure_document_ordinals"] == (0, 1, 2, 3)
+    assert boundary["anonymous_scope_targets"] == (None, None, None, None)
     reference_origin_rows = sum(
         len(occurrences) for occurrences in reference.origin_index.entries.values()
     )
-    if collect_provenance:
-        captured_origins = cast(tuple[tuple[bytes, ...], ...], captured["origins"])
-        assert len(captured_origins) == 4
-        assert sum(len(rows) for rows in captured_origins) == reference_origin_rows
-    else:
-        assert captured["origins"] is None
-    if preserve_source_map:
-        captured_source_maps = cast(
-            tuple[tuple[tuple[bytes, ...], tuple[bytes, ...]], ...],
-            captured["source_maps"],
-        )
-        assert len(captured_source_maps) == 4
-        assert sum(len(entries) for entries, _prefixes in captured_source_maps) == sum(
-            len(occurrences)
-            for document in reference.documents
-            for occurrences in cast(Any, document.source_map).entries.values()
-        )
-        assert sum(len(prefixes) for _entries, prefixes in captured_source_maps) == sum(
-            len(cast(Any, document.source_map).prefixes) for document in reference.documents
-        )
-    else:
-        assert captured["source_maps"] is None
-    assert captured["effective_origins"] is None
-    assert captured["effective_document_ordinals"] == ((0,), (1,), (2,), (3,))
-    assert captured["closure_document_ordinals"] == (0, 1, 2, 3)
 
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
     raw_owner = object.__getattribute__(handle, "_owner_v2")
     counters = cast(Any, raw_owner)._publication_counters_v2()
     assert counters.retained_document_tables == 4
     assert counters.canonical_input_rows == 4
-    assert counters.retained_origin_rows == (2 * reference_origin_rows if collect_provenance else 0)
+    assert counters.retained_origin_rows == (3 * reference_origin_rows if collect_provenance else 0)
     expected_source_rows = (
         sum(
             len(occurrences)
@@ -1567,10 +1574,7 @@ def test_legacy_native_extension_without_fork_keeps_complete_closure_path(
         b"Import(<urn:retained-legacy:child>) "
         b"Declaration(Class(<urn:retained-legacy:Root>)))"
     )
-    child = (
-        b"Ontology(<urn:retained-legacy:child> "
-        b"Declaration(Class(<urn:retained-legacy:Child>)))"
-    )
+    child = b"Ontology(<urn:retained-legacy:child> Declaration(Class(<urn:retained-legacy:Child>)))"
 
     def options(backend: BackendPreference) -> LoadOptions:
         return LoadOptions(
@@ -1629,10 +1633,7 @@ def test_record_unresolved_mixed_closure_retains_resolved_documents_and_diagnost
         b"Import(<urn:retained-record:missing>) "
         b"Declaration(Class(<urn:retained-record:Root>)))"
     )
-    child = (
-        b"Ontology(<urn:retained-record:child> "
-        b"Declaration(Class(<urn:retained-record:Child>)))"
-    )
+    child = b"Ontology(<urn:retained-record:child> Declaration(Class(<urn:retained-record:Child>)))"
 
     def options(backend: BackendPreference) -> LoadOptions:
         return LoadOptions(
@@ -1665,9 +1666,7 @@ def test_record_unresolved_mixed_closure_retains_resolved_documents_and_diagnost
         ImportStatus.UNRESOLVED,
     }
     unresolved = next(
-        edge
-        for edge in selected.import_manifest.edges
-        if edge.status is ImportStatus.UNRESOLVED
+        edge for edge in selected.import_manifest.edges if edge.status is ImportStatus.UNRESOLVED
     )
     assert unresolved.import_iri.value == "urn:retained-record:missing"
     assert unresolved.resolver_name == "mapping"
@@ -1682,6 +1681,9 @@ def test_record_unresolved_mixed_closure_retains_resolved_documents_and_diagnost
     assert encode_snapshot(selected) == encode_snapshot(reference)
     assert tuple(document.source_map for document in selected.documents) == tuple(
         document.source_map for document in reference.documents
+    )
+    assert tuple(document.origin_index for document in selected.documents) == tuple(
+        document.origin_index for document in reference.documents
     )
 
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
@@ -1869,24 +1871,34 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
         options=options(BackendPreference.PYTHON),
         resolver=MappingResolver(sources),
     )
-    merge_retained = cast(Any, extension)._merge_parsed_structural_snapshot_v2
+    prepare_retained = cast(Any, extension)._prepare_parsed_structural_closure_v2
     captured: dict[str, object] = {}
 
     def capture(
         parsed_documents: object,
-        origins: object,
-        attestation: object,
+        manifest: object,
+        root_document_key: object,
+        document_keys: object,
+        selected_collect_provenance: object,
+        selected_preserve_source_map: object,
         config: object,
         cancel: object,
         **keywords: object,
     ) -> object:
         captured["parsed_documents"] = parsed_documents
-        captured["origins"] = origins
-        captured.update(keywords)
-        return merge_retained(
+        captured["manifest"] = manifest
+        captured["root_document_key"] = root_document_key
+        captured["document_keys"] = document_keys
+        captured["collect_provenance"] = selected_collect_provenance
+        captured["preserve_source_map"] = selected_preserve_source_map
+        captured["keywords"] = keywords
+        return prepare_retained(
             parsed_documents,
-            origins,
-            attestation,
+            manifest,
+            root_document_key,
+            document_keys,
+            selected_collect_provenance,
+            selected_preserve_source_map,
             config,
             cancel,
             **keywords,
@@ -1897,8 +1909,13 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
 
     monkeypatch.setattr(
         cast(Any, extension),
-        "_merge_parsed_structural_snapshot_v2",
+        "_prepare_parsed_structural_closure_v2",
         capture,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_merge_parsed_structural_snapshot_v2",
+        unexpected_structural,
     )
     monkeypatch.setattr(
         cast(Any, extension),
@@ -1927,43 +1944,28 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
         type(value) is cast(Any, extension)._NativeParsedStructuralStorageV2
         for value in parsed_documents
     )
-    assert captured["effective_document_ordinals"] == ((0,), (1,))
-    assert captured["closure_document_ordinals"] == (0, 1)
-    assert captured["anonymous_scope_targets"] == (None, None)
-    if preserve_source_map:
-        source_maps = cast(
-            tuple[tuple[tuple[bytes, ...], tuple[bytes, ...]], ...],
-            captured["source_maps"],
-        )
-        assert len(source_maps) == 2
-    else:
-        assert captured["source_maps"] is None
+    assert captured["manifest"] == reference.import_manifest.canonical_bytes()
+    assert captured["root_document_key"] == reference.root_document_key
+    assert captured["document_keys"] == tuple(
+        record.document_key for record in reference.import_manifest.documents
+    )
+    assert captured["collect_provenance"] is collect_provenance
+    assert captured["preserve_source_map"] is preserve_source_map
+    boundary = cast(dict[str, object], captured["keywords"])
+    assert set(boundary) == {
+        "effective_document_ordinals",
+        "closure_document_ordinals",
+        "anonymous_scope_targets",
+    }
+    assert boundary["effective_document_ordinals"] == ((0,), (1,))
+    assert boundary["closure_document_ordinals"] == (0, 1)
+    assert boundary["anonymous_scope_targets"] == (None, None)
 
     raw_rows = tuple(
         tuple(canonical_bytes(value) for value in document.axioms)
         for document in selected.documents
     )
     assert raw_rows[0] != raw_rows[1]
-    if collect_provenance:
-        raw_origins = cast(tuple[tuple[bytes, ...], ...], captured["origins"])
-        effective_origins = cast(
-            tuple[tuple[bytes, ...], ...],
-            captured["effective_origins"],
-        )
-        assert len(raw_origins) == len(effective_origins) == 2
-        effective_origin_count = sum(len(rows) for rows in effective_origins)
-        assert effective_origin_count == sum(
-            len(occurrences) for occurrences in reference.origin_index.entries.values()
-        )
-        handle = cast(Any, selected)._native_snapshot_state.owner.handle
-        raw_owner = object.__getattribute__(handle, "_owner_v2")
-        counters = cast(Any, raw_owner)._publication_counters_v2()
-        assert counters.retained_origin_rows == (
-            sum(len(rows) for rows in raw_origins) + 2 * effective_origin_count
-        )
-    else:
-        assert captured["origins"] is None
-        assert captured["effective_origins"] is None
     handle = cast(Any, selected)._native_snapshot_state.owner.handle
     raw_owner = object.__getattribute__(handle, "_owner_v2")
     before_source_maps = cast(Any, raw_owner)._publication_counters_v2()
@@ -1988,6 +1990,12 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     assert before_source_maps.retained_source_prefix_rows == expected_prefix_rows
     assert before_source_maps.source_map_rows_emitted == 0
     assert before_source_maps.source_prefix_rows_emitted == 0
+    expected_origin_rows = sum(
+        len(occurrences) for occurrences in reference.origin_index.entries.values()
+    )
+    assert before_source_maps.retained_origin_rows == (
+        3 * expected_origin_rows if collect_provenance else 0
+    )
     assert handle.attestation.capability_bits == (
         7 | (8 if preserve_source_map else 0) | (16 if collect_provenance else 0)
     )
@@ -2015,6 +2023,74 @@ def test_resolved_functional_cycle_retains_distinct_anonymous_document_scopes(
     )
     assert effective_rows[0] != effective_rows[1]
     assert len(tuple(selected.iter_axioms())) == 2
+
+
+def test_repeated_named_only_fingerprint_candidate_is_a_native_scope_noop(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-repeat-named:root> "
+        b"Import(<urn:retained-repeat-named:first>) "
+        b"Import(<urn:retained-repeat-named:second>) "
+        b"Declaration(Class(<urn:retained-repeat-named:Root>)))"
+    )
+    first = (
+        b"Ontology(Declaration(Class(<urn:retained-repeat-named:Child>)))"
+    )
+    second = (
+        b"Ontology(\n"
+        b"Declaration(Class(<urn:retained-repeat-named:Child>))  )"
+    )
+    sources = {
+        "urn:retained-repeat-named:first": first,
+        "urn:retained-repeat-named:second": second,
+    }
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=True,
+        preserve_source_map=True,
+    )
+    reference = load_snapshot(
+        root,
+        options=replace(options, backend=BackendPreference.PYTHON),
+        resolver=MappingResolver(sources),
+    )
+    prepare = cast(Any, extension)._prepare_parsed_structural_closure_v2
+    observed_targets: list[tuple[bytes | None, ...]] = []
+
+    def capture(*arguments: object, **keywords: object) -> object:
+        targets = cast(tuple[bytes | None, ...], keywords["anonymous_scope_targets"])
+        observed_targets.append(targets)
+        return prepare(*arguments, **keywords)
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_prepare_parsed_structural_closure_v2",
+        capture,
+    )
+    selected = load_snapshot(
+        root,
+        options=options,
+        resolver=MappingResolver(sources),
+    )
+
+    assert len(observed_targets) == 1
+    assert sum(target is not None for target in observed_targets[0]) == 1
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert tuple(document.source_map for document in selected.documents) == tuple(
+        document.source_map for document in reference.documents
+    )
+    assert tuple(document.origin_index for document in selected.documents) == tuple(
+        document.origin_index for document in reference.documents
+    )
+    assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
 def test_repeated_anonymous_fingerprint_group_is_rescoped_inside_native_composition(
@@ -2054,35 +2130,53 @@ def test_repeated_anonymous_fingerprint_group_is_rescoped_inside_native_composit
         options=selected_options(BackendPreference.PYTHON),
         resolver=MappingResolver(sources),
     )
-    merge_retained = cast(Any, extension)._merge_parsed_structural_snapshot_v2
+    prepare_retained = cast(Any, extension)._prepare_parsed_structural_closure_v2
     captured: dict[str, object] = {}
 
     def capture(
         parsed_documents: object,
-        origins: object,
-        attestation: object,
+        manifest: object,
+        root_document_key: object,
+        document_keys: object,
+        collect_provenance: object,
+        preserve_source_map: object,
         config: object,
         cancel: object,
         **keywords: object,
     ) -> object:
         captured["parsed_documents"] = parsed_documents
-        captured.update(keywords)
-        return merge_retained(
+        captured["manifest"] = manifest
+        captured["root_document_key"] = root_document_key
+        captured["document_keys"] = document_keys
+        captured["collect_provenance"] = collect_provenance
+        captured["preserve_source_map"] = preserve_source_map
+        captured["keywords"] = keywords
+        result = prepare_retained(
             parsed_documents,
-            origins,
-            attestation,
+            manifest,
+            root_document_key,
+            document_keys,
+            collect_provenance,
+            preserve_source_map,
             config,
             cancel,
             **keywords,
         )
+        captured["prepared_encoded"] = result[0]
+        return result
 
     def unexpected_structural(*_arguments: object, **_keywords: object) -> object:
         raise AssertionError("repeated anonymous owners crossed Python structural retention")
 
     monkeypatch.setattr(
         cast(Any, extension),
-        "_merge_parsed_structural_snapshot_v2",
+        "_prepare_parsed_structural_closure_v2",
         capture,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_merge_parsed_structural_snapshot_v2",
+        unexpected_structural,
     )
     monkeypatch.setattr(
         cast(Any, extension),
@@ -2110,7 +2204,22 @@ def test_repeated_anonymous_fingerprint_group_is_rescoped_inside_native_composit
     assert encode_snapshot(selected) == encode_snapshot(reference)
     parsed_documents = cast(tuple[object, ...], captured["parsed_documents"])
     assert len(parsed_documents) == 4
-    scope_targets = cast(tuple[bytes | None, ...], captured["anonymous_scope_targets"])
+    assert captured["manifest"] == reference.import_manifest.canonical_bytes()
+    assert captured["root_document_key"] == reference.root_document_key
+    assert captured["document_keys"] == tuple(
+        record.document_key for record in reference.import_manifest.documents
+    )
+    assert captured["collect_provenance"] is True
+    assert captured["preserve_source_map"] is True
+    boundary = cast(dict[str, object], captured["keywords"])
+    assert set(boundary) == {
+        "effective_document_ordinals",
+        "closure_document_ordinals",
+        "anonymous_scope_targets",
+    }
+    assert boundary["effective_document_ordinals"] == ((0,), (1,), (2,), (3,))
+    assert boundary["closure_document_ordinals"] == (0, 1, 2, 3)
+    scope_targets = cast(tuple[bytes | None, ...], boundary["anonymous_scope_targets"])
     assert len(scope_targets) == 4
     assert sum(target is not None for target in scope_targets) == 2
     assert all(target is None or len(target) == 32 for target in scope_targets)
@@ -2144,6 +2253,601 @@ def test_repeated_anonymous_fingerprint_group_is_rescoped_inside_native_composit
     )
     assert len(set(effective_rows)) == 3
     assert len(tuple(selected.iter_axioms())) == 4
+    prepared_encoded = cast(bytes, captured["prepared_encoded"])
+    prepared = native_ingestion._decode_prepared_retained_closure_v2(
+        prepared_encoded,
+        document_count=4,
+        collect_provenance=True,
+        preserve_source_map=True,
+        allow_partial_rdf_mapping=False,
+        limits=selected_options(BackendPreference.NATIVE).limits,
+    )
+    ingestion = cast(Any, selected)._native_ingestion_counters_v2()
+    raw_structural = tuple(
+        value
+        for document in reference.documents
+        for value in (
+            *document.ontology_annotations,
+            *document.axioms,
+            *document.extension_components,
+        )
+    )
+    effective_structural = tuple(
+        value
+        for record in reference.import_manifest.documents
+        for value in (
+            *reference.ontology_annotations(
+                scope=AxiomScope.DOCUMENT,
+                document_key=record.document_key,
+            ),
+            *reference.iter_axioms(
+                scope=AxiomScope.DOCUMENT,
+                document_key=record.document_key,
+            ),
+            *reference.iter_extensions(
+                scope=AxiomScope.DOCUMENT,
+                document_key=record.document_key,
+            ),
+        )
+    )
+    fingerprint_rows = (
+        *reference.iter_axioms(),
+        *reference.iter_extensions(),
+        *reference.signature(),
+    )
+    independently_encoded_rows = (
+        *raw_structural,
+        *effective_structural,
+        *fingerprint_rows,
+    )
+    assert ingestion.parser_result_bytes_scanned == 0
+    assert ingestion.parser_summary_bytes_materialized == (
+        prepared.parser_summary_bytes_materialized + len(prepared_encoded)
+    )
+    assert ingestion.parser_summary_bytes_materialized > len(prepared_encoded)
+    assert ingestion.canonical_rows_scanned == prepared.canonical_rows_scanned == 8
+    assert (
+        ingestion.structural_occurrence_rows_scanned
+        == prepared.structural_occurrence_rows_scanned
+        == 4
+    )
+    assert ingestion.structural_root_rows_published == sum(prepared.closure_counts) == 4
+    assert ingestion.eager_structural_objects_materialized == 0
+    assert ingestion.metadata_iri_objects_materialized == 4
+    assert ingestion.provenance_occurrence_records_materialized == 0
+    assert ingestion.canonical_bytes_copied_to_python == 0
+    assert ingestion.fingerprint_preimage_bytes_materialized_in_python == 0
+    assert (
+        ingestion.native_publication_canonical_rows_encoded
+        == prepared.canonical_rows_encoded
+        == len(independently_encoded_rows)
+        == 14
+    )
+    assert (
+        ingestion.native_publication_canonical_bytes_encoded
+        == prepared.canonical_bytes_encoded
+        == sum(len(canonical_bytes(value)) for value in independently_encoded_rows)
+    )
+    assert ingestion.native_fingerprint_temporary_bytes == prepared.fingerprint_temporary_bytes
+    assert ingestion.native_origin_rows_retained == prepared.closure_origin_rows == 4
+    assert ingestion.native_origin_bytes_retained == prepared.origin_bytes_retained
+    assert ingestion.native_publication_canonical_rows_encoded > 4
+    assert ingestion.native_publication_canonical_bytes_encoded > 0
+    assert ingestion.native_fingerprint_temporary_bytes > 0
+    assert ingestion.native_origin_bytes_retained > 0
+    assert (
+        cast(Any, selected)._anonymous_document_scopes()
+        == cast(Any, reference)._anonymous_document_scopes()
+    )
+    with pytest.raises(
+        BackendProtocolError,
+        match=r"^native snapshot has no retained common-contract summary$",
+    ):
+        cast(Any, selected)._native_common_contract_summary_v1()
+
+
+def test_repeated_anonymous_scope_workspace_obeys_aggregate_memory_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-scope-limit:root> "
+        b"Import(<urn:retained-scope-limit:first>) "
+        b"Import(<urn:retained-scope-limit:second>) "
+        b"Declaration(Class(<urn:retained-scope-limit:Root>)))"
+    )
+    first = b"Ontology(ClassAssertion(<urn:retained-scope-limit:C> _:person))"
+    second = b"Ontology(  ClassAssertion(<urn:retained-scope-limit:C> _:person)  )"
+    sources = {
+        "urn:retained-scope-limit:first": first,
+        "urn:retained-scope-limit:second": second,
+    }
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=True,
+        preserve_source_map=True,
+    )
+    reference = load_snapshot(
+        root,
+        options=replace(options, backend=BackendPreference.PYTHON),
+        resolver=MappingResolver(sources),
+    )
+    prepare = cast(Any, extension)._prepare_parsed_structural_closure_v2
+    native_error = cast(Any, extension)._NativeError
+    observed: dict[str, object] = {}
+    failed_attempts = 0
+
+    def capture(
+        parsed_documents: object,
+        manifest: object,
+        root_document_key: object,
+        document_keys: object,
+        collect_provenance: object,
+        preserve_source_map: object,
+        config: object,
+        cancel: object,
+        **keywords: object,
+    ) -> object:
+        nonlocal failed_attempts
+        scope_targets = cast(tuple[bytes | None, ...], keywords["anonymous_scope_targets"])
+        assert sum(target is not None for target in scope_targets) == 1
+
+        def attempt(max_memory_bytes: int) -> str | None:
+            nonlocal failed_attempts
+            constrained = native._encode_config(
+                replace(options.limits, max_memory_bytes=max_memory_bytes),
+                None,
+                verify=False,
+            )
+            try:
+                prepared = prepare(
+                    parsed_documents,
+                    manifest,
+                    root_document_key,
+                    document_keys,
+                    collect_provenance,
+                    preserve_source_map,
+                    constrained,
+                    cancel,
+                    **keywords,
+                )
+            except native_error as error:
+                failed_attempts += 1
+                return str(error)
+            del prepared
+            return None
+
+        def owner_boundary(message: str | None) -> bool:
+            return message is not None and (
+                "native retained boundary exceeds configured memory limits" in message
+                or "native closure aggregate owners exceed configured memory limits" in message
+            )
+
+        lower = 1
+        upper = 1
+        while owner_boundary(attempt(upper)):
+            upper *= 2
+            assert upper <= 1 << 30
+        while lower < upper:
+            middle = (lower + upper) // 2
+            if owner_boundary(attempt(middle)):
+                lower = middle + 1
+            else:
+                upper = middle
+        message = attempt(lower)
+        assert message is not None
+        assert "native closure scope workspace exceeds max_memory_bytes" in message
+        success_lower = lower + 1
+        success_upper = max(2, success_lower)
+        while attempt(success_upper) is not None:
+            success_upper *= 2
+            assert success_upper <= 1 << 30
+        while success_lower < success_upper:
+            middle = (success_lower + success_upper) // 2
+            if attempt(middle) is None:
+                success_upper = middle
+            else:
+                success_lower = middle + 1
+        tight_message = attempt(success_lower - 1)
+        assert tight_message is not None
+        assert "native closure evidence exceeds max_memory_bytes" in tight_message
+        observed["limit"] = lower
+        observed["message"] = message
+        observed["success_limit"] = success_lower
+        observed["tight_message"] = tight_message
+        constrained = native._encode_config(
+            replace(options.limits, max_memory_bytes=success_lower),
+            None,
+            verify=False,
+        )
+        return prepare(
+            parsed_documents,
+            manifest,
+            root_document_key,
+            document_keys,
+            collect_provenance,
+            preserve_source_map,
+            constrained,
+            cancel,
+            **keywords,
+        )
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_prepare_parsed_structural_closure_v2",
+        capture,
+    )
+    selected = load_snapshot(
+        root,
+        options=options,
+        resolver=MappingResolver(sources),
+    )
+
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert failed_attempts > 1
+    assert cast(int, observed["limit"]) > 0
+    assert cast(int, observed["success_limit"]) > cast(int, observed["limit"])
+    assert "scope workspace" in cast(str, observed["message"])
+    assert "closure evidence" in cast(str, observed["tight_message"])
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert tuple(document.source_map for document in selected.documents) == tuple(
+        document.source_map for document in reference.documents
+    )
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_auxiliary_attachment_plan_one_byte_boundary_is_retryable_before_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    annotations = b" ".join(
+        f'Annotation(<urn:retained-plan:property> "value-{ordinal:04d}")'.encode()
+        for ordinal in range(128)
+    )
+    root = (
+        b"Ontology(<urn:retained-plan:root> "
+        b"Import(<urn:retained-plan:child>) "
+        + annotations
+        + b")"
+    )
+    child = (
+        b"Ontology(<urn:retained-plan:child> "
+        b'Declaration(Class(<urn:retained-plan:Child>)))'
+    )
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=False,
+        preserve_source_map=True,
+    )
+    resolver = MappingResolver({"urn:retained-plan:child": child})
+    reference = load_snapshot(
+        root,
+        options=replace(options, backend=BackendPreference.PYTHON),
+        resolver=resolver,
+    )
+    prepare = cast(Any, extension)._prepare_parsed_structural_closure_v2
+    auxiliary_failure = cast(
+        Any,
+        extension,
+    )._prepare_parsed_structural_closure_auxiliary_failure_probe_v2
+    finalize = cast(Any, extension)._finalize_parsed_structural_closure_v2
+    native_error = cast(Any, extension)._NativeError
+    observed: dict[str, object] = {}
+    finalizations = 0
+
+    def bounded_prepare(
+        parsed_documents: object,
+        manifest: object,
+        root_document_key: object,
+        document_keys: object,
+        collect_provenance: object,
+        preserve_source_map: object,
+        config: object,
+        cancel: object,
+        **keywords: object,
+    ) -> object:
+        with pytest.raises(
+            native_error,
+            match=r"injected native closure auxiliary plan preparation failure",
+        ):
+            auxiliary_failure(
+                parsed_documents,
+                manifest,
+                root_document_key,
+                document_keys,
+                collect_provenance,
+                preserve_source_map,
+                config,
+                **keywords,
+            )
+
+        def attempt(max_memory_bytes: int) -> tuple[object | None, str | None]:
+            constrained = native._encode_config(
+                replace(options.limits, max_memory_bytes=max_memory_bytes),
+                None,
+                verify=False,
+            )
+            try:
+                return (
+                    prepare(
+                        parsed_documents,
+                        manifest,
+                        root_document_key,
+                        document_keys,
+                        collect_provenance,
+                        preserve_source_map,
+                        constrained,
+                        cancel,
+                        **keywords,
+                    ),
+                    None,
+                )
+            except native_error as error:
+                return None, cast(tuple[str, str], error.args)[1]
+
+        lower = 1
+        upper = 1
+        while True:
+            candidate, _message = attempt(upper)
+            if candidate is not None:
+                del candidate
+                break
+            upper *= 2
+            assert upper <= 1 << 30
+        while lower < upper:
+            middle = (lower + upper) // 2
+            candidate, _message = attempt(middle)
+            if candidate is None:
+                lower = middle + 1
+            else:
+                del candidate
+                upper = middle
+
+        rejected, tight_message = attempt(lower - 1)
+        assert rejected is None
+        assert tight_message == "native closure evidence exceeds max_memory_bytes"
+        admitted, admitted_message = attempt(lower)
+        assert admitted_message is None
+        assert admitted is not None
+        observed["limit"] = lower
+        observed["tight_message"] = tight_message
+        return admitted
+
+    def counted_finalize(*arguments: object, **keywords: object) -> object:
+        nonlocal finalizations
+        finalizations += 1
+        return finalize(*arguments, **keywords)
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_prepare_parsed_structural_closure_v2",
+        bounded_prepare,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_finalize_parsed_structural_closure_v2",
+        counted_finalize,
+    )
+    selected = load_snapshot(root, options=options, resolver=resolver)
+
+    assert cast(int, observed["limit"]) > 1
+    assert finalizations == 1
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert tuple(document.source_map for document in selected.documents) == tuple(
+        document.source_map for document in reference.documents
+    )
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_anonymous_scope_cancellation_restores_source_owners_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-scope-cancel:root> "
+        b"Import(<urn:retained-scope-cancel:first>) "
+        b"Import(<urn:retained-scope-cancel:second>) "
+        b"Declaration(Class(<urn:retained-scope-cancel:Root>)))"
+    )
+    first = b"Ontology(ClassAssertion(<urn:retained-scope-cancel:C> _:person))"
+    second = b"Ontology(  ClassAssertion(<urn:retained-scope-cancel:C> _:person)  )"
+    sources = {
+        "urn:retained-scope-cancel:first": first,
+        "urn:retained-scope-cancel:second": second,
+    }
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=True,
+        preserve_source_map=True,
+    )
+    reference = load_snapshot(
+        root,
+        options=replace(options, backend=BackendPreference.PYTHON),
+        resolver=MappingResolver(sources),
+    )
+    prepare = cast(Any, extension)._prepare_parsed_structural_closure_v2
+    native_error = cast(Any, extension)._NativeError
+    cancelled_attempts = 0
+    retried = 0
+
+    def cancel_then_retry(
+        parsed_documents: object,
+        manifest: object,
+        root_document_key: object,
+        document_keys: object,
+        collect_provenance: object,
+        preserve_source_map: object,
+        config: object,
+        cancel: object,
+        **keywords: object,
+    ) -> object:
+        nonlocal cancelled_attempts, retried
+        scope_targets = cast(tuple[bytes | None, ...], keywords["anonymous_scope_targets"])
+        assert sum(target is not None for target in scope_targets) == 1
+        cancellation = extension._Cancellation(None)
+        assert cancellation.cancel() is True
+        with pytest.raises(native_error) as caught:
+            prepare(
+                parsed_documents,
+                manifest,
+                root_document_key,
+                document_keys,
+                collect_provenance,
+                preserve_source_map,
+                config,
+                cancellation,
+                **keywords,
+            )
+        assert caught.value.args[0] == "NATIVE_CANCELLED"
+        cancelled_attempts += 1
+        result = prepare(
+            parsed_documents,
+            manifest,
+            root_document_key,
+            document_keys,
+            collect_provenance,
+            preserve_source_map,
+            config,
+            cancel,
+            **keywords,
+        )
+        retried += 1
+        return result
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_prepare_parsed_structural_closure_v2",
+        cancel_then_retry,
+    )
+    selected = load_snapshot(
+        root,
+        options=options,
+        resolver=MappingResolver(sources),
+    )
+
+    assert cancelled_attempts == 1
+    assert retried == 1
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert encode_snapshot(selected) == encode_snapshot(reference)
+
+
+def test_parsed_closure_attestation_rejection_preserves_prepared_and_source_owners(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-rollback:root> "
+        b"Import(<urn:retained-rollback:child>) "
+        b"Declaration(Class(<urn:retained-rollback:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-rollback:child> Declaration(Class(<urn:retained-rollback:Child>)))"
+    )
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+        collect_provenance=True,
+        preserve_source_map=True,
+    )
+    reference = load_snapshot(
+        root,
+        options=replace(options, backend=BackendPreference.PYTHON),
+        resolver=MappingResolver({"urn:retained-rollback:child": child}),
+    )
+    finalize = cast(Any, extension)._finalize_parsed_structural_closure_v2
+    summary_rejected = 0
+    attestation_rejected = 0
+    retried = 0
+
+    def reject_then_retry(
+        parsed_documents: object,
+        prepared_closure: object,
+        prepared_summary: object,
+        attestation: object,
+        cancel: object,
+    ) -> object:
+        nonlocal attestation_rejected, retried, summary_rejected
+        encoded_summary = cast(bytes, prepared_summary)
+        tampered_summary = encoded_summary[:-1] + bytes((encoded_summary[-1] ^ 1,))
+        summary_rejected += 1
+        with pytest.raises(
+            cast(Any, extension)._NativeError,
+            match=r"native closure summary diverges before final publication",
+        ):
+            finalize(
+                parsed_documents,
+                prepared_closure,
+                tampered_summary,
+                attestation,
+                cancel,
+            )
+        attestation_rejected += 1
+        tampered = replace(
+            cast(Any, attestation),
+            root_table_sha256=b"\x00" * 32,
+        )
+        with pytest.raises(
+            cast(Any, extension)._NativeError,
+            match=r"native prepared closure content diverges from its attestation",
+        ):
+            finalize(
+                parsed_documents,
+                prepared_closure,
+                prepared_summary,
+                tampered,
+                cancel,
+            )
+        retried += 1
+        return finalize(
+            parsed_documents,
+            prepared_closure,
+            prepared_summary,
+            attestation,
+            cancel,
+        )
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_finalize_parsed_structural_closure_v2",
+        reject_then_retry,
+    )
+    selected = load_snapshot(
+        root,
+        options=options,
+        resolver=MappingResolver({"urn:retained-rollback:child": child}),
+    )
+
+    assert summary_rejected == attestation_rejected == retried == 1
+    assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert selected.import_manifest == reference.import_manifest
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+    assert selected.origin_index == reference.origin_index
+    assert tuple(document.source_map for document in selected.documents) == tuple(
+        document.source_map for document in reference.documents
+    )
+    assert encode_snapshot(selected) == encode_snapshot(reference)
 
 
 def test_eligible_owner_construction_failure_propagates_without_fallback(

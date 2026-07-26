@@ -80,7 +80,10 @@ struct RetainedLanguageDetailV2 {
 #[derive(Debug)]
 pub(crate) struct RetainedParseMetadataV2 {
     pub(crate) document_fingerprint: FingerprintEvidenceV2,
+    pub(crate) parser_summary_bytes_materialized: u64,
+    pub(crate) canonical_rows_scanned: u64,
     pub(crate) occurrence_count: u64,
+    pub(crate) metadata_iri_objects_materialized: u64,
     pub(crate) root_counts: [u64; 3],
     occurrences: Vec<RetainedOccurrenceV2>,
     effective_origin_fallbacks: Vec<([u8; 32], u64)>,
@@ -242,6 +245,258 @@ impl PreparedRetainedPublicationV2 {
 }
 
 impl RetainedParseMetadataV2 {
+    pub(crate) const fn closure_document_fingerprint(&self) -> (u64, [u8; 32]) {
+        (
+            self.document_fingerprint.preimage_bytes,
+            self.document_fingerprint.digest,
+        )
+    }
+
+    pub(crate) const fn closure_root_counts(&self) -> [u64; 3] {
+        self.root_counts
+    }
+
+    pub(crate) const fn closure_ingestion_counters(&self) -> [u64; 4] {
+        [
+            self.parser_summary_bytes_materialized,
+            self.canonical_rows_scanned,
+            self.occurrence_count,
+            self.metadata_iri_objects_materialized,
+        ]
+    }
+
+    pub(crate) const fn closure_has_scoped_roots(&self) -> bool {
+        self.scoped_roots
+    }
+
+    pub(crate) fn prepare_closure_source_map(
+        &self,
+        preserve_source_map: bool,
+        limits: &Limits,
+        cancellation: &Cancellation,
+        workspace_check: &mut dyn FnMut(usize) -> NativeResult<()>,
+    ) -> NativeResult<Option<TypedSourceMapRowsV2>> {
+        if self.source_prefixes.is_some() != preserve_source_map {
+            return Err(NativeError::protocol(
+                "native retained source-map metadata diverges from closure publication options",
+            ));
+        }
+        preserve_source_map
+            .then(|| encode_source_map_rows_bounded(self, limits, cancellation, workspace_check))
+            .transpose()
+    }
+
+    pub(crate) fn prepare_closure_origin_rows(
+        &self,
+        document_key: &str,
+        raw_owner_role: bool,
+        digest_remap: Option<&[([u8; 32], [u8; 32])]>,
+        limits: &Limits,
+        cancellation: &Cancellation,
+        workspace_check: &mut dyn FnMut(usize) -> NativeResult<()>,
+    ) -> NativeResult<Vec<Vec<u8>>> {
+        let predicted_raw_document_key_bytes =
+            usize::from(raw_owner_role).checked_mul(64).ok_or_else(|| {
+                NativeError::limit("native closure origin document-key size overflow")
+            })?;
+        workspace_check(predicted_raw_document_key_bytes)?;
+        let raw_document_key = raw_owner_role
+            .then(|| digest_hex(self.document_fingerprint.digest))
+            .transpose()?;
+        let raw_document_key_bytes = raw_document_key.as_ref().map_or(0, String::capacity);
+        workspace_check(raw_document_key_bytes)?;
+        let selected_document_key = raw_document_key.as_deref().unwrap_or(document_key);
+        let fallback_count = if raw_owner_role {
+            0
+        } else {
+            self.effective_origin_fallbacks.len()
+        };
+        let row_count = self
+            .occurrences
+            .len()
+            .checked_add(fallback_count)
+            .ok_or_else(|| NativeError::limit("native closure origin table overflow"))?;
+        let predicted_keyed_bytes = row_count
+            .checked_mul(size_of::<([u8; 32], u64, Vec<u8>)>())
+            .ok_or_else(|| NativeError::limit("native closure origin table size overflow"))?;
+        workspace_check(
+            predicted_keyed_bytes
+                .checked_add(raw_document_key_bytes)
+                .ok_or_else(|| NativeError::limit("native closure origin workspace overflow"))?,
+        )?;
+        cancellation.checkpoint()?;
+        let mut keyed = Vec::new();
+        keyed
+            .try_reserve_exact(row_count)
+            .map_err(|_| NativeError::limit("native closure origin table allocation failed"))?;
+        let keyed_bytes = keyed
+            .capacity()
+            .checked_mul(size_of::<([u8; 32], u64, Vec<u8>)>())
+            .ok_or_else(|| NativeError::limit("native closure origin table size overflow"))?;
+        workspace_check(
+            keyed_bytes
+                .checked_add(raw_document_key_bytes)
+                .ok_or_else(|| NativeError::limit("native closure origin workspace overflow"))?,
+        )?;
+        let mut payload_bytes = 0_usize;
+        for (occurrence, value) in self.occurrences.iter().enumerate() {
+            cancellation.checkpoint()?;
+            let occurrence = u64::try_from(occurrence)
+                .map_err(|_| NativeError::limit("native closure origin occurrence exceeds u64"))?;
+            let digest = if raw_owner_role {
+                value.digest
+            } else {
+                digest_remap
+                    .and_then(|mapping| {
+                        closure_digest_remap(mapping, value.digest)
+                            .or_else(|| closure_digest_remap(mapping, value.effective_digest))
+                    })
+                    .unwrap_or(value.effective_digest)
+            };
+            workspace_check(
+                keyed_bytes
+                    .checked_add(payload_bytes)
+                    .and_then(|total| total.checked_add(raw_document_key_bytes))
+                    .and_then(|total| {
+                        origin_row_size(selected_document_key, value.span)
+                            .ok()
+                            .and_then(|bytes| total.checked_add(bytes))
+                    })
+                    .ok_or_else(|| {
+                        NativeError::limit("native closure origin workspace overflow")
+                    })?,
+            )?;
+            let row = encode_origin_row(digest, selected_document_key, occurrence, value.span)?;
+            workspace_check(
+                keyed_bytes
+                    .checked_add(payload_bytes)
+                    .and_then(|total| total.checked_add(raw_document_key_bytes))
+                    .and_then(|total| total.checked_add(row.capacity()))
+                    .ok_or_else(|| {
+                        NativeError::limit("native closure origin workspace overflow")
+                    })?,
+            )?;
+            if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
+                return Err(NativeError::limit(
+                    "native retained closure origin row exceeds max_wire_bytes",
+                ));
+            }
+            payload_bytes = payload_bytes
+                .checked_add(row.capacity())
+                .ok_or_else(|| NativeError::limit("native closure origin payload overflow"))?;
+            keyed.push((digest, occurrence, row));
+        }
+        if !raw_owner_role {
+            for (digest, occurrence) in &self.effective_origin_fallbacks {
+                cancellation.checkpoint()?;
+                let selected = digest_remap
+                    .and_then(|mapping| closure_digest_remap(mapping, *digest))
+                    .unwrap_or(*digest);
+                workspace_check(
+                    keyed_bytes
+                        .checked_add(payload_bytes)
+                        .and_then(|total| total.checked_add(raw_document_key_bytes))
+                        .and_then(|total| {
+                            origin_row_size(document_key, None)
+                                .ok()
+                                .and_then(|bytes| total.checked_add(bytes))
+                        })
+                        .ok_or_else(|| {
+                            NativeError::limit("native closure origin workspace overflow")
+                        })?,
+                )?;
+                let row = encode_origin_row(selected, document_key, *occurrence, None)?;
+                workspace_check(
+                    keyed_bytes
+                        .checked_add(payload_bytes)
+                        .and_then(|total| total.checked_add(raw_document_key_bytes))
+                        .and_then(|total| total.checked_add(row.capacity()))
+                        .ok_or_else(|| {
+                            NativeError::limit("native closure origin workspace overflow")
+                        })?,
+                )?;
+                if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
+                    return Err(NativeError::limit(
+                        "native retained closure origin row exceeds max_wire_bytes",
+                    ));
+                }
+                payload_bytes = payload_bytes
+                    .checked_add(row.capacity())
+                    .ok_or_else(|| NativeError::limit("native closure origin payload overflow"))?;
+                keyed.push((selected, *occurrence, row));
+            }
+        }
+        drop(raw_document_key);
+        cancellation.checkpoint()?;
+        keyed.sort_unstable_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.cmp(&right.2))
+        });
+        let mut rows = Vec::new();
+        let predicted_row_table_bytes = keyed
+            .len()
+            .checked_mul(size_of::<Vec<u8>>())
+            .ok_or_else(|| NativeError::limit("native closure origin row size overflow"))?;
+        workspace_check(
+            keyed_bytes
+                .checked_add(payload_bytes)
+                .and_then(|total| total.checked_add(predicted_row_table_bytes))
+                .ok_or_else(|| NativeError::limit("native closure origin workspace overflow"))?,
+        )?;
+        cancellation.checkpoint()?;
+        rows.try_reserve_exact(keyed.len())
+            .map_err(|_| NativeError::limit("native closure origin row allocation failed"))?;
+        let row_table_bytes = rows
+            .capacity()
+            .checked_mul(size_of::<Vec<u8>>())
+            .ok_or_else(|| NativeError::limit("native closure origin row size overflow"))?;
+        workspace_check(
+            keyed_bytes
+                .checked_add(payload_bytes)
+                .and_then(|total| total.checked_add(row_table_bytes))
+                .ok_or_else(|| NativeError::limit("native closure origin workspace overflow"))?,
+        )?;
+        rows.extend(keyed.into_iter().map(|(_digest, _occurrence, row)| row));
+        workspace_check(
+            row_table_bytes
+                .checked_add(payload_bytes)
+                .ok_or_else(|| NativeError::limit("native closure origin workspace overflow"))?,
+        )?;
+        Ok(rows)
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn prepare_closure_rdf_report(
+        &self,
+        document_key: &str,
+        limits: &Limits,
+        cancellation: &Cancellation,
+        workspace_check: &mut dyn FnMut(usize) -> NativeResult<()>,
+    ) -> NativeResult<Option<(TypedRdfReportRowsV2, bool, u64, u64, [u8; 32], u64)>> {
+        self.rdf_mapping
+            .as_ref()
+            .map(|mapping| {
+                let prepared = prepare_rdf_report_bounded(
+                    document_key,
+                    mapping,
+                    limits,
+                    cancellation,
+                    workspace_check,
+                )?;
+                Ok((
+                    prepared.rows,
+                    prepared.conformant,
+                    prepared.consumed_triples,
+                    prepared.total_triples,
+                    prepared.digest,
+                    prepared.retained_bytes,
+                ))
+            })
+            .transpose()
+    }
+
     pub(crate) fn render_rdf_literal_evidence<E>(
         &mut self,
         mut render: impl FnMut(&str) -> Result<String, E>,
@@ -365,6 +620,13 @@ impl RetainedParseMetadataV2 {
     }
 }
 
+fn closure_digest_remap(mapping: &[([u8; 32], [u8; 32])], source: [u8; 32]) -> Option<[u8; 32]> {
+    mapping
+        .binary_search_by_key(&source, |(candidate, _target)| *candidate)
+        .ok()
+        .map(|index| mapping[index].1)
+}
+
 /// Build bounded publication evidence from canonical rows produced by a
 /// non-Functional native mapper. Structural rows stay in Rust and only this
 /// compact seed crosses the Python boundary.
@@ -485,11 +747,16 @@ pub(crate) fn build_rdfxml_seed(
         append_text64(&mut encoded, iri_text(value.as_bytes())?)?;
     }
     append_u64(&mut encoded, total_triples)?;
+    let parser_summary_bytes_materialized = u64::try_from(encoded.len())
+        .map_err(|_| NativeError::limit("native RDF/XML retained summary exceeds u64"))?;
     Ok((
         encoded,
         RetainedParseMetadataV2 {
             document_fingerprint,
+            parser_summary_bytes_materialized,
+            canonical_rows_scanned,
             occurrence_count,
+            metadata_iri_objects_materialized: metadata_iri_objects,
             root_counts,
             occurrences,
             effective_origin_fallbacks,
@@ -683,11 +950,16 @@ pub(crate) fn build_seed(
     for value in &imports {
         append_text64(&mut encoded, iri_text(value.as_bytes())?)?;
     }
+    let parser_summary_bytes_materialized = u64::try_from(encoded.len())
+        .map_err(|_| NativeError::limit("native Functional retained summary exceeds u64"))?;
     Ok((
         encoded,
         RetainedParseMetadataV2 {
             document_fingerprint,
+            parser_summary_bytes_materialized,
+            canonical_rows_scanned,
             occurrence_count,
+            metadata_iri_objects_materialized: metadata_iri_objects,
             root_counts,
             occurrences,
             effective_origin_fallbacks: Vec::new(),
@@ -2083,6 +2355,296 @@ fn encode_source_map_rows(
     Ok(TypedSourceMapRowsV2 { entries, prefixes })
 }
 
+fn encode_source_map_rows_bounded(
+    metadata: &RetainedParseMetadataV2,
+    limits: &Limits,
+    cancellation: &Cancellation,
+    workspace_check: &mut dyn FnMut(usize) -> NativeResult<()>,
+) -> NativeResult<TypedSourceMapRowsV2> {
+    type KeyedSourceRow = ([u8; 32], u64, Vec<u8>);
+
+    let row_count = usize::try_from(source_map_row_count(metadata)?)
+        .map_err(|_| NativeError::limit("native source-map count exceeds usize"))?;
+    let predicted_keyed_bytes = row_count
+        .checked_mul(size_of::<KeyedSourceRow>())
+        .ok_or_else(|| NativeError::limit("native source-map table size overflow"))?;
+    workspace_check(predicted_keyed_bytes)?;
+    cancellation.checkpoint()?;
+    let mut keyed = Vec::new();
+    keyed
+        .try_reserve_exact(row_count)
+        .map_err(|_| NativeError::limit("native source-map table allocation failed"))?;
+    let keyed_bytes = keyed
+        .capacity()
+        .checked_mul(size_of::<KeyedSourceRow>())
+        .ok_or_else(|| NativeError::limit("native source-map table size overflow"))?;
+    workspace_check(keyed_bytes)?;
+    let mut payload_bytes = 0_usize;
+    let mut producer_order = 0_u64;
+    for (occurrence, value) in metadata.occurrences.iter().enumerate() {
+        cancellation.checkpoint()?;
+        let occurrence = u64::try_from(occurrence)
+            .map_err(|_| NativeError::limit("native source-map occurrence exceeds u64"))?;
+        let lexical_count = value
+            .language_details
+            .len()
+            .checked_add(value.source_blank_labels.len())
+            .ok_or_else(|| NativeError::limit("native source-map lexical count overflow"))?;
+        let predicted_lexical_outer = lexical_count
+            .checked_mul(size_of::<(String, &str)>())
+            .ok_or_else(|| NativeError::limit("native source-map lexical size overflow"))?;
+        workspace_check(
+            keyed_bytes
+                .checked_add(payload_bytes)
+                .and_then(|total| total.checked_add(predicted_lexical_outer))
+                .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+        )?;
+        let mut root_lexical = Vec::new();
+        root_lexical
+            .try_reserve_exact(lexical_count)
+            .map_err(|_| NativeError::limit("native source-map lexical allocation failed"))?;
+        let lexical_outer_bytes = root_lexical
+            .capacity()
+            .checked_mul(size_of::<(String, &str)>())
+            .ok_or_else(|| NativeError::limit("native source-map lexical size overflow"))?;
+        workspace_check(
+            keyed_bytes
+                .checked_add(payload_bytes)
+                .and_then(|total| total.checked_add(lexical_outer_bytes))
+                .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+        )?;
+        let mut lexical_key_bytes = 0_usize;
+        for (index, detail) in value.language_details.iter().enumerate() {
+            let predicted_key_bytes = indexed_lexical_key_size("language-tag", index)?;
+            workspace_check(
+                keyed_bytes
+                    .checked_add(payload_bytes)
+                    .and_then(|total| total.checked_add(lexical_outer_bytes))
+                    .and_then(|total| total.checked_add(lexical_key_bytes))
+                    .and_then(|total| total.checked_add(predicted_key_bytes))
+                    .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+            )?;
+            let key = if index == 0 {
+                "language-tag".to_owned()
+            } else {
+                format!("language-tag:{}", index + 1)
+            };
+            workspace_check(
+                keyed_bytes
+                    .checked_add(payload_bytes)
+                    .and_then(|total| total.checked_add(lexical_outer_bytes))
+                    .and_then(|total| total.checked_add(lexical_key_bytes))
+                    .and_then(|total| total.checked_add(key.capacity()))
+                    .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+            )?;
+            lexical_key_bytes = lexical_key_bytes
+                .checked_add(key.capacity())
+                .ok_or_else(|| NativeError::limit("native source-map lexical size overflow"))?;
+            root_lexical.push((key, detail.spelling.as_str()));
+        }
+        for (index, label) in value.source_blank_labels.iter().enumerate() {
+            let predicted_key_bytes = indexed_lexical_key_size("blank-label", index)?;
+            workspace_check(
+                keyed_bytes
+                    .checked_add(payload_bytes)
+                    .and_then(|total| total.checked_add(lexical_outer_bytes))
+                    .and_then(|total| total.checked_add(lexical_key_bytes))
+                    .and_then(|total| total.checked_add(predicted_key_bytes))
+                    .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+            )?;
+            let key = if index == 0 {
+                "blank-label".to_owned()
+            } else {
+                format!("blank-label:{}", index + 1)
+            };
+            workspace_check(
+                keyed_bytes
+                    .checked_add(payload_bytes)
+                    .and_then(|total| total.checked_add(lexical_outer_bytes))
+                    .and_then(|total| total.checked_add(lexical_key_bytes))
+                    .and_then(|total| total.checked_add(key.capacity()))
+                    .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+            )?;
+            lexical_key_bytes = lexical_key_bytes
+                .checked_add(key.capacity())
+                .ok_or_else(|| NativeError::limit("native source-map lexical size overflow"))?;
+            root_lexical.push((key, label.as_str()));
+        }
+        cancellation.checkpoint()?;
+        root_lexical.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+        let lexical_workspace = lexical_outer_bytes
+            .checked_add(lexical_key_bytes)
+            .ok_or_else(|| NativeError::limit("native source-map lexical size overflow"))?;
+        let predicted_row_bytes = source_map_row_size(value.span, &root_lexical)?;
+        workspace_check(
+            keyed_bytes
+                .checked_add(payload_bytes)
+                .and_then(|total| total.checked_add(lexical_workspace))
+                .and_then(|total| total.checked_add(predicted_row_bytes))
+                .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+        )?;
+        let row = encode_source_map_row(value.digest, occurrence, value.span, &root_lexical)?;
+        workspace_check(
+            keyed_bytes
+                .checked_add(payload_bytes)
+                .and_then(|total| total.checked_add(lexical_workspace))
+                .and_then(|total| total.checked_add(row.capacity()))
+                .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+        )?;
+        if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
+            return Err(NativeError::limit(
+                "native retained source-map row exceeds max_wire_bytes",
+            ));
+        }
+        payload_bytes = payload_bytes
+            .checked_add(row.capacity())
+            .ok_or_else(|| NativeError::limit("native source-map payload overflow"))?;
+        keyed.push((value.digest, producer_order, row));
+        producer_order = producer_order
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native source-map producer order overflow"))?;
+        for detail in &value.language_details {
+            let predicted_key_bytes = "language-tag".len();
+            workspace_check(
+                keyed_bytes
+                    .checked_add(payload_bytes)
+                    .and_then(|total| total.checked_add(predicted_key_bytes))
+                    .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+            )?;
+            let key = "language-tag".to_owned();
+            let lexical = [(key, detail.spelling.as_str())];
+            let lexical_workspace = lexical[0].0.capacity();
+            let predicted_row_bytes = source_map_row_size(value.span, &lexical)?;
+            workspace_check(
+                keyed_bytes
+                    .checked_add(payload_bytes)
+                    .and_then(|total| total.checked_add(lexical_workspace))
+                    .and_then(|total| total.checked_add(predicted_row_bytes))
+                    .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+            )?;
+            let row = encode_source_map_row(detail.digest, occurrence, value.span, &lexical)?;
+            workspace_check(
+                keyed_bytes
+                    .checked_add(payload_bytes)
+                    .and_then(|total| total.checked_add(lexical_workspace))
+                    .and_then(|total| total.checked_add(row.capacity()))
+                    .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+            )?;
+            if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
+                return Err(NativeError::limit(
+                    "native retained source-map row exceeds max_wire_bytes",
+                ));
+            }
+            payload_bytes = payload_bytes
+                .checked_add(row.capacity())
+                .ok_or_else(|| NativeError::limit("native source-map payload overflow"))?;
+            keyed.push((detail.digest, producer_order, row));
+            producer_order = producer_order
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native source-map producer order overflow"))?;
+        }
+    }
+    cancellation.checkpoint()?;
+    keyed.sort_unstable_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let predicted_entries_bytes = keyed
+        .len()
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit("native source-map row size overflow"))?;
+    workspace_check(
+        keyed_bytes
+            .checked_add(payload_bytes)
+            .and_then(|total| total.checked_add(predicted_entries_bytes))
+            .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+    )?;
+    cancellation.checkpoint()?;
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(keyed.len())
+        .map_err(|_| NativeError::limit("native source-map row allocation failed"))?;
+    let entries_outer_bytes = entries
+        .capacity()
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit("native source-map row size overflow"))?;
+    workspace_check(
+        keyed_bytes
+            .checked_add(payload_bytes)
+            .and_then(|total| total.checked_add(entries_outer_bytes))
+            .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+    )?;
+    entries.extend(keyed.into_iter().map(|(_digest, _producer_order, row)| row));
+
+    let selected_prefixes = metadata.source_prefixes.as_deref().ok_or_else(|| {
+        NativeError::protocol("native retained source-map prefixes are unavailable")
+    })?;
+    let predicted_prefix_outer = selected_prefixes
+        .len()
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit("native source-prefix row size overflow"))?;
+    workspace_check(
+        entries_outer_bytes
+            .checked_add(payload_bytes)
+            .and_then(|total| total.checked_add(predicted_prefix_outer))
+            .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+    )?;
+    cancellation.checkpoint()?;
+    let mut prefixes = Vec::new();
+    prefixes
+        .try_reserve_exact(selected_prefixes.len())
+        .map_err(|_| NativeError::limit("native source-prefix row allocation failed"))?;
+    let prefixes_outer_bytes = prefixes
+        .capacity()
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit("native source-prefix row size overflow"))?;
+    workspace_check(
+        entries_outer_bytes
+            .checked_add(payload_bytes)
+            .and_then(|total| total.checked_add(prefixes_outer_bytes))
+            .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+    )?;
+    let mut previous: Option<&[u8]> = None;
+    for (prefix, iri) in selected_prefixes {
+        cancellation.checkpoint()?;
+        if previous.is_some_and(|value| value >= prefix.as_bytes()) {
+            return Err(NativeError::protocol(
+                "native retained source prefixes are not canonical",
+            ));
+        }
+        previous = Some(prefix.as_bytes());
+        let predicted_row_bytes = source_prefix_row_size(prefix, iri)?;
+        workspace_check(
+            entries_outer_bytes
+                .checked_add(payload_bytes)
+                .and_then(|total| total.checked_add(prefixes_outer_bytes))
+                .and_then(|total| total.checked_add(predicted_row_bytes))
+                .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+        )?;
+        let row = encode_source_prefix_row(prefix, iri)?;
+        workspace_check(
+            entries_outer_bytes
+                .checked_add(payload_bytes)
+                .and_then(|total| total.checked_add(prefixes_outer_bytes))
+                .and_then(|total| total.checked_add(row.capacity()))
+                .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+        )?;
+        if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
+            return Err(NativeError::limit(
+                "native retained source-prefix row exceeds max_wire_bytes",
+            ));
+        }
+        payload_bytes = payload_bytes
+            .checked_add(row.capacity())
+            .ok_or_else(|| NativeError::limit("native source-map payload overflow"))?;
+        prefixes.push(row);
+    }
+    workspace_check(
+        entries_outer_bytes
+            .checked_add(prefixes_outer_bytes)
+            .and_then(|total| total.checked_add(payload_bytes))
+            .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
+    )?;
+    Ok(TypedSourceMapRowsV2 { entries, prefixes })
+}
+
 fn encode_source_map_row(
     digest: [u8; 32],
     occurrence: u64,
@@ -2090,6 +2652,24 @@ fn encode_source_map_row(
     lexical: &[(String, &str)],
 ) -> NativeResult<Vec<u8>> {
     let lexical_count = u16::try_from(lexical.len())
+        .map_err(|_| NativeError::limit("native source-map lexical count exceeds u16"))?;
+    let size = source_map_row_size(span, lexical)?;
+    let mut row = Vec::new();
+    row.try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native source-map row allocation failed"))?;
+    row.extend_from_slice(&digest);
+    row.extend_from_slice(&occurrence.to_le_bytes());
+    encode_source_span(span, &mut row);
+    row.extend_from_slice(&lexical_count.to_le_bytes());
+    for (key, value) in lexical {
+        encode_source_text(key, &mut row)?;
+        encode_source_text(value, &mut row)?;
+    }
+    Ok(row)
+}
+
+fn source_map_row_size(span: Option<Span>, lexical: &[(String, &str)]) -> NativeResult<usize> {
+    u16::try_from(lexical.len())
         .map_err(|_| NativeError::limit("native source-map lexical count exceeds u16"))?;
     let mut previous: Option<&[u8]> = None;
     let lexical_size = lexical.iter().try_fold(0_usize, |total, (key, value)| {
@@ -2113,18 +2693,7 @@ fn encode_source_map_row(
         .checked_add(8 + 1 + usize::from(span.is_some()) * 4 * 8 + 2)
         .and_then(|value| value.checked_add(lexical_size))
         .ok_or_else(|| NativeError::limit("native source-map row size overflow"))?;
-    let mut row = Vec::new();
-    row.try_reserve_exact(size)
-        .map_err(|_| NativeError::limit("native source-map row allocation failed"))?;
-    row.extend_from_slice(&digest);
-    row.extend_from_slice(&occurrence.to_le_bytes());
-    encode_source_span(span, &mut row);
-    row.extend_from_slice(&lexical_count.to_le_bytes());
-    for (key, value) in lexical {
-        encode_source_text(key, &mut row)?;
-        encode_source_text(value, &mut row)?;
-    }
-    Ok(row)
+    Ok(size)
 }
 
 fn source_map_row_count(metadata: &RetainedParseMetadataV2) -> NativeResult<u64> {
@@ -2156,10 +2725,7 @@ fn encode_source_prefix_row(prefix: &str, iri: &str) -> NativeResult<Vec<u8>> {
         .map_err(|_| NativeError::limit("native source prefix exceeds u32"))?;
     let iri_len = u32::try_from(iri.len())
         .map_err(|_| NativeError::limit("native source prefix IRI exceeds u32"))?;
-    let size = 8_usize
-        .checked_add(prefix.len())
-        .and_then(|value| value.checked_add(iri.len()))
-        .ok_or_else(|| NativeError::limit("native source-prefix row size overflow"))?;
+    let size = source_prefix_row_size(prefix, iri)?;
     let mut row = Vec::new();
     row.try_reserve_exact(size)
         .map_err(|_| NativeError::limit("native source-prefix row allocation failed"))?;
@@ -2168,6 +2734,37 @@ fn encode_source_prefix_row(prefix: &str, iri: &str) -> NativeResult<Vec<u8>> {
     row.extend_from_slice(&iri_len.to_le_bytes());
     row.extend_from_slice(iri.as_bytes());
     Ok(row)
+}
+
+fn source_prefix_row_size(prefix: &str, iri: &str) -> NativeResult<usize> {
+    u32::try_from(prefix.len())
+        .map_err(|_| NativeError::limit("native source prefix exceeds u32"))?;
+    u32::try_from(iri.len())
+        .map_err(|_| NativeError::limit("native source prefix IRI exceeds u32"))?;
+    8_usize
+        .checked_add(prefix.len())
+        .and_then(|value| value.checked_add(iri.len()))
+        .ok_or_else(|| NativeError::limit("native source-prefix row size overflow"))
+}
+
+fn indexed_lexical_key_size(base: &str, index: usize) -> NativeResult<usize> {
+    if index == 0 {
+        return Ok(base.len());
+    }
+    let mut value = index
+        .checked_add(1)
+        .ok_or_else(|| NativeError::limit("native source-map lexical index overflow"))?;
+    let mut digits = 1_usize;
+    while value >= 10 {
+        value /= 10;
+        digits = digits
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native source-map lexical size overflow"))?;
+    }
+    base.len()
+        .checked_add(1)
+        .and_then(|size| size.checked_add(digits))
+        .ok_or_else(|| NativeError::limit("native source-map lexical size overflow"))
 }
 
 fn encode_source_span(span: Option<Span>, row: &mut Vec<u8>) {
@@ -2191,11 +2788,7 @@ fn encode_origin_row(
     let key = document_key.as_bytes();
     let key_len = u32::try_from(key.len())
         .map_err(|_| NativeError::limit("native document key exceeds u32"))?;
-    let size = 32_usize
-        .checked_add(4)
-        .and_then(|value| value.checked_add(key.len()))
-        .and_then(|value| value.checked_add(8 + 1 + usize::from(span.is_some()) * 4 * 8))
-        .ok_or_else(|| NativeError::limit("native origin row size overflow"))?;
+    let size = origin_row_size(document_key, span)?;
     let mut row = Vec::new();
     row.try_reserve_exact(size)
         .map_err(|_| NativeError::limit("native origin row allocation failed"))?;
@@ -2213,6 +2806,14 @@ fn encode_origin_row(
         None => row.push(0),
     }
     Ok(row)
+}
+
+fn origin_row_size(document_key: &str, span: Option<Span>) -> NativeResult<usize> {
+    32_usize
+        .checked_add(4)
+        .and_then(|value| value.checked_add(document_key.len()))
+        .and_then(|value| value.checked_add(8 + 1 + usize::from(span.is_some()) * 4 * 8))
+        .ok_or_else(|| NativeError::limit("native origin row size overflow"))
 }
 
 fn root_manifest_digest(
@@ -2423,10 +3024,195 @@ fn prepare_rdf_report(
     })
 }
 
+fn prepare_rdf_report_bounded(
+    document_key: &str,
+    mapping: &RetainedRdfMappingEvidenceV2,
+    limits: &Limits,
+    cancellation: &Cancellation,
+    workspace_check: &mut dyn FnMut(usize) -> NativeResult<()>,
+) -> NativeResult<PreparedRetainedRdfReportV2> {
+    let remaining = mapping
+        .total_triples
+        .checked_sub(mapping.consumed_triples)
+        .ok_or_else(|| NativeError::protocol("native RDF consumed count exceeds total"))?;
+    let evidence_count = u64::try_from(mapping.unconsumed.len())
+        .map_err(|_| NativeError::limit("native RDF evidence count exceeds u64"))?;
+    if (remaining == 0) != mapping.unconsumed.is_empty()
+        || evidence_count > remaining
+        || evidence_count > limits.value(crate::limits::LimitKey::MaxDiagnostics)
+    {
+        return Err(NativeError::protocol(
+            "native RDF report evidence diverges from mapping counts",
+        ));
+    }
+    let conformant = remaining == 0;
+    workspace_check(17)?;
+    cancellation.checkpoint()?;
+    let mut header = Vec::new();
+    header
+        .try_reserve_exact(17)
+        .map_err(|_| NativeError::limit("native RDF report header allocation failed"))?;
+    let header_bytes = header.capacity();
+    workspace_check(header_bytes)?;
+    header.push(u8::from(conformant));
+    header.extend_from_slice(&mapping.consumed_triples.to_le_bytes());
+    header.extend_from_slice(&mapping.total_triples.to_le_bytes());
+
+    let predicted_unconsumed_outer = mapping
+        .unconsumed
+        .len()
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit("native RDF evidence row size overflow"))?;
+    workspace_check(
+        header_bytes
+            .checked_add(predicted_unconsumed_outer)
+            .ok_or_else(|| NativeError::limit("native RDF report workspace overflow"))?,
+    )?;
+    cancellation.checkpoint()?;
+    let mut unconsumed_triples = Vec::new();
+    unconsumed_triples
+        .try_reserve_exact(mapping.unconsumed.len())
+        .map_err(|_| NativeError::limit("native RDF evidence row allocation failed"))?;
+    let unconsumed_outer_bytes = unconsumed_triples
+        .capacity()
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit("native RDF evidence row size overflow"))?;
+    workspace_check(
+        header_bytes
+            .checked_add(unconsumed_outer_bytes)
+            .ok_or_else(|| NativeError::limit("native RDF report workspace overflow"))?,
+    )?;
+    let mut payload_bytes = 0_usize;
+    for triple in &mapping.unconsumed {
+        cancellation.checkpoint()?;
+        let predicted_row_bytes = rdf_triple_evidence_size(triple, limits)?;
+        workspace_check(
+            header_bytes
+                .checked_add(unconsumed_outer_bytes)
+                .and_then(|total| total.checked_add(payload_bytes))
+                .and_then(|total| total.checked_add(predicted_row_bytes))
+                .ok_or_else(|| NativeError::limit("native RDF report workspace overflow"))?,
+        )?;
+        let row = encode_rdf_triple_evidence(triple, limits)?;
+        workspace_check(
+            header_bytes
+                .checked_add(unconsumed_outer_bytes)
+                .and_then(|total| total.checked_add(payload_bytes))
+                .and_then(|total| total.checked_add(row.capacity()))
+                .ok_or_else(|| NativeError::limit("native RDF report workspace overflow"))?,
+        )?;
+        payload_bytes = payload_bytes
+            .checked_add(row.capacity())
+            .ok_or_else(|| NativeError::limit("native RDF report payload overflow"))?;
+        unconsumed_triples.push(row);
+    }
+    let predicted_rule_outer = usize::from(!conformant)
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit("native RDF rule row size overflow"))?;
+    workspace_check(
+        header_bytes
+            .checked_add(unconsumed_outer_bytes)
+            .and_then(|total| total.checked_add(payload_bytes))
+            .and_then(|total| total.checked_add(predicted_rule_outer))
+            .ok_or_else(|| NativeError::limit("native RDF report workspace overflow"))?,
+    )?;
+    cancellation.checkpoint()?;
+    let mut rule_ids = Vec::new();
+    if !conformant {
+        rule_ids
+            .try_reserve_exact(1)
+            .map_err(|_| NativeError::limit("native RDF rule row allocation failed"))?;
+        let rule_outer_bytes = rule_ids
+            .capacity()
+            .checked_mul(size_of::<Vec<u8>>())
+            .ok_or_else(|| NativeError::limit("native RDF rule row size overflow"))?;
+        let predicted_row_bytes = rdf_rule_id_size("OWL2-RDF-REVERSE", limits)?;
+        workspace_check(
+            header_bytes
+                .checked_add(unconsumed_outer_bytes)
+                .and_then(|total| total.checked_add(payload_bytes))
+                .and_then(|total| total.checked_add(rule_outer_bytes))
+                .and_then(|total| total.checked_add(predicted_row_bytes))
+                .ok_or_else(|| NativeError::limit("native RDF report workspace overflow"))?,
+        )?;
+        let row = encode_rdf_rule_id("OWL2-RDF-REVERSE", limits)?;
+        workspace_check(
+            header_bytes
+                .checked_add(unconsumed_outer_bytes)
+                .and_then(|total| total.checked_add(payload_bytes))
+                .and_then(|total| total.checked_add(rule_outer_bytes))
+                .and_then(|total| total.checked_add(row.capacity()))
+                .ok_or_else(|| NativeError::limit("native RDF report workspace overflow"))?,
+        )?;
+        payload_bytes = payload_bytes
+            .checked_add(row.capacity())
+            .ok_or_else(|| NativeError::limit("native RDF report payload overflow"))?;
+        rule_ids.push(row);
+    }
+    let rule_outer_bytes = rule_ids
+        .capacity()
+        .checked_mul(size_of::<Vec<u8>>())
+        .ok_or_else(|| NativeError::limit("native RDF rule row size overflow"))?;
+
+    let mut report = MeasuredSha256::domain(RDF_MAPPING_REPORT_DOMAIN_V2)?;
+    report.text64(document_key)?;
+    report.frame64(&header)?;
+    report.u64_le(evidence_count)?;
+    for row in &unconsumed_triples {
+        cancellation.checkpoint()?;
+        report.frame64(row)?;
+    }
+    report.u64_le(u64::from(!conformant))?;
+    for row in &rule_ids {
+        cancellation.checkpoint()?;
+        report.frame64(row)?;
+    }
+    report.u64_le(0)?;
+    let digest = report.finish().digest;
+    let retained_bytes = header_bytes
+        .checked_add(payload_bytes)
+        .and_then(|size| u64::try_from(size).ok())
+        .ok_or_else(|| NativeError::limit("native RDF report size exceeds u64"))?;
+    workspace_check(
+        header_bytes
+            .checked_add(unconsumed_outer_bytes)
+            .and_then(|total| total.checked_add(rule_outer_bytes))
+            .and_then(|total| total.checked_add(payload_bytes))
+            .ok_or_else(|| NativeError::limit("native RDF report workspace overflow"))?,
+    )?;
+    Ok(PreparedRetainedRdfReportV2 {
+        rows: TypedRdfReportRowsV2 {
+            header,
+            unconsumed_triples,
+            rule_ids,
+            diagnostics: Vec::new(),
+        },
+        conformant,
+        consumed_triples: mapping.consumed_triples,
+        total_triples: mapping.total_triples,
+        digest,
+        retained_bytes,
+    })
+}
+
 fn encode_rdf_triple_evidence(
     triple: &crate::bindings::ingestion::engine::RdfTripleEvidence,
     limits: &Limits,
 ) -> NativeResult<Vec<u8>> {
+    let size = rdf_triple_evidence_size(triple, limits)?;
+    let mut row = Vec::new();
+    row.try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native RDF evidence row allocation failed"))?;
+    for value in [&triple.subject, &triple.predicate, &triple.object] {
+        encode_source_text(value, &mut row)?;
+    }
+    Ok(row)
+}
+
+fn rdf_triple_evidence_size(
+    triple: &crate::bindings::ingestion::engine::RdfTripleEvidence,
+    limits: &Limits,
+) -> NativeResult<usize> {
     if triple.object_requires_repr {
         return Err(NativeError::protocol(
             "native RDF literal evidence was not rendered by the binding",
@@ -2448,16 +3234,19 @@ fn encode_rdf_triple_evidence(
                 .ok_or_else(|| NativeError::limit("native RDF evidence row size overflow"))
         })?;
     ensure_rdf_auxiliary_row_size(size, limits)?;
-    let mut row = Vec::new();
-    row.try_reserve_exact(size)
-        .map_err(|_| NativeError::limit("native RDF evidence row allocation failed"))?;
-    for value in [&triple.subject, &triple.predicate, &triple.object] {
-        encode_source_text(value, &mut row)?;
-    }
-    Ok(row)
+    Ok(size)
 }
 
 fn encode_rdf_rule_id(value: &str, limits: &Limits) -> NativeResult<Vec<u8>> {
+    let size = rdf_rule_id_size(value, limits)?;
+    let mut row = Vec::new();
+    row.try_reserve_exact(size)
+        .map_err(|_| NativeError::limit("native RDF rule row allocation failed"))?;
+    encode_source_text(value, &mut row)?;
+    Ok(row)
+}
+
+fn rdf_rule_id_size(value: &str, limits: &Limits) -> NativeResult<usize> {
     if value.is_empty() {
         return Err(NativeError::protocol("native RDF rule id is empty"));
     }
@@ -2467,11 +3256,7 @@ fn encode_rdf_rule_id(value: &str, limits: &Limits) -> NativeResult<Vec<u8>> {
         .checked_add(4)
         .ok_or_else(|| NativeError::limit("native RDF rule row size overflow"))?;
     ensure_rdf_auxiliary_row_size(size, limits)?;
-    let mut row = Vec::new();
-    row.try_reserve_exact(size)
-        .map_err(|_| NativeError::limit("native RDF rule row allocation failed"))?;
-    encode_source_text(value, &mut row)?;
-    Ok(row)
+    Ok(size)
 }
 
 fn ensure_rdf_auxiliary_row_size(size: usize, limits: &Limits) -> NativeResult<()> {
@@ -2801,6 +3586,102 @@ fn checked_add(left: u64, right: u64, message: &'static str) -> NativeResult<u64
 mod tests {
     use super::*;
     use crate::canonical::{canonical_set, entity, literal, Field};
+
+    #[test]
+    fn raw_closure_origins_use_source_fingerprint_key_at_exact_workspace() {
+        let digest = [0xab; 32];
+        let span = Span {
+            byte_start: 1,
+            byte_end: 2,
+            line: 1,
+            column: 1,
+        };
+        let metadata = RetainedParseMetadataV2 {
+            document_fingerprint: FingerprintEvidenceV2 {
+                preimage_bytes: 0,
+                digest,
+            },
+            parser_summary_bytes_materialized: 0,
+            canonical_rows_scanned: 1,
+            occurrence_count: 1,
+            metadata_iri_objects_materialized: 0,
+            root_counts: [0, 1, 0],
+            occurrences: vec![RetainedOccurrenceV2 {
+                digest,
+                effective_digest: digest,
+                span: Some(span),
+                source_order: 0,
+                language_details: Vec::new(),
+                source_blank_labels: Vec::new(),
+            }],
+            effective_origin_fallbacks: Vec::new(),
+            source_prefixes: None,
+            rdf_mapping: None,
+            scoped_roots: false,
+        };
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut peak = 0_usize;
+        let mut record = |workspace: usize| {
+            peak = peak.max(workspace);
+            Ok(())
+        };
+        let rows = metadata
+            .prepare_closure_origin_rows(
+                "d1:effective-owner",
+                true,
+                None,
+                &limits,
+                &cancellation,
+                &mut record,
+            )
+            .expect("raw closure origins");
+        let encoded_key = digest_hex(digest).expect("source fingerprint key");
+        let key_length =
+            u32::from_le_bytes(rows[0][32..36].try_into().expect("key length")) as usize;
+        assert_eq!(&rows[0][36..36 + key_length], encoded_key.as_bytes());
+        assert!(peak > 1);
+
+        let maximum = peak - 1;
+        let mut one_byte_short = |workspace: usize| {
+            if workspace > maximum {
+                Err(NativeError::limit(
+                    "injected one-byte-short raw origin workspace",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        let error = metadata
+            .prepare_closure_origin_rows(
+                "d1:effective-owner",
+                true,
+                None,
+                &limits,
+                &cancellation,
+                &mut one_byte_short,
+            )
+            .expect_err("one-byte-short raw origin workspace must fail");
+        assert_eq!(error.code, "NATIVE_WIRE_LIMIT");
+
+        let mut exact = |workspace: usize| {
+            if workspace > peak {
+                Err(NativeError::limit("exact raw origin workspace exceeded"))
+            } else {
+                Ok(())
+            }
+        };
+        metadata
+            .prepare_closure_origin_rows(
+                "d1:effective-owner",
+                true,
+                None,
+                &limits,
+                &cancellation,
+                &mut exact,
+            )
+            .expect("exact raw origin workspace");
+    }
 
     #[test]
     fn language_details_follow_canonical_walk_and_source_spelling_queues() {

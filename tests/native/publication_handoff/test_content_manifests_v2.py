@@ -33,6 +33,7 @@ from pyowl_core.backends.native_handoff_v2 import (
     NativeSignatureKindV2,
     NativeSnapshotPublicationV2,
     NativeSourceMapRowV2,
+    decode_native_auxiliary_row_v2,
     encode_native_auxiliary_row_v2,
     freeze_native_snapshot_publication_v2,
     native_snapshot_content_digests_v2,
@@ -462,6 +463,89 @@ def test_manifest_rejects_non_structural_origin_digest_and_fingerprint_echo() ->
             values,
             fixture_collections(),
             (replace(evidence[0], digest=b"y" * 32), *evidence[1:]),
+        )
+
+
+def test_raw_provisional_origin_key_preserves_canonical_effective_publication() -> None:
+    values = publication_fields()
+    documents = cast(tuple[NativeDocumentPublicationV1, ...], values["documents"])
+    document = documents[0]
+    effective = dict(fixture_collections())
+    origin_key: FixtureKey = (
+        NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+        NativeFacadeScopeV2.DOCUMENT,
+        0,
+        NativeSignatureKindV2.ALL,
+        True,
+    )
+    effective_origin = effective[origin_key][0]
+    decoded_effective = cast(
+        NativeOriginRowV2,
+        decode_native_auxiliary_row_v2(
+            NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+            effective_origin,
+            max_row_bytes=source_load_row_budget(values),
+        ),
+    )
+    provisional_key = document.document_fingerprint.digest.hex()
+    _collection, provisional_origin = encode_native_auxiliary_row_v2(
+        replace(decoded_effective, document_key=provisional_key),
+        max_row_bytes=source_load_row_budget(values),
+    )
+    raw = dict(effective)
+    raw[origin_key] = (provisional_origin,)
+
+    selected = publication(
+        effective,
+        values=values,
+        raw_document_collections=raw,
+    )
+    decoded_raw = cast(
+        NativeOriginRowV2,
+        decode_native_auxiliary_row_v2(
+            NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+            provisional_origin,
+            max_row_bytes=source_load_row_budget(values),
+        ),
+    )
+
+    assert decoded_raw.document_key == provisional_key
+    assert decoded_effective.document_key == document.document_key
+    assert selected.documents[0].document_key == document.document_key
+    assert selected.root_document_key == document.document_key
+
+
+def test_raw_provenance_rejects_third_provisional_document_key() -> None:
+    values = publication_fields()
+    effective = dict(fixture_collections())
+    origin_key: FixtureKey = (
+        NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+        NativeFacadeScopeV2.DOCUMENT,
+        0,
+        NativeSignatureKindV2.ALL,
+        True,
+    )
+    decoded = cast(
+        NativeOriginRowV2,
+        decode_native_auxiliary_row_v2(
+            NativeFacadeCollectionV2.ORIGIN_ENTRIES,
+            effective[origin_key][0],
+            max_row_bytes=source_load_row_budget(values),
+        ),
+    )
+    _collection, malformed = encode_native_auxiliary_row_v2(
+        replace(decoded, document_key="00" * 32),
+        max_row_bytes=source_load_row_budget(values),
+    )
+    raw = dict(effective)
+    raw[origin_key] = (malformed,)
+
+    with pytest.raises(BackendProtocolError, match="wrong document"):
+        content_digests(
+            values,
+            effective,
+            fingerprint_evidence(values),
+            raw,
         )
 
 

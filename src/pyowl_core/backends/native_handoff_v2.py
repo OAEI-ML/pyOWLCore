@@ -2717,6 +2717,7 @@ def _provenance_manifest_sha256_v2(
                 origins,
                 allowed_digests=raw_digests,
                 expected_document_key=document.document_key,
+                alternate_document_key=document.document_fingerprint.digest.hex(),
             )
             origin_body = (
                 _text64_v2(document.document_key)
@@ -2807,6 +2808,7 @@ def _validate_manifest_reference_rows_v2(
     *,
     allowed_digests: frozenset[bytes] | None = None,
     expected_document_key: str | None = None,
+    alternate_document_key: str | None = None,
     digest_by_document_key: Mapping[str, frozenset[bytes]] | None = None,
 ) -> tuple[NativeSourceMapRowV2 | NativeOriginRowV2, ...]:
     if (allowed_digests is None) == (digest_by_document_key is None):
@@ -2824,7 +2826,11 @@ def _validate_manifest_reference_rows_v2(
         )
         selected_digests = allowed_digests
         if type(decoded) is NativeOriginRowV2:
-            if expected_document_key is not None and decoded.document_key != expected_document_key:
+            if (
+                expected_document_key is not None
+                and decoded.document_key != expected_document_key
+                and decoded.document_key != alternate_document_key
+            ):
                 _fail(
                     "V2 origin row belongs to the wrong document",
                     "NATIVE_STRUCTURAL_DIGEST",

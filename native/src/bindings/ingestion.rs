@@ -4,6 +4,8 @@
 //! add functions/classes and feature names in this module without editing the
 //! shared module registry.
 
+#[path = "ingestion_closure.rs"]
+mod closure;
 #[allow(dead_code)]
 #[path = "../ingestion/mod.rs"]
 pub(crate) mod engine;
@@ -40,6 +42,19 @@ struct NativeParsedStructuralStorageV2 {
     parser_bytes: u64,
 }
 
+#[pyclass(
+    module = "pyowl_core._native",
+    name = "_NativePreparedStructuralClosureV2",
+    skip_from_py_object
+)]
+struct NativePreparedStructuralClosureV2 {
+    storage: Option<TypedFacadeStorageV2>,
+    prepared: Option<closure::PreparedClosurePublicationV2>,
+    prepared_summary: Vec<u8>,
+    metadata: Vec<Arc<crate::parse::RetainedParseMetadataV2>>,
+    parser_bytes: u64,
+}
+
 type RetainedParseBindingResult = (
     Py<PyBytes>,
     NativeParsedStructuralStorageV2,
@@ -54,9 +69,28 @@ type RetainedRdfXmlParseBindingResult = (
 
 pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResult<()> {
     _module.add_class::<NativeParsedStructuralStorageV2>()?;
+    _module.add_class::<NativePreparedStructuralClosureV2>()?;
     _module.add_function(wrap_pyfunction!(_retain_structural_snapshot_v2, _module)?)?;
     _module.add_function(wrap_pyfunction!(
         _merge_parsed_structural_snapshot_v2,
+        _module
+    )?)?;
+    _module.add_function(wrap_pyfunction!(
+        _prepare_parsed_structural_closure_v2,
+        _module
+    )?)?;
+    #[cfg(feature = "test-hooks")]
+    _module.add_function(wrap_pyfunction!(
+        _prepare_parsed_structural_closure_bridge_allocation_probe_v2,
+        _module
+    )?)?;
+    #[cfg(feature = "test-hooks")]
+    _module.add_function(wrap_pyfunction!(
+        _prepare_parsed_structural_closure_auxiliary_failure_probe_v2,
+        _module
+    )?)?;
+    _module.add_function(wrap_pyfunction!(
+        _finalize_parsed_structural_closure_v2,
         _module
     )?)?;
     #[cfg(feature = "test-hooks")]
@@ -396,8 +430,9 @@ fn parse_rdfxml_retained_v2_with_allocations<'py>(
 ///
 /// Eligible documents, including single-document anonymous-node scopes,
 /// return only bounded metadata and fingerprint evidence; canonical ontology
-/// rows remain solely in the native component owner. Explicit diagnostic and
-/// resolver-backed closure fallbacks retain the complete framing.
+/// rows remain solely in the native component owner. Only explicit diagnostic
+/// or unsupported direct fallback keeps complete framing; resolver-orchestrated
+/// materialization remains owner-first through compact closure seeds.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
@@ -902,6 +937,938 @@ fn validate_prepared_attestation(
     {
         return Err(crate::python_error(NativeError::protocol(
             "native retained publication metadata diverges from its attestation",
+        )));
+    }
+    Ok(())
+}
+
+/// Prepare one parser-owner closure without exporting structural or auxiliary
+/// rows. Original parser owners remain reusable until exact attestation
+/// validation succeeds at the finalization boundary.
+#[pyfunction]
+#[pyo3(signature = (
+    parsed_documents,
+    manifest,
+    root_document_key,
+    document_keys,
+    collect_provenance,
+    preserve_source_map,
+    config,
+    cancel=None,
+    *,
+    effective_document_ordinals=None,
+    closure_document_ordinals=None,
+    anonymous_scope_targets=None
+))]
+#[allow(clippy::too_many_arguments)]
+fn _prepare_parsed_structural_closure_v2<'py>(
+    py: Python<'py>,
+    parsed_documents: &Bound<'py, PyAny>,
+    manifest: &Bound<'py, PyBytes>,
+    root_document_key: String,
+    document_keys: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    effective_document_ordinals: Option<&Bound<'py, PyAny>>,
+    closure_document_ordinals: Option<&Bound<'py, PyAny>>,
+    anonymous_scope_targets: Option<&Bound<'py, PyAny>>,
+) -> PyResult<(Py<PyBytes>, NativePreparedStructuralClosureV2)> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    prepare_parsed_structural_closure_v2_with_allocations(
+        py,
+        parsed_documents,
+        manifest,
+        root_document_key,
+        document_keys,
+        collect_provenance,
+        preserve_source_map,
+        config,
+        cancel,
+        effective_document_ordinals,
+        closure_document_ordinals,
+        anonymous_scope_targets,
+        false,
+        &mut allocations,
+    )
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (
+    parsed_documents,
+    manifest,
+    root_document_key,
+    document_keys,
+    collect_provenance,
+    preserve_source_map,
+    config,
+    fail_after=None,
+    *,
+    effective_document_ordinals=None,
+    closure_document_ordinals=None,
+    anonymous_scope_targets=None
+))]
+#[allow(clippy::too_many_arguments)]
+fn _prepare_parsed_structural_closure_bridge_allocation_probe_v2<'py>(
+    py: Python<'py>,
+    parsed_documents: &Bound<'py, PyAny>,
+    manifest: &Bound<'py, PyBytes>,
+    root_document_key: String,
+    document_keys: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    config: &Bound<'py, PyAny>,
+    fail_after: Option<u64>,
+    effective_document_ordinals: Option<&Bound<'py, PyAny>>,
+    closure_document_ordinals: Option<&Bound<'py, PyAny>>,
+    anonymous_scope_targets: Option<&Bound<'py, PyAny>>,
+) -> PyResult<(Py<PyBytes>, NativePreparedStructuralClosureV2, u64)> {
+    let mut allocations = crate::BridgeAllocationProbe::configured(
+        fail_after,
+        "injected native parsed-closure preparation bridge allocation failure",
+    );
+    let (encoded, prepared) = prepare_parsed_structural_closure_v2_with_allocations(
+        py,
+        parsed_documents,
+        manifest,
+        root_document_key,
+        document_keys,
+        collect_provenance,
+        preserve_source_map,
+        config,
+        None,
+        effective_document_ordinals,
+        closure_document_ordinals,
+        anonymous_scope_targets,
+        false,
+        &mut allocations,
+    )?;
+    Ok((encoded, prepared, allocations.count()))
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+#[pyo3(signature = (
+    parsed_documents,
+    manifest,
+    root_document_key,
+    document_keys,
+    collect_provenance,
+    preserve_source_map,
+    config,
+    *,
+    effective_document_ordinals=None,
+    closure_document_ordinals=None,
+    anonymous_scope_targets=None
+))]
+#[allow(clippy::too_many_arguments)]
+fn _prepare_parsed_structural_closure_auxiliary_failure_probe_v2<'py>(
+    py: Python<'py>,
+    parsed_documents: &Bound<'py, PyAny>,
+    manifest: &Bound<'py, PyBytes>,
+    root_document_key: String,
+    document_keys: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    config: &Bound<'py, PyAny>,
+    effective_document_ordinals: Option<&Bound<'py, PyAny>>,
+    closure_document_ordinals: Option<&Bound<'py, PyAny>>,
+    anonymous_scope_targets: Option<&Bound<'py, PyAny>>,
+) -> PyResult<(Py<PyBytes>, NativePreparedStructuralClosureV2)> {
+    let mut allocations = crate::BridgeAllocationProbe::disabled();
+    prepare_parsed_structural_closure_v2_with_allocations(
+        py,
+        parsed_documents,
+        manifest,
+        root_document_key,
+        document_keys,
+        collect_provenance,
+        preserve_source_map,
+        config,
+        None,
+        effective_document_ordinals,
+        closure_document_ordinals,
+        anonymous_scope_targets,
+        true,
+        &mut allocations,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_parsed_structural_closure_v2_with_allocations<'py>(
+    py: Python<'py>,
+    parsed_documents: &Bound<'py, PyAny>,
+    manifest: &Bound<'py, PyBytes>,
+    root_document_key: String,
+    document_keys: &Bound<'py, PyAny>,
+    collect_provenance: bool,
+    preserve_source_map: bool,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+    effective_document_ordinals: Option<&Bound<'py, PyAny>>,
+    closure_document_ordinals: Option<&Bound<'py, PyAny>>,
+    anonymous_scope_targets: Option<&Bound<'py, PyAny>>,
+    force_auxiliary_plan_failure: bool,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<(Py<PyBytes>, NativePreparedStructuralClosureV2)> {
+    let limits = crate::limits_from_python_with_allocations(config, allocations)?;
+    let cancellation = crate::cancellation_or_default(cancel);
+    if !parsed_documents.get_type().is(py.get_type::<PyTuple>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "native parsed closure documents must be an exact tuple",
+        ));
+    }
+    let parsed_documents = parsed_documents.cast::<PyTuple>()?;
+    if parsed_documents.is_empty()
+        || u64::try_from(parsed_documents.len()).map_or(true, |count| count > limits.max_documents)
+    {
+        return Err(crate::python_error(NativeError::limit(
+            "native parsed closure document count is invalid",
+        )));
+    }
+    let owned_document_keys =
+        owned_closure_document_keys(py, document_keys, parsed_documents.len(), allocations)?;
+    let mut owned_manifest = Vec::new();
+    allocations.checkpoint()?;
+    owned_manifest
+        .try_reserve_exact(manifest.as_bytes().len())
+        .map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native closure manifest allocation failed",
+            ))
+        })?;
+    owned_manifest.extend_from_slice(manifest.as_bytes());
+
+    let mut parser_bytes = 0_u64;
+    let mut original_owner_bytes = 0_usize;
+    let mut original_component_bytes = 0_usize;
+    let mut original_external_bytes = 0_usize;
+    let mut predicted_fork_external_bytes = 0_usize;
+    let mut retained_parser_metadata_bytes = 0_usize;
+    let mut metadata = Vec::new();
+    allocations.checkpoint()?;
+    metadata
+        .try_reserve_exact(parsed_documents.len())
+        .map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native closure metadata allocation failed",
+            ))
+        })?;
+    let mut owner_identities = Vec::new();
+    allocations.checkpoint()?;
+    owner_identities
+        .try_reserve_exact(parsed_documents.len())
+        .map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native closure owner-identity allocation failed",
+            ))
+        })?;
+    for item in parsed_documents.iter() {
+        if !item
+            .get_type()
+            .is(py.get_type::<NativeParsedStructuralStorageV2>())
+        {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native parsed closure contains an invalid storage owner",
+            ));
+        }
+        owner_identities.push(item.as_ptr() as usize);
+        let parsed: PyRef<'_, NativeParsedStructuralStorageV2> = item.extract()?;
+        if parsed.storage.is_none()
+            || parsed.metadata.is_none()
+            || parsed.prepared.is_some()
+            || parsed.prepared_summary.is_some()
+        {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "native parsed closure storage was consumed, prepared, or lacks metadata",
+            ));
+        }
+        parser_bytes = parser_bytes
+            .checked_add(parsed.parser_bytes)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native closure parser byte count overflow",
+                ))
+            })?;
+        let counters = parsed
+            .storage
+            .as_ref()
+            .expect("validated closure storage")
+            .counters()
+            .map_err(crate::python_error)?;
+        let retained_owner_bytes =
+            usize::try_from(counters.retained_owner_bytes).map_err(|_| {
+                crate::python_error(NativeError::limit(
+                    "native closure source owner exceeds usize",
+                ))
+            })?;
+        let retained_component_bytes =
+            usize::try_from(counters.retained_component_bytes).map_err(|_| {
+                crate::python_error(NativeError::limit(
+                    "native closure source component arena exceeds usize",
+                ))
+            })?;
+        let retained_external_bytes = retained_owner_bytes
+            .checked_sub(retained_component_bytes)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::protocol(
+                    "native closure source owner accounting is inconsistent",
+                ))
+            })?;
+        original_owner_bytes = original_owner_bytes
+            .checked_add(retained_owner_bytes)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native closure source owner size overflow",
+                ))
+            })?;
+        original_component_bytes = original_component_bytes
+            .checked_add(retained_component_bytes)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native closure source component size overflow",
+                ))
+            })?;
+        original_external_bytes = original_external_bytes
+            .checked_add(retained_external_bytes)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native closure source external size overflow",
+                ))
+            })?;
+        // Each fork shares the immutable arena but clones root manifests,
+        // derived indexes, and owner metadata. The source non-component bytes
+        // conservatively preflight that aggregate clone before any owner moves.
+        predicted_fork_external_bytes = predicted_fork_external_bytes
+            .checked_add(retained_external_bytes)
+            .ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native closure fork overhead size overflow",
+                ))
+            })?;
+        let retained_metadata = parsed
+            .metadata
+            .as_ref()
+            .cloned()
+            .expect("validated closure metadata");
+        retained_parser_metadata_bytes = retained_parser_metadata_bytes
+            .checked_add(
+                retained_metadata
+                    .retained_bytes()
+                    .map_err(crate::python_error)?,
+            )
+            .ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native closure parser metadata size overflow",
+                ))
+            })?;
+        metadata.push(retained_metadata);
+    }
+    cancellation.checkpoint().map_err(crate::python_error)?;
+    owner_identities.sort_unstable();
+    if owner_identities.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "native parsed closure contains a duplicate storage owner",
+        ));
+    }
+    let (effective_document_ordinals, closure_document_ordinals, topology_bytes) =
+        owned_closure_topology(
+            py,
+            effective_document_ordinals,
+            closure_document_ordinals,
+            parsed_documents.len(),
+            &limits,
+            &cancellation,
+            allocations,
+        )?;
+    let (mut anonymous_scope_targets, scope_bytes) = owned_anonymous_scope_targets(
+        py,
+        anonymous_scope_targets,
+        parsed_documents,
+        &cancellation,
+        allocations,
+    )?;
+    for (target, selected_metadata) in anonymous_scope_targets.iter_mut().zip(&metadata) {
+        if !selected_metadata.closure_has_scoped_roots() {
+            *target = None;
+        }
+    }
+    let mut storages = Vec::new();
+    allocations.checkpoint()?;
+    storages
+        .try_reserve_exact(parsed_documents.len())
+        .map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native closure source storage allocation failed",
+            ))
+        })?;
+    let mut originals = Vec::new();
+    allocations.checkpoint()?;
+    originals
+        .try_reserve_exact(parsed_documents.len())
+        .map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native closure original-storage allocation failed",
+            ))
+        })?;
+    let mut forks = Vec::new();
+    allocations.checkpoint()?;
+    forks
+        .try_reserve_exact(parsed_documents.len())
+        .map_err(|_| {
+            crate::python_error(NativeError::limit(
+                "native closure forked-storage allocation failed",
+            ))
+        })?;
+    let key_table_bytes = owned_document_keys
+        .capacity()
+        .checked_mul(size_of::<String>())
+        .ok_or_else(|| {
+            crate::python_error(NativeError::limit(
+                "native closure document-key size overflow",
+            ))
+        })?;
+    let key_bytes = owned_document_keys
+        .iter()
+        .try_fold(key_table_bytes, |total, key| {
+            total.checked_add(key.capacity()).ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native closure document-key size overflow",
+                ))
+            })
+        })?;
+    let metadata_bytes = metadata
+        .capacity()
+        .checked_mul(size_of::<Arc<crate::parse::RetainedParseMetadataV2>>())
+        .ok_or_else(|| {
+            crate::python_error(NativeError::limit("native closure metadata size overflow"))
+        })?;
+    let storage_table_bytes = storages
+        .capacity()
+        .checked_add(originals.capacity())
+        .and_then(|value| value.checked_add(forks.capacity()))
+        .and_then(|value| value.checked_mul(size_of::<TypedFacadeStorageV2>()))
+        .ok_or_else(|| {
+            crate::python_error(NativeError::limit(
+                "native closure storage-table size overflow",
+            ))
+        })?;
+    let identity_bytes = owner_identities
+        .capacity()
+        .checked_mul(size_of::<usize>())
+        .ok_or_else(|| {
+            crate::python_error(NativeError::limit(
+                "native closure owner-identity size overflow",
+            ))
+        })?;
+    let closure_metadata_bytes = owned_manifest
+        .capacity()
+        .checked_add(root_document_key.capacity())
+        .and_then(|value| value.checked_add(key_bytes))
+        .and_then(|value| value.checked_add(metadata_bytes))
+        .and_then(|value| value.checked_add(retained_parser_metadata_bytes))
+        .and_then(|value| value.checked_add(storage_table_bytes))
+        .and_then(|value| value.checked_add(topology_bytes))
+        .and_then(|value| value.checked_add(scope_bytes))
+        .ok_or_else(|| {
+            crate::python_error(NativeError::limit(
+                "native closure preparation boundary size overflow",
+            ))
+        })?;
+    let boundary_bytes = original_owner_bytes
+        .checked_add(predicted_fork_external_bytes)
+        .and_then(|value| value.checked_add(closure_metadata_bytes))
+        .ok_or_else(|| {
+            crate::python_error(NativeError::limit(
+                "native closure aggregate owner boundary size overflow",
+            ))
+        })?;
+    let identity_peak_bytes = boundary_bytes.checked_add(identity_bytes).ok_or_else(|| {
+        crate::python_error(NativeError::limit(
+            "native closure identity peak size overflow",
+        ))
+    })?;
+    enforce_retained_boundary(identity_peak_bytes, &limits)?;
+    drop(owner_identities);
+    let closure_external_bytes = original_external_bytes
+        .checked_add(closure_metadata_bytes)
+        .ok_or_else(|| {
+            crate::python_error(NativeError::limit(
+                "native closure preparation external size overflow",
+            ))
+        })?;
+
+    for item in parsed_documents.iter() {
+        let mut parsed: PyRefMut<'_, NativeParsedStructuralStorageV2> = item.extract()?;
+        storages.push(parsed.storage.take().expect("validated closure storage"));
+    }
+    let (originals, retained_metadata, prepared_result) =
+        crate::run_detached(py, move |interrupt| {
+            let mut sources = storages.into_iter();
+            let mut fork_owner_bytes = 0_usize;
+            let mut fork_component_bytes = 0_usize;
+            let mut fork_external_bytes = 0_usize;
+            while let Some(storage) = sources.next() {
+                match storage.fork_parser_document(cancellation.clone(), Some(interrupt.clone())) {
+                    Ok((source, fork)) => {
+                        originals.push(source);
+                        let fork_counters = match fork.counters() {
+                            Ok(counters) => counters,
+                            Err(error) => {
+                                originals.extend(sources);
+                                return Ok::<_, NativeError>((originals, metadata, Err(error)));
+                            }
+                        };
+                        let owner_bytes = match usize::try_from(fork_counters.retained_owner_bytes)
+                        {
+                            Ok(value) => value,
+                            Err(_) => {
+                                originals.extend(sources);
+                                return Ok::<_, NativeError>((
+                                    originals,
+                                    metadata,
+                                    Err(NativeError::limit(
+                                        "native closure fork owner exceeds usize",
+                                    )),
+                                ));
+                            }
+                        };
+                        let component_bytes =
+                            match usize::try_from(fork_counters.retained_component_bytes) {
+                                Ok(value) => value,
+                                Err(_) => {
+                                    originals.extend(sources);
+                                    return Ok::<_, NativeError>((
+                                        originals,
+                                        metadata,
+                                        Err(NativeError::limit(
+                                            "native closure fork component exceeds usize",
+                                        )),
+                                    ));
+                                }
+                            };
+                        let external_bytes = match owner_bytes.checked_sub(component_bytes) {
+                            Some(value) => value,
+                            None => {
+                                originals.extend(sources);
+                                return Ok::<_, NativeError>((
+                                    originals,
+                                    metadata,
+                                    Err(NativeError::protocol(
+                                        "native closure fork accounting is inconsistent",
+                                    )),
+                                ));
+                            }
+                        };
+                        fork_owner_bytes = match fork_owner_bytes.checked_add(owner_bytes) {
+                            Some(value) => value,
+                            None => {
+                                originals.extend(sources);
+                                return Ok::<_, NativeError>((
+                                    originals,
+                                    metadata,
+                                    Err(NativeError::limit(
+                                        "native closure fork owner size overflow",
+                                    )),
+                                ));
+                            }
+                        };
+                        fork_component_bytes =
+                            match fork_component_bytes.checked_add(component_bytes) {
+                                Some(value) => value,
+                                None => {
+                                    originals.extend(sources);
+                                    return Ok::<_, NativeError>((
+                                        originals,
+                                        metadata,
+                                        Err(NativeError::limit(
+                                            "native closure fork component size overflow",
+                                        )),
+                                    ));
+                                }
+                            };
+                        fork_external_bytes = match fork_external_bytes.checked_add(external_bytes)
+                        {
+                            Some(value) => value,
+                            None => {
+                                originals.extend(sources);
+                                return Ok::<_, NativeError>((
+                                    originals,
+                                    metadata,
+                                    Err(NativeError::limit(
+                                        "native closure fork overhead size overflow",
+                                    )),
+                                ));
+                            }
+                        };
+                        let aggregate = original_owner_bytes
+                            .checked_add(fork_external_bytes)
+                            .and_then(|value| value.checked_add(closure_metadata_bytes));
+                        if let Err(error) = aggregate
+                            .ok_or_else(|| {
+                                NativeError::limit("native closure aggregate owner size overflow")
+                            })
+                            .and_then(|bytes| enforce_closure_aggregate_bytes(bytes, &limits))
+                        {
+                            originals.extend(sources);
+                            return Ok::<_, NativeError>((originals, metadata, Err(error)));
+                        }
+                        forks.push(fork);
+                    }
+                    Err((source, error)) => {
+                        originals.push(source);
+                        originals.extend(sources);
+                        return Ok::<_, NativeError>((originals, metadata, Err(error)));
+                    }
+                }
+            }
+            if fork_component_bytes != original_component_bytes {
+                return Ok::<_, NativeError>((
+                    originals,
+                    metadata,
+                    Err(NativeError::protocol(
+                        "native closure fork component accounting diverges",
+                    )),
+                ));
+            }
+            let started = Instant::now();
+            let prepared = closure::prepare_closure(
+                forks,
+                &metadata,
+                &owned_manifest,
+                &root_document_key,
+                &owned_document_keys,
+                collect_provenance,
+                preserve_source_map,
+                &effective_document_ordinals,
+                &closure_document_ordinals,
+                anonymous_scope_targets,
+                limits,
+                cancellation,
+                Some(interrupt),
+                closure_external_bytes,
+                fork_owner_bytes,
+                force_auxiliary_plan_failure,
+            )
+            .and_then(|(storage, prepared)| {
+                let prepare_ns = u64::try_from(started.elapsed().as_nanos()).map_err(|_| {
+                    NativeError::limit("native closure preparation time exceeds u64")
+                })?;
+                let summary = prepared.encode_summary(prepare_ns)?;
+                Ok((storage, prepared, summary))
+            });
+            Ok((originals, metadata, prepared))
+        })?;
+    for (item, storage) in parsed_documents.iter().zip(originals) {
+        let mut parsed: PyRefMut<'_, NativeParsedStructuralStorageV2> = item.extract()?;
+        parsed.storage = Some(storage);
+    }
+    let (storage, prepared, summary) = prepared_result.map_err(crate::python_error)?;
+    allocations.checkpoint()?;
+    prepared
+        .ensure_summary_copy_peak(summary.capacity(), summary.len())
+        .map_err(crate::python_error)?;
+    let encoded = PyBytes::new_with(py, summary.len(), |buffer| {
+        buffer.copy_from_slice(&summary);
+        Ok(())
+    })?
+    .unbind();
+    Ok((
+        encoded,
+        NativePreparedStructuralClosureV2 {
+            storage: Some(storage),
+            prepared: Some(prepared),
+            prepared_summary: summary,
+            metadata: retained_metadata,
+            parser_bytes,
+        },
+    ))
+}
+
+/// Finalize an attested prepared closure, consuming the original parser owners
+/// only after the native composite has become a valid publication handle.
+#[pyfunction]
+#[pyo3(signature = (
+    parsed_documents,
+    prepared_closure,
+    prepared_summary,
+    attestation,
+    cancel=None
+))]
+fn _finalize_parsed_structural_closure_v2<'py>(
+    py: Python<'py>,
+    parsed_documents: &Bound<'py, PyAny>,
+    mut prepared_closure: PyRefMut<'py, NativePreparedStructuralClosureV2>,
+    prepared_summary: &Bound<'py, PyBytes>,
+    attestation: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<NativeSnapshotHandle> {
+    let cancellation = crate::cancellation_or_default(cancel);
+    cancellation.checkpoint().map_err(crate::python_error)?;
+    if prepared_closure.prepared_summary != prepared_summary.as_bytes() {
+        return Err(crate::python_error(NativeError::protocol(
+            "native closure summary diverges before final publication",
+        )));
+    }
+    if !parsed_documents.get_type().is(py.get_type::<PyTuple>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "native parsed closure documents must be an exact tuple",
+        ));
+    }
+    let parsed_documents = parsed_documents.cast::<PyTuple>()?;
+    if parsed_documents.len() != prepared_closure.metadata.len() {
+        return Err(crate::python_error(NativeError::protocol(
+            "native prepared closure document count diverges",
+        )));
+    }
+    for (item, expected_metadata) in parsed_documents.iter().zip(&prepared_closure.metadata) {
+        if !item
+            .get_type()
+            .is(py.get_type::<NativeParsedStructuralStorageV2>())
+        {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native parsed closure contains an invalid storage owner",
+            ));
+        }
+        let parsed: PyRef<'_, NativeParsedStructuralStorageV2> = item.extract()?;
+        let observed_metadata = parsed.metadata.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "native parsed closure metadata was already consumed",
+            )
+        })?;
+        if parsed.storage.is_none()
+            || parsed.prepared.is_some()
+            || parsed.prepared_summary.is_some()
+            || !Arc::ptr_eq(observed_metadata, expected_metadata)
+        {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "native parsed closure owners diverged after preparation",
+            ));
+        }
+    }
+    let prepared = prepared_closure.prepared.as_ref().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err("native prepared closure was already consumed")
+    })?;
+    validate_prepared_closure_attestation(py, prepared, attestation)?;
+    let owned_attestation = NativeSnapshotAttestationV2::from_python(attestation)?;
+    let storage = prepared_closure.storage.as_ref().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "native prepared closure storage was already consumed",
+        )
+    })?;
+    let validated_commit = crate::publication::validate_typed_structural_auxiliary_commit_v2(
+        &owned_attestation,
+        storage,
+        &prepared.auxiliary,
+        prepared_closure.parser_bytes,
+    )
+    .map_err(crate::python_error)?;
+
+    let storage = prepared_closure.storage.take().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "native prepared closure storage was already consumed",
+        )
+    })?;
+    let prepared = prepared_closure.prepared.take().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err("native prepared closure was already consumed")
+    })?;
+    drop(std::mem::take(&mut prepared_closure.prepared_summary));
+    drop(std::mem::take(&mut prepared_closure.metadata));
+    let handle = crate::publication::commit_typed_structural_auxiliary_handle_v2(
+        owned_attestation,
+        storage,
+        prepared.auxiliary,
+        validated_commit,
+    );
+    for item in parsed_documents.iter() {
+        let mut parsed: PyRefMut<'_, NativeParsedStructuralStorageV2> =
+            item.extract().expect("validated parsed closure owner");
+        parsed.storage = None;
+        parsed.metadata = None;
+        parsed.parser_bytes = 0;
+    }
+    Ok(handle)
+}
+
+fn owned_closure_document_keys(
+    py: Python<'_>,
+    document_keys: &Bound<'_, PyAny>,
+    expected: usize,
+    allocations: &mut crate::BridgeAllocationProbe,
+) -> PyResult<Vec<String>> {
+    if !document_keys.get_type().is(py.get_type::<PyTuple>()) {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "native closure document keys must be an exact tuple",
+        ));
+    }
+    let document_keys = document_keys.cast::<PyTuple>()?;
+    if document_keys.len() != expected {
+        return Err(crate::python_error(NativeError::protocol(
+            "native closure document keys are not document-aligned",
+        )));
+    }
+    let mut owned = Vec::new();
+    allocations.checkpoint()?;
+    owned.try_reserve_exact(expected).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native closure document-key allocation failed",
+        ))
+    })?;
+    for value in document_keys.iter() {
+        if !value.get_type().is(py.get_type::<PyString>()) {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "native closure document keys must contain exact strings",
+            ));
+        }
+        allocations.checkpoint()?;
+        owned.push(value.extract::<String>()?);
+    }
+    Ok(owned)
+}
+
+fn validate_prepared_closure_attestation(
+    py: Python<'_>,
+    prepared: &closure::PreparedClosurePublicationV2,
+    attestation: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    for (name, expected) in [
+        ("root_table_sha256", prepared.content.root_table_sha256),
+        (
+            "effective_root_table_sha256",
+            prepared.content.effective_root_table_sha256,
+        ),
+        (
+            "fingerprint_inputs_sha256",
+            prepared.content.fingerprint_inputs_sha256,
+        ),
+        (
+            "source_manifest_sha256",
+            prepared.content.source_manifest_sha256,
+        ),
+        (
+            "provenance_manifest_sha256",
+            prepared.content.provenance_manifest_sha256,
+        ),
+        (
+            "effective_origin_manifest_sha256",
+            prepared.content.effective_origin_manifest_sha256,
+        ),
+    ] {
+        let value = attestation.getattr(name)?;
+        if !value.get_type().is(py.get_type::<PyBytes>())
+            || value.cast::<PyBytes>()?.as_bytes() != expected
+        {
+            return Err(crate::python_error(NativeError::protocol(
+                "native prepared closure content diverges from its attestation",
+            )));
+        }
+    }
+    let document_count = u64::try_from(prepared.documents.len()).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native prepared closure document count exceeds u64",
+        ))
+    })?;
+    let raw_counts = prepared.documents.iter().try_fold(
+        [0_u64; 3],
+        |mut totals, document| -> PyResult<[u64; 3]> {
+            for (total, count) in totals.iter_mut().zip(document.raw_counts) {
+                *total = total.checked_add(count).ok_or_else(|| {
+                    crate::python_error(NativeError::limit(
+                        "native prepared closure root count overflow",
+                    ))
+                })?;
+            }
+            Ok(totals)
+        },
+    )?;
+    let source_entries = prepared
+        .documents
+        .iter()
+        .try_fold(0_u64, |total, document| {
+            total.checked_add(document.source_counts[0]).ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native prepared closure source-map count overflow",
+                ))
+            })
+        })?;
+    let raw_origins = prepared
+        .documents
+        .iter()
+        .try_fold(0_u64, |total, document| {
+            total.checked_add(document.origin_counts[1]).ok_or_else(|| {
+                crate::python_error(NativeError::limit(
+                    "native prepared closure origin count overflow",
+                ))
+            })
+        })?;
+    let rdf_reports = u64::try_from(
+        prepared
+            .documents
+            .iter()
+            .filter(|document| document.rdf_report.is_some())
+            .count(),
+    )
+    .map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native prepared closure RDF report count exceeds u64",
+        ))
+    })?;
+    let capability_bits = 7_u64
+        | if prepared
+            .documents
+            .iter()
+            .any(|document| document.source_map.is_some())
+        {
+            8
+        } else {
+            0
+        }
+        | if prepared
+            .documents
+            .iter()
+            .any(|document| document.origin_rows.is_some())
+        {
+            16
+        } else {
+            0
+        }
+        | if rdf_reports != 0 { 32 } else { 0 };
+    if attestation.getattr("document_count")?.extract::<u64>()? != document_count
+        || attestation
+            .getattr("ontology_annotation_count")?
+            .extract::<u64>()?
+            != raw_counts[0]
+        || attestation
+            .getattr("stored_axiom_count")?
+            .extract::<u64>()?
+            != raw_counts[1]
+        || attestation
+            .getattr("effective_axiom_count")?
+            .extract::<u64>()?
+            != prepared.closure_counts[1]
+        || attestation.getattr("extension_count")?.extract::<u64>()? != raw_counts[2]
+        || attestation
+            .getattr("source_map_entry_count")?
+            .extract::<u64>()?
+            != source_entries
+        || attestation
+            .getattr("origin_entry_count")?
+            .extract::<u64>()?
+            != raw_origins
+        || attestation
+            .getattr("rdf_mapping_report_count")?
+            .extract::<u64>()?
+            != rdf_reports
+        || attestation.getattr("capability_bits")?.extract::<u64>()? != capability_bits
+        || attestation
+            .getattr("max_facade_row_bytes")?
+            .extract::<u64>()?
+            != prepared.max_facade_row_bytes
+    {
+        return Err(crate::python_error(NativeError::protocol(
+            "native prepared closure metadata diverges from its attestation",
         )));
     }
     Ok(())
@@ -1491,6 +2458,21 @@ fn enforce_retained_boundary(total_bytes: usize, limits: &Limits) -> PyResult<()
         return Err(crate::python_error(NativeError::limit(
             "native retained boundary exceeds configured memory limits",
         )));
+    }
+    Ok(())
+}
+
+fn enforce_closure_aggregate_bytes(total_bytes: usize, limits: &Limits) -> NativeResult<()> {
+    let total = u64::try_from(total_bytes)
+        .map_err(|_| NativeError::limit("native closure aggregate size exceeds u64"))?;
+    if total > limits.value(LimitKey::MaxTemporaryBytes)
+        || limits
+            .max_memory_bytes
+            .is_some_and(|maximum| total > maximum)
+    {
+        return Err(NativeError::limit(
+            "native closure aggregate owners exceed configured memory limits",
+        ));
     }
     Ok(())
 }
