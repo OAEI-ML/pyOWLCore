@@ -64,7 +64,6 @@ from pyowl_core.exceptions import (
 from pyowl_core.model import (
     IRI,
     Annotation,
-    AnonymousIndividual,
     CanonicalSet,
     Entity,
     EntityKind,
@@ -77,11 +76,11 @@ from pyowl_core.model import (
     ValidationIssue,
     canonical_bytes,
     encode_varint,
-    walk,
 )
 from pyowl_core.model.axioms import AxiomNode
 
 from .document import Fingerprint, OntologyDocument, OntologyID
+from .fingerprint import fingerprint_bytes
 from .identity import _identity_metadata_from_manifest, _OntologyIdentityMetadata
 from .imports import (
     DocumentRecord,
@@ -2106,25 +2105,26 @@ class _NativeOntologySnapshot(OntologySnapshot):
 
     def _anonymous_document_scopes(self) -> frozenset[bytes]:
         self._check_open()
-        retained = self._native_snapshot_state.anonymous_scopes
+        state = self._native_snapshot_state
+        retained = state.anonymous_scopes
         if retained is not None:
             return retained
-        scopes: set[bytes] = set()
-        collections: tuple[Mapping[str, CanonicalSet[StructuralNode]], ...] = (
-            cast(Mapping[str, CanonicalSet[StructuralNode]], self._annotations_by_key),
-            cast(Mapping[str, CanonicalSet[StructuralNode]], self._axioms_by_key),
-            self._extensions_by_key,
+        from pyowl_core.backends.native_views import (
+            EncodedStructuralViewV1,
+            _anonymous_document_scopes_from_encoded_view_v1,
         )
-        for collection in collections:
-            for values in collection.values():
-                for root in values:
-                    for node in walk(root):
-                        if isinstance(node, AnonymousIndividual):
-                            scopes.add(node.document_scope)
-        return frozenset(scopes)
+
+        encoded = self.view(EncodedStructuralViewV1)
+        created = _anonymous_document_scopes_from_encoded_view_v1(encoded)
+        with state.lock:
+            retained = state.anonymous_scopes
+            if retained is None:
+                state.anonymous_scopes = created
+                return created
+            return retained
 
     def _anonymous_scope_lineage(self) -> tuple[tuple[bytes, bytes, bytes], ...]:
-        leaf = self.structural_fingerprint.digest
+        leaf = fingerprint_bytes(self.structural_fingerprint)
         return tuple((scope, scope, leaf) for scope in sorted(self._anonymous_document_scopes()))
 
     def _ontology_identity_metadata(
