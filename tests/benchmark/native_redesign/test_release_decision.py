@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -21,8 +22,8 @@ ROOT = Path(__file__).parents[3]
 CHECKPOINT = ROOT / "reports" / "performance" / "native-redesign" / "checkpoint-evidence.json"
 
 
-def test_complete_exact_evidence_enables_both_decisions() -> None:
-    result = evaluate_release_decision(_evidence())
+def test_complete_exact_evidence_enables_both_decisions(tmp_path: Path) -> None:
+    result = evaluate_release_decision(_evidence(tmp_path), evidence_root=tmp_path)
 
     assert result["schema"] == DECISION_SCHEMA
     assert result["core_release_eligible"] is True
@@ -40,8 +41,10 @@ def test_complete_exact_evidence_enables_both_decisions() -> None:
     assert cast(dict[str, object], result["workspace"])["not_run_consumers"] == []
 
 
-def test_unavailable_consumers_do_not_block_core_but_block_workspace_claim() -> None:
-    payload = _evidence()
+def test_unavailable_consumers_do_not_block_core_but_block_workspace_claim(
+    tmp_path: Path,
+) -> None:
+    payload = _evidence(tmp_path)
     consumers = cast(list[dict[str, object]], payload["workspace_consumers"])
     projector = next(row for row in consumers if row["id"] == "projector")
     projector.update(
@@ -51,7 +54,7 @@ def test_unavailable_consumers_do_not_block_core_but_block_workspace_claim() -> 
         evidence=[],
     )
 
-    result = evaluate_release_decision(payload)
+    result = evaluate_release_decision(payload, evidence_root=tmp_path)
     workspace = cast(dict[str, object], result["workspace"])
 
     assert result["core_release_eligible"] is True
@@ -68,12 +71,12 @@ def test_unavailable_consumers_do_not_block_core_but_block_workspace_claim() -> 
 
 
 @pytest.mark.parametrize("status", ("fail", "not-run"))
-def test_incomplete_core_gate_blocks_both_decisions(status: str) -> None:
-    payload = _evidence()
+def test_incomplete_core_gate_blocks_both_decisions(status: str, tmp_path: Path) -> None:
+    payload = _evidence(tmp_path)
     gates = cast(list[dict[str, object]], payload["core_gates"])
     gates[0].update(status=status, reason="required evidence is incomplete", evidence=[])
 
-    result = evaluate_release_decision(payload)
+    result = evaluate_release_decision(payload, evidence_root=tmp_path)
     core = cast(dict[str, object], result["core"])
     workspace = cast(dict[str, object], result["workspace"])
 
@@ -87,32 +90,79 @@ def test_incomplete_core_gate_blocks_both_decisions(status: str) -> None:
     }
 
 
-def test_pass_requires_evidence_and_non_pass_requires_reason() -> None:
-    no_evidence = _evidence()
+def test_pass_requires_evidence_and_non_pass_requires_reason(tmp_path: Path) -> None:
+    no_evidence = _evidence(tmp_path)
     cast(list[dict[str, object]], no_evidence["core_gates"])[0]["evidence"] = []
     with pytest.raises(ReleaseDecisionError, match="pass requires evidence"):
-        evaluate_release_decision(no_evidence)
+        evaluate_release_decision(no_evidence, evidence_root=tmp_path)
 
-    no_reason = _evidence()
+    no_reason = _evidence(tmp_path)
     row = cast(list[dict[str, object]], no_reason["workspace_consumers"])[0]
     row.update(status="not-run", revision=None, reason=None, evidence=[])
     with pytest.raises(ReleaseDecisionError, match="requires a nonempty reason"):
-        evaluate_release_decision(no_reason)
+        evaluate_release_decision(no_reason, evidence_root=tmp_path)
 
 
-def test_consumer_pass_or_fail_is_bound_to_an_exact_revision() -> None:
-    payload = _evidence()
+def test_consumer_pass_or_fail_is_bound_to_an_exact_revision(tmp_path: Path) -> None:
+    payload = _evidence(tmp_path)
     row = cast(list[dict[str, object]], payload["workspace_consumers"])[0]
     row["revision"] = None
 
     with pytest.raises(ReleaseDecisionError, match="pass requires an exact revision"):
+        evaluate_release_decision(payload, evidence_root=tmp_path)
+
+
+def test_pass_evidence_requires_a_root_and_matching_file_digest(tmp_path: Path) -> None:
+    payload = _evidence(tmp_path)
+
+    with pytest.raises(ReleaseDecisionError, match="requires an evidence root"):
         evaluate_release_decision(payload)
+
+    evidence = cast(
+        list[dict[str, str]],
+        cast(list[dict[str, object]], payload["core_gates"])[0]["evidence"],
+    )
+    evidence[0]["sha256"] = "0" * 64
+    with pytest.raises(ReleaseDecisionError, match="sha256 does not match"):
+        evaluate_release_decision(payload, evidence_root=tmp_path)
+
+
+def test_pass_evidence_must_exist_within_manifest_directory(tmp_path: Path) -> None:
+    payload = _evidence(tmp_path)
+    evidence = cast(
+        list[dict[str, str]],
+        cast(list[dict[str, object]], payload["core_gates"])[0]["evidence"],
+    )
+    evidence[0]["path"] = "../outside.json"
+
+    with pytest.raises(ReleaseDecisionError, match="escapes the evidence root"):
+        evaluate_release_decision(payload, evidence_root=tmp_path)
+
+    evidence[0]["path"] = "evidence/missing.json"
+    with pytest.raises(ReleaseDecisionError, match="cannot be loaded"):
+        evaluate_release_decision(payload, evidence_root=tmp_path)
+
+
+def test_legacy_schema_cannot_claim_a_pass(tmp_path: Path) -> None:
+    payload = _evidence(tmp_path)
+    payload["schema"] = "pyowl-core.native-redesign-release-evidence/1"
+    for row in cast(list[dict[str, object]], payload["core_gates"]):
+        row["evidence"] = ["legacy-evidence.json"]
+    for row in cast(list[dict[str, object]], payload["workspace_consumers"]):
+        row["evidence"] = ["legacy-evidence.json"]
+
+    with pytest.raises(ReleaseDecisionError, match="schema 1 cannot claim pass"):
+        evaluate_release_decision(payload, evidence_root=tmp_path)
 
 
 @pytest.mark.parametrize(
     ("mutation", "message"),
     (
         (lambda value: value.update(extra=True), "unknown fields"),
+        (
+            lambda value: value.update(schema=[]),
+            "unsupported release evidence schema",
+        ),
         (
             lambda value: cast(list[dict[str, object]], value["core_gates"]).pop(),
             "missing required ids",
@@ -134,19 +184,20 @@ def test_consumer_pass_or_fail_is_bound_to_an_exact_revision() -> None:
 def test_evidence_shape_cannot_weaken_normative_gate_set(
     mutation: Any,
     message: str,
+    tmp_path: Path,
 ) -> None:
-    payload = _evidence()
+    payload = _evidence(tmp_path)
     mutation(payload)
 
     with pytest.raises(ReleaseDecisionError, match=message):
-        evaluate_release_decision(payload)
+        evaluate_release_decision(payload, evidence_root=tmp_path)
 
 
 def test_loader_and_cli_emit_deterministic_fail_closed_decision(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    payload = _evidence()
+    payload = _evidence(tmp_path)
     row = cast(list[dict[str, object]], payload["core_gates"])[0]
     row.update(status="not-run", reason="reference-machine evidence unavailable", evidence=[])
     path = tmp_path / "evidence.json"
@@ -172,7 +223,20 @@ def test_checked_in_checkpoint_is_truthfully_fail_closed() -> None:
     assert workspace["not_run_consumers"] == sorted(REQUIRED_WORKSPACE_CONSUMERS)
 
 
-def _evidence() -> dict[str, object]:
+def _evidence(root: Path) -> dict[str, object]:
+    evidence_dir = root / "evidence"
+    evidence_dir.mkdir(exist_ok=True)
+
+    def evidence(identifier: str) -> list[dict[str, str]]:
+        path = evidence_dir / f"{identifier}.json"
+        path.write_text(json.dumps({"id": identifier}), encoding="utf-8")
+        return [
+            {
+                "path": path.relative_to(root).as_posix(),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        ]
+
     return {
         "schema": INPUT_SCHEMA,
         "core_revision": "a" * 40,
@@ -181,7 +245,7 @@ def _evidence() -> dict[str, object]:
                 "id": identifier,
                 "status": "pass",
                 "reason": None,
-                "evidence": [f"reports/evidence/{identifier}.json"],
+                "evidence": evidence(identifier),
             }
             for identifier in REQUIRED_CORE_GATES
         ],
@@ -192,7 +256,7 @@ def _evidence() -> dict[str, object]:
                 "status": "pass",
                 "revision": "b" * 40,
                 "reason": None,
-                "evidence": [f"reports/evidence/{identifier}.json"],
+                "evidence": evidence(identifier),
             }
             for identifier, role in REQUIRED_WORKSPACE_CONSUMERS.items()
         ],
