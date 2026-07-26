@@ -148,11 +148,40 @@ def validate_inventory(root: Path) -> list[str]:
     violations: list[str] = []
     if inventory.schema != 1:
         violations.append(f"inventory: unsupported schema {inventory.schema}")
-    lock_path = root / inventory.lockfile
+    if inventory.lockfile != "native/Cargo.lock":
+        violations.append(
+            f"inventory: lockfile must be exactly native/Cargo.lock, got {inventory.lockfile!r}"
+        )
+    lock_path = root / "native" / "Cargo.lock"
     try:
-        locked = _third_party(load_locked_packages(lock_path))
+        all_locked = load_locked_packages(lock_path)
+        manifest = _load_toml(root / "native" / "Cargo.toml")
+        manifest_package = manifest["package"]
+        if not isinstance(manifest_package, dict):
+            raise ValueError("native Cargo.toml package field must be a table")
+        local_key = (str(manifest_package["name"]), str(manifest_package["version"]))
     except (KeyError, OSError, TypeError, ValueError) as error:
-        return [f"inventory: cannot load {inventory.lockfile}: {error}"]
+        return [f"inventory: cannot load native dependency manifests: {error}"]
+
+    all_locked_keys = [package.key for package in all_locked]
+    if len(set(all_locked_keys)) != len(all_locked_keys):
+        violations.append("inventory: duplicate locked package identity")
+    local_packages = [package for package in all_locked if package.source is None]
+    if [package.key for package in local_packages] != [local_key]:
+        rendered = ", ".join(f"{package.name} {package.version}" for package in local_packages)
+        violations.append(
+            "inventory: source-less lock packages must contain only "
+            f"{local_key[0]} {local_key[1]}; found {rendered or 'none'}"
+        )
+    for package in all_locked:
+        for dependency in package.dependencies:
+            if _dependency_key(dependency, all_locked) is None:
+                violations.append(
+                    "inventory: unresolved locked dependency "
+                    f"{dependency!r} required by {package.name} {package.version}"
+                )
+
+    locked = _third_party(all_locked)
 
     locked_keys = {package.key for package in locked}
     inventory_keys = {component.key for component in inventory.components}
@@ -176,9 +205,7 @@ def validate_inventory(root: Path) -> list[str]:
                 f"inventory: missing license selection {component.name} {component.version}"
             )
         if component.scope not in {"native-build", "native-runtime"}:
-            violations.append(
-                f"inventory: invalid scope {component.scope!r} for {component.name}"
-            )
+            violations.append(f"inventory: invalid scope {component.scope!r} for {component.name}")
         if component.additional_license_file is not None:
             license_path = root / component.additional_license_file
             if not license_path.is_file() or not license_path.read_text(encoding="utf-8").strip():
@@ -197,9 +224,7 @@ def _project_version(root: Path) -> str:
     return match.group(1)
 
 
-def _dependency_key(
-    dependency: str, packages: tuple[LockedPackage, ...]
-) -> tuple[str, str] | None:
+def _dependency_key(dependency: str, packages: tuple[LockedPackage, ...]) -> tuple[str, str] | None:
     """Resolve Cargo.lock's ``name [version]`` dependency notation."""
 
     fields = dependency.split()

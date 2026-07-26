@@ -15,6 +15,13 @@ from tools.packaging.supply_chain import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _copy_dependency_manifests(target: Path) -> None:
+    shutil.copytree(ROOT / "THIRD_PARTY_LICENSES", target / "THIRD_PARTY_LICENSES")
+    (target / "native").mkdir()
+    shutil.copy2(ROOT / "native" / "Cargo.lock", target / "native" / "Cargo.lock")
+    shutil.copy2(ROOT / "native" / "Cargo.toml", target / "native" / "Cargo.toml")
+
+
 def test_reviewed_inventory_exactly_matches_cargo_lock() -> None:
     assert validate_inventory(ROOT) == []
     inventory = build_dependency_inventory(ROOT)
@@ -54,8 +61,7 @@ def test_generated_evidence_check_detects_and_reports_drift(tmp_path: Path) -> N
 
 
 def test_inventory_rejects_unreviewed_lock_component(tmp_path: Path) -> None:
-    shutil.copytree(ROOT / "THIRD_PARTY_LICENSES", tmp_path / "THIRD_PARTY_LICENSES")
-    (tmp_path / "native").mkdir()
+    _copy_dependency_manifests(tmp_path)
     lock = (ROOT / "native" / "Cargo.lock").read_text(encoding="utf-8")
     lock += (
         "\n[[package]]\n"
@@ -67,4 +73,35 @@ def test_inventory_rejects_unreviewed_lock_component(tmp_path: Path) -> None:
     (tmp_path / "native" / "Cargo.lock").write_text(lock, encoding="utf-8")
     assert validate_inventory(tmp_path) == [
         "inventory: unreviewed locked component unexpected-crate 9.9.9"
+    ]
+
+
+def test_inventory_rejects_source_less_component_omitted_from_sbom(tmp_path: Path) -> None:
+    _copy_dependency_manifests(tmp_path)
+    lock_path = tmp_path / "native" / "Cargo.lock"
+    lock = lock_path.read_text(encoding="utf-8")
+    lock += '\n[[package]]\nname = "untracked-path-component"\nversion = "9.9.9"\n'
+    lock_path.write_text(lock, encoding="utf-8")
+
+    assert validate_inventory(tmp_path) == [
+        "inventory: source-less lock packages must contain only "
+        "pyowl-core-native 0.1.0-dev.0; found "
+        "pyowl-core-native 0.1.0-dev.0, untracked-path-component 9.9.9"
+    ]
+
+
+def test_inventory_cannot_redirect_the_reviewed_lockfile(tmp_path: Path) -> None:
+    _copy_dependency_manifests(tmp_path)
+    inventory_path = tmp_path / "THIRD_PARTY_LICENSES" / "inventory.toml"
+    inventory = inventory_path.read_text(encoding="utf-8")
+    inventory_path.write_text(
+        inventory.replace(
+            'lockfile = "native/Cargo.lock"',
+            'lockfile = "../unreviewed/Cargo.lock"',
+        ),
+        encoding="utf-8",
+    )
+
+    assert validate_inventory(tmp_path) == [
+        "inventory: lockfile must be exactly native/Cargo.lock, got '../unreviewed/Cargo.lock'"
     ]
