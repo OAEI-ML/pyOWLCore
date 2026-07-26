@@ -167,30 +167,40 @@ class OntologyComposite:
         limits.enforce("max_delta_entries", selected_delta.entry_count)
         for source in sources:
             _ensure_live(source)
-        adapter = sources[0].capabilities.adapter_protocol
-        model_schema = sources[0].capabilities.model_schema
-        wire = sources[0].capabilities.wire_format
+        source_capabilities = tuple(source.capabilities for source in sources)
+        adapter = source_capabilities[0].adapter_protocol
+        model_schema = source_capabilities[0].model_schema
+        wire = source_capabilities[0].wire_format
         if any(
-            source.capabilities.adapter_protocol != adapter
-            or source.capabilities.model_schema != model_schema
-            or source.capabilities.wire_format != wire
-            for source in sources[1:]
+            capabilities.adapter_protocol != adapter
+            or capabilities.model_schema != model_schema
+            or capabilities.wire_format != wire
+            for capabilities in source_capabilities[1:]
         ):
             raise DeltaError(
                 "composition members have incompatible schemas",
                 code="COMPOSITION_SCHEMA_MISMATCH",
             )
-        backends = {source.capabilities.backend for source in sources}
+        backends = {capabilities.backend for capabilities in source_capabilities}
         common_features = set.intersection(
-            *(set(source.capabilities.features) for source in sources)
+            *(set(capabilities.features) for capabilities in source_capabilities)
         )
+        common_schema_names = set.intersection(
+            *(set(capabilities.encoded_view_schemas) for capabilities in source_capabilities)
+        )
+        common_schemas = {
+            name: min(
+                capabilities.encoded_view_schemas[name] for capabilities in source_capabilities
+            )
+            for name in sorted(common_schema_names)
+        }
         common_features.update({"ontology-composite", "zero-copy-view", "member-provenance"})
         capabilities = CoreCapabilities(
             adapter,
             model_schema,
             wire,
             frozenset(common_features),
-            {},
+            common_schemas,
             next(iter(backends)) if len(backends) == 1 else "mixed",
         )
         object.__setattr__(self, "members", tuple(flattened))

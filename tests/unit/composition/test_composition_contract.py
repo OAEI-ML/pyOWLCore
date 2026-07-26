@@ -180,6 +180,51 @@ def test_nested_composites_flatten_structurally_and_overlap_is_rejected() -> Non
     assert overlap.value.code == "COMPOSITION_CYCLE"
 
 
+def test_composite_intersects_encoded_view_schema_capabilities() -> None:
+    first = snapshot("one", "A")
+    second = snapshot("two", "B")
+    third = snapshot("three", "C")
+    object.__setattr__(
+        first,
+        "_capabilities",
+        replace(
+            first.capabilities,
+            encoded_view_schemas={
+                "urn:schema:common": 3,
+                "urn:schema:first-only": 1,
+            },
+        ),
+    )
+    object.__setattr__(
+        second,
+        "_capabilities",
+        replace(
+            second.capabilities,
+            encoded_view_schemas={
+                "urn:schema:common": 1,
+                "urn:schema:second-only": 2,
+            },
+        ),
+    )
+    object.__setattr__(
+        third,
+        "_capabilities",
+        replace(
+            third.capabilities,
+            encoded_view_schemas={
+                "urn:schema:common": 2,
+                "urn:schema:third-only": 1,
+            },
+        ),
+    )
+
+    direct = compose_views(first, second, third)
+    nested = compose_views(compose_views(first, second), third)
+
+    assert dict(direct.capabilities.encoded_view_schemas) == {"urn:schema:common": 1}
+    assert nested.capabilities.encoded_view_schemas == (direct.capabilities.encoded_view_schemas)
+
+
 def test_shape_role_self_and_member_limits_are_checked_before_iteration() -> None:
     first = snapshot("one", "A")
     second = snapshot("two", "B")
