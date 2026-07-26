@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tools.packaging import supply_chain
 from tools.packaging.supply_chain import (
     build_cyclonedx,
     build_dependency_inventory,
@@ -28,6 +29,13 @@ def _copy_dependency_manifests(target: Path) -> None:
     (target / "native").mkdir()
     shutil.copy2(ROOT / "native" / "Cargo.lock", target / "native" / "Cargo.lock")
     shutil.copy2(ROOT / "native" / "Cargo.toml", target / "native" / "Cargo.toml")
+
+
+def _copy_build_inputs(target: Path) -> None:
+    for relative_path in supply_chain._BUILD_INPUT_PATHS:
+        destination = target / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative_path, destination)
 
 
 def test_reviewed_inventory_exactly_matches_cargo_lock() -> None:
@@ -102,6 +110,75 @@ def test_build_provenance_binds_exact_toolchain_and_lock_hash() -> None:
         "bytes": len(lock),
         "sha256": hashlib.sha256(lock).hexdigest(),
     }
+
+
+def test_build_provenance_parses_and_hashes_the_same_captured_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _copy_build_inputs(tmp_path)
+    workflow_path = tmp_path / ".github" / "workflows" / "wheels.yml"
+    original = workflow_path.read_bytes()
+    replacement = original.replace(b"build==1.5.0", b"build==9.9.9")
+    assert replacement != original
+    original_pin = supply_chain._workflow_pin
+    mutated = False
+
+    def mutate_after_capture(text: str, pattern: str, label: str) -> str:
+        nonlocal mutated
+        if not mutated:
+            workflow_path.write_bytes(replacement)
+            mutated = True
+        return original_pin(text, pattern, label)
+
+    monkeypatch.setattr(supply_chain, "_workflow_pin", mutate_after_capture)
+
+    provenance = build_provenance(tmp_path)
+
+    assert mutated
+    assert provenance["tools"]["python_build_frontend"] == "build==1.5.0"
+    assert provenance["inputs"][".github/workflows/wheels.yml"] == {
+        "bytes": len(original),
+        "sha256": hashlib.sha256(original).hexdigest(),
+    }
+    assert workflow_path.read_bytes() == replacement
+
+
+def test_build_provenance_rejects_symlinked_inputs(tmp_path: Path) -> None:
+    _copy_build_inputs(tmp_path)
+    workflow_path = tmp_path / ".github" / "workflows" / "wheels.yml"
+    target = tmp_path / "captured-wheels.yml"
+    workflow_path.replace(target)
+    try:
+        workflow_path.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    with pytest.raises(ValueError, match="regular non-symlink file"):
+        build_provenance(tmp_path)
+
+
+def test_stable_build_input_reader_rejects_concurrent_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "input.txt"
+    path.write_bytes(b"captured")
+    original_lstat = Path.lstat
+    inspections = 0
+
+    def mutate_before_final_identity(selected: Path):
+        nonlocal inspections
+        if selected == path:
+            inspections += 1
+            if inspections == 2:
+                selected.write_bytes(b"changed-after-read")
+        return original_lstat(selected)
+
+    monkeypatch.setattr(Path, "lstat", mutate_before_final_identity)
+
+    with pytest.raises(ValueError, match="changed while reading"):
+        supply_chain._read_stable_regular_file(path, label="input.txt")
 
 
 def test_generated_evidence_check_detects_and_reports_drift(tmp_path: Path) -> None:

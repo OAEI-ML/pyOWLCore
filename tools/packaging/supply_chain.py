@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import stat
 import sys
 import uuid
 from dataclasses import dataclass
@@ -534,19 +536,94 @@ def _workflow_pin(text: str, pattern: str, label: str) -> str:
     return values.pop()
 
 
-def _file_identity(path: Path) -> dict[str, Any]:
-    payload = path.read_bytes()
+def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _read_stable_regular_file(path: Path, *, label: str) -> bytes:
+    try:
+        initial = path.lstat()
+    except OSError as error:
+        raise ValueError(
+            f"build provenance: cannot inspect build input {label}: {error}"
+        ) from error
+    if not stat.S_ISREG(initial.st_mode):
+        raise ValueError(
+            f"build provenance: build input must be a regular non-symlink file: {label}"
+        )
+    try:
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            payload = stream.read()
+            completed = os.fstat(stream.fileno())
+        final = path.lstat()
+    except OSError as error:
+        raise ValueError(f"build provenance: cannot read build input {label}: {error}") from error
+    identities = {
+        _stat_identity(initial),
+        _stat_identity(opened),
+        _stat_identity(completed),
+        _stat_identity(final),
+    }
+    if len(identities) != 1 or not stat.S_ISREG(opened.st_mode) or len(payload) != opened.st_size:
+        raise ValueError(f"build provenance: build input changed while reading: {label}")
+    return payload
+
+
+def _payload_identity(payload: bytes) -> dict[str, Any]:
     return {
         "bytes": len(payload),
         "sha256": hashlib.sha256(payload).hexdigest(),
     }
 
 
+def _decode_build_input(payload: bytes, label: str) -> str:
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"build provenance: build input is not UTF-8: {label}") from error
+
+
+def _load_build_toml(payload: bytes, label: str) -> dict[str, Any]:
+    try:
+        loaded = tomllib.loads(_decode_build_input(payload, label))
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f"build provenance: cannot parse TOML build input {label}") from error
+    if not isinstance(loaded, dict):  # pragma: no cover - tomllib contract
+        raise ValueError(f"build provenance: TOML build input is not a table: {label}")
+    return loaded
+
+
+def _captured_project_version(payload: bytes) -> str:
+    text = _decode_build_input(payload, "pyproject.toml")
+    match = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
+    if match is None:
+        raise ValueError("build provenance: pyproject.toml has no literal project version")
+    return match.group(1)
+
+
 def build_provenance(root: Path) -> dict[str, Any]:
     """Bind exact release tool pins to every deterministic build input."""
 
-    wheels = (root / ".github" / "workflows" / "wheels.yml").read_text(encoding="utf-8")
-    cargo = _load_toml(root / "native" / "Cargo.toml")
+    payloads = {
+        relative_path: _read_stable_regular_file(
+            root / relative_path,
+            label=relative_path,
+        )
+        for relative_path in _BUILD_INPUT_PATHS
+    }
+    wheels = _decode_build_input(
+        payloads[".github/workflows/wheels.yml"],
+        ".github/workflows/wheels.yml",
+    )
+    cargo = _load_build_toml(payloads["native/Cargo.toml"], "native/Cargo.toml")
     package = cargo.get("package")
     if not isinstance(package, dict) or not isinstance(package.get("rust-version"), str):
         raise ValueError("build provenance: native Cargo.toml has no literal rust-version")
@@ -578,16 +655,14 @@ def build_provenance(root: Path) -> dict[str, Any]:
         r"pypa/cibuildwheel@([0-9a-f]{40})",
         "cibuildwheel action revision",
     )
-    inputs: dict[str, dict[str, Any]] = {}
-    for relative_path in _BUILD_INPUT_PATHS:
-        path = root / relative_path
-        if not path.is_file():
-            raise ValueError(f"build provenance: missing build input {relative_path}")
-        inputs[relative_path] = _file_identity(path)
+    inputs = {
+        relative_path: _payload_identity(payloads[relative_path])
+        for relative_path in _BUILD_INPUT_PATHS
+    }
     return {
         "schema": "pyowl-core.build-provenance/1",
         "distribution": "pyowl-core",
-        "version": _project_version(root),
+        "version": _captured_project_version(payloads["pyproject.toml"]),
         "source_date_epoch": int(source_date_epoch),
         "tools": {
             "rust_toolchain": rust_toolchain,
