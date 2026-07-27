@@ -11,7 +11,9 @@ include pyowl_build.py
 include setup.py
 include native/Cargo.toml
 include native/Cargo.lock
+include native/build.rs
 recursive-include native/src *.rs
+recursive-include native/tests *.rs
 recursive-include docs *.md *.py
 recursive-include benchmarks *.md *.py *.toml *.json
 prune benchmarks/comparators

@@ -43,9 +43,12 @@ EXPECTED_PROVENANCE_INPUTS = {
 }
 
 
-def test_sdist_manifest_prunes_native_test_build_outputs() -> None:
+def test_sdist_manifest_covers_native_build_inputs_and_prunes_outputs() -> None:
     manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines()
 
+    assert "include native/build.rs" in manifest
+    assert "recursive-include native/src *.rs" in manifest
+    assert "recursive-include native/tests *.rs" in manifest
     assert "prune tests/fuzz/native/target" in manifest
     assert "prune tests/miri/native/target" in manifest
 
