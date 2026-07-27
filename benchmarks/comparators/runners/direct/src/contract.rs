@@ -261,27 +261,18 @@ fn identity(evidence: &ComparatorCommonEvidence, source_sha256: &str, format: &s
 }
 
 fn provenance(evidence: &ComparatorCommonEvidence, format: &str) -> Result<Value, ContractError> {
-    let mut grouped: BTreeMap<[u8; 32], Vec<Value>> = BTreeMap::new();
-    let mut origin_rows = evidence.origins.iter().collect::<Vec<_>>();
-    let canonical_rdf_ordinals = format == "rdfxml";
-    if canonical_rdf_ordinals {
-        // The direct comparator is import-free, so every row has the same
-        // document key. The producer ordinal is only a duplicate tie-break.
-        origin_rows.sort_by_key(|origin| (origin.structural_sha256, origin.occurrence));
+    if format == "rdfxml" {
+        return rdf_provenance(evidence);
     }
-    for (index, origin) in origin_rows.into_iter().enumerate() {
-        let occurrence = if canonical_rdf_ordinals {
-            u64::try_from(index)
-                .map_err(|_| ContractError::new("RDF provenance exceeds u64 ordinals"))?
-        } else {
-            origin.occurrence
-        };
+
+    let mut grouped: BTreeMap<[u8; 32], Vec<Value>> = BTreeMap::new();
+    for origin in &evidence.origins {
         grouped
             .entry(origin.structural_sha256)
             .or_default()
             .push(json!({
                 "document_key": evidence.document_key,
-                "occurrence": occurrence,
+                "occurrence": origin.occurrence,
                 "span": null,
             }));
     }
@@ -297,6 +288,58 @@ fn provenance(evidence: &ComparatorCommonEvidence, format: &str) -> Result<Value
     let origin_entry_count = origins.len();
     Ok(json!({
         "origins": origins,
+        "origin_entry_count": origin_entry_count,
+        "source_byte_count": evidence.source_byte_count,
+        "document_count": 1,
+    }))
+}
+
+fn rdf_provenance(evidence: &ComparatorCommonEvidence) -> Result<Value, ContractError> {
+    // Retained publication already emits effective origins in this order. Keep
+    // a defensive fallback for independently assembled test evidence, while
+    // avoiding a second O(n log n) sort and BTreeMap build on the timed path.
+    let reordered;
+    let origins = if evidence.origins.windows(2).all(|pair| {
+        (pair[0].structural_sha256, pair[0].occurrence)
+            <= (pair[1].structural_sha256, pair[1].occurrence)
+    }) {
+        evidence.origins.as_slice()
+    } else {
+        reordered = {
+            let mut values = evidence.origins.clone();
+            values.sort_unstable_by_key(|origin| (origin.structural_sha256, origin.occurrence));
+            values
+        };
+        reordered.as_slice()
+    };
+
+    let mut grouped = Vec::new();
+    let mut digest = None;
+    let mut occurrences = Vec::new();
+    for (index, origin) in origins.iter().enumerate() {
+        if digest.is_some_and(|value| value != origin.structural_sha256) {
+            grouped.push(json!({
+                "structural_sha256": hex(digest.expect("checked as present")),
+                "occurrences": std::mem::take(&mut occurrences),
+            }));
+        }
+        digest = Some(origin.structural_sha256);
+        occurrences.push(json!({
+            "document_key": evidence.document_key,
+            "occurrence": u64::try_from(index)
+                .map_err(|_| ContractError::new("RDF provenance exceeds u64 ordinals"))?,
+            "span": null,
+        }));
+    }
+    if let Some(digest) = digest {
+        grouped.push(json!({
+            "structural_sha256": hex(digest),
+            "occurrences": occurrences,
+        }));
+    }
+    let origin_entry_count = grouped.len();
+    Ok(json!({
+        "origins": grouped,
         "origin_entry_count": origin_entry_count,
         "source_byte_count": evidence.source_byte_count,
         "document_count": 1,
@@ -566,15 +609,15 @@ fn hex_digest(value: &[u8]) -> String {
 }
 
 fn hex(value: impl AsRef<[u8]>) -> String {
-    use std::fmt::Write;
+    const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
-    value
-        .as_ref()
-        .iter()
-        .fold(String::new(), |mut output, byte| {
-            let _ = write!(output, "{byte:02x}");
-            output
-        })
+    let value = value.as_ref();
+    let mut output = String::with_capacity(value.len().saturating_mul(2));
+    for byte in value {
+        output.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        output.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    output
 }
 
 fn is_sha256(value: &str) -> bool {

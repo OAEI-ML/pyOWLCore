@@ -81,7 +81,7 @@ Reproduce and authenticate the pinned Darwin x86_64 executable with:
 cd benchmarks/comparators/runners/direct
 cargo +1.97.1 build --locked --release
 printf '%s  %s\n' \
-  7b1eaea6101996870722d444e6ab4fab6e32bbe7294caa9796e6a273e366fdce \
+  a890618c136ef0712c8f09d7963241dacb51a811b96a803da18c7b2774515be0 \
   target/release/pyowl-core-direct-comparator | shasum -a 256 -c -
 export PYOWL_CORE_DIRECT_RUNNER="$PWD/target/release/pyowl-core-direct-comparator"
 ```
