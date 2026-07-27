@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use pyowl_native::comparator::{
     ComparatorCommonEvidence, ComparatorFingerprintEvidence, ComparatorRecordInventory,
 };
+use serde::ser::{Serialize, SerializeMap, Serializer};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -209,12 +210,33 @@ pub(crate) fn validate_contract(value: &Value) -> Result<(), ContractError> {
         .get("contract_sha256")
         .and_then(Value::as_str)
         .ok_or_else(|| ContractError::new("common contract digest is missing"))?;
-    let mut unsigned = object.clone();
-    unsigned.remove("contract_sha256");
-    if observed != hex_digest(&canonical_json(&Value::Object(unsigned))?) {
+    if observed != hex_digest(&canonical_unsigned_contract(object)?) {
         return Err(ContractError::new("common contract digest differs"));
     }
     Ok(())
+}
+
+struct UnsignedContract<'a>(&'a Map<String, Value>);
+
+impl Serialize for UnsignedContract<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let field_count = self.0.len().saturating_sub(1);
+        let mut map = serializer.serialize_map(Some(field_count))?;
+        for (name, value) in self.0 {
+            if name != "contract_sha256" {
+                map.serialize_entry(name, value)?;
+            }
+        }
+        map.end()
+    }
+}
+
+fn canonical_unsigned_contract(object: &Map<String, Value>) -> Result<Vec<u8>, ContractError> {
+    serde_json::to_vec(&UnsignedContract(object))
+        .map_err(|_| ContractError::new("common contract could not be canonically serialized"))
 }
 
 fn identity(evidence: &ComparatorCommonEvidence, source_sha256: &str, format: &str) -> Value {
@@ -586,6 +608,13 @@ mod tests {
         .expect("contract");
 
         validate_contract(&contract).expect("valid contract");
+        let object = contract.as_object().expect("contract object");
+        let mut cloned = object.clone();
+        cloned.remove("contract_sha256");
+        assert_eq!(
+            canonical_unsigned_contract(object).expect("borrowed unsigned contract"),
+            canonical_json(&Value::Object(cloned)).expect("cloned unsigned contract"),
+        );
         let mut tampered = contract;
         tampered["ledger"]["provenance_bytes"] = json!(0);
         assert!(validate_contract(&tampered).is_err());
