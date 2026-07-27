@@ -5,10 +5,9 @@ use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
 use crate::model::{scan_canonical, Category, ScanBudget};
 use crate::session::Session;
+use std::collections::{HashMap, HashSet};
 
-use super::rdf_lists::{
-    DecodedRdfList, RdfListDecoder, RdfResource, RdfTerm, RdfTriple, RDF_FIRST, RDF_TYPE,
-};
+use super::rdf_lists::{DecodedRdfList, RdfListDecoder, RdfTerm, RdfTriple, RDF_FIRST, RDF_TYPE};
 
 const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
 const OWL_DATA_RANGE: &str = "http://www.w3.org/2002/07/owl#DataRange";
@@ -98,16 +97,10 @@ pub(crate) struct RdfClassExpressionDecoder<'graph, 'data> {
     lists: RdfListDecoder<'graph, 'data>,
     active: Vec<&'data str>,
     active_data: Vec<&'data str>,
-    blank_roles: Vec<BlankRole<'data>>,
-    data_properties: Vec<&'data str>,
-    datatypes: Vec<&'data str>,
+    blank_roles: HashMap<&'data str, u8>,
+    data_properties: HashSet<&'data str>,
+    datatypes: HashSet<&'data str>,
     literals: Vec<Option<RdfLiteralMetadata<'data>>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct BlankRole<'data> {
-    label: &'data str,
-    roles: u8,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,17 +166,20 @@ impl ClassConstructor {
 }
 
 impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
-    pub(crate) fn new(triples: &'graph [RdfTriple<'data>]) -> Self {
-        Self {
+    pub(crate) fn new(
+        triples: &'graph [RdfTriple<'data>],
+        session: &mut Session<'_>,
+    ) -> NativeResult<Self> {
+        Ok(Self {
             triples,
-            lists: RdfListDecoder::new(triples),
+            lists: RdfListDecoder::new(triples, session)?,
             active: Vec::new(),
             active_data: Vec::new(),
-            blank_roles: Vec::new(),
-            data_properties: Vec::new(),
-            datatypes: Vec::new(),
+            blank_roles: HashMap::new(),
+            data_properties: HashSet::new(),
+            datatypes: HashSet::new(),
             literals: Vec::new(),
-        }
+        })
     }
 
     pub(crate) fn register_data_property(
@@ -625,12 +621,12 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         session: &mut Session<'_>,
     ) -> NativeResult<Option<usize>> {
         let mut selected = None;
-        for (index, triple) in self.triples.iter().enumerate() {
+        for index in self.lists.blank_subject_indexes(subject) {
             session.step(1)?;
-            if triple.subject == RdfResource::Blank(subject)
-                && matches!(triple.object, RdfTerm::Literal(_))
-                && selected.replace(index).is_some()
-            {
+            let triple = self.triples.get(*index).ok_or_else(|| {
+                NativeError::protocol("native RDF expression subject index exceeds graph")
+            })?;
+            if matches!(triple.object, RdfTerm::Literal(_)) && selected.replace(*index).is_some() {
                 return Err(unsupported(
                     "native RDF facet restriction has multiple literal values",
                 ));
@@ -645,26 +641,22 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         filler: RdfTerm<'data>,
         session: &mut Session<'_>,
     ) -> NativeResult<bool> {
-        session.step(usize_as_u64(
-            self.data_properties.len(),
-            "native RDF property-kind work exceeds u64",
-        )?)?;
-        if property.is_some_and(|value| self.data_properties.contains(&value)) {
+        session.step(1)?;
+        if property.is_some_and(|value| self.data_properties.contains(value)) {
             return Ok(true);
         }
-        session.step(usize_as_u64(
-            self.datatypes.len(),
-            "native RDF datatype-kind work exceeds u64",
-        )?)?;
+        session.step(1)?;
         match filler {
-            RdfTerm::Iri(value) => Ok(self.datatypes.contains(&value)),
+            RdfTerm::Iri(value) => Ok(self.datatypes.contains(value)),
             RdfTerm::Blank(value) => {
-                for triple in self.triples {
+                for index in self.lists.blank_subject_indexes(value) {
                     session.step(1)?;
-                    if triple.subject == RdfResource::Blank(value)
-                        && (triple.predicate == OWL_ON_DATATYPE
-                            || (triple.predicate == RDF_TYPE
-                                && triple.object == RdfTerm::Iri(RDFS_DATATYPE)))
+                    let triple = self.triples.get(*index).ok_or_else(|| {
+                        NativeError::protocol("native RDF expression subject index exceeds graph")
+                    })?;
+                    if triple.predicate == OWL_ON_DATATYPE
+                        || (triple.predicate == RDF_TYPE
+                            && triple.object == RdfTerm::Iri(RDFS_DATATYPE))
                     {
                         return Ok(true);
                     }
@@ -1125,10 +1117,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         let cardinality = nonnegative_integer(self.triples[cardinality_index].object, session)?;
         let on_class = self.unique_edge(subject, OWL_ON_CLASS, session)?;
         let on_data = self.unique_edge(subject, OWL_ON_DATA_RANGE, session)?;
-        session.step(usize_as_u64(
-            self.data_properties.len(),
-            "native RDF property-kind work exceeds u64",
-        )?)?;
+        session.step(1)?;
         let property_iri = match property_term {
             RdfTerm::Iri(value) => Some(value),
             RdfTerm::Blank(_) => None,
@@ -1138,7 +1127,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 ));
             }
         };
-        let declared_data = property_iri.is_some_and(|value| self.data_properties.contains(&value));
+        let declared_data = property_iri.is_some_and(|value| self.data_properties.contains(value));
         let (filler_index, data_cardinality) = if qualified {
             match (on_class, on_data) {
                 (Some(index), None) => (Some(index), false),
@@ -1320,10 +1309,7 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         for cell in &decoded.cells {
             self.claim_blank(cell, ROLE_LIST, session)?;
         }
-        session.step(usize_as_u64(
-            self.data_properties.len(),
-            "native RDF property-kind work exceeds u64",
-        )?)?;
+        session.step(1)?;
         let data_properties = decoded.items.iter().all(
             |item| matches!(item, RdfTerm::Iri(value) if self.data_properties.contains(value)),
         );
@@ -1383,11 +1369,8 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         let mut object_properties = Vec::new();
         let mut data_properties = Vec::new();
         for item in decoded.items {
-            session.step(usize_as_u64(
-                self.data_properties.len(),
-                "native RDF property-kind work exceeds u64",
-            )?)?;
-            if matches!(item, RdfTerm::Iri(value) if self.data_properties.contains(&value)) {
+            session.step(1)?;
+            if matches!(item, RdfTerm::Iri(value) if self.data_properties.contains(value)) {
                 reserve_item(&mut data_properties, session)?;
                 data_properties.push(named_data_property(item, session)?);
             } else {
@@ -1484,26 +1467,19 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         role: u8,
         session: &mut Session<'_>,
     ) -> NativeResult<()> {
-        session.step(usize_as_u64(
-            self.blank_roles.len(),
-            "native RDF blank-role work exceeds u64",
-        )?)?;
-        if let Some(record) = self
-            .blank_roles
-            .iter_mut()
-            .find(|record| record.label == label)
-        {
-            let roles = record.roles | role;
+        session.step(1)?;
+        if let Some(record) = self.blank_roles.get_mut(label) {
+            let roles = *record | role;
             if (roles & ROLE_INDIVIDUAL != 0 && roles != ROLE_INDIVIDUAL)
                 || (roles & ROLE_FACET != 0 && roles != ROLE_FACET)
             {
                 return Err(unsupported("native RDF blank node has ambiguous roles"));
             }
-            record.roles = roles;
+            *record = roles;
             return Ok(());
         }
-        reserve_item(&mut self.blank_roles, session)?;
-        self.blank_roles.push(BlankRole { label, roles: role });
+        reserve_hash_map_item(&mut self.blank_roles, session)?;
+        self.blank_roles.insert(label, role);
         Ok(())
     }
 
@@ -1514,12 +1490,12 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         session: &mut Session<'_>,
     ) -> NativeResult<Option<usize>> {
         let mut selected = None;
-        for (index, triple) in self.triples.iter().enumerate() {
+        for index in self.lists.blank_subject_indexes(subject) {
             session.step(1)?;
-            if triple.subject == RdfResource::Blank(subject)
-                && triple.predicate == predicate
-                && selected.replace(index).is_some()
-            {
+            let triple = self.triples.get(*index).ok_or_else(|| {
+                NativeError::protocol("native RDF expression subject index exceeds graph")
+            })?;
+            if triple.predicate == predicate && selected.replace(*index).is_some() {
                 return Err(mapping_cardinality(
                     "native RDF class constructor has multiple targets",
                 ));
@@ -1535,12 +1511,14 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         session: &mut Session<'_>,
     ) -> NativeResult<Option<usize>> {
         let mut selected = None;
-        for (index, triple) in self.triples.iter().enumerate() {
+        for index in self.lists.blank_subject_indexes(subject) {
             session.step(1)?;
-            if triple.subject == RdfResource::Blank(subject)
-                && triple.predicate == RDF_TYPE
+            let triple = self.triples.get(*index).ok_or_else(|| {
+                NativeError::protocol("native RDF expression subject index exceeds graph")
+            })?;
+            if triple.predicate == RDF_TYPE
                 && triple.object == RdfTerm::Iri(object)
-                && selected.replace(index).is_some()
+                && selected.replace(*index).is_some()
             {
                 return Err(unsupported(
                     "native RDF class marker is duplicated in the source graph",
@@ -1556,13 +1534,13 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         consumed: &mut Vec<usize>,
         session: &mut Session<'_>,
     ) -> NativeResult<()> {
-        for (index, triple) in self.triples.iter().enumerate() {
+        for index in self.lists.blank_subject_indexes(subject) {
             session.step(1)?;
-            if triple.subject == RdfResource::Blank(subject)
-                && triple.predicate == RDF_TYPE
-                && triple.object == RdfTerm::Iri(OWL_CLASS)
-            {
-                push_index(consumed, index, session)?;
+            let triple = self.triples.get(*index).ok_or_else(|| {
+                NativeError::protocol("native RDF expression subject index exceeds graph")
+            })?;
+            if triple.predicate == RDF_TYPE && triple.object == RdfTerm::Iri(OWL_CLASS) {
+                push_index(consumed, *index, session)?;
             }
         }
         Ok(())
@@ -1704,19 +1682,47 @@ fn reserve_item<T>(values: &mut Vec<T>, session: &mut Session<'_>) -> NativeResu
 }
 
 fn register_kind_value<'data>(
-    values: &mut Vec<&'data str>,
+    values: &mut HashSet<&'data str>,
     value: &'data str,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
-    session.step(usize_as_u64(
-        values.len(),
-        "native RDF entity-kind work exceeds u64",
-    )?)?;
-    if !values.contains(&value) {
-        reserve_item(values, session)?;
-        values.push(value);
+    session.step(1)?;
+    if !values.contains(value) {
+        reserve_hash_item(values, session)?;
+        if !values.insert(value) {
+            return Err(NativeError::protocol(
+                "native RDF entity-kind index changed during insertion",
+            ));
+        }
     }
     Ok(())
+}
+
+fn reserve_hash_item<T: Eq + std::hash::Hash>(
+    values: &mut HashSet<T>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    let bytes = std::mem::size_of::<T>()
+        .checked_add(std::mem::size_of::<usize>())
+        .ok_or_else(|| NativeError::limit("native RDF expression allocation overflow"))?;
+    session.reserve_bytes(bytes)?;
+    values
+        .try_reserve(1)
+        .map_err(|_| NativeError::limit("native RDF expression allocation failed"))
+}
+
+fn reserve_hash_map_item<K: Eq + std::hash::Hash, V>(
+    values: &mut HashMap<K, V>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    let bytes = std::mem::size_of::<K>()
+        .checked_add(std::mem::size_of::<V>())
+        .and_then(|value| value.checked_add(std::mem::size_of::<usize>()))
+        .ok_or_else(|| NativeError::limit("native RDF expression allocation overflow"))?;
+    session.reserve_bytes(bytes)?;
+    values
+        .try_reserve(1)
+        .map_err(|_| NativeError::limit("native RDF expression allocation failed"))
 }
 
 fn usize_as_u64(value: usize, message: &'static str) -> NativeResult<u64> {
@@ -1733,7 +1739,7 @@ fn mapping_cardinality(message: &'static str) -> NativeError {
 
 #[cfg(test)]
 mod tests {
-    use super::super::rdf_lists::{RDF_FIRST, RDF_NIL, RDF_REST};
+    use super::super::rdf_lists::{RdfResource, RDF_FIRST, RDF_NIL, RDF_REST};
     use super::*;
     use crate::cancel::{Cancellation, Guard};
     use crate::limits::Limits;
@@ -1778,7 +1784,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0)?;
-        let mut decoder = RdfClassExpressionDecoder::new(graph);
+        let mut decoder = RdfClassExpressionDecoder::new(graph, &mut session)?;
         for property in data_properties {
             decoder.register_data_property(property, &mut session)?;
         }
@@ -1800,7 +1806,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0)?;
-        let mut decoder = RdfClassExpressionDecoder::new(graph);
+        let mut decoder = RdfClassExpressionDecoder::new(graph, &mut session)?;
         for (index, datatype, language) in literals {
             decoder.register_literal(*index, *datatype, *language, &mut session)?;
         }
@@ -2269,7 +2275,8 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut decoder = RdfClassExpressionDecoder::new(&typed_graph);
+        let mut decoder =
+            RdfClassExpressionDecoder::new(&typed_graph, &mut session).expect("decoder");
         decoder
             .register_literal(
                 2,
@@ -2314,7 +2321,8 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut decoder = RdfClassExpressionDecoder::new(&language_graph);
+        let mut decoder =
+            RdfClassExpressionDecoder::new(&language_graph, &mut session).expect("decoder");
         decoder
             .register_literal(2, None, Some("EN-gb"), &mut session)
             .expect("language literal metadata");
@@ -2350,7 +2358,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut decoder = RdfClassExpressionDecoder::new(&graph);
+        let mut decoder = RdfClassExpressionDecoder::new(&graph, &mut session).expect("decoder");
 
         for index in 0..graph.len() {
             decoder
@@ -2383,7 +2391,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut decoder = RdfClassExpressionDecoder::new(&graph);
+        let mut decoder = RdfClassExpressionDecoder::new(&graph, &mut session).expect("decoder");
         decoder
             .register_literal(2, Some(XSD_STRING), Some("en"), &mut session)
             .expect("ambiguous literal metadata registration");
@@ -2402,7 +2410,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut decoder = RdfClassExpressionDecoder::new(&graph);
+        let mut decoder = RdfClassExpressionDecoder::new(&graph, &mut session).expect("decoder");
         decoder
             .register_literal(2, None, Some("not_valid"), &mut session)
             .expect("invalid language metadata registration");
@@ -2830,7 +2838,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let mut decoder = RdfClassExpressionDecoder::new(&list);
+        let mut decoder = RdfClassExpressionDecoder::new(&list, &mut session).expect("decoder");
         assert_eq!(
             decoder
                 .decode_object_property_collection(blank_term("h"), &mut session)

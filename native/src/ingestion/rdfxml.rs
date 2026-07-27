@@ -11,7 +11,7 @@ use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
 use crate::session::Session;
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::time::Instant;
 
 use super::rdf_class_expressions::{
@@ -510,6 +510,110 @@ pub(super) struct Triple {
     pub(super) subject: Resource,
     pub(super) predicate: String,
     pub(super) object: Term,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ResourceKey<'graph> {
+    Iri(&'graph str),
+    Blank(&'graph str),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum TermKey<'graph> {
+    Iri(&'graph str),
+    Blank(&'graph str),
+    Literal {
+        lexical: &'graph str,
+        datatype: Option<&'graph str>,
+        language: Option<&'graph str>,
+    },
+}
+
+type ExactTripleKey<'graph> = (ResourceKey<'graph>, &'graph str, TermKey<'graph>);
+
+#[derive(Debug)]
+struct RdfGraphIndex<'graph> {
+    by_subject: HashMap<ResourceKey<'graph>, Vec<usize>>,
+    exact_triples: HashMap<ExactTripleKey<'graph>, usize>,
+}
+
+impl<'graph> RdfGraphIndex<'graph> {
+    fn build(triples: &'graph [Triple], session: &mut Session<'_>) -> NativeResult<Self> {
+        let mut by_subject = HashMap::new();
+        let mut exact_triples = HashMap::new();
+        for (index, triple) in triples.iter().enumerate() {
+            session.step(1)?;
+            let subject = resource_key(&triple.subject);
+            if !by_subject.contains_key(&subject) {
+                reserve_hash_map_item(&mut by_subject, session)?;
+                by_subject.insert(subject, Vec::new());
+            }
+            let indexes = by_subject.get_mut(&subject).ok_or_else(|| {
+                NativeError::protocol("native RDF subject index changed during construction")
+            })?;
+            reserve_vec_item(indexes, session)?;
+            indexes.push(index);
+
+            let key = (subject, triple.predicate.as_str(), term_key(&triple.object));
+            if !exact_triples.contains_key(&key) {
+                reserve_hash_map_item(&mut exact_triples, session)?;
+                exact_triples.insert(key, index);
+            }
+        }
+        Ok(Self {
+            by_subject,
+            exact_triples,
+        })
+    }
+
+    fn subject_indexes(&self, subject: &'graph Resource) -> &[usize] {
+        self.by_subject
+            .get(&resource_key(subject))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    fn exact_index(
+        &self,
+        source: &'graph Term,
+        property: &'graph str,
+        target: &'graph Term,
+    ) -> Option<usize> {
+        let source = term_resource_key(source)?;
+        self.exact_triples
+            .get(&(source, property, term_key(target)))
+            .copied()
+    }
+}
+
+fn resource_key(value: &Resource) -> ResourceKey<'_> {
+    match value {
+        Resource::Iri(value) => ResourceKey::Iri(value),
+        Resource::Blank(value) => ResourceKey::Blank(value),
+    }
+}
+
+fn term_resource_key(value: &Term) -> Option<ResourceKey<'_>> {
+    match value {
+        Term::Iri(value) => Some(ResourceKey::Iri(value)),
+        Term::Blank(value) => Some(ResourceKey::Blank(value)),
+        Term::Literal { .. } => None,
+    }
+}
+
+fn term_key(value: &Term) -> TermKey<'_> {
+    match value {
+        Term::Iri(value) => TermKey::Iri(value),
+        Term::Blank(value) => TermKey::Blank(value),
+        Term::Literal {
+            lexical,
+            datatype,
+            language,
+        } => TermKey::Literal {
+            lexical,
+            datatype: datatype.as_deref(),
+            language: language.as_deref(),
+        },
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2617,7 +2721,7 @@ pub(super) fn map_graph(
     let mut equivalence_occurrences = Vec::new();
     let mut simple_occurrences = Vec::new();
     let list_graph = list_graph_view(&triples, session)?;
-    let mut expressions = RdfClassExpressionDecoder::new(&list_graph);
+    let mut expressions = RdfClassExpressionDecoder::new(&list_graph, session)?;
     for property in [OWL_TOP_DATA_PROPERTY, OWL_BOTTOM_DATA_PROPERTY] {
         expressions.register_data_property(property, session)?;
     }
@@ -2676,7 +2780,7 @@ pub(super) fn map_graph(
         let annotations = if inferred {
             Vec::new()
         } else {
-            axiom_annotations.annotations_for(triple, &triples, session)?
+            axiom_annotations.annotations_for_index(index, session)?
         };
         let declaration = build_node(
             60,
@@ -2689,7 +2793,7 @@ pub(super) fn map_graph(
         push_axiom(declaration, &mut axioms, session)?;
         if !inferred {
             consumed[index] = true;
-            axiom_annotations.claim(triple, &triples)?;
+            axiom_annotations.claim_index(index, session)?;
         }
     }
     if capture_occurrences {
@@ -2884,7 +2988,7 @@ pub(super) fn map_graph(
             continue;
         }
         session.step(1)?;
-        let annotations = axiom_annotations.annotations_for(triple, &triples, session)?;
+        let annotations = axiom_annotations.annotations_for_index(index, session)?;
         let class_axiom = class_expression_axiom(
             &list_graph[index],
             &kinds,
@@ -2924,7 +3028,7 @@ pub(super) fn map_graph(
                 simple_anchors.push(index);
             }
             consumed[index] = true;
-            axiom_annotations.claim(triple, &triples)?;
+            axiom_annotations.claim_index(index, session)?;
         }
     }
     if capture_occurrences {
@@ -3138,28 +3242,43 @@ struct NestedAnnotationRecord {
     claimed: bool,
 }
 
-#[derive(Debug, Default)]
-struct AxiomAnnotationLedger {
+#[derive(Debug)]
+struct AxiomAnnotationLedger<'graph> {
     records: Vec<AxiomAnnotationRecord>,
     nested_records: Vec<NestedAnnotationRecord>,
+    graph_index: RdfGraphIndex<'graph>,
 }
 
-impl AxiomAnnotationLedger {
-    fn annotations_for(
+impl<'graph> AxiomAnnotationLedger<'graph> {
+    fn finalize_records(&mut self, session: &mut Session<'_>) -> NativeResult<()> {
+        session.step(sort_work(self.records.len())?)?;
+        self.records
+            .sort_unstable_by_key(|record| record.main_index);
+        Ok(())
+    }
+
+    fn record_range(
         &self,
-        triple: &Triple,
-        triples: &[Triple],
+        main_index: usize,
+        session: &mut Session<'_>,
+    ) -> NativeResult<std::ops::Range<usize>> {
+        session.step(range_lookup_work(self.records.len())?)?;
+        let start = self
+            .records
+            .partition_point(|record| record.main_index < main_index);
+        let end =
+            start + self.records[start..].partition_point(|record| record.main_index == main_index);
+        Ok(start..end)
+    }
+
+    fn annotations_for_index(
+        &self,
+        main_index: usize,
         session: &mut Session<'_>,
     ) -> NativeResult<Vec<Node>> {
         let mut annotations = Vec::new();
-        for record in &self.records {
+        for record in &self.records[self.record_range(main_index, session)?] {
             session.step(1)?;
-            let main = triples.get(record.main_index).ok_or_else(|| {
-                NativeError::protocol("native RDF reification main index exceeds graph")
-            })?;
-            if main != triple {
-                continue;
-            }
             for annotation in &record.annotations {
                 reserve_vec_item(&mut annotations, session)?;
                 session.reserve_bytes(annotation.as_bytes().len())?;
@@ -3174,19 +3293,16 @@ impl AxiomAnnotationLedger {
         canonical_set(annotations, 0, None)
     }
 
-    fn claim(&mut self, triple: &Triple, triples: &[Triple]) -> NativeResult<()> {
-        for record in &mut self.records {
-            let main = triples.get(record.main_index).ok_or_else(|| {
-                NativeError::protocol("native RDF reification main index exceeds graph")
-            })?;
-            if main == triple {
-                record.claimed = true;
-            }
+    fn claim_index(&mut self, main_index: usize, session: &mut Session<'_>) -> NativeResult<()> {
+        let range = self.record_range(main_index, session)?;
+        for record in &mut self.records[range] {
+            session.step(1)?;
+            record.claimed = true;
         }
         Ok(())
     }
 
-    fn nested_annotations_for<'view, 'graph>(
+    fn nested_annotations_for<'view>(
         &mut self,
         main_index: usize,
         triples: &'graph [Triple],
@@ -3198,6 +3314,7 @@ impl AxiomAnnotationLedger {
             main_index,
             &mut self.nested_records,
             triples,
+            &self.graph_index,
             expressions,
             &mut stack,
             session,
@@ -3208,6 +3325,27 @@ impl AxiomAnnotationLedger {
         self.records.iter().any(|record| !record.claimed)
             || self.nested_records.iter().any(|record| !record.claimed)
     }
+}
+
+fn comparison_levels(length: usize) -> u64 {
+    if length <= 1 {
+        1
+    } else {
+        u64::from(usize::BITS - (length - 1).leading_zeros())
+    }
+}
+
+fn sort_work(length: usize) -> NativeResult<u64> {
+    u64::try_from(length)
+        .map_err(|_| NativeError::limit("native RDF reification work exceeds u64"))?
+        .checked_mul(comparison_levels(length))
+        .ok_or_else(|| NativeError::limit("native RDF reification work exceeds u64"))
+}
+
+fn range_lookup_work(length: usize) -> NativeResult<u64> {
+    comparison_levels(length)
+        .checked_mul(2)
+        .ok_or_else(|| NativeError::limit("native RDF reification work exceeds u64"))
 }
 
 fn consume_owl1_redundant_types(
@@ -4091,13 +4229,13 @@ fn consume_detached_owl1_data_enumerations<'view, 'graph>(
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ClassTerm<'graph> {
     Iri(&'graph str),
     Blank(&'graph str),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum IndividualTerm<'graph> {
     Iri(&'graph str),
     Blank(&'graph str),
@@ -4159,7 +4297,7 @@ fn map_ontology_annotations<'view, 'graph>(
     consumed: &mut [bool],
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     annotations: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -4204,7 +4342,7 @@ fn map_swrl_rules<'view, 'graph>(
     source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     extensions: &mut Vec<Vec<u8>>,
     allow_swrl: bool,
     session: &mut Session<'_>,
@@ -4777,7 +4915,7 @@ fn annotations_on_structural_node<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
     source_triples: &'graph [Triple],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     session: &mut Session<'_>,
 ) -> NativeResult<Vec<Node>> {
     if triples.len() != source_triples.len() {
@@ -4829,7 +4967,7 @@ fn map_negative_property_assertions<'view, 'graph>(
     source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -5009,7 +5147,7 @@ fn map_all_different<'view, 'graph>(
     source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -5085,7 +5223,7 @@ fn map_all_disjoint_collections<'view, 'graph>(
     source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -5184,7 +5322,7 @@ fn map_property_chains<'view, 'graph>(
     source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -5210,10 +5348,10 @@ fn map_property_chains<'view, 'graph>(
                 "native object property chain has fewer than two members",
             ));
         }
-        let source_triple = source_triples.get(index).ok_or_else(|| {
+        source_triples.get(index).ok_or_else(|| {
             NativeError::protocol("native property-chain index exceeds source graph")
         })?;
-        let annotations = reifications.annotations_for(source_triple, source_triples, session)?;
+        let annotations = reifications.annotations_for_index(index, session)?;
         let chain = build_node(11, [Field::Sequence(properties)], session)?;
         let axiom = build_node(
             70,
@@ -5227,7 +5365,7 @@ fn map_property_chains<'view, 'graph>(
         consume_collection_indexes(super_consumed, consumed, session)?;
         consume_collection_indexes(collection_consumed, consumed, session)?;
         consumed[index] = true;
-        reifications.claim(source_triple, source_triples)?;
+        reifications.claim_index(index, session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -5239,7 +5377,7 @@ fn map_has_keys<'view, 'graph>(
     source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -5264,10 +5402,10 @@ fn map_has_keys<'view, 'graph>(
                 "native owl:hasKey has no property members",
             ));
         }
-        let source_triple = source_triples
+        source_triples
             .get(index)
             .ok_or_else(|| NativeError::protocol("native has-key index exceeds source graph"))?;
-        let annotations = reifications.annotations_for(source_triple, source_triples, session)?;
+        let annotations = reifications.annotations_for_index(index, session)?;
         let object_properties = canonical_set(object_properties, 0, None)?;
         let data_properties = canonical_set(data_properties, 0, None)?;
         let axiom = build_node(
@@ -5282,7 +5420,7 @@ fn map_has_keys<'view, 'graph>(
         )?;
         consume_collection_indexes(collection_consumed, consumed, session)?;
         consumed[index] = true;
-        reifications.claim(source_triple, source_triples)?;
+        reifications.claim_index(index, session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -5294,7 +5432,7 @@ fn map_disjoint_unions<'view, 'graph>(
     source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -5316,10 +5454,10 @@ fn map_disjoint_unions<'view, 'graph>(
                 "native disjoint-union axiom requires at least two distinct members",
             ));
         }
-        let source_triple = source_triples.get(index).ok_or_else(|| {
+        source_triples.get(index).ok_or_else(|| {
             NativeError::protocol("native disjoint-union index exceeds source graph")
         })?;
-        let annotations = reifications.annotations_for(source_triple, source_triples, session)?;
+        let annotations = reifications.annotations_for_index(index, session)?;
         let axiom = build_node(
             64,
             [
@@ -5331,7 +5469,7 @@ fn map_disjoint_unions<'view, 'graph>(
         )?;
         consume_collection_indexes(collection_consumed, consumed, session)?;
         consumed[index] = true;
-        reifications.claim(source_triple, source_triples)?;
+        reifications.claim_index(index, session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -5344,7 +5482,7 @@ fn map_owl1_compatibility_class_axioms<'view, 'graph>(
     consumed: &mut [bool],
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -5386,13 +5524,13 @@ fn map_owl1_compatibility_class_axioms<'view, 'graph>(
             2,
             "native named class constructor axiom requires two distinct expressions",
         )?;
-        let source_triple = source_triples.get(index).ok_or_else(|| {
+        source_triples.get(index).ok_or_else(|| {
             NativeError::protocol("native OWL 1 compatibility index exceeds source graph")
         })?;
-        let annotations = reifications.annotations_for(source_triple, source_triples, session)?;
+        let annotations = reifications.annotations_for_index(index, session)?;
         let axiom = build_node(62, [Field::Set(members), Field::Set(annotations)], session)?;
         consumed[index] = true;
-        reifications.claim(source_triple, source_triples)?;
+        reifications.claim_index(index, session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -5405,7 +5543,7 @@ fn map_datatype_definitions<'view, 'graph>(
     consumed: &mut [bool],
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
@@ -5424,10 +5562,10 @@ fn map_datatype_definitions<'view, 'graph>(
             node: data_range,
             consumed: range_consumed,
         } = expressions.decode_data_term(triple.object, session)?;
-        let source_triple = source_triples.get(index).ok_or_else(|| {
+        source_triples.get(index).ok_or_else(|| {
             NativeError::protocol("native datatype-definition index exceeds source graph")
         })?;
-        let annotations = reifications.annotations_for(source_triple, source_triples, session)?;
+        let annotations = reifications.annotations_for_index(index, session)?;
         let axiom = build_node(
             100,
             [
@@ -5439,7 +5577,7 @@ fn map_datatype_definitions<'view, 'graph>(
         )?;
         consume_collection_indexes(range_consumed, consumed, session)?;
         consumed[index] = true;
-        reifications.claim(source_triple, source_triples)?;
+        reifications.claim_index(index, session)?;
         push_axiom(axiom, axioms, session)?;
     }
     Ok(())
@@ -5484,19 +5622,19 @@ fn consume_collection_indexes(
     Ok(())
 }
 
-fn component_annotations(
+fn component_annotations<'graph>(
     indexes: &[usize],
-    triples: &[Triple],
-    reifications: &mut AxiomAnnotationLedger,
+    triples: &'graph [Triple],
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     session: &mut Session<'_>,
 ) -> NativeResult<Vec<Node>> {
     let mut annotations = Vec::new();
     for index in indexes {
         session.step(1)?;
-        let triple = triples.get(*index).ok_or_else(|| {
+        triples.get(*index).ok_or_else(|| {
             NativeError::protocol("native RDF component edge index exceeds graph")
         })?;
-        let edge_annotations = reifications.annotations_for(triple, triples, session)?;
+        let edge_annotations = reifications.annotations_for_index(*index, session)?;
         for annotation in edge_annotations {
             enforce_usize(
                 annotations.len().saturating_add(1),
@@ -5506,9 +5644,145 @@ fn component_annotations(
             reserve_vec_item(&mut annotations, session)?;
             annotations.push(annotation);
         }
-        reifications.claim(triple, triples)?;
+        reifications.claim_index(*index, session)?;
     }
     canonical_set(annotations, 0, None)
+}
+
+struct ComponentIndex<T> {
+    edges: Vec<Option<(T, T)>>,
+    incident: HashMap<T, Vec<usize>>,
+}
+
+struct IndexedComponent<T> {
+    members: Vec<T>,
+    edge_indexes: Vec<usize>,
+}
+
+impl<T: Copy + Eq + std::hash::Hash> ComponentIndex<T> {
+    fn build<'graph>(
+        triples: &[ListTriple<'graph>],
+        consumed: &[bool],
+        mut edge: impl FnMut(&ListTriple<'graph>) -> Option<(T, T)>,
+        session: &mut Session<'_>,
+    ) -> NativeResult<Self> {
+        if triples.len() != consumed.len() {
+            return Err(NativeError::protocol(
+                "native RDF component index differs from consumed ledger",
+            ));
+        }
+        let mut edges = reserved_vec(triples.len(), session)?;
+        let mut incident = HashMap::new();
+        for (index, triple) in triples.iter().enumerate() {
+            session.step(1)?;
+            let selected = (!consumed[index]).then(|| edge(triple)).flatten();
+            edges.push(selected);
+            let Some((left, right)) = selected else {
+                continue;
+            };
+            index_component_endpoint(&mut incident, left, index, session)?;
+            if right != left {
+                index_component_endpoint(&mut incident, right, index, session)?;
+            }
+        }
+        Ok(Self { edges, incident })
+    }
+
+    fn component_at(
+        &self,
+        start: usize,
+        consumed: &mut [bool],
+        session: &mut Session<'_>,
+    ) -> NativeResult<Option<IndexedComponent<T>>> {
+        if consumed.get(start).copied().ok_or_else(|| {
+            NativeError::protocol("native RDF component start exceeds consumed ledger")
+        })? {
+            return Ok(None);
+        }
+        let Some((left, right)) = self.edges.get(start).copied().flatten() else {
+            return Ok(None);
+        };
+        let mut members = Vec::new();
+        let mut member_set = HashSet::new();
+        let mut edge_indexes = Vec::new();
+        push_component_member(&mut members, &mut member_set, left, session)?;
+        push_component_member(&mut members, &mut member_set, right, session)?;
+        let mut cursor = 0_usize;
+        while cursor < members.len() {
+            session.step(1)?;
+            let member = members[cursor];
+            cursor = cursor
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native RDF component cursor overflow"))?;
+            let Some(indexes) = self.incident.get(&member) else {
+                continue;
+            };
+            for index in indexes {
+                session.step(1)?;
+                if consumed.get(*index).copied().ok_or_else(|| {
+                    NativeError::protocol("native RDF component edge exceeds consumed ledger")
+                })? {
+                    continue;
+                }
+                let (edge_left, edge_right) =
+                    self.edges.get(*index).copied().flatten().ok_or_else(|| {
+                        NativeError::protocol("native RDF component edge index is absent")
+                    })?;
+                let claimed = consumed.get_mut(*index).ok_or_else(|| {
+                    NativeError::protocol("native RDF component edge exceeds consumed ledger")
+                })?;
+                *claimed = true;
+                reserve_vec_item(&mut edge_indexes, session)?;
+                edge_indexes.push(*index);
+                push_component_member(&mut members, &mut member_set, edge_left, session)?;
+                push_component_member(&mut members, &mut member_set, edge_right, session)?;
+            }
+        }
+        Ok(Some(IndexedComponent {
+            members,
+            edge_indexes,
+        }))
+    }
+}
+
+fn index_component_endpoint<T: Copy + Eq + std::hash::Hash>(
+    incident: &mut HashMap<T, Vec<usize>>,
+    member: T,
+    edge_index: usize,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session.step(1)?;
+    if !incident.contains_key(&member) {
+        reserve_hash_map_item(incident, session)?;
+        incident.insert(member, Vec::new());
+    }
+    let indexes = incident.get_mut(&member).ok_or_else(|| {
+        NativeError::protocol("native RDF component index changed during construction")
+    })?;
+    reserve_vec_item(indexes, session)?;
+    indexes.push(edge_index);
+    Ok(())
+}
+
+fn push_component_member<T: Copy + Eq + std::hash::Hash>(
+    members: &mut Vec<T>,
+    member_set: &mut HashSet<T>,
+    member: T,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    session.step(1)?;
+    if member_set.contains(&member) {
+        return Ok(());
+    }
+    reserve_hash_item(member_set, session)?;
+    if !member_set.insert(member) {
+        return Err(NativeError::protocol(
+            "native RDF component member index changed during insertion",
+        ));
+    }
+    reserve_vec_item(members, session)?;
+    members.push(member);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5518,54 +5792,28 @@ fn map_equivalent_class_components<'view, 'graph>(
     consumed: &mut [bool],
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     mut occurrence_anchors: Option<&mut Vec<ComponentOccurrenceAnchor<'graph>>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
+    let component_index = ComponentIndex::build(
+        triples,
+        consumed,
+        |triple| {
+            let (left, right) = class_equivalent_edge(triple)?;
+            class_equivalence_subject_supported(left, kinds).then_some((left, right))
+        },
+        session,
+    )?;
     for start in 0..triples.len() {
-        if consumed[start] {
-            continue;
-        }
-        let Some((left, right)) = class_equivalent_edge(&triples[start]) else {
+        let Some(IndexedComponent {
+            members,
+            edge_indexes,
+        }) = component_index.component_at(start, consumed, session)?
+        else {
             continue;
         };
-        if !class_equivalence_subject_supported(left, kinds) {
-            continue;
-        }
-        let mut members = Vec::new();
-        let mut edge_indexes = Vec::new();
-        add_class_member(&mut members, left, session)?;
-        add_class_member(&mut members, right, session)?;
-        reserve_vec_item(&mut edge_indexes, session)?;
-        edge_indexes.push(start);
-        consumed[start] = true;
-        loop {
-            let mut changed = false;
-            for (index, triple) in triples.iter().enumerate() {
-                session.step(1)?;
-                if consumed[index] {
-                    continue;
-                }
-                let Some((edge_left, edge_right)) = class_equivalent_edge(triple) else {
-                    continue;
-                };
-                if !class_equivalence_subject_supported(edge_left, kinds) {
-                    continue;
-                }
-                if members.contains(&edge_left) || members.contains(&edge_right) {
-                    add_class_member(&mut members, edge_left, session)?;
-                    add_class_member(&mut members, edge_right, session)?;
-                    reserve_vec_item(&mut edge_indexes, session)?;
-                    edge_indexes.push(index);
-                    consumed[index] = true;
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
 
         if let Some(anchors) = occurrence_anchors.as_deref_mut() {
             push_component_occurrence_anchor(
@@ -5615,22 +5863,6 @@ fn class_equivalence_subject_supported(value: ClassTerm<'_>, kinds: &[KindRecord
         ClassTerm::Iri(value) => !has_kind(kinds, value, "datatype"),
         ClassTerm::Blank(_) => true,
     }
-}
-
-fn add_class_member<'graph>(
-    members: &mut Vec<ClassTerm<'graph>>,
-    value: ClassTerm<'graph>,
-    session: &mut Session<'_>,
-) -> NativeResult<()> {
-    session.step(
-        u64::try_from(members.len())
-            .map_err(|_| NativeError::limit("native RDF class component work exceeds u64"))?,
-    )?;
-    if !members.contains(&value) {
-        reserve_vec_item(members, session)?;
-        members.push(value);
-    }
-    Ok(())
 }
 
 fn decode_class_expression<'view, 'graph>(
@@ -5957,59 +6189,30 @@ fn map_equivalent_property_components<'view, 'graph>(
     consumed: &mut [bool],
     kinds: &[KindRecord<'graph>],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     mut occurrence_anchors: Option<&mut Vec<ComponentOccurrenceAnchor<'graph>>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
+    let component_index = ComponentIndex::build(
+        triples,
+        consumed,
+        |triple| {
+            let (left, right) = property_equivalent_edge(triple, predicate)?;
+            (equivalent_property_member_supported(left, kinds)
+                && equivalent_property_member_supported(right, kinds))
+            .then_some((left, right))
+        },
+        session,
+    )?;
     for start in 0..triples.len() {
-        if consumed[start] {
-            continue;
-        }
-        let Some((left, right)) = property_equivalent_edge(&triples[start], predicate) else {
+        let Some(IndexedComponent {
+            members,
+            edge_indexes,
+        }) = component_index.component_at(start, consumed, session)?
+        else {
             continue;
         };
-        if !equivalent_property_member_supported(left, kinds)
-            || !equivalent_property_member_supported(right, kinds)
-        {
-            continue;
-        }
-        let mut members = Vec::new();
-        let mut edge_indexes = Vec::new();
-        add_property_member(&mut members, left, session)?;
-        add_property_member(&mut members, right, session)?;
-        reserve_vec_item(&mut edge_indexes, session)?;
-        edge_indexes.push(start);
-        consumed[start] = true;
-        loop {
-            let mut changed = false;
-            for (index, triple) in triples.iter().enumerate() {
-                session.step(1)?;
-                if consumed[index] {
-                    continue;
-                }
-                let Some((edge_left, edge_right)) = property_equivalent_edge(triple, predicate)
-                else {
-                    continue;
-                };
-                if !equivalent_property_member_supported(edge_left, kinds)
-                    || !equivalent_property_member_supported(edge_right, kinds)
-                {
-                    continue;
-                }
-                if members.contains(&edge_left) || members.contains(&edge_right) {
-                    add_property_member(&mut members, edge_left, session)?;
-                    add_property_member(&mut members, edge_right, session)?;
-                    reserve_vec_item(&mut edge_indexes, session)?;
-                    edge_indexes.push(index);
-                    consumed[index] = true;
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
         if let Some(anchors) = occurrence_anchors.as_deref_mut() {
             push_component_occurrence_anchor(
                 anchors,
@@ -6073,70 +6276,31 @@ fn equivalent_property_member_supported(value: ClassTerm<'_>, kinds: &[KindRecor
     }
 }
 
-fn add_property_member<'graph>(
-    members: &mut Vec<ClassTerm<'graph>>,
-    value: ClassTerm<'graph>,
-    session: &mut Session<'_>,
-) -> NativeResult<()> {
-    session.step(
-        u64::try_from(members.len())
-            .map_err(|_| NativeError::limit("native RDF property component work exceeds u64"))?,
-    )?;
-    if !members.contains(&value) {
-        reserve_vec_item(members, session)?;
-        members.push(value);
-    }
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn map_same_individual_components<'view, 'graph>(
     triples: &'view [ListTriple<'graph>],
     source_triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
-    reifications: &mut AxiomAnnotationLedger,
+    reifications: &mut AxiomAnnotationLedger<'graph>,
     axioms: &mut Vec<Vec<u8>>,
     mut occurrence_anchors: Option<&mut Vec<ComponentOccurrenceAnchor<'graph>>>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
+    let component_index = ComponentIndex::build(
+        triples,
+        consumed,
+        |triple| individual_edge(triple, OWL_SAME_AS),
+        session,
+    )?;
     for start in 0..triples.len() {
-        if consumed[start] {
-            continue;
-        }
-        let Some((left, right)) = individual_edge(&triples[start], OWL_SAME_AS) else {
+        let Some(IndexedComponent {
+            members,
+            edge_indexes,
+        }) = component_index.component_at(start, consumed, session)?
+        else {
             continue;
         };
-        let mut members = Vec::new();
-        let mut edge_indexes = Vec::new();
-        add_individual_member(&mut members, left, session)?;
-        add_individual_member(&mut members, right, session)?;
-        reserve_vec_item(&mut edge_indexes, session)?;
-        edge_indexes.push(start);
-        consumed[start] = true;
-        loop {
-            let mut changed = false;
-            for (index, triple) in triples.iter().enumerate() {
-                session.step(1)?;
-                if consumed[index] {
-                    continue;
-                }
-                let Some((edge_left, edge_right)) = individual_edge(triple, OWL_SAME_AS) else {
-                    continue;
-                };
-                if members.contains(&edge_left) || members.contains(&edge_right) {
-                    add_individual_member(&mut members, edge_left, session)?;
-                    add_individual_member(&mut members, edge_right, session)?;
-                    reserve_vec_item(&mut edge_indexes, session)?;
-                    edge_indexes.push(index);
-                    consumed[index] = true;
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
 
         if let Some(anchors) = occurrence_anchors.as_deref_mut() {
             push_component_occurrence_anchor(
@@ -6177,33 +6341,20 @@ fn individual_edge<'graph>(
     ))
 }
 
-fn add_individual_member<'graph>(
-    members: &mut Vec<IndividualTerm<'graph>>,
-    value: IndividualTerm<'graph>,
-    session: &mut Session<'_>,
-) -> NativeResult<()> {
-    session
-        .step(u64::try_from(members.len()).map_err(|_| {
-            NativeError::limit("native RDF individual component work exceeds u64")
-        })?)?;
-    if !members.contains(&value) {
-        reserve_vec_item(members, session)?;
-        members.push(value);
-    }
-    Ok(())
-}
-
 fn collect_axiom_annotations<'view, 'graph>(
     triples: &'graph [Triple],
     consumed: &mut [bool],
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
     session: &mut Session<'_>,
-) -> NativeResult<AxiomAnnotationLedger> {
-    let nested_records = collect_nested_annotation_records(triples, consumed, session)?;
-    validate_nested_annotation_records(&nested_records, triples, session)?;
+) -> NativeResult<AxiomAnnotationLedger<'graph>> {
+    let graph_index = RdfGraphIndex::build(triples, session)?;
+    let nested_records =
+        collect_nested_annotation_records(triples, &graph_index, consumed, session)?;
+    validate_nested_annotation_records(&nested_records, triples, &graph_index, session)?;
     let mut ledger = AxiomAnnotationLedger {
         records: Vec::new(),
         nested_records,
+        graph_index,
     };
     for (type_index, type_triple) in triples.iter().enumerate() {
         session.step(1)?;
@@ -6215,12 +6366,24 @@ fn collect_axiom_annotations<'view, 'graph>(
             continue;
         }
         let reification = &type_triple.subject;
-        let main_index = reification_main_index(reification, triples, session)?;
+        let main_index =
+            reification_main_index(reification, triples, &ledger.graph_index, session)?;
 
         let mut annotations = Vec::new();
-        for (index, triple) in triples.iter().enumerate() {
+        let subject_count = ledger.graph_index.subject_indexes(reification).len();
+        for offset in 0..subject_count {
             session.step(1)?;
-            if &triple.subject != reification || is_reification_metadata(&triple.predicate) {
+            let index = *ledger
+                .graph_index
+                .subject_indexes(reification)
+                .get(offset)
+                .ok_or_else(|| {
+                    NativeError::protocol("native RDF subject index changed during traversal")
+                })?;
+            let triple = triples
+                .get(index)
+                .ok_or_else(|| NativeError::protocol("native RDF subject index exceeds graph"))?;
+            if is_reification_metadata(&triple.predicate) {
                 continue;
             }
             let annotation = build_node(
@@ -6257,13 +6420,15 @@ fn collect_axiom_annotations<'view, 'graph>(
             annotations,
             claimed: false,
         });
-        consume_reification_node(reification, triples, consumed, session)?;
+        consume_reification_node(reification, &ledger.graph_index, consumed, session)?;
     }
+    ledger.finalize_records(session)?;
     Ok(ledger)
 }
 
-fn collect_nested_annotation_records(
-    triples: &[Triple],
+fn collect_nested_annotation_records<'graph>(
+    triples: &'graph [Triple],
+    graph_index: &RdfGraphIndex<'graph>,
     consumed: &mut [bool],
     session: &mut Session<'_>,
 ) -> NativeResult<Vec<NestedAnnotationRecord>> {
@@ -6278,70 +6443,96 @@ fn collect_nested_annotation_records(
             continue;
         }
         let reification = &type_triple.subject;
-        if triples.iter().any(|triple| {
-            triple.subject == *reification
-                && triple.predicate == RDF_TYPE
+        let mut is_axiom = false;
+        for index in graph_index.subject_indexes(reification) {
+            session.step(1)?;
+            let triple = triples
+                .get(*index)
+                .ok_or_else(|| NativeError::protocol("native RDF subject index exceeds graph"))?;
+            if triple.predicate == RDF_TYPE
                 && matches!(&triple.object, Term::Iri(value) if value == OWL_AXIOM)
-        }) {
+            {
+                is_axiom = true;
+                break;
+            }
+        }
+        if is_axiom {
             return Err(rdf_axiom_reification(
                 "native RDF reification node cannot be both owl:Annotation and owl:Axiom",
             ));
         }
-        let main_index = reification_main_index(reification, triples, session)?;
+        let main_index = reification_main_index(reification, triples, graph_index, session)?;
         reserve_vec_item(&mut records, session)?;
         records.push(NestedAnnotationRecord {
             type_index,
             main_index,
             claimed: false,
         });
-        consume_reification_node(reification, triples, consumed, session)?;
+        consume_reification_node(reification, graph_index, consumed, session)?;
     }
+    session.step(sort_work(records.len())?)?;
+    records.sort_unstable_by_key(|record| (record.main_index, record.type_index));
     Ok(records)
 }
 
-fn validate_nested_annotation_records(
+fn nested_record_range(
     records: &[NestedAnnotationRecord],
-    triples: &[Triple],
+    main_index: usize,
+    session: &mut Session<'_>,
+) -> NativeResult<std::ops::Range<usize>> {
+    session.step(range_lookup_work(records.len())?)?;
+    let start = records.partition_point(|record| record.main_index < main_index);
+    let end = start + records[start..].partition_point(|record| record.main_index == main_index);
+    Ok(start..end)
+}
+
+fn validate_nested_annotation_records<'graph>(
+    records: &[NestedAnnotationRecord],
+    triples: &'graph [Triple],
+    graph_index: &RdfGraphIndex<'graph>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
     let mut stack = Vec::new();
+    let mut validated = HashSet::new();
     for record in records {
-        validate_nested_annotation_main(record.main_index, records, triples, &mut stack, session)?;
+        validate_nested_annotation_main(
+            record.main_index,
+            records,
+            triples,
+            graph_index,
+            &mut stack,
+            &mut validated,
+            session,
+        )?;
     }
     Ok(())
 }
 
-fn validate_nested_annotation_main(
+fn validate_nested_annotation_main<'graph>(
     main_index: usize,
     records: &[NestedAnnotationRecord],
-    triples: &[Triple],
+    triples: &'graph [Triple],
+    graph_index: &RdfGraphIndex<'graph>,
     stack: &mut Vec<usize>,
+    validated: &mut HashSet<usize>,
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
-    let main = triples.get(main_index).ok_or_else(|| {
+    triples.get(main_index).ok_or_else(|| {
         NativeError::protocol("native nested annotation main index exceeds graph")
     })?;
-    if stack.iter().any(|index| {
-        triples
-            .get(*index)
-            .is_some_and(|candidate| candidate == main)
-    }) {
+    session.step(1)?;
+    if validated.contains(&main_index) {
+        return Ok(());
+    }
+    if stack.contains(&main_index) {
         return Err(rdf_axiom_reification(
             "native RDF annotation reification contains a cycle",
         ));
     }
-    let mut matching = Vec::new();
-    for record in records {
-        session.step(1)?;
-        let record_main = triples.get(record.main_index).ok_or_else(|| {
-            NativeError::protocol("native nested annotation main index exceeds graph")
-        })?;
-        if record_main == main {
-            reserve_vec_item(&mut matching, session)?;
-            matching.push(record.type_index);
-        }
-    }
+    let matching = nested_record_range(records, main_index, session)?;
     if matching.is_empty() {
+        reserve_hash_item(validated, session)?;
+        validated.insert(main_index);
         return Ok(());
     }
     enforce_usize(
@@ -6351,24 +6542,44 @@ fn validate_nested_annotation_main(
     )?;
     reserve_vec_item(stack, session)?;
     stack.push(main_index);
-    for type_index in matching {
+    for record_index in matching {
+        session.step(1)?;
+        let type_index = records
+            .get(record_index)
+            .ok_or_else(|| {
+                NativeError::protocol("native annotation reification index exceeds ledger")
+            })?
+            .type_index;
         let reification = &triples
             .get(type_index)
             .ok_or_else(|| {
                 NativeError::protocol("native annotation reification index exceeds graph")
             })?
             .subject;
-        for (index, triple) in triples.iter().enumerate() {
+        for index in graph_index.subject_indexes(reification) {
             session.step(1)?;
-            if &triple.subject != reification || is_reification_metadata(&triple.predicate) {
+            let triple = triples
+                .get(*index)
+                .ok_or_else(|| NativeError::protocol("native RDF subject index exceeds graph"))?;
+            if is_reification_metadata(&triple.predicate) {
                 continue;
             }
-            validate_nested_annotation_main(index, records, triples, stack, session)?;
+            validate_nested_annotation_main(
+                *index,
+                records,
+                triples,
+                graph_index,
+                stack,
+                validated,
+                session,
+            )?;
         }
     }
     stack
         .pop()
         .ok_or_else(|| NativeError::protocol("native RDF annotation validation stack is empty"))?;
+    reserve_hash_item(validated, session)?;
+    validated.insert(main_index);
     Ok(())
 }
 
@@ -6376,26 +6587,19 @@ fn nested_annotations<'view, 'graph>(
     main_index: usize,
     records: &mut [NestedAnnotationRecord],
     triples: &'graph [Triple],
+    graph_index: &RdfGraphIndex<'graph>,
     expressions: &mut RdfClassExpressionDecoder<'view, 'graph>,
     stack: &mut Vec<usize>,
     session: &mut Session<'_>,
 ) -> NativeResult<Vec<Node>> {
-    let main = triples.get(main_index).ok_or_else(|| {
+    triples.get(main_index).ok_or_else(|| {
         NativeError::protocol("native nested annotation main index exceeds graph")
     })?;
-    let has_records = records.iter().any(|record| {
-        triples
-            .get(record.main_index)
-            .is_some_and(|candidate| candidate == main)
-    });
-    if !has_records {
+    let matching = nested_record_range(records, main_index, session)?;
+    if matching.is_empty() {
         return Ok(Vec::new());
     }
-    if stack.iter().any(|index| {
-        triples
-            .get(*index)
-            .is_some_and(|candidate| candidate == main)
-    }) {
+    if stack.contains(&main_index) {
         return Err(rdf_axiom_reification(
             "native RDF annotation reification contains a cycle",
         ));
@@ -6409,19 +6613,8 @@ fn nested_annotations<'view, 'graph>(
     stack.push(main_index);
 
     let mut annotations = Vec::new();
-    for record_index in 0..records.len() {
+    for record_index in matching {
         session.step(1)?;
-        let matches = {
-            let record_main = triples
-                .get(records[record_index].main_index)
-                .ok_or_else(|| {
-                    NativeError::protocol("native nested annotation main index exceeds graph")
-                })?;
-            record_main == main
-        };
-        if !matches {
-            continue;
-        }
         records[record_index].claimed = true;
         let type_index = records[record_index].type_index;
         let reification = &triples
@@ -6430,12 +6623,23 @@ fn nested_annotations<'view, 'graph>(
                 NativeError::protocol("native annotation reification index exceeds graph")
             })?
             .subject;
-        for (index, triple) in triples.iter().enumerate() {
+        for index in graph_index.subject_indexes(reification) {
             session.step(1)?;
-            if &triple.subject != reification || is_reification_metadata(&triple.predicate) {
+            let triple = triples
+                .get(*index)
+                .ok_or_else(|| NativeError::protocol("native RDF subject index exceeds graph"))?;
+            if is_reification_metadata(&triple.predicate) {
                 continue;
             }
-            let nested = nested_annotations(index, records, triples, expressions, stack, session)?;
+            let nested = nested_annotations(
+                *index,
+                records,
+                triples,
+                graph_index,
+                expressions,
+                stack,
+                session,
+            )?;
             let annotation = build_node(
                 5,
                 [
@@ -6444,7 +6648,7 @@ fn nested_annotations<'view, 'graph>(
                         &triple.predicate,
                         session,
                     )?),
-                    Field::Node(annotation_value(index, triple, expressions, session)?),
+                    Field::Node(annotation_value(*index, triple, expressions, session)?),
                     Field::Set(nested),
                 ],
                 session,
@@ -6464,15 +6668,33 @@ fn nested_annotations<'view, 'graph>(
     canonical_set(annotations, 0, None)
 }
 
-fn reification_main_index(
-    reification: &Resource,
-    triples: &[Triple],
+fn reification_main_index<'graph>(
+    reification: &'graph Resource,
+    triples: &'graph [Triple],
+    graph_index: &RdfGraphIndex<'graph>,
     session: &mut Session<'_>,
 ) -> NativeResult<usize> {
-    let (_, source) = unique_reification_term(reification, OWL_ANNOTATED_SOURCE, triples, session)?;
-    let (_, property) =
-        unique_reification_term(reification, OWL_ANNOTATED_PROPERTY, triples, session)?;
-    let (_, target) = unique_reification_term(reification, OWL_ANNOTATED_TARGET, triples, session)?;
+    let (_, source) = unique_reification_term(
+        reification,
+        OWL_ANNOTATED_SOURCE,
+        triples,
+        graph_index,
+        session,
+    )?;
+    let (_, property) = unique_reification_term(
+        reification,
+        OWL_ANNOTATED_PROPERTY,
+        triples,
+        graph_index,
+        session,
+    )?;
+    let (_, target) = unique_reification_term(
+        reification,
+        OWL_ANNOTATED_TARGET,
+        triples,
+        graph_index,
+        session,
+    )?;
     if !matches!(source, Term::Iri(_) | Term::Blank(_)) {
         return Err(rdf_axiom_reification(
             "native RDF annotatedSource must be an IRI or blank node",
@@ -6483,50 +6705,45 @@ fn reification_main_index(
             "native RDF annotatedProperty must be an IRI",
         ));
     };
-    let mut main_index = None;
-    for (index, candidate) in triples.iter().enumerate() {
-        session.step(1)?;
-        if resource_matches_term(&candidate.subject, source)
-            && candidate.predicate == *property
-            && candidate.object == *target
-        {
-            main_index.get_or_insert(index);
-        }
-    }
-    main_index.ok_or_else(|| rdf_axiom_reification("native RDF reification main triple is absent"))
+    session.step(1)?;
+    graph_index
+        .exact_index(source, property, target)
+        .ok_or_else(|| rdf_axiom_reification("native RDF reification main triple is absent"))
 }
 
-fn consume_reification_node(
-    reification: &Resource,
-    triples: &[Triple],
+fn consume_reification_node<'graph>(
+    reification: &'graph Resource,
+    graph_index: &RdfGraphIndex<'graph>,
     consumed: &mut [bool],
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
-    for (index, triple) in triples.iter().enumerate() {
+    for index in graph_index.subject_indexes(reification) {
         session.step(1)?;
-        if &triple.subject == reification {
-            let value = consumed.get_mut(index).ok_or_else(|| {
-                NativeError::protocol("native RDF consumed ledger is shorter than graph")
-            })?;
-            *value = true;
-        }
+        let value = consumed.get_mut(*index).ok_or_else(|| {
+            NativeError::protocol("native RDF consumed ledger is shorter than graph")
+        })?;
+        *value = true;
     }
     Ok(())
 }
 
-fn unique_reification_term<'a>(
-    reification: &Resource,
+fn unique_reification_term<'graph>(
+    reification: &'graph Resource,
     predicate: &str,
-    triples: &'a [Triple],
+    triples: &'graph [Triple],
+    graph_index: &RdfGraphIndex<'graph>,
     session: &mut Session<'_>,
-) -> NativeResult<(usize, &'a Term)> {
+) -> NativeResult<(usize, &'graph Term)> {
     let mut value = None;
-    for (index, triple) in triples.iter().enumerate() {
+    for index in graph_index.subject_indexes(reification) {
         session.step(1)?;
-        if &triple.subject != reification || triple.predicate != predicate {
+        let triple = triples
+            .get(*index)
+            .ok_or_else(|| NativeError::protocol("native RDF subject index exceeds graph"))?;
+        if triple.predicate != predicate {
             continue;
         }
-        if value.replace((index, &triple.object)).is_some() {
+        if value.replace((*index, &triple.object)).is_some() {
             return Err(rdf_axiom_reification(
                 "native RDF reification metadata must have cardinality one",
             ));
@@ -6537,17 +6754,6 @@ fn unique_reification_term<'a>(
             "native RDF reification requires source, property, and target metadata",
         )
     })
-}
-
-fn resource_matches_term(resource: &Resource, term: &Term) -> bool {
-    match (resource, term) {
-        (Resource::Iri(left), Term::Iri(right)) | (Resource::Blank(left), Term::Blank(right)) => {
-            left == right
-        }
-        (Resource::Iri(_) | Resource::Blank(_), Term::Literal { .. })
-        | (Resource::Iri(_), Term::Blank(_))
-        | (Resource::Blank(_), Term::Iri(_)) => false,
-    }
 }
 
 fn is_reification_metadata(predicate: &str) -> bool {
@@ -8497,6 +8703,20 @@ fn reserve_hash_item<T: Eq + std::hash::Hash>(
         .map_err(|_| NativeError::limit("native RDF hash allocation failed"))
 }
 
+fn reserve_hash_map_item<K: Eq + std::hash::Hash, V>(
+    values: &mut HashMap<K, V>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    let bytes = std::mem::size_of::<K>()
+        .checked_add(std::mem::size_of::<V>())
+        .and_then(|value| value.checked_add(std::mem::size_of::<usize>()))
+        .ok_or_else(|| NativeError::limit("native RDF hash allocation accounting overflow"))?;
+    session.reserve_bytes(bytes)?;
+    values
+        .try_reserve(1)
+        .map_err(|_| NativeError::limit("native RDF hash allocation failed"))
+}
+
 fn hash_graph_into_vec(
     triples: HashSet<Triple>,
     session: &mut Session<'_>,
@@ -8611,15 +8831,22 @@ mod tests {
     use crate::limits::{Limits, CONFIG_BYTES, CONFIG_MAGIC, CONFIG_SCHEMA};
     use std::time::Duration;
 
-    fn mapped(source: &[u8], document_iri: Option<&str>) -> NativeResult<CanonicalDocument> {
-        let limits = Limits::default();
+    fn mapped_with_limits(
+        source: &[u8],
+        document_iri: Option<&str>,
+        limits: &Limits,
+    ) -> NativeResult<CanonicalDocument> {
         let mut guard = Guard::new(
             Cancellation::with_duration(None),
             limits.deadline,
             limits.cancellation_stride,
         );
-        let mut session = Session::new(&mut guard, &limits, source.len())?;
+        let mut session = Session::new(&mut guard, limits, source.len())?;
         parse_and_map(source, document_iri, &mut session)
+    }
+
+    fn mapped(source: &[u8], document_iri: Option<&str>) -> NativeResult<CanonicalDocument> {
+        mapped_with_limits(source, document_iri, &Limits::default())
     }
 
     fn mapped_partial(
@@ -8695,6 +8922,56 @@ mod tests {
             })
             .expect("duplicate after the unique table fills");
         assert_eq!(parser.triples.len(), 64);
+    }
+
+    #[test]
+    fn reification_graph_index_enforces_work_and_memory_before_publication() {
+        let triples = vec![
+            Triple {
+                subject: Resource::Iri("urn:subject:0".to_owned()),
+                predicate: "urn:predicate".to_owned(),
+                object: Term::Iri("urn:object:0".to_owned()),
+            },
+            Triple {
+                subject: Resource::Iri("urn:subject:1".to_owned()),
+                predicate: "urn:predicate".to_owned(),
+                object: Term::Iri("urn:object:1".to_owned()),
+            },
+        ];
+
+        let mut work_limits = Limits::default();
+        work_limits.max_canonical_work = 1;
+        let mut work_guard = Guard::new(
+            Cancellation::with_duration(None),
+            work_limits.deadline,
+            work_limits.cancellation_stride,
+        );
+        let mut work_session =
+            Session::new(&mut work_guard, &work_limits, 0).expect("bounded work session");
+        let work_error = RdfGraphIndex::build(&triples, &mut work_session)
+            .expect_err("second indexed triple must exceed the work limit");
+        assert_eq!(work_error.code, "NATIVE_WIRE_LIMIT");
+        assert_eq!(
+            work_error.message,
+            "native operation exceeds max_canonical_work"
+        );
+
+        let mut memory_limits = Limits::default();
+        memory_limits.max_memory_bytes = Some(1);
+        let mut memory_guard = Guard::new(
+            Cancellation::with_duration(None),
+            memory_limits.deadline,
+            memory_limits.cancellation_stride,
+        );
+        let mut memory_session =
+            Session::new(&mut memory_guard, &memory_limits, 0).expect("bounded memory session");
+        let memory_error = RdfGraphIndex::build(&triples, &mut memory_session)
+            .expect_err("first subject index allocation must exceed the memory limit");
+        assert_eq!(memory_error.code, "NATIVE_WIRE_LIMIT");
+        assert_eq!(
+            memory_error.message,
+            "native operation exceeds max_memory_bytes"
+        );
     }
 
     #[test]
@@ -13878,6 +14155,169 @@ mod tests {
     }
 
     #[test]
+    fn multiple_reifications_share_one_main_triple_without_losing_annotations() {
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:e=\"urn:\"><rdf:Description rdf:about=\"urn:A\"><rdfs:subClassOf rdf:resource=\"urn:B\"/></rdf:Description><owl:Axiom rdf:nodeID=\"first\"><owl:annotatedSource rdf:resource=\"urn:A\"/><owl:annotatedProperty rdf:resource=\"{RDFS_SUB_CLASS_OF}\"/><owl:annotatedTarget rdf:resource=\"urn:B\"/><e:first rdf:resource=\"urn:one\"/></owl:Axiom><owl:Axiom rdf:nodeID=\"second\"><owl:annotatedSource rdf:resource=\"urn:A\"/><owl:annotatedProperty rdf:resource=\"{RDFS_SUB_CLASS_OF}\"/><owl:annotatedTarget rdf:resource=\"urn:B\"/><e:second rdf:resource=\"urn:two\"/></owl:Axiom></rdf:RDF>"
+        );
+        let document = mapped(source.as_bytes(), None).expect("two reifications for one triple");
+        let annotation = |property: &str, value: &str| {
+            Node::build(
+                5,
+                vec![
+                    Field::Node(
+                        entity(
+                            "annotation_property",
+                            iri(property.to_owned()).expect("annotation property IRI"),
+                        )
+                        .expect("annotation property"),
+                    ),
+                    Field::Node(iri(value.to_owned()).expect("annotation value IRI")),
+                    Field::Set(Vec::new()),
+                ],
+            )
+            .expect("annotation")
+        };
+        let annotations = canonical_set(
+            vec![
+                annotation("urn:first", "urn:one"),
+                annotation("urn:second", "urn:two"),
+            ],
+            0,
+            None,
+        )
+        .expect("canonical annotations");
+        let expected = Node::build(
+            61,
+            vec![
+                Field::Node(class_node("urn:A")),
+                Field::Node(class_node("urn:B")),
+                Field::Set(annotations),
+            ],
+        )
+        .expect("annotated subclass");
+        assert_eq!(document.axioms, [expected.as_bytes().to_vec()]);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples
+        );
+    }
+
+    #[test]
+    fn axiom_reification_mapping_stays_bounded_at_scale() {
+        use std::fmt::Write as _;
+
+        const REIFICATIONS: usize = 1_024;
+        let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
+        let mut source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:rdfs=\"{rdfs}\" xmlns:e=\"urn:\">"
+        );
+        for index in 0..REIFICATIONS {
+            write!(
+                source,
+                "<owl:Class rdf:about=\"urn:C{index}\"><rdfs:subClassOf rdf:resource=\"urn:Top\"/></owl:Class><owl:Axiom rdf:nodeID=\"a{index}\"><owl:annotatedSource rdf:resource=\"urn:C{index}\"/><owl:annotatedProperty rdf:resource=\"{RDFS_SUB_CLASS_OF}\"/><owl:annotatedTarget rdf:resource=\"urn:Top\"/><e:note rdf:resource=\"urn:N{index}\"/></owl:Axiom>"
+            )
+            .expect("generated RDF/XML");
+        }
+        source.push_str("</rdf:RDF>");
+
+        let mut limits = Limits::default();
+        limits.max_canonical_work = 10_000_000;
+        let document = mapped_with_limits(source.as_bytes(), None, &limits)
+            .expect("indexed reification mapping stays within bounded work");
+        assert_eq!(document.axioms.len(), REIFICATIONS * 2);
+        assert_eq!(
+            document.mapping.total_triples,
+            document.mapping.consumed_triples
+        );
+    }
+
+    #[test]
+    fn class_property_and_same_as_components_stay_within_linear_work() {
+        const EDGES_PER_COMPONENT: usize = 1_024;
+        let class_labels = (0..=EDGES_PER_COMPONENT)
+            .map(|index| format!("urn:C{index}"))
+            .collect::<Vec<_>>();
+        let property_labels = (0..=EDGES_PER_COMPONENT)
+            .map(|index| format!("urn:p{index}"))
+            .collect::<Vec<_>>();
+        let individual_labels = (0..=EDGES_PER_COMPONENT)
+            .map(|index| format!("urn:i{index}"))
+            .collect::<Vec<_>>();
+        let mut triples = Vec::with_capacity(EDGES_PER_COMPONENT * 3);
+        for index in 0..EDGES_PER_COMPONENT {
+            triples.push(ListTriple {
+                subject: ListResource::Iri(class_labels[index].as_str()),
+                predicate: OWL_EQUIVALENT_CLASS,
+                object: ListTerm::Iri(class_labels[index + 1].as_str()),
+            });
+        }
+        for index in 0..EDGES_PER_COMPONENT {
+            triples.push(ListTriple {
+                subject: ListResource::Iri(property_labels[index].as_str()),
+                predicate: OWL_EQUIVALENT_PROPERTY,
+                object: ListTerm::Iri(property_labels[index + 1].as_str()),
+            });
+        }
+        for index in 0..EDGES_PER_COMPONENT {
+            triples.push(ListTriple {
+                subject: ListResource::Iri(individual_labels[index].as_str()),
+                predicate: OWL_SAME_AS,
+                object: ListTerm::Iri(individual_labels[index + 1].as_str()),
+            });
+        }
+
+        let mut limits = Limits::default();
+        limits.max_canonical_work = 100_000;
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut consumed = vec![false; triples.len()];
+
+        let classes =
+            ComponentIndex::build(&triples, &consumed, class_equivalent_edge, &mut session)
+                .expect("class component index");
+        let class_component = classes
+            .component_at(0, &mut consumed, &mut session)
+            .expect("class component traversal")
+            .expect("class component");
+        assert_eq!(class_component.members.len(), EDGES_PER_COMPONENT + 1);
+        assert_eq!(class_component.edge_indexes.len(), EDGES_PER_COMPONENT);
+
+        let properties = ComponentIndex::build(
+            &triples,
+            &consumed,
+            |triple| property_equivalent_edge(triple, OWL_EQUIVALENT_PROPERTY),
+            &mut session,
+        )
+        .expect("property component index");
+        let property_component = properties
+            .component_at(EDGES_PER_COMPONENT, &mut consumed, &mut session)
+            .expect("property component traversal")
+            .expect("property component");
+        assert_eq!(property_component.members.len(), EDGES_PER_COMPONENT + 1);
+        assert_eq!(property_component.edge_indexes.len(), EDGES_PER_COMPONENT);
+
+        let individuals = ComponentIndex::build(
+            &triples,
+            &consumed,
+            |triple| individual_edge(triple, OWL_SAME_AS),
+            &mut session,
+        )
+        .expect("same-as component index");
+        let individual_component = individuals
+            .component_at(EDGES_PER_COMPONENT * 2, &mut consumed, &mut session)
+            .expect("same-as component traversal")
+            .expect("same-as component");
+        assert_eq!(individual_component.members.len(), EDGES_PER_COMPONENT + 1);
+        assert_eq!(individual_component.edge_indexes.len(), EDGES_PER_COMPONENT);
+        assert!(consumed.into_iter().all(|value| value));
+    }
+
+    #[test]
     fn malformed_or_unclaimed_axiom_reification_fails_closed() {
         let missing_main = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\"><owl:Axiom rdf:nodeID=\"axiom\"><owl:annotatedSource rdf:resource=\"urn:A\"/><owl:annotatedProperty rdf:resource=\"{RDFS_SUB_CLASS_OF}\"/><owl:annotatedTarget rdf:resource=\"urn:B\"/></owl:Axiom></rdf:RDF>"
@@ -14051,6 +14491,33 @@ mod tests {
         assert_eq!(
             document.mapping.total_triples,
             document.mapping.consumed_triples,
+        );
+    }
+
+    #[test]
+    fn equal_main_nested_annotations_preserve_source_error_precedence() {
+        let source = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" xmlns:e=\"urn:\"><rdf:Description rdf:about=\"urn:s\"><e:p rdf:resource=\"urn:o\"/></rdf:Description><owl:Annotation rdf:nodeID=\"first\"><owl:annotatedSource rdf:resource=\"urn:s\"/><owl:annotatedProperty rdf:resource=\"urn:p\"/><owl:annotatedTarget rdf:resource=\"urn:o\"/><e:first rdf:resource=\"urn:one\"/></owl:Annotation><owl:Annotation rdf:nodeID=\"second\"><owl:annotatedSource rdf:resource=\"urn:s\"/><owl:annotatedProperty rdf:resource=\"urn:p\"/><owl:annotatedTarget rdf:resource=\"urn:o\"/><e:second rdf:resource=\"urn:two\"/></owl:Annotation></rdf:RDF>"
+        );
+        let limits = Limits::default();
+        let triples = graph_with_limits(&source, &limits).expect("RDF graph");
+        let mut consumed = vec![false; triples.len()];
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, source.len()).expect("session");
+        let graph_index = RdfGraphIndex::build(&triples, &mut session).expect("graph index");
+        let records =
+            collect_nested_annotation_records(&triples, &graph_index, &mut consumed, &mut session)
+                .expect("nested annotation records");
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].main_index, records[1].main_index);
+        assert!(
+            records[0].type_index < records[1].type_index,
+            "equal-main records must retain source/type order so malformed branches report deterministically"
         );
     }
 
