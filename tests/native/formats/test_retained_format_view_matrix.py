@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parents[3]
 RUNNER = Path(__file__).with_name("_retained_format_view_matrix_runner.py")
 
 
+@pytest.mark.skipif(
+    not os.environ.get("PYOWL_CORE_TEST_NATIVE_LIBRARY")
+    and importlib.util.find_spec("pyowl_core._native") is None,
+    reason="native extension is not installed in this test lane",
+)
 def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -> None:
     environment = dict(os.environ)
     inherited = environment.get("PYTHONPATH", "")
