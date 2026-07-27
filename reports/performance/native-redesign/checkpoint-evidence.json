@@ -84,8 +84,8 @@
       "id": "projector",
       "role": "encoded-native-compiler",
       "status": "not-run",
-      "revision": "a893e1bca5c0c44fb8fa53c272769d7f97d0ab69",
-      "reason": "private kernel v125 passes its direct, overlay, composite, nested-selector, and two-map scope-mapped four-table delta families with exact counters and bounded batches, but general recursive segmented traversal and public production dispatch remain incomplete and unadvertised",
+      "revision": "9f3c5ded47fa6ec152862e27a661492abd119e5f",
+      "reason": "private kernel v126 passes its direct, overlay, composite, nested-selector, two-map scope-mapped four-table delta, and mapped nested-base taxonomy-selection families with exact counters and bounded batches, but general recursive segmented traversal and public production dispatch remain incomplete and unadvertised",
       "evidence": ["pyOwl2Vec-Star-projector/reports/p7/encoded-native-compiler.md"]
     },
     {
