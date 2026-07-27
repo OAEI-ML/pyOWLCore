@@ -106,7 +106,7 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     assert direct.runner_pin_state == "complete"
     assert direct.runner_revision == "pyowl-core-direct-rust-common-runner-v2"
     assert direct.runner_sha256 == (
-        "1c0217ae7367ce345a90d4e3460cf562edbba1935000d4180813a9be6972faf9"
+        "06d8d9da5492921343315dd553ba963c5d27a166c3d7d9e6dc00b8364640f21a"
     )
     assert direct.artifact_is_runnable is True
 

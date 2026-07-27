@@ -81,12 +81,12 @@ Reproduce and authenticate the pinned Darwin x86_64 executable with:
 cd benchmarks/comparators/runners/direct
 cargo +1.97.1 build --locked --release
 printf '%s  %s\n' \
-  a36fd6f0bcef1ef60474585001425199ae2c5fec2b9fe21c33fd82bbdf982525 \
+  06d8d9da5492921343315dd553ba963c5d27a166c3d7d9e6dc00b8364640f21a \
   target/release/pyowl-core-direct-comparator | shasum -a 256 -c -
 export PYOWL_CORE_DIRECT_RUNNER="$PWD/target/release/pyowl-core-direct-comparator"
 ```
 
-Runner v1 verifies its embedded native `Cargo.lock`, executable hash, exact
+Runner v2 verifies its embedded native `Cargo.lock`, executable hash, exact
 semantic options, source/document identity, allocator, thread ceiling, lane,
 and boundary. Functional Syntax uses the retained parser arena and RDF/XML uses
 the streaming mapper's retained arena. Both construct and fully validate the
