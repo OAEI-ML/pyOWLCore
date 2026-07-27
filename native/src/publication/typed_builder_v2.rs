@@ -365,17 +365,17 @@ impl TypedFacadeBuilderV2 {
         });
 
         let mut effective_tables = Vec::new();
-        for scope in &scopes {
-            let entities = collect_signature(
-                &arena,
-                scope.roots.iter().map(Vec::as_slice),
-                &self.limits,
-                self.cancellation.clone(),
-                self.interrupt.clone(),
-                self.base_external_bytes,
-            )?;
-            append_signature_tables(&arena, scope, &entities, &mut effective_tables)?;
-        }
+        append_scope_signature_tables(
+            &arena,
+            &scopes,
+            effective_documents,
+            closure_documents,
+            &self.limits,
+            self.cancellation.clone(),
+            self.interrupt.clone(),
+            self.base_external_bytes,
+            &mut effective_tables,
+        )?;
 
         let mut raw_document_tables = Vec::new();
         for (ordinal, document) in resolved.into_iter().enumerate() {
@@ -568,17 +568,17 @@ impl TypedFacadeBuilderV2 {
         });
 
         let mut effective_tables = Vec::new();
-        for scope in &scopes {
-            let entities = collect_signature(
-                &arena,
-                scope.roots.iter().map(Vec::as_slice),
-                &limits,
-                cancellation.clone(),
-                interrupt.clone(),
-                base_external_bytes,
-            )?;
-            append_signature_tables(&arena, scope, &entities, &mut effective_tables)?;
-        }
+        append_scope_signature_tables(
+            &arena,
+            &scopes,
+            effective_documents,
+            closure_documents,
+            &limits,
+            cancellation.clone(),
+            interrupt.clone(),
+            base_external_bytes,
+            &mut effective_tables,
+        )?;
 
         let mut raw_document_tables = Vec::new();
         for (ordinal, document) in resolved.into_iter().enumerate() {
@@ -1053,16 +1053,82 @@ fn union_document_roots(
                 .unwrap_or(&selected.roots[index]);
             result[index].extend_from_slice(roots);
         }
-        arena.sort_deduplicate_ids(
-            &mut result[index],
-            expected,
+        // Each resolved document slice preserves the canonical ascending,
+        // duplicate-free order validated at ingestion. A one-document scope
+        // is already the required union, so avoid reconstructing every
+        // canonical row solely to rediscover the same order. Multi-document
+        // closures still require cross-owner/order canonicalization.
+        if ordinals.len() > 1 {
+            arena.sort_deduplicate_ids(
+                &mut result[index],
+                expected,
+                limits,
+                cancellation.clone(),
+                interrupt.clone(),
+                external_bytes,
+            )?;
+        }
+    }
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_scope_signature_tables(
+    arena: &NativeComponentArena,
+    scopes: &[EffectiveScopeV2],
+    effective_documents: &[Vec<u64>],
+    closure_documents: &[u64],
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    external_bytes: usize,
+    tables: &mut Vec<TypedFacadeTableV2>,
+) -> NativeResult<()> {
+    if scopes.len() != effective_documents.len().saturating_add(1) {
+        return Err(NativeError::protocol(
+            "typed V2 signature scopes are not document-aligned",
+        ));
+    }
+    let mut closure_entities = None;
+    for (scope, reachable) in scopes[..effective_documents.len()]
+        .iter()
+        .zip(effective_documents)
+    {
+        let entities = collect_signature(
+            arena,
+            scope.roots.iter().map(Vec::as_slice),
             limits,
             cancellation.clone(),
             interrupt.clone(),
             external_bytes,
         )?;
+        append_signature_tables(arena, scope, &entities, tables)?;
+        if closure_entities.is_none() && reachable.as_slice() == closure_documents {
+            // The closure has the same root union, so its signature is exactly
+            // this canonical entity set. Retain one small ID vector until the
+            // closure tables are emitted instead of traversing every
+            // structural component a second time.
+            closure_entities = Some(entities);
+        }
     }
-    Ok(result)
+    let closure = scopes
+        .last()
+        .ok_or_else(|| NativeError::protocol("typed V2 closure scope is missing"))?;
+    let computed;
+    let entities = if let Some(entities) = closure_entities.as_ref() {
+        entities
+    } else {
+        computed = collect_signature(
+            arena,
+            closure.roots.iter().map(Vec::as_slice),
+            limits,
+            cancellation,
+            interrupt,
+            external_bytes,
+        )?;
+        &computed
+    };
+    append_signature_tables(arena, closure, entities, tables)
 }
 
 fn collect_signature<'a>(
@@ -1187,35 +1253,55 @@ fn append_signature_tables(
     entities: &[ComponentId],
     tables: &mut Vec<TypedFacadeTableV2>,
 ) -> NativeResult<()> {
-    for include_builtins in [false, true] {
-        for signature_kind in SIGNATURE_KINDS {
-            let selected_count = entities.iter().try_fold(0_usize, |count, identifier| {
-                let descriptor = entity_descriptor(arena, *identifier)?;
-                if (signature_kind == TypedFacadeSignatureKindV2::All
-                    || descriptor.kind == signature_kind)
-                    && (include_builtins || !is_builtin(descriptor))
+    const TABLE_COUNT: usize = SIGNATURE_KINDS.len() * 2;
+    let mut counts = [0_usize; TABLE_COUNT];
+    for identifier in entities {
+        let descriptor = entity_descriptor(arena, *identifier)?;
+        let builtin = is_builtin(descriptor);
+        for (include_index, include_builtins) in [false, true].into_iter().enumerate() {
+            if !include_builtins && builtin {
+                continue;
+            }
+            for (kind_index, signature_kind) in SIGNATURE_KINDS.into_iter().enumerate() {
+                if signature_kind == TypedFacadeSignatureKindV2::All
+                    || descriptor.kind == signature_kind
                 {
-                    count
+                    let slot = include_index * SIGNATURE_KINDS.len() + kind_index;
+                    counts[slot] = counts[slot]
                         .checked_add(1)
-                        .ok_or_else(|| NativeError::limit("typed V2 signature count overflow"))
-                } else {
-                    Ok(count)
-                }
-            })?;
-            let mut selected = Vec::new();
-            selected
-                .try_reserve_exact(selected_count)
-                .map_err(|_| NativeError::limit("typed V2 signature table allocation failed"))?;
-            for identifier in entities {
-                let descriptor = entity_descriptor(arena, *identifier)?;
-                if (signature_kind == TypedFacadeSignatureKindV2::All
-                    || descriptor.kind == signature_kind)
-                    && (include_builtins || !is_builtin(descriptor))
-                {
-                    selected.push(*identifier);
+                        .ok_or_else(|| NativeError::limit("typed V2 signature count overflow"))?;
                 }
             }
-            if !selected.is_empty() {
+        }
+    }
+    let mut selected: [Vec<ComponentId>; TABLE_COUNT] = Default::default();
+    for (slot, count) in counts.into_iter().enumerate() {
+        selected[slot]
+            .try_reserve_exact(count)
+            .map_err(|_| NativeError::limit("typed V2 signature table allocation failed"))?;
+    }
+    for identifier in entities {
+        let descriptor = entity_descriptor(arena, *identifier)?;
+        let builtin = is_builtin(descriptor);
+        for (include_index, include_builtins) in [false, true].into_iter().enumerate() {
+            if !include_builtins && builtin {
+                continue;
+            }
+            for (kind_index, signature_kind) in SIGNATURE_KINDS.into_iter().enumerate() {
+                if signature_kind == TypedFacadeSignatureKindV2::All
+                    || descriptor.kind == signature_kind
+                {
+                    let slot = include_index * SIGNATURE_KINDS.len() + kind_index;
+                    selected[slot].push(*identifier);
+                }
+            }
+        }
+    }
+    for (include_index, include_builtins) in [false, true].into_iter().enumerate() {
+        for (kind_index, signature_kind) in SIGNATURE_KINDS.into_iter().enumerate() {
+            let slot = include_index * SIGNATURE_KINDS.len() + kind_index;
+            let roots = std::mem::take(&mut selected[slot]);
+            if !roots.is_empty() {
                 push_table(
                     tables,
                     TypedFacadeTableV2::new(
@@ -1226,7 +1312,7 @@ fn append_signature_tables(
                             signature_kind,
                             include_builtins,
                         },
-                        selected,
+                        roots,
                     ),
                 )?;
             }

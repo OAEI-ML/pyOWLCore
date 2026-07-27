@@ -27,6 +27,7 @@ use crate::model::{
 const MAX_TYPED_FACADE_TABLES_V2: usize = 100_000;
 const MAX_FACADE_PAGE_ROWS_V2: u32 = 64;
 const MAX_FACADE_PAGE_BYTES_V2: u64 = 8 * 1024 * 1024;
+const SINGLE_DOCUMENT_VALIDATION_SLOTS: usize = 17;
 
 pub(crate) type FlatDocumentV2 = (
     NativeComponentArena,
@@ -129,11 +130,41 @@ impl TypedFacadeCoordinateV2 {
     }
 }
 
+const fn single_document_validation_slot(coordinate: TypedFacadeCoordinateV2) -> usize {
+    match coordinate.collection {
+        TypedFacadeCollectionV2::OntologyAnnotations => 0,
+        TypedFacadeCollectionV2::Axioms => 1,
+        TypedFacadeCollectionV2::Extensions => 2,
+        TypedFacadeCollectionV2::Signature => {
+            3 + signature_kind_slot(coordinate.signature_kind) * 2
+                + coordinate.include_builtins as usize
+        }
+    }
+}
+
+const fn signature_kind_slot(kind: TypedFacadeSignatureKindV2) -> usize {
+    match kind {
+        TypedFacadeSignatureKindV2::All => 0,
+        TypedFacadeSignatureKindV2::Class => 1,
+        TypedFacadeSignatureKindV2::Datatype => 2,
+        TypedFacadeSignatureKindV2::ObjectProperty => 3,
+        TypedFacadeSignatureKindV2::DataProperty => 4,
+        TypedFacadeSignatureKindV2::AnnotationProperty => 5,
+        TypedFacadeSignatureKindV2::NamedIndividual => 6,
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct TypedFacadeTableV2 {
     coordinate: TypedFacadeCoordinateV2,
     roots: Vec<ComponentId>,
-    axiom_index: Option<NativeComponentDigestIndex>,
+    axiom_index: Option<TypedFacadeAxiomIndexV2>,
+}
+
+#[derive(Debug)]
+enum TypedFacadeAxiomIndexV2 {
+    Owned(NativeComponentDigestIndex),
+    SharedEffective(usize),
 }
 
 impl TypedFacadeTableV2 {
@@ -336,46 +367,71 @@ impl TypedFacadeStorageV2 {
 
         let mut maximum_row_bytes = 1_u64;
         let mut peak_ordering_workspace_bytes = 0_u64;
-        for table in effective_tables.iter().chain(&raw_document_tables) {
-            let validation = validate_table(
-                &arena,
-                table,
-                &limits,
-                cancellation.clone(),
-                interrupt.clone(),
-                live_base_external_usize,
-            )?;
+        let mut single_document_validations: [Option<(usize, TableValidationV2)>;
+            SINGLE_DOCUMENT_VALIDATION_SLOTS] = [None; SINGLE_DOCUMENT_VALIDATION_SLOTS];
+        for (table_index, table) in effective_tables
+            .iter()
+            .chain(&raw_document_tables)
+            .enumerate()
+        {
+            let effective = table_index < effective_tables.len();
+            let slot = single_document_validation_slot(table.coordinate);
+            let reused = if document_count == 1
+                && effective
+                && table.coordinate.scope == TypedFacadeScopeV2::Closure
+            {
+                single_document_validations[slot]
+                    .filter(|(source, _)| effective_tables[*source].roots == table.roots)
+                    .map(|(_, validation)| validation)
+            } else {
+                None
+            };
+            let validation = if let Some(validation) = reused {
+                validation
+            } else {
+                let validation = validate_table(
+                    &arena,
+                    table,
+                    &limits,
+                    cancellation.clone(),
+                    interrupt.clone(),
+                    live_base_external_usize,
+                )?;
+                if document_count == 1
+                    && effective
+                    && table.coordinate.scope == TypedFacadeScopeV2::Document
+                    && table.coordinate.document_ordinal == Some(0)
+                {
+                    single_document_validations[slot] = Some((table_index, validation));
+                }
+                validation
+            };
             maximum_row_bytes = maximum_row_bytes.max(validation.maximum_row_bytes);
             peak_ordering_workspace_bytes =
                 peak_ordering_workspace_bytes.max(validation.peak_workspace_bytes);
         }
 
         let mut retained_index_bytes = 0_u64;
-        for table in effective_tables.iter_mut().chain(&mut raw_document_tables) {
-            if table.coordinate.collection != TypedFacadeCollectionV2::Axioms {
-                continue;
-            }
-            let index_external = checked_add(live_base_external, retained_index_bytes)?;
-            let index_external = usize::try_from(index_external)
-                .map_err(|_| NativeError::limit("typed V2 index workspace exceeds usize"))?;
-            let index = NativeComponentDigestIndex::build_with_external(
-                &arena,
-                &table.roots,
-                Category::Axiom,
-                &limits,
-                cancellation.clone(),
-                interrupt.clone(),
-                index_external,
-            )?;
-            retained_index_bytes = checked_add(retained_index_bytes, index.retained_bytes())?;
-            if retained_index_bytes > limits.value(LimitKey::MaxIndexBytes) {
-                return Err(NativeError::limit(
-                    "typed V2 axiom indexes exceed max_index_bytes",
-                ));
-            }
-            check_retained_limit(&arena, live_base_external, retained_index_bytes, &limits)?;
-            table.axiom_index = Some(index);
-        }
+        attach_axiom_indexes(
+            &arena,
+            &mut effective_tables,
+            true,
+            &limits,
+            cancellation.clone(),
+            interrupt.clone(),
+            live_base_external,
+            &mut retained_index_bytes,
+        )?;
+        attach_axiom_indexes(
+            &arena,
+            &mut raw_document_tables,
+            false,
+            &limits,
+            cancellation.clone(),
+            interrupt.clone(),
+            live_base_external,
+            &mut retained_index_bytes,
+        )?;
 
         let external_retained = checked_add(retained_base_external, retained_index_bytes)?;
         let external_retained_bytes = usize::try_from(external_retained)
@@ -679,10 +735,11 @@ impl TypedFacadeStorageV2 {
             self.update_contains_counters(false, 0)?;
             return Ok(false);
         }
-        let Some(index) = self
-            .select_table(coordinate, raw_document_owner)
-            .and_then(|table| table.axiom_index.as_ref())
-        else {
+        let Some(table) = self.select_table(coordinate, raw_document_owner) else {
+            self.update_contains_counters(false, 0)?;
+            return Ok(false);
+        };
+        let Some(index) = self.axiom_index(table)? else {
             self.update_contains_counters(false, 0)?;
             return Ok(false);
         };
@@ -1036,19 +1093,21 @@ impl TypedFacadeStorageV2 {
     #[cfg(test)]
     pub(crate) fn observation_for_tests(&self) -> NativeResult<TypedFacadeStorageObservationV2> {
         let root_identifier_rows = root_count(&self.effective_tables, &self.raw_document_tables)?;
-        let axiom_index_rows = self
+        let mut axiom_index_rows = 0_u64;
+        for table in self
             .effective_tables
             .iter()
             .chain(&self.raw_document_tables)
-            .filter_map(|table| table.axiom_index.as_ref())
-            .try_fold(0_u64, |total, index| {
-                checked_add(
-                    total,
-                    u64::try_from(index.len()).map_err(|_| {
-                        NativeError::limit("typed V2 observed index rows exceed u64")
-                    })?,
-                )
-            })?;
+        {
+            let Some(index) = self.axiom_index(table)? else {
+                continue;
+            };
+            axiom_index_rows = checked_add(
+                axiom_index_rows,
+                u64::try_from(index.len())
+                    .map_err(|_| NativeError::limit("typed V2 observed index rows exceed u64"))?,
+            )?;
+        }
         Ok(TypedFacadeStorageObservationV2 {
             arena_fields: 1,
             root_identifier_rows,
@@ -1083,6 +1142,27 @@ impl TypedFacadeStorageV2 {
             .binary_search_by_key(&coordinate, |table| table.coordinate)
             .ok()
             .and_then(|index| self.effective_tables.get(index))
+    }
+
+    fn axiom_index<'a>(
+        &'a self,
+        table: &'a TypedFacadeTableV2,
+    ) -> NativeResult<Option<&'a NativeComponentDigestIndex>> {
+        match table.axiom_index.as_ref() {
+            None => Ok(None),
+            Some(TypedFacadeAxiomIndexV2::Owned(index)) => Ok(Some(index)),
+            Some(TypedFacadeAxiomIndexV2::SharedEffective(source)) => {
+                let source = self.effective_tables.get(*source).ok_or_else(|| {
+                    NativeError::protocol("typed V2 shared axiom index source is invalid")
+                })?;
+                match source.axiom_index.as_ref() {
+                    Some(TypedFacadeAxiomIndexV2::Owned(index)) => Ok(Some(index)),
+                    _ => Err(NativeError::protocol(
+                        "typed V2 shared axiom index source is not owning",
+                    )),
+                }
+            }
+        }
     }
 
     fn raw_document_count(&self, collection: TypedFacadeCollectionV2) -> NativeResult<u64> {
@@ -1439,6 +1519,63 @@ fn validate_table(
     Ok(validation)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn attach_axiom_indexes(
+    arena: &NativeComponentArena,
+    tables: &mut [TypedFacadeTableV2],
+    share_within_effective: bool,
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    live_base_external: u64,
+    retained_index_bytes: &mut u64,
+) -> NativeResult<()> {
+    for table_index in 0..tables.len() {
+        let (previous, following) = tables.split_at_mut(table_index);
+        let table = following
+            .first_mut()
+            .ok_or_else(|| NativeError::protocol("typed V2 axiom table index is invalid"))?;
+        if table.coordinate.collection != TypedFacadeCollectionV2::Axioms {
+            continue;
+        }
+        if share_within_effective {
+            let shared = previous.iter().enumerate().find_map(|(index, candidate)| {
+                (candidate.roots == table.roots
+                    && matches!(
+                        candidate.axiom_index.as_ref(),
+                        Some(TypedFacadeAxiomIndexV2::Owned(_))
+                    ))
+                .then_some(index)
+            });
+            if let Some(source) = shared {
+                table.axiom_index = Some(TypedFacadeAxiomIndexV2::SharedEffective(source));
+                continue;
+            }
+        }
+        let index_external = checked_add(live_base_external, *retained_index_bytes)?;
+        let index_external = usize::try_from(index_external)
+            .map_err(|_| NativeError::limit("typed V2 index workspace exceeds usize"))?;
+        let index = NativeComponentDigestIndex::build_with_external(
+            arena,
+            &table.roots,
+            Category::Axiom,
+            limits,
+            cancellation.clone(),
+            interrupt.clone(),
+            index_external,
+        )?;
+        *retained_index_bytes = checked_add(*retained_index_bytes, index.retained_bytes())?;
+        if *retained_index_bytes > limits.value(LimitKey::MaxIndexBytes) {
+            return Err(NativeError::limit(
+                "typed V2 axiom indexes exceed max_index_bytes",
+            ));
+        }
+        check_retained_limit(arena, live_base_external, *retained_index_bytes, limits)?;
+        table.axiom_index = Some(TypedFacadeAxiomIndexV2::Owned(index));
+    }
+    Ok(())
+}
+
 fn check_temporary_limit(
     arena: &NativeComponentArena,
     external_bytes: usize,
@@ -1763,6 +1900,20 @@ mod tests {
         assert_eq!(storage.maximum_row_bytes(), rows[2].len() as u64);
 
         let coordinate = TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+        let closure_coordinate = TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms);
+        let document_index = storage
+            .select_table(coordinate, false)
+            .ok_or_else(|| NativeError::protocol("document table missing"))
+            .and_then(|table| storage.axiom_index(table))
+            .expect("document index")
+            .expect("document index present");
+        let closure_index = storage
+            .select_table(closure_coordinate, false)
+            .ok_or_else(|| NativeError::protocol("closure table missing"))
+            .and_then(|table| storage.axiom_index(table))
+            .expect("closure index")
+            .expect("closure index present");
+        assert!(std::ptr::eq(document_index, closure_index));
         let first = storage
             .page(
                 TypedFacadePageRequestV2::new(coordinate, false, 0, 64, rows[0].len() as u64),
@@ -2047,6 +2198,27 @@ mod tests {
         )
         .expect_err("reversed roots");
         assert_eq!(reversed.code, "NATIVE_PROTOCOL");
+
+        let divergent_closure = TypedFacadeStorageV2::freeze(
+            witness.clone(),
+            vec![
+                table(
+                    TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0),
+                    roots.clone(),
+                ),
+                table(
+                    TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms),
+                    vec![roots[1], roots[0]],
+                ),
+            ],
+            Vec::new(),
+            1,
+            Limits::default(),
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect_err("divergent closure bypasses no validation");
+        assert_eq!(divergent_closure.code, "NATIVE_PROTOCOL");
 
         let duplicate = TypedFacadeStorageV2::freeze(
             witness.clone(),

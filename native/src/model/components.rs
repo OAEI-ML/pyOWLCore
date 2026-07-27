@@ -853,6 +853,117 @@ impl NativeComponentArena {
         }
     }
 
+    fn entity_order_parts(&self, identifier: ComponentId) -> NativeResult<(&[u8], &[u8])> {
+        let tables = self.lookup_tables(identifier.owner)?;
+        let LocalComponentId::Entity(identifier) = identifier.local else {
+            return Err(NativeError::protocol(
+                "native entity order received a non-entity identifier",
+            ));
+        };
+        let entity = tables
+            .entities
+            .get(identifier.index())
+            .ok_or_else(|| NativeError::protocol("native entity id is out of bounds"))?;
+        let [kind, iri] = entity.fields.as_slice() else {
+            return Err(NativeError::protocol(
+                "native entity row has an invalid field count",
+            ));
+        };
+        if entity.tag != 2 {
+            return Err(NativeError::protocol(
+                "native entity row has an invalid model tag",
+            ));
+        }
+        let ComponentValue::String(ScalarKind::Enum, kind) = *kind else {
+            return Err(NativeError::protocol(
+                "native entity row has an invalid kind",
+            ));
+        };
+        let kind = tables
+            .strings
+            .get(kind.0.index())
+            .map(Vec::as_slice)
+            .ok_or_else(|| NativeError::protocol("native entity kind is out of bounds"))?;
+        let ComponentValue::Node(LocalComponentId::Iri(iri)) = *iri else {
+            return Err(NativeError::protocol(
+                "native entity row has an invalid IRI",
+            ));
+        };
+        let iri = tables
+            .iris
+            .get(iri.index())
+            .ok_or_else(|| NativeError::protocol("native entity IRI is out of bounds"))?;
+        let [value] = iri.fields.as_slice() else {
+            return Err(NativeError::protocol(
+                "native IRI row has an invalid field count",
+            ));
+        };
+        if iri.tag != 1 {
+            return Err(NativeError::protocol(
+                "native IRI row has an invalid model tag",
+            ));
+        }
+        let ComponentValue::String(ScalarKind::Text, value) = *value else {
+            return Err(NativeError::protocol(
+                "native IRI row has an invalid text value",
+            ));
+        };
+        let value = tables
+            .strings
+            .get(value.0.index())
+            .map(Vec::as_slice)
+            .ok_or_else(|| NativeError::protocol("native IRI text is out of bounds"))?;
+        Ok((kind, value))
+    }
+
+    /// Compare two entity rows in their exact canonical wire-byte order
+    /// without allocating or recursively reconstructing either row.
+    fn compare_entities_with_work(
+        &self,
+        left: ComponentId,
+        right: ComponentId,
+        work: &mut ComponentWork,
+    ) -> NativeResult<Ordering> {
+        if work.max_nesting_depth < 1 {
+            return Err(NativeError::limit(
+                "native component encoding nesting exceeds configured limits",
+            ));
+        }
+        let (left_kind, left_iri) = self.entity_order_parts(left)?;
+        let (right_kind, right_iri) = self.entity_order_parts(right)?;
+        // Both rows have the fixed Entity tag, enum marker, node marker, IRI
+        // tag, and text marker. Charge those shared bytes before comparing the
+        // variable canonical frames.
+        work.consume(5)?;
+        let ordering = metered_varint_compare(
+            usize_u64(left_kind.len(), "native entity kind length exceeds u64")?,
+            usize_u64(right_kind.len(), "native entity kind length exceeds u64")?,
+            work,
+        )?;
+        if ordering != Ordering::Equal {
+            return Ok(ordering);
+        }
+        let ordering = metered_slice_compare(left_kind, right_kind, work)?;
+        if ordering != Ordering::Equal {
+            return Ok(ordering);
+        }
+        let left_iri_len = encoded_iri_len(left_iri.len())?;
+        let right_iri_len = encoded_iri_len(right_iri.len())?;
+        let ordering = metered_varint_compare(left_iri_len, right_iri_len, work)?;
+        if ordering != Ordering::Equal {
+            return Ok(ordering);
+        }
+        let ordering = metered_varint_compare(
+            usize_u64(left_iri.len(), "native IRI length exceeds u64")?,
+            usize_u64(right_iri.len(), "native IRI length exceeds u64")?,
+            work,
+        )?;
+        if ordering != Ordering::Equal {
+            return Ok(ordering);
+        }
+        metered_slice_compare(left_iri, right_iri, work)
+    }
+
     pub(crate) fn category(&self, identifier: ComponentId) -> NativeResult<Category> {
         Ok(component_category(self.validate_identifier(identifier)?))
     }
@@ -906,19 +1017,27 @@ impl NativeComponentArena {
         work.auxiliary_bytes = u64::try_from(sort_workspace)
             .map_err(|_| NativeError::limit("native component sort workspace exceeds u64"))?;
         let base_auxiliary = work.auxiliary_bytes;
-        let order = fallible_index_order(identifiers.len(), &mut work, |left, right, work| {
-            let left = self.encode_with_work(identifiers[left], work)?;
-            work.auxiliary_bytes = base_auxiliary
-                .checked_add(
-                    u64::try_from(left.capacity())
-                        .map_err(|_| NativeError::limit("native component sort row exceeds u64"))?,
-                )
-                .ok_or_else(|| NativeError::limit("native component sort workspace overflow"))?;
-            let right = self.encode_with_work(identifiers[right], work)?;
-            let ordering = left.cmp(&right);
-            work.auxiliary_bytes = base_auxiliary;
-            Ok(ordering)
-        })?;
+        let order = if expected == Category::Entity {
+            fallible_index_order(identifiers.len(), &mut work, |left, right, work| {
+                self.compare_entities_with_work(identifiers[left], identifiers[right], work)
+            })?
+        } else {
+            fallible_index_order(identifiers.len(), &mut work, |left, right, work| {
+                let left = self.encode_with_work(identifiers[left], work)?;
+                work.auxiliary_bytes =
+                    base_auxiliary
+                        .checked_add(u64::try_from(left.capacity()).map_err(|_| {
+                            NativeError::limit("native component sort row exceeds u64")
+                        })?)
+                        .ok_or_else(|| {
+                            NativeError::limit("native component sort workspace overflow")
+                        })?;
+                let right = self.encode_with_work(identifiers[right], work)?;
+                let ordering = left.cmp(&right);
+                work.auxiliary_bytes = base_auxiliary;
+                Ok(ordering)
+            })?
+        };
         let order_bytes = order
             .capacity()
             .checked_mul(size_of::<usize>())
@@ -947,6 +1066,24 @@ impl NativeComponentArena {
         for index in order {
             ordered.push(identifiers[index]);
             work.consume(1)?;
+        }
+        if expected == Category::Entity {
+            let mut write = 0_usize;
+            for read in 0..ordered.len() {
+                let keep = write == 0
+                    || self.compare_entities_with_work(
+                        ordered[write - 1],
+                        ordered[read],
+                        &mut work,
+                    )? != Ordering::Equal;
+                if keep {
+                    ordered[write] = ordered[read];
+                    write += 1;
+                }
+            }
+            ordered.truncate(write);
+            *identifiers = ordered;
+            return Ok(());
         }
         let output_capacity_bytes = ordered
             .capacity()
@@ -3112,6 +3249,33 @@ fn metered_slice_compare<T: Ord>(
     Ok(left.len().cmp(&right.len()))
 }
 
+fn metered_varint_compare(
+    mut left: u64,
+    mut right: u64,
+    work: &mut ComponentWork,
+) -> NativeResult<Ordering> {
+    loop {
+        let left_byte = (left as u8 & 0x7f) | (u8::from(left >= 0x80) * 0x80);
+        let right_byte = (right as u8 & 0x7f) | (u8::from(right >= 0x80) * 0x80);
+        work.consume(1)?;
+        let ordering = left_byte.cmp(&right_byte);
+        if ordering != Ordering::Equal || (left < 0x80 && right < 0x80) {
+            return Ok(ordering);
+        }
+        left >>= 7;
+        right >>= 7;
+    }
+}
+
+fn usize_u64(value: usize, message: &'static str) -> NativeResult<u64> {
+    u64::try_from(value).map_err(|_| NativeError::limit(message))
+}
+
+fn encoded_iri_len(value_len: usize) -> NativeResult<u64> {
+    let value_len = usize_u64(value_len, "native IRI length exceeds u64")?;
+    checked_add_u64(checked_add_u64(2, varint_len(value_len))?, value_len)
+}
+
 fn metered_slice_equal<T: Eq>(
     left: &[T],
     right: &[T],
@@ -4178,6 +4342,175 @@ mod tests {
                 .code,
             "NATIVE_PROTOCOL"
         );
+    }
+
+    #[test]
+    fn entity_identifier_sort_matches_exact_canonical_byte_order() {
+        let limits = Limits::default();
+        let rows = vec![
+            entity("class", "urn:z"),
+            entity("annotation_property", "urn:a"),
+            entity("data_property", "urn:data"),
+            entity("datatype", "urn:datatype"),
+            entity("named_individual", "urn:individual"),
+            entity("object_property", "urn:object"),
+            // Exercise both the inner IRI frame and outer node frame around
+            // their one-/two-byte LEB128 length transitions.
+            entity("class", &format!("urn:{}", "w".repeat(120))),
+            entity("class", &format!("urn:{}", "x".repeat(121))),
+            entity("class", &format!("urn:{}", "y".repeat(123))),
+            entity("class", &format!("urn:{}", "z".repeat(124))),
+            entity("class", "urn:a"),
+        ];
+        let mut builder = component_builder(&limits);
+        let pending = rows
+            .iter()
+            .map(|row| builder.intern_canonical(row).expect("entity"))
+            .collect::<Vec<_>>();
+        let frozen = builder.freeze().expect("arena");
+        let mut identifiers = pending
+            .into_iter()
+            .rev()
+            .map(|identifier| frozen.resolve(identifier).expect("frozen entity"))
+            .collect::<Vec<_>>();
+        identifiers.push(identifiers[1]);
+        identifiers.push(identifiers[3]);
+        let arena = frozen.into_arena();
+
+        arena
+            .sort_deduplicate_ids(
+                &mut identifiers,
+                Category::Entity,
+                &limits,
+                Cancellation::with_duration(None),
+                None,
+                0,
+            )
+            .expect("canonical entity set");
+
+        let encoded = identifiers
+            .into_iter()
+            .map(|identifier| {
+                arena
+                    .encode(
+                        identifier,
+                        &limits,
+                        Cancellation::with_duration(None),
+                        None,
+                        0,
+                    )
+                    .expect("canonical entity")
+            })
+            .collect::<Vec<_>>();
+        let mut expected = rows;
+        expected.sort();
+        expected.dedup();
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn entity_identifier_sort_deduplicates_composed_owners() {
+        let limits = Limits::default();
+        let shared = entity("class", "urn:shared");
+        let first_rows = [entity("class", "urn:first"), shared.clone()];
+        let second_rows = [shared.clone(), entity("datatype", "urn:second")];
+
+        let mut first = component_builder(&limits);
+        let first_pending = first_rows
+            .iter()
+            .map(|row| first.intern_canonical(row).expect("first entity"))
+            .collect::<Vec<_>>();
+        let first = first.freeze().expect("first arena");
+        let first_ids = first_pending
+            .into_iter()
+            .map(|identifier| first.resolve(identifier).expect("first frozen entity"))
+            .collect::<Vec<_>>();
+        let first_arena = first.into_arena();
+
+        let mut second = component_builder(&limits);
+        let second_pending = second_rows
+            .iter()
+            .map(|row| second.intern_canonical(row).expect("second entity"))
+            .collect::<Vec<_>>();
+        let second = second.freeze().expect("second arena");
+        let second_ids = second_pending
+            .into_iter()
+            .map(|identifier| second.resolve(identifier).expect("second frozen entity"))
+            .collect::<Vec<_>>();
+        let second_arena = second.into_arena();
+
+        let arena = NativeComponentArena::compose_flat(&[&first_arena, &second_arena])
+            .expect("composition");
+        let mut identifiers = vec![second_ids[1], first_ids[1], second_ids[0], first_ids[0]];
+        arena
+            .sort_deduplicate_ids(
+                &mut identifiers,
+                Category::Entity,
+                &limits,
+                Cancellation::with_duration(None),
+                None,
+                0,
+            )
+            .expect("canonical composed entity set");
+
+        let encoded = identifiers
+            .into_iter()
+            .map(|identifier| {
+                arena
+                    .encode(
+                        identifier,
+                        &limits,
+                        Cancellation::with_duration(None),
+                        None,
+                        0,
+                    )
+                    .expect("canonical entity")
+            })
+            .collect::<Vec<_>>();
+        let mut expected = first_rows
+            .into_iter()
+            .chain(second_rows)
+            .collect::<Vec<_>>();
+        expected.sort();
+        expected.dedup();
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn entity_identifier_sort_checks_depth_before_mutation() {
+        let limits = Limits::default();
+        let mut builder = component_builder(&limits);
+        let pending = ["urn:z", "urn:a"]
+            .iter()
+            .map(|value| {
+                builder
+                    .intern_canonical(&entity("class", value))
+                    .expect("entity")
+            })
+            .collect::<Vec<_>>();
+        let frozen = builder.freeze().expect("arena");
+        let mut identifiers = pending
+            .into_iter()
+            .map(|identifier| frozen.resolve(identifier).expect("frozen entity"))
+            .collect::<Vec<_>>();
+        let arena = frozen.into_arena();
+        let original = identifiers.clone();
+        let mut bounded = limits;
+        bounded.max_nesting_depth = 0;
+
+        let failure = arena
+            .sort_deduplicate_ids(
+                &mut identifiers,
+                Category::Entity,
+                &bounded,
+                Cancellation::with_duration(None),
+                None,
+                0,
+            )
+            .expect_err("bounded entity sort");
+
+        assert_eq!(failure.code, "NATIVE_WIRE_LIMIT");
+        assert_eq!(identifiers, original);
     }
 
     #[test]
