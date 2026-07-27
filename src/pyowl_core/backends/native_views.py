@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn, Protocol, 
 
 from pyowl_core.document.document import Fingerprint
 from pyowl_core.document.overlay import view_limits
-from pyowl_core.document.snapshot import AxiomScope, OntologyView
+from pyowl_core.document.snapshot import AxiomScope, OntologyView, _is_ontology_view
 from pyowl_core.exceptions import (
     BackendProtocolError,
     ClosedSnapshotError,
@@ -328,7 +328,7 @@ class EncodedStructuralViewV1:
         del started
         if not isinstance(options, EncodedStructuralOptionsV1):
             raise TypeError("options must be EncodedStructuralOptionsV1")
-        if not isinstance(ontology, OntologyView):
+        if not _is_ontology_view(ontology):
             raise TypeError("ontology must implement OntologyView")
         budget.check()
         created = produce_encoded_structural_view_v1(
@@ -436,7 +436,7 @@ def produce_encoded_structural_view_v1(
     """Publish deterministic v1 columns without flattening retained owners."""
 
     _validate_selection(scope, document_key)
-    if not isinstance(owner, OntologyView):
+    if not _is_ontology_view(owner):
         raise TypeError("owner must implement OntologyView")
     if type(materialize_segments) is not bool:
         raise TypeError("materialize_segments must be bool")
@@ -1524,7 +1524,7 @@ def _freeze_encoded_structural_view_v1(
     """Shared validator; zero-copy is restricted to module-owned producers."""
 
     _validate_selection(expected_scope, expected_document_key)
-    if not isinstance(expected_owner, OntologyView):
+    if not _is_ontology_view(expected_owner):
         raise TypeError("expected_owner must implement OntologyView")
     selected_limits = _selected_limits(expected_owner, limits)
     candidate_identity = id(candidate)
@@ -1739,7 +1739,7 @@ def _freeze_segments(
         }:
             _fail("encoded structural segment role is invalid", "ENCODED_VIEW_SEGMENTS")
         try:
-            owner_is_view = isinstance(owner, OntologyView)
+            owner_is_view = _is_ontology_view(owner)
         except Exception as error:
             raise BackendProtocolError(
                 "encoded structural segment owner is hostile",
