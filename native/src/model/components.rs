@@ -4432,8 +4432,11 @@ mod tests {
             entity("class", &format!("urn:{}", "x".repeat(121))),
             entity("class", &format!("urn:{}", "y".repeat(123))),
             entity("class", &format!("urn:{}", "z".repeat(124))),
-            // Cover the two-/three-byte LEB128 transition for both the raw
-            // IRI text frame and the enclosing IRI child frame.
+            // Cover the two-/three-byte LEB128 transition for the enclosing
+            // IRI child frame (encoded child lengths 16,383 and 16,384).
+            entity("class", &format!("urn:{}", "k".repeat(16_375))),
+            entity("class", &format!("urn:{}", "l".repeat(16_376))),
+            // Cover the same transition for the raw IRI text frame.
             entity("class", &format!("urn:{}", "m".repeat(16_379))),
             entity("class", &format!("urn:{}", "n".repeat(16_380))),
             entity("class", "urn:a"),
