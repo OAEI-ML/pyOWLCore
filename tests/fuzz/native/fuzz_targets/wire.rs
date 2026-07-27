@@ -3,6 +3,11 @@
 
 use libfuzzer_sys::fuzz_target;
 
+// The production wire module reads this crate-level contract constant when it
+// builds validation receipts. Keep the fuzz crate's root equivalent to the
+// extension crate root; test_manifest.py guards the value against drift.
+const ABI_VERSION: u32 = 3;
+
 #[path = "../../../../native/src/cancel.rs"]
 mod cancel;
 #[path = "../../../../native/src/error.rs"]

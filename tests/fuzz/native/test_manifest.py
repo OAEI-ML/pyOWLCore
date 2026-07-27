@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -37,6 +38,20 @@ def test_native_fuzz_targets_track_the_current_production_module_graph() -> None
         assert "native/src/model/mod.rs" in target
     assert "#[cfg(not(fuzzing))]\nmod retained;" in parser
     assert "#[cfg(fuzzing)]\npub(crate) type InterruptSlot = Arc<()>;" in cancellation
+
+
+def test_wire_fuzzer_uses_the_production_abi_version() -> None:
+    repository = Path(__file__).parents[3]
+    production = (repository / "native" / "src" / "lib.rs").read_text(encoding="utf-8")
+    harness = (
+        Path(__file__).parent / "fuzz_targets" / "wire.rs"
+    ).read_text(encoding="utf-8")
+    pattern = re.compile(r"(?:pub\(crate\)\s+)?const ABI_VERSION: u32 = (\d+);")
+    production_match = pattern.search(production)
+    harness_match = pattern.search(harness)
+    assert production_match is not None
+    assert harness_match is not None
+    assert production_match.group(1) == harness_match.group(1)
 
 
 def test_miri_harness_is_dependency_free_and_locked() -> None:
