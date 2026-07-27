@@ -18,8 +18,8 @@
       "sha256": "d1c8762c04401d1556fc575ba3d3b7c8f817f862930f245bc169f1008b9f64c6"
     },
     "MANIFEST.in": {
-      "bytes": 1098,
-      "sha256": "f4a623b505ece40f0c65eb4da0fc355fad05ebd2ab623876a2129ffb64c0a609"
+      "bytes": 1189,
+      "sha256": "dbf10d6f32e8ab0d6fff18b1713d92639586ef5a8813f6041e66fd11d5289fe3"
     },
     "native/Cargo.lock": {
       "bytes": 3421,
