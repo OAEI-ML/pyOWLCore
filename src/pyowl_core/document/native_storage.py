@@ -370,14 +370,15 @@ class _NativeSharedState:
                 else "auxiliary_rows_decoded"
             )
             self._counters[counter] += 1
-            value = (decoded, 0)
+            value = (decoded, 1)
             visited: set[int] = set()
             charge = _deep_size(key, visited) + _deep_size(value, visited)
-            # The stored charge replaces the small integer zero above.  Both
-            # are one-digit Python integers because a cache entry can never
-            # reach the fixed 8 MiB publication bound, so their retained sizes
-            # are equal.  OrderedDict's table and linked-list nodes are charged
-            # separately after insertion via sys.getsizeof().
+            # The stored charge replaces the positive integer sentinel above.
+            # Both are one-digit Python integers because a cache entry can
+            # never reach the fixed 8 MiB publication bound, so their retained
+            # sizes are equal on every supported CPython.  OrderedDict's table
+            # and linked-list nodes are charged separately after insertion via
+            # sys.getsizeof().
             if charge + _EMPTY_CACHE_BYTES > self._max_cache_bytes:
                 return decoded
             if cache is None:

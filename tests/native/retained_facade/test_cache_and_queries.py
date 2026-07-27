@@ -243,7 +243,7 @@ def test_cache_drops_an_empty_grown_container_after_candidate_eviction() -> None
     visited: set[int] = set()
     admission_bytes = (
         _deep_size(key, visited)
-        + _deep_size((decoded, 0), visited)
+        + _deep_size((decoded, 1), visited)
         + sys.getsizeof(OrderedDict())
     )
     values = publication_fields()
