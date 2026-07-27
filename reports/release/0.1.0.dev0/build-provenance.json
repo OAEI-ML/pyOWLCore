@@ -29,6 +29,10 @@
       "bytes": 901,
       "sha256": "6bcedfcbb646b4f9a89371c846589906867d55fe6b07d94b3e46f69bdba35e93"
     },
+    "native/build.rs": {
+      "bytes": 9090,
+      "sha256": "4c911604b24c07f1a724f6c8a5a04f297489586444d863d29b65f69aa7b8fa08"
+    },
     "pyowl_build.py": {
       "bytes": 9961,
       "sha256": "9a3ee55e9431ca8a36d444624ce270ec8fdc394605142051edd6dd14a99a1933"
@@ -36,6 +40,14 @@
     "pyproject.toml": {
       "bytes": 1690,
       "sha256": "7ea2a1e1ac78ff0022e01d8240178058ccf6d0dee9f180f02e5e4cb1545732ca"
+    },
+    "schemas/encoded-view-v1.json": {
+      "bytes": 11185,
+      "sha256": "9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5"
+    },
+    "schemas/encoded-view-v1.toml": {
+      "bytes": 14338,
+      "sha256": "cf6e17bbbabb6fa43ff95f3e11d99f3559c6b8a452c33b2fa6d9efe8911675da"
     },
     "setup.py": {
       "bytes": 2809,
@@ -70,8 +82,8 @@
       "sha256": "de7ef0287437191c302fb239f479d5339d996d2ae5749bee752762ce342592d0"
     },
     "tools/packaging/supply_chain.py": {
-      "bytes": 30494,
-      "sha256": "ce56c2dc6941329a3c2d54977a140df2e813f4a0d3cacbec75cff4f8093d6b51"
+      "bytes": 30589,
+      "sha256": "ef174a73af03f0d96d372fc721329281f20a00106a86e4ecda16f64c91a44cfb"
     }
   },
   "schema": "pyowl-core.build-provenance/1",
