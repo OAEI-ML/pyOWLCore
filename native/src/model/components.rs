@@ -1634,14 +1634,38 @@ impl NativeComponentBuilder {
         &mut self,
         canonical: &[u8],
     ) -> NativeResult<PendingComponentId> {
+        self.begin_canonical_intern()?;
+        let mut budget = ScanBudget::from_limits(&self.limits);
+        scan_canonical(canonical, &mut budget)?;
+        self.decode_validated_canonical(canonical)
+    }
+
+    /// Intern a row that the caller has already accepted with
+    /// [`scan_canonical`] under this builder's limits.
+    ///
+    /// The typed publication builder validates every borrowed input
+    /// collection before it mutates the component arena, then uses this seam
+    /// while those immutable bytes remain borrowed. Keeping the narrow seam
+    /// here avoids repeating the complete structural scan immediately before
+    /// decoding.
+    pub(crate) fn intern_validated_canonical(
+        &mut self,
+        canonical: &[u8],
+    ) -> NativeResult<PendingComponentId> {
+        self.begin_canonical_intern()?;
+        self.decode_validated_canonical(canonical)
+    }
+
+    fn begin_canonical_intern(&mut self) -> NativeResult<()> {
         if self.poisoned {
             return Err(NativeError::protocol(
                 "native component builder is poisoned after a failed mutation",
             ));
         }
-        self.work_mut()?.checkpoint(true)?;
-        let mut budget = ScanBudget::from_limits(&self.limits);
-        scan_canonical(canonical, &mut budget)?;
+        self.work_mut()?.checkpoint(true)
+    }
+
+    fn decode_validated_canonical(&mut self, canonical: &[u8]) -> NativeResult<PendingComponentId> {
         let decoded = self.decode_node(canonical, 0, canonical.len());
         let (identifier, consumed) = match decoded {
             Ok(value) => value,
@@ -1661,6 +1685,11 @@ impl NativeComponentBuilder {
             owner: self.owner,
             local: identifier,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn counters(&self) -> &ComponentCounters {
+        &self.counters
     }
 
     /// Update the live allocation owned by the caller while this builder is
@@ -4134,6 +4163,8 @@ fn append(output: &mut Vec<u8>, value: &[u8]) -> NativeResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn component_builder(limits: &Limits) -> NativeComponentBuilder {
@@ -4242,6 +4273,46 @@ mod tests {
         assert_eq!(frozen.arena().counters().unique_nodes, 3);
         assert!(frozen.arena().counters().node_hits >= 3);
         assert_eq!(frozen.arena().counters().unique_strings, 2);
+    }
+
+    #[test]
+    fn validated_interning_matches_checked_interning_and_preserves_checkpoint() {
+        let limits = Limits::default();
+        let row = declaration("urn:validated");
+        let mut budget = ScanBudget::from_limits(&limits);
+        assert_eq!(
+            scan_canonical(&row, &mut budget).expect("validated canonical row"),
+            Category::Axiom
+        );
+
+        let mut checked = component_builder(&limits);
+        checked.intern_canonical(&row).expect("checked interning");
+        let checked_counters = *checked.counters();
+        let checked = checked.freeze().expect("checked arena");
+
+        let mut validated = component_builder(&limits);
+        validated
+            .intern_validated_canonical(&row)
+            .expect("validated interning");
+        assert_eq!(*validated.counters(), checked_counters);
+        let validated = validated.freeze().expect("validated arena");
+        assert_eq!(validated.arena().tables(), checked.arena().tables());
+
+        let mut expired = NativeComponentBuilder::with_control(
+            &limits,
+            Cancellation::with_duration(Some(Duration::ZERO)),
+            None,
+            0,
+        )
+        .expect("expired builder");
+        assert_eq!(
+            expired
+                .intern_validated_canonical(&row)
+                .expect_err("validated seam must keep forced checkpoint"),
+            NativeError::deadline()
+        );
+        assert_eq!(expired.counters().node_requests, 0);
+        assert_eq!(expired.counters().unique_nodes, 0);
     }
 
     #[test]

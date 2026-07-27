@@ -41,6 +41,12 @@ const SIGNATURE_KINDS: [TypedFacadeSignatureKindV2; 7] = [
 
 type BorrowedDocumentRoots<'a> = (&'a [Vec<u8>], &'a [Vec<u8>], &'a [Vec<u8>]);
 
+#[derive(Clone, Copy, Debug)]
+struct ValidatedInputRows<'a> {
+    rows: &'a [Vec<u8>],
+    expected: Category,
+}
+
 #[derive(Debug, Default)]
 struct PendingDocumentV2 {
     roots: [Vec<PendingComponentId>; 3],
@@ -174,10 +180,16 @@ impl TypedFacadeBuilderV2 {
             self.limits.max_axioms,
             "typed V2 document exceeds max_axioms",
         )?;
-        validate_input_rows(ontology_annotations, Category::Annotation, &self.limits)?;
-        validate_input_rows(axioms, Category::Axiom, &self.limits)?;
-        validate_input_rows(extensions, Category::Swrl, &self.limits)?;
-        if let Some((effective_annotations, effective_axioms, effective_extensions)) = effective {
+        let ontology_annotations =
+            validate_input_rows(ontology_annotations, Category::Annotation, &self.limits)?;
+        let axioms = validate_input_rows(axioms, Category::Axiom, &self.limits)?;
+        let extensions = validate_input_rows(extensions, Category::Swrl, &self.limits)?;
+        let effective = if let Some((
+            effective_annotations,
+            effective_axioms,
+            effective_extensions,
+        )) = effective
+        {
             check_input_count(
                 effective_annotations.len(),
                 self.limits.max_annotations,
@@ -188,33 +200,36 @@ impl TypedFacadeBuilderV2 {
                 self.limits.max_axioms,
                 "typed V2 effective document exceeds max_axioms",
             )?;
-            validate_input_rows(effective_annotations, Category::Annotation, &self.limits)?;
-            validate_input_rows(effective_axioms, Category::Axiom, &self.limits)?;
-            validate_input_rows(effective_extensions, Category::Swrl, &self.limits)?;
-        }
+            Some((
+                validate_input_rows(effective_annotations, Category::Annotation, &self.limits)?,
+                validate_input_rows(effective_axioms, Category::Axiom, &self.limits)?,
+                validate_input_rows(effective_extensions, Category::Swrl, &self.limits)?,
+            ))
+        } else {
+            None
+        };
 
         let mut staged_bytes = 0_usize;
-        let annotations =
-            self.intern_rows(ontology_annotations, Category::Annotation, staged_bytes)?;
+        let annotations = self.intern_rows(ontology_annotations, staged_bytes)?;
         staged_bytes = pending_bytes(&annotations)?;
-        let axioms = self.intern_rows(axioms, Category::Axiom, staged_bytes)?;
+        let axioms = self.intern_rows(axioms, staged_bytes)?;
         staged_bytes = staged_bytes
             .checked_add(pending_bytes(&axioms)?)
             .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
-        let extensions = self.intern_rows(extensions, Category::Swrl, staged_bytes)?;
+        let extensions = self.intern_rows(extensions, staged_bytes)?;
         staged_bytes = staged_bytes
             .checked_add(pending_bytes(&extensions)?)
             .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
         let effective_roots = if let Some((annotations, axioms, extensions)) = effective {
-            let annotations = self.intern_rows(annotations, Category::Annotation, staged_bytes)?;
+            let annotations = self.intern_rows(annotations, staged_bytes)?;
             staged_bytes = staged_bytes
                 .checked_add(pending_bytes(&annotations)?)
                 .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
-            let axioms = self.intern_rows(axioms, Category::Axiom, staged_bytes)?;
+            let axioms = self.intern_rows(axioms, staged_bytes)?;
             staged_bytes = staged_bytes
                 .checked_add(pending_bytes(&axioms)?)
                 .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
-            let extensions = self.intern_rows(extensions, Category::Swrl, staged_bytes)?;
+            let extensions = self.intern_rows(extensions, staged_bytes)?;
             staged_bytes = staged_bytes
                 .checked_add(pending_bytes(&extensions)?)
                 .ok_or_else(|| NativeError::limit("typed V2 pending root size overflow"))?;
@@ -633,10 +648,10 @@ impl TypedFacadeBuilderV2 {
 
     fn intern_rows(
         &mut self,
-        rows: &[Vec<u8>],
-        expected: Category,
+        input: ValidatedInputRows<'_>,
         prior_staged_bytes: usize,
     ) -> NativeResult<Vec<PendingComponentId>> {
+        let ValidatedInputRows { rows, expected } = input;
         let mut output = Vec::new();
         let predicted = rows
             .len()
@@ -657,7 +672,7 @@ impl TypedFacadeBuilderV2 {
         )?;
         for row in rows {
             self.cancellation.checkpoint()?;
-            let identifier = self.components.intern_canonical(row)?;
+            let identifier = self.components.intern_validated_canonical(row)?;
             output.push(identifier);
         }
         if !STRUCTURAL_CATEGORIES.contains(&expected) {
@@ -1553,7 +1568,11 @@ fn check_input_count(count: usize, maximum: u64, message: &'static str) -> Nativ
     Ok(())
 }
 
-fn validate_input_rows(rows: &[Vec<u8>], expected: Category, limits: &Limits) -> NativeResult<()> {
+fn validate_input_rows<'a>(
+    rows: &'a [Vec<u8>],
+    expected: Category,
+    limits: &Limits,
+) -> NativeResult<ValidatedInputRows<'a>> {
     if rows
         .windows(2)
         .any(|pair| pair[0].as_slice() >= pair[1].as_slice())
@@ -1570,7 +1589,7 @@ fn validate_input_rows(rows: &[Vec<u8>], expected: Category, limits: &Limits) ->
             ));
         }
     }
-    Ok(())
+    Ok(ValidatedInputRows { rows, expected })
 }
 
 fn pending_bytes(values: &Vec<PendingComponentId>) -> NativeResult<usize> {
@@ -1735,6 +1754,17 @@ mod tests {
             .into_iter()
             .find_map(|(name, value)| (name == "root_kinds").then_some(value))
             .expect("root kind buffer")
+    }
+
+    fn assert_prevalidation_left_builder_unmutated(builder: &TypedFacadeBuilderV2) {
+        let counters = builder.components.counters();
+        assert_eq!(counters.node_requests, 0);
+        assert_eq!(counters.unique_nodes, 0);
+        assert_eq!(counters.string_requests, 0);
+        assert_eq!(counters.unique_strings, 0);
+        assert_eq!(counters.sequence_requests, 0);
+        assert_eq!(counters.unique_sequences, 0);
+        assert!(builder.documents.is_empty());
     }
 
     #[test]
@@ -2500,10 +2530,19 @@ mod tests {
         let mut builder =
             TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
                 .expect("builder");
-        assert!(builder.add_document(&[], &reversed, &[]).is_err());
-        assert!(builder
-            .add_document(&[], std::slice::from_ref(&a), &[])
-            .is_err());
+        assert_eq!(
+            builder
+                .add_document(&[], &reversed, &[])
+                .expect_err("reversed roots"),
+            NativeError::protocol("typed V2 input roots are not canonical ascending unique")
+        );
+        assert_prevalidation_left_builder_unmutated(&builder);
+        assert_eq!(
+            builder
+                .add_document(&[], std::slice::from_ref(&a), &[])
+                .expect_err("poisoned builder"),
+            NativeError::protocol("typed V2 builder is poisoned after a failed mutation")
+        );
         assert!(builder.freeze(&[vec![0]], &[0]).is_err());
 
         let mut builder =
@@ -2532,6 +2571,45 @@ mod tests {
     }
 
     #[test]
+    fn builder_prevalidates_late_wrong_category_and_corruption_before_mutation() {
+        let raw = sorted(vec![declaration("class", "urn:builder:raw")]);
+        let wrong_category = vec![entity_row("class", "urn:builder:not-an-axiom")];
+        let limits = Limits::default();
+        let mut builder =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("wrong-category builder");
+        assert_eq!(
+            builder
+                .add_scoped_document(&[], &raw, &[], &[], &wrong_category, &[],)
+                .expect_err("late effective category mismatch"),
+            NativeError::protocol("typed V2 input root is in the wrong structural collection")
+        );
+        assert_prevalidation_left_builder_unmutated(&builder);
+        assert_eq!(
+            builder
+                .add_document(&[], &raw, &[])
+                .expect_err("wrong-category failure poisons builder"),
+            NativeError::protocol("typed V2 builder is poisoned after a failed mutation")
+        );
+
+        let malformed = vec![vec![0x80]];
+        let mut builder =
+            TypedFacadeBuilderV2::new(limits, Cancellation::with_duration(None), None, 0)
+                .expect("corrupt-row builder");
+        let failure = builder
+            .add_scoped_document(&[], &raw, &[], &[], &malformed, &[])
+            .expect_err("late malformed effective row");
+        assert_eq!(failure.code, "NATIVE_WIRE_CORRUPTION");
+        assert_prevalidation_left_builder_unmutated(&builder);
+        assert_eq!(
+            builder
+                .add_document(&[], &raw, &[])
+                .expect_err("corrupt-row failure poisons builder"),
+            NativeError::protocol("typed V2 builder is poisoned after a failed mutation")
+        );
+    }
+
+    #[test]
     fn builder_observes_cancellation_before_mutation() {
         let mut builder = TypedFacadeBuilderV2::new(
             Limits::default(),
@@ -2540,8 +2618,18 @@ mod tests {
             0,
         )
         .expect("builder");
-        assert!(builder
-            .add_document(&[], &[declaration("class", "urn:builder:A")], &[])
-            .is_err());
+        assert_eq!(
+            builder
+                .add_document(&[], &[declaration("class", "urn:builder:A")], &[])
+                .expect_err("expired deadline"),
+            NativeError::deadline()
+        );
+        assert_prevalidation_left_builder_unmutated(&builder);
+        assert_eq!(
+            builder
+                .add_document(&[], &[declaration("class", "urn:builder:B")], &[])
+                .expect_err("deadline failure poisons builder"),
+            NativeError::protocol("typed V2 builder is poisoned after a failed mutation")
+        );
     }
 }
