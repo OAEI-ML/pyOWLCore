@@ -22,8 +22,11 @@ def run_import_probe(package: str = "pyowl_core") -> dict[str, Any]:
 
     violations: list[str] = []
     observed: list[str] = []
+    probe_active = True
 
     def audit(event: str, args: tuple[object, ...]) -> None:
+        if not probe_active:
+            return
         if event.startswith(_BLOCKED_EVENT_PREFIXES) or event in _BLOCKED_EVENTS:
             observed.append(event)
             raise RuntimeError(f"blocked import side effect: {event}")
@@ -46,10 +49,10 @@ def run_import_probe(package: str = "pyowl_core") -> dict[str, Any]:
         violations.append(f"import failed: {type(error).__name__}: {error}")
         module = None
         caught = []
+    finally:
+        probe_active = False
     for warning in caught:
-        violations.append(
-            f"import warning: {warning.category.__name__}: {warning.message}"
-        )
+        violations.append(f"import warning: {warning.category.__name__}: {warning.message}")
     imported = sorted(set(sys.modules) - before)
     for name in imported:
         if name == f"{package}._native":
