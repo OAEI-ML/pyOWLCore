@@ -12,6 +12,7 @@ CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 NATIVE_SAFETY = (WORKFLOWS / "native-safety.yml").read_text(encoding="utf-8")
 PLATFORM_AUDIT = (ROOT / "tools" / "packaging" / "platform_audit.py").read_text(encoding="utf-8")
 ACTION = re.compile(r"(?m)^\s*-?\s*uses:\s+([^\s#]+)")
+CONTAINER_IMAGE = re.compile(r"(?m)^\s*container:\s+([^\s#]+)")
 
 
 def _inline_python(workflow: str) -> tuple[str, ...]:
@@ -41,6 +42,12 @@ def test_every_external_action_is_pinned_to_a_full_commit() -> None:
         assert actions
         for action in actions:
             assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", action), action
+
+
+def test_ci_container_images_are_pinned_to_exact_manifests() -> None:
+    assert CONTAINER_IMAGE.findall(CI) == [
+        "python:3.10-slim@sha256:e8d6cdadc17ce7146e1bb286e6093d58c8cf582659a558ad51cd103829655e72"
+    ]
 
 
 def test_inline_workflow_python_is_syntactically_valid() -> None:

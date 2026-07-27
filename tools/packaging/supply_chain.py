@@ -39,6 +39,7 @@ _ADDITIONAL_LICENSE_FILES = {
 }
 _DEVELOPMENT_LICENSE_FILES = {"W3C-RDF-tests-BSD-3-Clause.txt"}
 _BUILD_INPUT_PATHS = (
+    ".github/workflows/ci.yml",
     ".github/workflows/native-safety.yml",
     ".github/workflows/release.yml",
     ".github/workflows/wheels.yml",
@@ -632,6 +633,10 @@ def build_provenance(root: Path) -> dict[str, Any]:
         payloads[".github/workflows/wheels.yml"],
         ".github/workflows/wheels.yml",
     )
+    ci = _decode_build_input(
+        payloads[".github/workflows/ci.yml"],
+        ".github/workflows/ci.yml",
+    )
     cargo = _load_build_toml(payloads["native/Cargo.toml"], "native/Cargo.toml")
     package = cargo.get("package")
     if not isinstance(package, dict) or not isinstance(package.get("rust-version"), str):
@@ -664,6 +669,11 @@ def build_provenance(root: Path) -> dict[str, Any]:
         r"pypa/cibuildwheel@([0-9a-f]{40})",
         "cibuildwheel action revision",
     )
+    pure_ci_image = _workflow_pin(
+        ci,
+        r"(?m)^\s*container:\s*(python:3\.10-slim@sha256:[0-9a-f]{64})\s*$",
+        "pure-package CI image",
+    )
     inputs = {
         relative_path: _payload_identity(payloads[relative_path])
         for relative_path in _BUILD_INPUT_PATHS
@@ -680,6 +690,7 @@ def build_provenance(root: Path) -> dict[str, Any]:
             "python_build_backend": f"setuptools=={setuptools_version}",
             "wheel_builder": f"wheel=={wheel_version}",
             "cibuildwheel_action": f"pypa/cibuildwheel@{cibuildwheel_revision}",
+            "pure_ci_image": pure_ci_image,
         },
         "inputs": inputs,
     }

@@ -22,6 +22,7 @@ from tools.packaging.supply_chain import (
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_PROVENANCE_INPUTS = {
+    ".github/workflows/ci.yml",
     ".github/workflows/native-safety.yml",
     ".github/workflows/release.yml",
     ".github/workflows/wheels.yml",
@@ -123,6 +124,10 @@ def test_build_provenance_binds_exact_toolchain_and_lock_hash() -> None:
         "python_build_backend": "setuptools==83.0.0",
         "wheel_builder": "wheel==0.45.1",
         "cibuildwheel_action": ("pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55"),
+        "pure_ci_image": (
+            "python:3.10-slim@sha256:"
+            "e8d6cdadc17ce7146e1bb286e6093d58c8cf582659a558ad51cd103829655e72"
+        ),
     }
     inputs = provenance["inputs"]
     assert set(inputs) == EXPECTED_PROVENANCE_INPUTS
@@ -177,6 +182,20 @@ def test_build_provenance_rejects_symlinked_inputs(tmp_path: Path) -> None:
         pytest.skip("symlinks unavailable")
 
     with pytest.raises(ValueError, match="regular non-symlink file"):
+        build_provenance(tmp_path)
+
+
+def test_build_provenance_rejects_a_mutable_pure_ci_image(tmp_path: Path) -> None:
+    _copy_build_inputs(tmp_path)
+    workflow_path = tmp_path / ".github" / "workflows" / "ci.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    pinned = (
+        "python:3.10-slim@sha256:e8d6cdadc17ce7146e1bb286e6093d58c8cf582659a558ad51cd103829655e72"
+    )
+    assert pinned in workflow
+    workflow_path.write_text(workflow.replace(pinned, "python:3.10-slim"), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="pure-package CI image"):
         build_provenance(tmp_path)
 
 

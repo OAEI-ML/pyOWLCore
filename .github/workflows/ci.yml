@@ -32,7 +32,7 @@ jobs:
 
   pure-package:
     runs-on: ubuntu-24.04
-    container: python:3.10-slim
+    container: python:3.10-slim@sha256:e8d6cdadc17ce7146e1bb286e6093d58c8cf582659a558ad51cd103829655e72
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
