@@ -11,20 +11,28 @@
 
 ## Tested workspace consumers
 
-The WP11 compatibility run tested these exact ranges and commits:
+The coordinated native-redesign compatibility run used runtime implementation
+`af9bdb0b9178766b5f15806fb6a2f00b05e00e22`. The later core revision
+`15992ca5b19f795da7870ec183727100758b08d9` changes only the pinned pure-package
+CI image, release provenance, benchmark evidence validation, and their checks;
+it does not change runtime sources.
+
+These exact consumer revisions passed the recorded short compatibility selections:
 
 | Consumer | Tested package | Core range/API | Exact commit |
 |---|---:|---|---|
-| Exact-OM | `2.0.0` | `pyowl-core>=0.1,<0.2` | `e943881befd7673f42b4b4b0b9230b47364c8f35` |
-| OAEI Bio-ML eval | `0.2.0` | `pyowl-core>=0.1,<0.2` | `1a6e2e5533cd24af6852fd7ae6029d0f7cd010fa` |
-| pyELK | `0.1.0.dev0` | core API `(0,1)` | `d2ec1e1485180388c93f11e0bdaf4afbdd66583f` |
-| pyHermiT | `0.1.0.dev0` | core API `(0,1)` | `77887fd42e4b38586ee860a36678ac57bf689071` |
-| OWL2Vec* projector | `0.1.0rc1` | `pyowl-core>=0.1,<0.2` | `490eeb89d450723cf8933913e2ccfa53d6fe4140` |
+| Exact-OM | `2.0.0` | `pyowl-core>=0.1,<0.2` | `d172cfa355a5d2683fc47824a5d8f2ed24cf9125` |
+| OAEI Bio-ML eval | `0.2.0` | `pyowl-core>=0.1,<0.2` | `04573c09dd0e62825c3fa7c5b2490b43d5a22874` |
+| pyELK | `0.1.0.dev0` | core API `(0,1)` | `a909cfcea341834ab6d6598f80445a697b338f13` |
+| pyHermiT | `0.1.0.dev0` | core API `(0,1)` | `04bd8163b532f623044d7391706ff728d1aed4b1` |
+| OWL2Vec* projector | `0.1.0rc1` | `pyowl-core>=0.1,<0.2` | `53a23e2d385696e2be042568ade0d178580c6de4` |
 
 The machine-readable authority is
 [`reports/integration/consumer-compatibility.json`](../reports/integration/consumer-compatibility.json).
 Do not infer compatibility with later untested commits or widen these ranges
-from model/wire numbers alone.
+from model/wire numbers alone. These short semantic and packaging selections
+do not stand in for the hosted wheel, long-running performance, fuzz,
+sanitizer, licensed-corpus, signing, or external approval gates.
 
 ## Interpreter support and evidence
 

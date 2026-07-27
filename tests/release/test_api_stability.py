@@ -32,11 +32,14 @@ def test_independent_version_domains_and_distribution_metadata_agree() -> None:
     assert (ROOT / "src" / "pyowl_core" / "py.typed").is_file()
 
 
-def test_documented_consumer_handoff_matches_wp11_evidence_exactly() -> None:
+def test_documented_consumer_handoff_matches_exact_revision_evidence() -> None:
     payload = cast(dict[str, Any], json.loads(COMPATIBILITY.read_text(encoding="utf-8")))
     documentation = (ROOT / "docs" / "compatibility.md").read_text(encoding="utf-8")
     core = cast(dict[str, Any], payload["core"])
     assert core["package_version"] in documentation
+    assert core["implementation_commit"] in documentation
+    release_evidence = cast(dict[str, Any], core["release_evidence"])
+    assert release_evidence["commit"] in documentation
     assert f"`({core['api_version'][0]},{core['api_version'][1]})`" in documentation
     assert f"`({core['wire_format'][0]},{core['wire_format'][1]})`" in documentation
     for consumer in cast(list[dict[str, Any]], payload["consumers"]):
