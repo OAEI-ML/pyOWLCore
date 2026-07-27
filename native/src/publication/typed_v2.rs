@@ -39,6 +39,7 @@ pub(crate) type FlatDocumentV2 = (
 struct TableValidationV2 {
     maximum_row_bytes: u64,
     peak_workspace_bytes: u64,
+    total_row_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -371,6 +372,8 @@ impl TypedFacadeStorageV2 {
 
         let mut maximum_row_bytes = 1_u64;
         let mut peak_ordering_workspace_bytes = 0_u64;
+        let mut canonical_input_rows = 0_u64;
+        let mut canonical_input_bytes = 0_u64;
         let mut single_document_validations: [Option<(usize, TableValidationV2)>;
             SINGLE_DOCUMENT_VALIDATION_SLOTS] = [None; SINGLE_DOCUMENT_VALIDATION_SLOTS];
         for (table_index, table) in effective_tables
@@ -413,6 +416,22 @@ impl TypedFacadeStorageV2 {
             maximum_row_bytes = maximum_row_bytes.max(validation.maximum_row_bytes);
             peak_ordering_workspace_bytes =
                 peak_ordering_workspace_bytes.max(validation.peak_workspace_bytes);
+            if table.coordinate.scope == TypedFacadeScopeV2::Document
+                && canonical_input_collection(table.coordinate.collection)
+                && (!effective
+                    || raw_document_tables
+                        .binary_search_by_key(&table.coordinate, |candidate| candidate.coordinate)
+                        .is_err())
+            {
+                canonical_input_rows = checked_add(
+                    canonical_input_rows,
+                    u64::try_from(table.roots.len()).map_err(|_| {
+                        NativeError::limit("typed V2 canonical input rows exceed u64")
+                    })?,
+                )?;
+                canonical_input_bytes =
+                    checked_add(canonical_input_bytes, validation.total_row_bytes)?;
+            }
         }
 
         let mut retained_index_bytes = 0_u64;
@@ -442,17 +461,6 @@ impl TypedFacadeStorageV2 {
             .map_err(|_| NativeError::limit("typed V2 retained owner exceeds usize"))?;
         let component = *arena.counters();
         let retained_owner_bytes = checked_add(component.retained_bytes, external_retained)?;
-        let canonical_input = canonical_input_counters(
-            &arena,
-            &effective_tables,
-            &raw_document_tables,
-            &limits,
-            cancellation.clone(),
-            interrupt,
-            external_retained_bytes
-                .checked_add(caller_external_bytes)
-                .ok_or_else(|| NativeError::limit("typed V2 canonical input memory overflow"))?,
-        )?;
         let publication_peak = retained_owner_bytes
             .checked_add(caller_external)
             .and_then(|value| value.checked_add(maximum_row_bytes))
@@ -473,8 +481,8 @@ impl TypedFacadeStorageV2 {
         }
         let frozen_counters = TypedFacadeCounterSnapshotV2 {
             component,
-            canonical_input_rows: canonical_input.0,
-            canonical_input_bytes: canonical_input.1,
+            canonical_input_rows,
+            canonical_input_bytes,
             retained_document_tables: document_count,
             retained_root_rows,
             retained_component_bytes: component.retained_bytes,
@@ -1505,6 +1513,11 @@ fn validate_table(
             u64::try_from(canonical.len())
                 .map_err(|_| NativeError::limit("typed V2 canonical row exceeds u64"))?,
         );
+        validation.total_row_bytes = checked_add(
+            validation.total_row_bytes,
+            u64::try_from(canonical.len())
+                .map_err(|_| NativeError::limit("typed V2 canonical input bytes exceed u64"))?,
+        )?;
         validation.peak_workspace_bytes = validation.peak_workspace_bytes.max(workspace_bytes);
         previous = Some(canonical);
     }
@@ -1656,82 +1669,13 @@ fn check_temporary_limit(
     Ok(())
 }
 
-fn canonical_input_counters(
-    arena: &NativeComponentArena,
-    effective: &[TypedFacadeTableV2],
-    raw: &[TypedFacadeTableV2],
-    limits: &Limits,
-    cancellation: Cancellation,
-    interrupt: Option<InterruptSlot>,
-    external_bytes: usize,
-) -> NativeResult<(u64, u64)> {
-    let mut rows = 0_u64;
-    let mut bytes = 0_u64;
-    for effective_table in effective.iter().filter(|table| {
-        table.coordinate.scope == TypedFacadeScopeV2::Document
-            && matches!(
-                table.coordinate.collection,
-                TypedFacadeCollectionV2::OntologyAnnotations
-                    | TypedFacadeCollectionV2::Axioms
-                    | TypedFacadeCollectionV2::Extensions
-            )
-    }) {
-        let selected = raw
-            .binary_search_by_key(&effective_table.coordinate, |table| table.coordinate)
-            .ok()
-            .and_then(|index| raw.get(index))
-            .unwrap_or(effective_table);
-        rows = checked_add(
-            rows,
-            u64::try_from(selected.roots.len())
-                .map_err(|_| NativeError::limit("typed V2 canonical input rows exceed u64"))?,
-        )?;
-        for identifier in &selected.roots {
-            bytes = checked_add(
-                bytes,
-                u64::try_from(arena.encoded_len(
-                    *identifier,
-                    limits,
-                    cancellation.clone(),
-                    interrupt.clone(),
-                    external_bytes,
-                )?)
-                .map_err(|_| NativeError::limit("typed V2 canonical input bytes exceed u64"))?,
-            )?;
-        }
-    }
-    for raw_table in raw.iter().filter(|table| {
-        table.coordinate.scope == TypedFacadeScopeV2::Document
-            && matches!(
-                table.coordinate.collection,
-                TypedFacadeCollectionV2::OntologyAnnotations
-                    | TypedFacadeCollectionV2::Axioms
-                    | TypedFacadeCollectionV2::Extensions
-            )
-            && effective
-                .binary_search_by_key(&table.coordinate, |item| item.coordinate)
-                .is_err()
-    }) {
-        rows = checked_add(
-            rows,
-            u64::try_from(raw_table.roots.len())
-                .map_err(|_| NativeError::limit("typed V2 canonical input rows exceed u64"))?,
-        )?;
-        for identifier in &raw_table.roots {
-            bytes = checked_add(
-                bytes,
-                u64::try_from(arena.encoded_len(
-                    *identifier,
-                    limits,
-                    cancellation.clone(),
-                    interrupt.clone(),
-                    external_bytes,
-                )?)
-                .map_err(|_| NativeError::limit("typed V2 canonical input bytes exceed u64"))?,
-            )?;
-        }
-    }
-    Ok((rows, bytes))
+const fn canonical_input_collection(collection: TypedFacadeCollectionV2) -> bool {
+    matches!(
+        collection,
+        TypedFacadeCollectionV2::OntologyAnnotations
+            | TypedFacadeCollectionV2::Axioms
+            | TypedFacadeCollectionV2::Extensions
+    )
 }
 
 fn root_count(effective: &[TypedFacadeTableV2], raw: &[TypedFacadeTableV2]) -> NativeResult<u64> {
@@ -2256,6 +2200,12 @@ mod tests {
             .expect("raw page");
         assert_eq!(snapshot.rows, effective_rows);
         assert_eq!(document.rows, effective_rows[..1]);
+        let counters = storage.counters().expect("raw override counters");
+        assert_eq!(counters.canonical_input_rows, 1);
+        assert_eq!(
+            counters.canonical_input_bytes,
+            u64::try_from(effective_rows[0].len()).expect("canonical input bytes")
+        );
         assert!(!storage
             .contains_axiom(
                 coordinate,
