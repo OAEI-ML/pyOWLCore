@@ -92,13 +92,13 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     assert raw_horned.runner_pin_state == "complete"
     assert raw_horned.runner_revision == "pyowl-core-horned-raw-runner-v2"
     assert raw_horned.runner_sha256 == (
-        "ffd20194b7c3715d6d07ec8ba9167d590ed484c278305754148711c44ae8887b"
+        "a7817c2831f958acaf7d6acbd6fab584564c3768e7304491615ac76cae220ebf"
     )
     assert raw_horned.artifact_is_runnable is True
 
     common_horned = manifest.by_id("horned-owl-common")
     assert common_horned.runner_pin_state == "complete"
-    assert common_horned.runner_revision == "pyowl-core-horned-common-runner-v1"
+    assert common_horned.runner_revision == "pyowl-core-horned-common-runner-v2"
     assert common_horned.runner_sha256 == raw_horned.runner_sha256
     assert common_horned.artifact_is_runnable is True
 
@@ -134,7 +134,7 @@ def test_external_runner_requires_its_own_complete_hash_before_runnable(
     missing_hash_source = _replace_in_lane(
         source,
         "horned-owl-raw",
-        'runner_sha256 = "ffd20194b7c3715d6d07ec8ba9167d590ed484c278305754148711c44ae8887b"',
+        'runner_sha256 = "a7817c2831f958acaf7d6acbd6fab584564c3768e7304491615ac76cae220ebf"',
         "",
     )
     missing_hash = _write_manifest(tmp_path, "missing-runner-hash.toml", missing_hash_source)
@@ -146,7 +146,7 @@ def test_external_runner_requires_its_own_complete_hash_before_runnable(
     raw = load_comparator_manifest(complete_path).by_id("horned-owl-raw")
 
     assert raw.runner_revision == "pyowl-core-horned-raw-runner-v2"
-    assert raw.runner_sha256 == ("ffd20194b7c3715d6d07ec8ba9167d590ed484c278305754148711c44ae8887b")
+    assert raw.runner_sha256 == ("a7817c2831f958acaf7d6acbd6fab584564c3768e7304491615ac76cae220ebf")
     assert raw.artifact_is_runnable is True
 
 

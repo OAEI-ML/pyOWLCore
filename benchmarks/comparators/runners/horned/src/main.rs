@@ -37,7 +37,7 @@ const ENGINE_SHA256: &str = "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5
 const ALLOCATOR: &str = "Rust system allocator";
 const THREAD_CEILING: u64 = 1;
 const RAW_RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v2";
-const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v1";
+const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v2";
 const RUNNER_FEATURES: &[&str] = &["default", "independent-common-contract-v1"];
 
 const ADAPTER_REQUEST_SCHEMA: &str = "pyowl-core/comparator-adapter-request/v2";

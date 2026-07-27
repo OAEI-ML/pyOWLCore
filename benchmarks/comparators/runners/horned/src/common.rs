@@ -1937,6 +1937,84 @@ fn map_rule(
     )
 }
 
+fn coalesce_rdf_equivalence_axioms(
+    axioms: Vec<MappedAxiom>,
+) -> Result<Vec<MappedAxiom>, RunnerError> {
+    type EquivalenceComponent = (usize, BTreeSet<Vec<u8>>, BTreeSet<Vec<u8>>);
+    let mut output = Vec::with_capacity(axioms.len());
+    let mut components = BTreeMap::<u64, Vec<EquivalenceComponent>>::new();
+    for (occurrence, axiom) in axioms.into_iter().enumerate() {
+        let parsed = c::parse_node(&axiom.value)?;
+        if !matches!(
+            parsed.tag,
+            c::EQUIVALENT_CLASSES
+                | c::EQUIVALENT_OBJECT_PROPERTIES
+                | c::EQUIVALENT_DATA_PROPERTIES
+                | c::SAME_INDIVIDUAL
+        ) {
+            output.push((occurrence, axiom));
+            continue;
+        }
+        let [c::ParsedField::Set(members), c::ParsedField::Set(annotations)] =
+            parsed.fields.as_slice()
+        else {
+            return Err(RunnerError::new(
+                "Horned equivalence axiom has an invalid canonical shape",
+            ));
+        };
+        let members = members
+            .iter()
+            .map(c::ParsedNode::encode)
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if members.len() < 2 {
+            return Err(RunnerError::new(
+                "Horned equivalence axiom has fewer than two distinct members",
+            ));
+        }
+        let annotations = annotations
+            .iter()
+            .map(c::ParsedNode::encode)
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let grouped = components.entry(parsed.tag).or_default();
+        let mut first_occurrence = occurrence;
+        let mut merged_members = members;
+        let mut merged_annotations = annotations;
+        let mut index = 0;
+        while index < grouped.len() {
+            if merged_members.is_disjoint(&grouped[index].1) {
+                index += 1;
+                continue;
+            }
+            let (other_occurrence, members, annotations) = grouped.remove(index);
+            first_occurrence = first_occurrence.min(other_occurrence);
+            merged_members.extend(members);
+            merged_annotations.extend(annotations);
+            index = 0;
+        }
+        grouped.push((first_occurrence, merged_members, merged_annotations));
+    }
+    for (tag, grouped) in components {
+        for (occurrence, members, annotations) in grouped {
+            let members = members.into_iter().collect::<Vec<_>>();
+            output.push((
+                occurrence,
+                MappedAxiom {
+                    value: c::node(
+                        tag,
+                        [
+                            Field::Set(members.clone()),
+                            Field::Set(annotations.into_iter().collect()),
+                        ],
+                    )?,
+                    logical: Some(c::node(tag, [Field::Set(members), Field::Set(Vec::new())])?),
+                },
+            ));
+        }
+    }
+    output.sort_by_key(|(occurrence, _)| *occurrence);
+    Ok(output.into_iter().map(|(_, axiom)| axiom).collect())
+}
+
 fn map_document(
     ontology: &RcIRIMappedOntology,
     format: Format,
@@ -1945,7 +2023,7 @@ fn map_document(
 ) -> Result<MappedDocument, RunnerError> {
     let mut context = MappingContext {
         signature: BTreeSet::new(),
-        simple_literal_datatype: if matches!(format, Format::OwlXml) {
+        simple_literal_datatype: if matches!(format, Format::OwlXml | Format::RdfXml) {
             XSD_STRING
         } else {
             RDF_PLAIN_LITERAL
@@ -1995,6 +2073,9 @@ fn map_document(
                 });
             }
         }
+    }
+    if matches!(format, Format::RdfXml) {
+        axioms = coalesce_rdf_equivalence_axioms(axioms)?;
     }
     if version_iri.is_some() && ontology_iri.is_none() {
         return Err(RunnerError::new(
@@ -2372,6 +2453,34 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>, RunnerError> {
         .map_err(|_| RunnerError::new("common contract could not be canonically serialized"))
 }
 
+fn provenance_rows(
+    mut root_digests: Vec<Vec<u8>>,
+    document_key: &str,
+    canonical_ordinals: bool,
+) -> Result<Vec<Value>, RunnerError> {
+    if canonical_ordinals {
+        root_digests.sort();
+    }
+    let mut origins: BTreeMap<Vec<u8>, Vec<Value>> = BTreeMap::new();
+    for (occurrence, digest) in root_digests.into_iter().enumerate() {
+        origins.entry(digest).or_default().push(json!({
+            "document_key": document_key,
+            "occurrence": u64::try_from(occurrence)
+                .map_err(|_| RunnerError::new("provenance occurrence exceeds u64"))?,
+            "span": Value::Null,
+        }));
+    }
+    Ok(origins
+        .into_iter()
+        .map(|(digest, occurrences)| {
+            json!({
+                "structural_sha256": hex_digest(&digest),
+                "occurrences": occurrences,
+            })
+        })
+        .collect())
+}
+
 pub(crate) fn build_common_contract(
     ontology: &RcIRIMappedOntology,
     request: &ValidatedRequest,
@@ -2423,31 +2532,39 @@ pub(crate) fn build_common_contract(
         "root_document_key": key,
     });
 
-    let mut origins: BTreeMap<Vec<u8>, Vec<Value>> = BTreeMap::new();
-    let roots = document
-        .annotations
-        .iter()
-        .chain(document.axioms.iter().map(|value| &value.value))
-        .chain(document.extensions.iter().map(|value| &value.0));
-    for (occurrence, root) in roots.enumerate() {
-        origins
-            .entry(c::structural_digest(root))
-            .or_default()
-            .push(json!({
-                "document_key": key,
-                "occurrence": occurrence,
-                "span": Value::Null,
-            }));
-    }
-    let provenance_rows = origins
-        .into_iter()
-        .map(|(digest, occurrences)| {
-            json!({
-                "structural_sha256": hex_digest(&digest),
-                "occurrences": occurrences,
-            })
-        })
-        .collect::<Vec<_>>();
+    let root_digests = if matches!(request.format, Format::RdfXml) {
+        document
+            .axioms
+            .iter()
+            .map(|value| c::structural_digest(&value.value))
+            .chain(
+                document
+                    .extensions
+                    .iter()
+                    .map(|value| c::structural_digest(&value.0)),
+            )
+            .collect::<Vec<_>>()
+    } else {
+        document
+            .annotations
+            .iter()
+            .map(|value| c::structural_digest(value))
+            .chain(
+                document
+                    .axioms
+                    .iter()
+                    .map(|value| c::structural_digest(&value.value)),
+            )
+            .chain(
+                document
+                    .extensions
+                    .iter()
+                    .map(|value| c::structural_digest(&value.0)),
+            )
+            .collect::<Vec<_>>()
+    };
+    let provenance_rows =
+        provenance_rows(root_digests, &key, matches!(request.format, Format::RdfXml))?;
     let provenance = json!({
         "origins": provenance_rows,
         "origin_entry_count": provenance_rows.len(),
@@ -2837,6 +2954,8 @@ mod tests {
         "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c";
     const OWLXML_OPTIONS_SHA256: &str =
         "a24b7713aa79cad899ffe819abc25ac9e53f8b9657b2e22507b1745073a8253e";
+    const RDFXML_OPTIONS_SHA256: &str =
+        "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f";
 
     fn contract(source: &[u8], corpus_id: &str) -> Value {
         contract_for(
@@ -2935,6 +3054,97 @@ mod tests {
         assert_eq!(
             value["contract_sha256"],
             "1805ba8326e393c14a9f383ed00df5c948e49ebcf0356d024652a53f427a3e96"
+        );
+    }
+
+    #[test]
+    fn rdfxml_simple_literals_match_reference_contract_vector() {
+        let source = concat!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n",
+            "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+            "xmlns:owl=\"http://www.w3.org/2002/07/owl#\">\n",
+            "  <owl:Ontology rdf:about=\"urn:o\">\n",
+            "    <owl:versionInfo>alpha</owl:versionInfo>\n",
+            "  </owl:Ontology>\n",
+            "</rdf:RDF>\n",
+        );
+        let value = contract_for(
+            source.as_bytes(),
+            "probe-horned-rdf-literal",
+            Format::RdfXml,
+            RDFXML_OPTIONS_SHA256,
+        );
+        assert_eq!(
+            value["contract_sha256"],
+            "6bf684d79b456ab3243205d6e9fd436c2f013590c2226b09f83cb37c4c8e008d"
+        );
+    }
+
+    #[test]
+    fn rdfxml_equivalence_components_match_reference_contract_vector() {
+        let source = concat!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n",
+            "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" ",
+            "xmlns:owl=\"http://www.w3.org/2002/07/owl#\">\n",
+            "  <owl:Ontology rdf:about=\"urn:o\"/>\n",
+            "  <owl:Class rdf:about=\"urn:A\">\n",
+            "    <owl:equivalentClass rdf:resource=\"urn:B\"/>\n",
+            "    <owl:equivalentClass rdf:resource=\"urn:C\"/>\n",
+            "  </owl:Class>\n",
+            "  <owl:Class rdf:about=\"urn:B\"/>\n",
+            "  <owl:Class rdf:about=\"urn:C\"/>\n",
+            "</rdf:RDF>\n",
+        );
+        let value = contract_for(
+            source.as_bytes(),
+            "probe-horned-rdf-equivalence",
+            Format::RdfXml,
+            RDFXML_OPTIONS_SHA256,
+        );
+        assert_eq!(value["ledger"]["inventories"]["axioms"]["count"], 4);
+        assert_eq!(
+            value["contract_sha256"],
+            "9034dbb5b3448dde1baf34adf9e5b92948dd677e8d83d6d2b29d865dad7c9c3e"
+        );
+    }
+
+    #[test]
+    fn rdfxml_provenance_ordinals_are_digest_canonical_and_evidence_sensitive() {
+        let lower = vec![0x10; 32];
+        let upper = vec![0x20; 32];
+        let canonical = provenance_rows(
+            vec![upper.clone(), lower.clone(), upper.clone()],
+            "d1:test",
+            true,
+        )
+        .unwrap();
+        let reordered = provenance_rows(
+            vec![upper.clone(), upper.clone(), lower.clone()],
+            "d1:test",
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(canonical, reordered);
+        assert_eq!(canonical[0]["occurrences"][0]["occurrence"], 0);
+        assert_eq!(canonical[1]["occurrences"][0]["occurrence"], 1);
+        assert_eq!(canonical[1]["occurrences"][1]["occurrence"], 2);
+        assert_ne!(
+            canonical,
+            provenance_rows(
+                vec![upper.clone(), lower.clone(), upper.clone()],
+                "d1:other",
+                true,
+            )
+            .unwrap()
+        );
+        assert_ne!(
+            canonical,
+            provenance_rows(vec![upper.clone(), lower], "d1:test", true).unwrap()
+        );
+        assert_ne!(
+            canonical,
+            provenance_rows(vec![upper, vec![0x30; 32]], "d1:test", true).unwrap()
         );
     }
 
