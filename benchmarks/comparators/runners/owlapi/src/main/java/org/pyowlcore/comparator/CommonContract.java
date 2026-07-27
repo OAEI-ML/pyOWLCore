@@ -156,12 +156,51 @@ final class CommonContract {
 
     private static Map<String, Object> provenance(
             ModelMapper.MappedDocument document, RequestContext request, String key) {
+        List<Object> rows = originRows(
+                document.provenanceRoots,
+                key,
+                "rdfxml".equals(request.format) || "turtle".equals(request.format));
+        return object(
+                "document_count", 1,
+                "origin_entry_count", rows.size(),
+                "origins", rows,
+                "source_byte_count", request.source.length);
+    }
+
+    static List<Object> originRows(
+            List<byte[]> roots, String documentKey, boolean canonicalOrdinals) {
+        List<OriginOccurrence> occurrences = new ArrayList<>(roots.size());
+        byte[] documentKeyBytes = utf8(documentKey);
+        for (int priorOccurrence = 0; priorOccurrence < roots.size(); priorOccurrence++) {
+            occurrences.add(new OriginOccurrence(
+                    Canonical.structuralDigest(roots.get(priorOccurrence)),
+                    documentKey,
+                    documentKeyBytes,
+                    priorOccurrence));
+        }
+        if (canonicalOrdinals) {
+            occurrences.sort((left, right) -> {
+                int digestOrder = UNSIGNED_BYTES.compare(left.digest, right.digest);
+                if (digestOrder != 0) {
+                    return digestOrder;
+                }
+                int documentOrder =
+                        UNSIGNED_BYTES.compare(left.documentKeyBytes, right.documentKeyBytes);
+                if (documentOrder != 0) {
+                    return documentOrder;
+                }
+                return Integer.compare(left.priorOccurrence, right.priorOccurrence);
+            });
+        }
+
         NavigableMap<byte[], List<Object>> origins = new TreeMap<>(UNSIGNED_BYTES);
-        List<byte[]> roots = document.provenanceRoots;
-        for (int occurrence = 0; occurrence < roots.size(); occurrence++) {
-            byte[] digest = Canonical.structuralDigest(roots.get(occurrence));
-            origins.computeIfAbsent(digest, ignored -> new ArrayList<>())
-                    .add(object("document_key", key, "occurrence", occurrence, "span", null));
+        for (int ordinal = 0; ordinal < occurrences.size(); ordinal++) {
+            OriginOccurrence occurrence = occurrences.get(ordinal);
+            origins.computeIfAbsent(occurrence.digest, ignored -> new ArrayList<>())
+                    .add(object(
+                            "document_key", occurrence.documentKey,
+                            "occurrence", ordinal,
+                            "span", null));
         }
         List<Object> rows = new ArrayList<>();
         for (Map.Entry<byte[], List<Object>> entry : origins.entrySet()) {
@@ -169,11 +208,25 @@ final class CommonContract {
                     "occurrences", entry.getValue(),
                     "structural_sha256", Canonical.hex(entry.getKey())));
         }
-        return object(
-                "document_count", 1,
-                "origin_entry_count", rows.size(),
-                "origins", rows,
-                "source_byte_count", request.source.length);
+        return rows;
+    }
+
+    private static final class OriginOccurrence {
+        final byte[] digest;
+        final String documentKey;
+        final byte[] documentKeyBytes;
+        final int priorOccurrence;
+
+        OriginOccurrence(
+                byte[] digest,
+                String documentKey,
+                byte[] documentKeyBytes,
+                int priorOccurrence) {
+            this.digest = digest;
+            this.documentKey = documentKey;
+            this.documentKeyBytes = documentKeyBytes;
+            this.priorOccurrence = priorOccurrence;
+        }
     }
 
     private static Map<String, Object> inventories(

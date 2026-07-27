@@ -4,9 +4,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.NavigableSet;
-import java.util.Optional;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -76,6 +77,32 @@ final class ModelMapper {
         }
     }
 
+    private static final class EquivalenceComponent<T> {
+        final Set<T> members = new LinkedHashSet<>();
+        final Set<OWLAnnotation> annotations = new LinkedHashSet<>();
+
+        EquivalenceComponent(
+                Collection<? extends T> members,
+                Collection<OWLAnnotation> annotations) {
+            this.members.addAll(members);
+            this.annotations.addAll(annotations);
+        }
+
+        boolean overlaps(Collection<? extends T> values) {
+            for (T value : values) {
+                if (members.contains(value)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        void merge(EquivalenceComponent<T> other) {
+            members.addAll(other.members);
+            annotations.addAll(other.annotations);
+        }
+    }
+
     private final NavigableSet<byte[]> signature = new TreeSet<>(UNSIGNED_BYTES);
 
     MappedDocument map(OWLOntology ontology, String format) {
@@ -102,7 +129,13 @@ final class ModelMapper {
         List<MappedAxiom> axioms = new ArrayList<>();
         List<MappedAxiom> extensions = new ArrayList<>();
         List<SourceAxiom> sourceAxioms = new ArrayList<>();
-        ontology.axioms().forEach(axiom -> {
+        List<OWLAxiom> ontologyAxioms =
+                ontology.axioms().collect(Collectors.toCollection(ArrayList::new));
+        if (isRdfGraph(format)) {
+            ontologyAxioms = coalesceRdfEquivalenceAxioms(
+                    ontologyAxioms, ontology.getOWLOntologyManager().getOWLDataFactory());
+        }
+        ontologyAxioms.forEach(axiom -> {
             byte[] mapped = axiom(axiom, true);
             byte[] logical = axiom.isLogicalAxiom() ? axiom(axiom, false) : null;
             MappedAxiom row = new MappedAxiom(mapped, logical);
@@ -133,260 +166,102 @@ final class ModelMapper {
                 provenanceRoots);
     }
 
+    private static boolean isRdfGraph(String format) {
+        return "rdfxml".equals(format) || "turtle".equals(format);
+    }
+
+    private static List<OWLAxiom> coalesceRdfEquivalenceAxioms(
+            List<OWLAxiom> axioms, OWLDataFactory dataFactory) {
+        List<OWLAxiom> output = new ArrayList<>();
+        List<EquivalenceComponent<OWLClassExpression>> classes = new ArrayList<>();
+        List<EquivalenceComponent<OWLObjectPropertyExpression>> objectProperties =
+                new ArrayList<>();
+        List<EquivalenceComponent<OWLDataPropertyExpression>> dataProperties =
+                new ArrayList<>();
+        List<EquivalenceComponent<OWLIndividual>> individuals = new ArrayList<>();
+
+        for (OWLAxiom value : axioms) {
+            Set<OWLAnnotation> annotations = value.annotations()
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (value instanceof OWLEquivalentClassesAxiom) {
+                mergeComponent(
+                        classes,
+                        ((OWLEquivalentClassesAxiom) value).classExpressions()
+                                .collect(Collectors.toCollection(LinkedHashSet::new)),
+                        annotations);
+            } else if (value instanceof OWLEquivalentObjectPropertiesAxiom) {
+                mergeComponent(
+                        objectProperties,
+                        ((OWLEquivalentObjectPropertiesAxiom) value).properties()
+                                .collect(Collectors.toCollection(LinkedHashSet::new)),
+                        annotations);
+            } else if (value instanceof OWLEquivalentDataPropertiesAxiom) {
+                mergeComponent(
+                        dataProperties,
+                        ((OWLEquivalentDataPropertiesAxiom) value).properties()
+                                .collect(Collectors.toCollection(LinkedHashSet::new)),
+                        annotations);
+            } else if (value instanceof OWLSameIndividualAxiom) {
+                mergeComponent(
+                        individuals,
+                        ((OWLSameIndividualAxiom) value).individuals()
+                                .collect(Collectors.toCollection(LinkedHashSet::new)),
+                        annotations);
+            } else {
+                output.add(value);
+            }
+        }
+
+        classes.forEach(component -> output.add(dataFactory.getOWLEquivalentClassesAxiom(
+                component.members, component.annotations)));
+        objectProperties.forEach(component ->
+                output.add(dataFactory.getOWLEquivalentObjectPropertiesAxiom(
+                        component.members, component.annotations)));
+        dataProperties.forEach(component ->
+                output.add(dataFactory.getOWLEquivalentDataPropertiesAxiom(
+                        component.members, component.annotations)));
+        individuals.forEach(component -> output.add(dataFactory.getOWLSameIndividualAxiom(
+                component.members, component.annotations)));
+        return output;
+    }
+
+    private static <T> void mergeComponent(
+            List<EquivalenceComponent<T>> components,
+            Collection<? extends T> members,
+            Collection<OWLAnnotation> annotations) {
+        EquivalenceComponent<T> merged = new EquivalenceComponent<>(members, annotations);
+        for (int index = components.size() - 1; index >= 0; index--) {
+            EquivalenceComponent<T> candidate = components.get(index);
+            if (merged.overlaps(candidate.members)) {
+                merged.merge(candidate);
+                components.remove(index);
+            }
+        }
+        components.add(merged);
+    }
+
     private static List<byte[]> provenanceRoots(
             String format,
             List<byte[]> annotations,
             List<SourceAxiom> sourceAxioms,
             List<MappedAxiom> axioms,
             List<MappedAxiom> extensions) {
-        if (!"rdfxml".equals(format) && !"turtle".equals(format)) {
+        if (!isRdfGraph(format)) {
             List<byte[]> roots = new ArrayList<>(annotations);
             axioms.forEach(value -> roots.add(value.value));
             extensions.forEach(value -> roots.add(value.value));
             return roots;
         }
 
-        List<SourceAxiom> declarations = new ArrayList<>();
-        List<SourceAxiom> special = new ArrayList<>();
-        List<SourceAxiom> equivalences = new ArrayList<>();
-        List<SourceAxiom> simple = new ArrayList<>();
+        List<byte[]> roots = new ArrayList<>(sourceAxioms.size());
         for (SourceAxiom value : sourceAxioms) {
             if (value.source instanceof SWRLRule) {
                 throw new IneligibleException(
-                        "RDF SWRL provenance order is not independently recoverable from OWLAPI");
+                        "RDF SWRL common-contract mapping cannot be proven exact from OWLAPI");
             }
-            if (value.source instanceof OWLDeclarationAxiom) {
-                declarations.add(value);
-            } else if (isRdfSpecial(value.source)) {
-                special.add(value);
-            } else if (isRdfEquivalence(value.source)) {
-                equivalences.add(value);
-            } else {
-                simple.add(value);
-            }
-        }
-
-        declarations.sort(Comparator.comparing(value -> rdfDeclarationKey(
-                (OWLDeclarationAxiom) value.source)));
-        sortRecoverable(special, ModelMapper::rdfSpecialKey,
-                "multiple RDF special-axiom blank-node orderings");
-        sortRecoverable(equivalences, ModelMapper::rdfEquivalenceKey,
-                "multiple RDF equivalence-component orderings");
-        sortRecoverable(simple, ModelMapper::rdfSimpleKey,
-                "multiple RDF simple-axiom orderings");
-
-        List<byte[]> roots = new ArrayList<>(sourceAxioms.size());
-        for (List<SourceAxiom> group : List.of(declarations, special, equivalences, simple)) {
-            group.forEach(value -> roots.add(value.mapped.value));
+            roots.add(value.mapped.value);
         }
         return roots;
-    }
-
-    private static void sortRecoverable(
-            List<SourceAxiom> values,
-            Function<OWLAxiom, Optional<String>> key,
-            String reason) {
-        if (values.size() < 2) {
-            return;
-        }
-        List<String> keys = values.stream()
-                .map(value -> key.apply(value.source).orElseThrow(
-                        () -> new IneligibleException(reason)))
-                .collect(Collectors.toCollection(ArrayList::new));
-        List<Integer> order = new ArrayList<>();
-        for (int index = 0; index < values.size(); index++) {
-            order.add(index);
-        }
-        order.sort(Comparator.comparing(keys::get));
-        List<SourceAxiom> sorted = order.stream()
-                .map(values::get)
-                .collect(Collectors.toCollection(ArrayList::new));
-        values.clear();
-        values.addAll(sorted);
-    }
-
-    private static boolean isRdfSpecial(OWLAxiom value) {
-        if (value instanceof OWLNegativeObjectPropertyAssertionAxiom
-                || value instanceof OWLNegativeDataPropertyAssertionAxiom) {
-            return true;
-        }
-        if (value instanceof OWLDisjointClassesAxiom) {
-            return ((OWLDisjointClassesAxiom) value).classExpressions().count() > 2;
-        }
-        if (value instanceof OWLDisjointObjectPropertiesAxiom) {
-            return ((OWLDisjointObjectPropertiesAxiom) value).properties().count() > 2;
-        }
-        if (value instanceof OWLDisjointDataPropertiesAxiom) {
-            return ((OWLDisjointDataPropertiesAxiom) value).properties().count() > 2;
-        }
-        return value instanceof OWLDifferentIndividualsAxiom
-                && ((OWLDifferentIndividualsAxiom) value).individuals().count() > 2;
-    }
-
-    private static boolean isRdfEquivalence(OWLAxiom value) {
-        return value instanceof OWLEquivalentClassesAxiom
-                || value instanceof OWLEquivalentObjectPropertiesAxiom
-                || value instanceof OWLEquivalentDataPropertiesAxiom
-                || value instanceof OWLSameIndividualAxiom
-                || value instanceof OWLDatatypeDefinitionAxiom;
-    }
-
-    private static String rdfDeclarationKey(OWLDeclarationAxiom value) {
-        return rdfResource(value.getEntity().getIRI().toString()) + rdfResource(
-                "http://www.w3.org/1999/02/22-rdf-syntax-ns#type") + rdfResource(
-                declarationTypeIri(value.getEntity()));
-    }
-
-    private static String declarationTypeIri(OWLEntity value) {
-        if (value instanceof OWLClass) {
-            return "http://www.w3.org/2002/07/owl#Class";
-        }
-        if (value instanceof OWLDatatype) {
-            return "http://www.w3.org/2000/01/rdf-schema#Datatype";
-        }
-        if (value instanceof OWLObjectProperty) {
-            return "http://www.w3.org/2002/07/owl#ObjectProperty";
-        }
-        if (value instanceof OWLDataProperty) {
-            return "http://www.w3.org/2002/07/owl#DatatypeProperty";
-        }
-        if (value instanceof OWLAnnotationProperty) {
-            return "http://www.w3.org/2002/07/owl#AnnotationProperty";
-        }
-        if (value instanceof OWLNamedIndividual) {
-            return "http://www.w3.org/2002/07/owl#NamedIndividual";
-        }
-        throw new IneligibleException("RDF declaration kind is unsupported");
-    }
-
-    private static Optional<String> rdfSpecialKey(OWLAxiom value) {
-        // Multiple special axioms are ordered by RDF blank-node labels, which OWLAPI does not
-        // retain. A single special axiom remains exact because the category position is fixed.
-        return Optional.empty();
-    }
-
-    private static Optional<String> rdfEquivalenceKey(OWLAxiom value) {
-        List<String> iris = new ArrayList<>();
-        String family;
-        if (value instanceof OWLEquivalentClassesAxiom) {
-            family = "0";
-            ((OWLEquivalentClassesAxiom) value).classExpressions().forEach(expression -> {
-                if (expression.isAnonymous()) {
-                    iris.add(null);
-                } else {
-                    iris.add(expression.asOWLClass().getIRI().toString());
-                }
-            });
-        } else if (value instanceof OWLDatatypeDefinitionAxiom) {
-            family = "0";
-            OWLDatatypeDefinitionAxiom axiom = (OWLDatatypeDefinitionAxiom) value;
-            if (!(axiom.getDataRange() instanceof OWLDatatype)) {
-                return Optional.empty();
-            }
-            iris.add(axiom.getDatatype().getIRI().toString());
-            iris.add(((OWLDatatype) axiom.getDataRange()).getIRI().toString());
-        } else if (value instanceof OWLEquivalentObjectPropertiesAxiom) {
-            family = "1";
-            ((OWLEquivalentObjectPropertiesAxiom) value).properties().forEach(property -> {
-                if (property.isAnonymous()) {
-                    iris.add(null);
-                } else {
-                    iris.add(property.asOWLObjectProperty().getIRI().toString());
-                }
-            });
-        } else if (value instanceof OWLEquivalentDataPropertiesAxiom) {
-            family = "1";
-            ((OWLEquivalentDataPropertiesAxiom) value).properties()
-                    .forEach(property -> iris.add(property.asOWLDataProperty().getIRI().toString()));
-        } else if (value instanceof OWLSameIndividualAxiom) {
-            family = "2";
-            ((OWLSameIndividualAxiom) value).individuals().forEach(individual -> {
-                if (individual.isAnonymous()) {
-                    iris.add(null);
-                } else {
-                    iris.add(individual.asOWLNamedIndividual().getIRI().toString());
-                }
-            });
-        } else {
-            return Optional.empty();
-        }
-        if (iris.isEmpty() || iris.stream().anyMatch(java.util.Objects::isNull)) {
-            return Optional.empty();
-        }
-        return Optional.of(family + "\u0000" + iris.stream().min(String::compareTo).orElseThrow());
-    }
-
-    private static Optional<String> rdfSimpleKey(OWLAxiom value) {
-        if (value instanceof OWLAnnotationAssertionAxiom) {
-            OWLAnnotationAssertionAxiom axiom = (OWLAnnotationAssertionAxiom) value;
-            if (!(axiom.getSubject() instanceof IRI)) {
-                return Optional.empty();
-            }
-            return rdfAnnotationValueKey(axiom.getValue()).map(object ->
-                    rdfResource(axiom.getSubject().toString())
-                            + rdfResource(axiom.getProperty().getIRI().toString()) + object);
-        }
-        if (value instanceof OWLSubClassOfAxiom) {
-            OWLSubClassOfAxiom axiom = (OWLSubClassOfAxiom) value;
-            if (axiom.getSubClass().isAnonymous() || axiom.getSuperClass().isAnonymous()) {
-                return Optional.empty();
-            }
-            return Optional.of(rdfResource(axiom.getSubClass().asOWLClass().getIRI().toString())
-                    + rdfResource("http://www.w3.org/2000/01/rdf-schema#subClassOf")
-                    + rdfResource(axiom.getSuperClass().asOWLClass().getIRI().toString()));
-        }
-        if (value instanceof OWLClassAssertionAxiom) {
-            OWLClassAssertionAxiom axiom = (OWLClassAssertionAxiom) value;
-            if (axiom.getIndividual().isAnonymous() || axiom.getClassExpression().isAnonymous()) {
-                return Optional.empty();
-            }
-            return Optional.of(rdfResource(
-                    axiom.getIndividual().asOWLNamedIndividual().getIRI().toString())
-                    + rdfResource("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
-                    + rdfResource(axiom.getClassExpression().asOWLClass().getIRI().toString()));
-        }
-        if (value instanceof OWLObjectPropertyAssertionAxiom) {
-            OWLObjectPropertyAssertionAxiom axiom = (OWLObjectPropertyAssertionAxiom) value;
-            if (axiom.getSubject().isAnonymous() || axiom.getObject().isAnonymous()
-                    || axiom.getProperty().isAnonymous()) {
-                return Optional.empty();
-            }
-            return Optional.of(rdfResource(
-                    axiom.getSubject().asOWLNamedIndividual().getIRI().toString())
-                    + rdfResource(axiom.getProperty().asOWLObjectProperty().getIRI().toString())
-                    + rdfResource(axiom.getObject().asOWLNamedIndividual().getIRI().toString()));
-        }
-        if (value instanceof OWLDataPropertyAssertionAxiom) {
-            OWLDataPropertyAssertionAxiom axiom = (OWLDataPropertyAssertionAxiom) value;
-            if (axiom.getSubject().isAnonymous()) {
-                return Optional.empty();
-            }
-            return Optional.of(rdfResource(
-                    axiom.getSubject().asOWLNamedIndividual().getIRI().toString())
-                    + rdfResource(axiom.getProperty().asOWLDataProperty().getIRI().toString())
-                    + rdfLiteral(axiom.getObject()));
-        }
-        return Optional.empty();
-    }
-
-    private static Optional<String> rdfAnnotationValueKey(OWLAnnotationValue value) {
-        if (value instanceof IRI) {
-            return Optional.of(rdfResource(value.toString()));
-        }
-        if (value instanceof OWLLiteral) {
-            return Optional.of(rdfLiteral((OWLLiteral) value));
-        }
-        return Optional.empty();
-    }
-
-    private static String rdfResource(String iri) {
-        return "I\u0000" + iri + "\u0000";
-    }
-
-    private static String rdfLiteral(OWLLiteral value) {
-        String language = value.hasLang() ? value.getLang().toLowerCase(java.util.Locale.ROOT) : "";
-        String datatype = value.hasLang() ? "" : value.getDatatype().getIRI().toString();
-        return "L\u0000" + value.getLiteral() + "\u0000" + language + "\u0000" + datatype;
     }
 
     private static void deduplicate(List<MappedAxiom> values) {

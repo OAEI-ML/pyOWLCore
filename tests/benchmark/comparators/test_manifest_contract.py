@@ -114,7 +114,7 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     owlapi_runner = Path("benchmarks/comparators/runners/owlapi/launcher.sh")
     assert owlapi.artifact_sha256 == OWLAPI_5_5_1_SHA256
     assert owlapi.runner_pin_state == "complete"
-    assert owlapi.runner_revision == "pyowl-core-owlapi-common-runner-v1"
+    assert owlapi.runner_revision == "pyowl-core-owlapi-common-runner-v2"
     assert owlapi.runner_sha256 == hashlib.sha256(owlapi_runner.read_bytes()).hexdigest()
     assert owlapi.artifact_is_runnable is True
 

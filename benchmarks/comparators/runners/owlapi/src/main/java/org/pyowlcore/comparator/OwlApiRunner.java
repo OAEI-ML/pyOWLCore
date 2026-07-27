@@ -56,7 +56,7 @@ public final class OwlApiRunner {
             "747b1a5269fee2992487dcde946f16dfbc14aa458d50854994a0485cf263ce07";
     private static final String ALLOCATOR = "HotSpot G1GC";
     private static final long THREAD_CEILING = 1;
-    private static final String RUNNER_REVISION = "pyowl-core-owlapi-common-runner-v1";
+    private static final String RUNNER_REVISION = "pyowl-core-owlapi-common-runner-v2";
     private static final List<String> FEATURES =
             List.of("isolated-java", "common-contract-v1");
 
