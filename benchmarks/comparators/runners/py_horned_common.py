@@ -45,6 +45,8 @@ from pyowl_core.document.provenance import (  # noqa: E402
     DetectionBasis,
     DigestKind,
     DocumentProvenance,
+    OriginIndex,
+    OriginIndexBuilder,
 )
 from tools.benchmark.comparators.adapters import (  # noqa: E402
     ADAPTER_REQUEST_SCHEMA,
@@ -81,7 +83,7 @@ FEATURES = (
 )
 ALLOCATOR = "Rust system allocator and CPython platform allocator"
 THREAD_CEILING = 1
-RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v2"
+RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v3"
 
 MAX_REQUEST_BYTES = 512 * 1024**2
 MAX_FRAME_HEADER_BYTES = 32
@@ -95,6 +97,7 @@ _FORMAT_SERIALIZATION = {
     DocumentFormat.OWL_XML: "owx",
     DocumentFormat.RDF_XML: "rdf",
 }
+_RDF_GRAPH_FORMATS = frozenset((DocumentFormat.RDF_XML, DocumentFormat.TURTLE))
 _FACET_IRIS = {
     "Length": _XSD + "length",
     "MinLength": _XSD + "minLength",
@@ -193,24 +196,34 @@ def _iri(value: object) -> IRI:
     return IRI(str(value))
 
 
-def _canonical_set(values: object) -> core_model.CanonicalSet[Any]:
-    return core_model.CanonicalSet(_map_node(item) for item in cast(Any, values))
+def _canonical_set(
+    values: object,
+    literal_datatype: core_model.Datatype,
+) -> core_model.CanonicalSet[Any]:
+    return core_model.CanonicalSet(_map_node(item, literal_datatype) for item in cast(Any, values))
 
 
 def _map_annotation(
     value: object,
+    literal_datatype: core_model.Datatype,
     nested: object = (),
 ) -> core_model.Annotation:
     if type(value).__name__ != "Annotation":
         raise RunnerContractError("expected py-horned Annotation")
     return core_model.Annotation(
-        cast(core_model.AnnotationProperty, _map_node(value.ap)),  # type: ignore[attr-defined]
-        cast(core_model.AnnotationValue, _map_node(value.av)),  # type: ignore[attr-defined]
-        _canonical_set(nested),
+        cast(  # type: ignore[attr-defined]
+            core_model.AnnotationProperty,
+            _map_node(value.ap, literal_datatype),
+        ),
+        cast(core_model.AnnotationValue, _map_node(value.av, literal_datatype)),  # type: ignore[attr-defined]
+        _canonical_set(nested, literal_datatype),
     )
 
 
-def _map_node(value: object) -> core_model.StructuralNode:
+def _map_node(
+    value: object,
+    literal_datatype: core_model.Datatype,
+) -> core_model.StructuralNode:
     """Map one py-horned model value without invoking a core syntax parser."""
 
     name = type(value).__name__
@@ -230,7 +243,7 @@ def _map_node(value: object) -> core_model.StructuralNode:
     if name == "AnonymousIndividual":
         return provisional_anonymous(value.first)  # type: ignore[attr-defined]
     if name == "SimpleLiteral":
-        return core_model.Literal(value.literal, core_model.XSD_STRING)  # type: ignore[attr-defined]
+        return core_model.Literal(value.literal, literal_datatype)  # type: ignore[attr-defined]
     if name == "LanguageLiteral":
         return core_model.Literal(  # type: ignore[attr-defined]
             value.literal,
@@ -243,10 +256,13 @@ def _map_node(value: object) -> core_model.StructuralNode:
             core_model.Datatype(_iri(value.datatype_iri)),
         )
     if name == "Annotation":
-        return _map_annotation(value)
+        return _map_annotation(value, literal_datatype)
     if name == "InverseObjectProperty":
         return core_model.ObjectInverseOf(
-            cast(core_model.ObjectProperty, _map_node(value.first))  # type: ignore[attr-defined]
+            cast(  # type: ignore[attr-defined]
+                core_model.ObjectProperty,
+                _map_node(value.first, literal_datatype),
+            )
         )
     if name == "FacetRestriction":
         facet_name = str(value.f).removeprefix("Facet.")  # type: ignore[attr-defined]
@@ -256,7 +272,7 @@ def _map_node(value: object) -> core_model.StructuralNode:
             raise RunnerContractError("unsupported py-horned facet") from error
         return core_model.FacetRestriction(
             IRI(facet),
-            cast(core_model.Literal, _map_node(value.l)),  # type: ignore[attr-defined]
+            cast(core_model.Literal, _map_node(value.l, literal_datatype)),  # type: ignore[attr-defined]
         )
 
     unary_sets = {
@@ -269,16 +285,20 @@ def _map_node(value: object) -> core_model.StructuralNode:
     }
     unary_set = unary_sets.get(name)
     if unary_set is not None:
-        return unary_set(_canonical_set(value.first))  # type: ignore[attr-defined]
+        return unary_set(_canonical_set(value.first, literal_datatype))  # type: ignore[attr-defined]
     if name == "DataComplementOf":
-        return core_model.DataComplementOf(_map_node(value.first))  # type: ignore[attr-defined]
+        return core_model.DataComplementOf(  # type: ignore[attr-defined]
+            _map_node(value.first, literal_datatype)
+        )
     if name == "DatatypeRestriction":
         return core_model.DatatypeRestriction(  # type: ignore[attr-defined]
-            cast(core_model.Datatype, _map_node(value.first)),
-            _canonical_set(value.second),
+            cast(core_model.Datatype, _map_node(value.first, literal_datatype)),
+            _canonical_set(value.second, literal_datatype),
         )
     if name == "ObjectComplementOf":
-        return core_model.ObjectComplementOf(_map_node(value.first))  # type: ignore[attr-defined]
+        return core_model.ObjectComplementOf(  # type: ignore[attr-defined]
+            _map_node(value.first, literal_datatype)
+        )
 
     object_quantifiers = {
         "ObjectSomeValuesFrom": core_model.ObjectSomeValuesFrom,
@@ -287,16 +307,18 @@ def _map_node(value: object) -> core_model.StructuralNode:
     object_quantifier = object_quantifiers.get(name)
     if object_quantifier is not None:
         return object_quantifier(
-            _map_node(value.ope),  # type: ignore[attr-defined]
-            _map_node(value.bce),  # type: ignore[attr-defined]
+            _map_node(value.ope, literal_datatype),  # type: ignore[attr-defined]
+            _map_node(value.bce, literal_datatype),  # type: ignore[attr-defined]
         )
     if name == "ObjectHasValue":
         return core_model.ObjectHasValue(  # type: ignore[attr-defined]
-            _map_node(value.ope),
-            _map_node(value.i),
+            _map_node(value.ope, literal_datatype),
+            _map_node(value.i, literal_datatype),
         )
     if name == "ObjectHasSelf":
-        return core_model.ObjectHasSelf(_map_node(value.first))  # type: ignore[attr-defined]
+        return core_model.ObjectHasSelf(  # type: ignore[attr-defined]
+            _map_node(value.first, literal_datatype)
+        )
     object_cardinalities = {
         "ObjectMinCardinality": core_model.ObjectMinCardinality,
         "ObjectMaxCardinality": core_model.ObjectMaxCardinality,
@@ -306,8 +328,8 @@ def _map_node(value: object) -> core_model.StructuralNode:
     if object_cardinality is not None:
         return object_cardinality(
             value.n,  # type: ignore[attr-defined]
-            _map_node(value.ope),  # type: ignore[attr-defined]
-            _map_node(value.bce),  # type: ignore[attr-defined]
+            _map_node(value.ope, literal_datatype),  # type: ignore[attr-defined]
+            _map_node(value.bce, literal_datatype),  # type: ignore[attr-defined]
         )
 
     data_quantifiers = {
@@ -317,13 +339,18 @@ def _map_node(value: object) -> core_model.StructuralNode:
     data_quantifier = data_quantifiers.get(name)
     if data_quantifier is not None:
         return data_quantifier(
-            (cast(core_model.DataProperty, _map_node(value.dp)),),  # type: ignore[attr-defined]
-            _map_node(value.dr),  # type: ignore[attr-defined]
+            (  # type: ignore[attr-defined]
+                cast(
+                    core_model.DataProperty,
+                    _map_node(value.dp, literal_datatype),
+                ),
+            ),
+            _map_node(value.dr, literal_datatype),  # type: ignore[attr-defined]
         )
     if name == "DataHasValue":
         return core_model.DataHasValue(  # type: ignore[attr-defined]
-            cast(core_model.DataProperty, _map_node(value.dp)),
-            cast(core_model.Literal, _map_node(value.l)),
+            cast(core_model.DataProperty, _map_node(value.dp, literal_datatype)),
+            cast(core_model.Literal, _map_node(value.l, literal_datatype)),
         )
     data_cardinalities = {
         "DataMinCardinality": core_model.DataMinCardinality,
@@ -334,40 +361,46 @@ def _map_node(value: object) -> core_model.StructuralNode:
     if data_cardinality is not None:
         return data_cardinality(
             value.n,  # type: ignore[attr-defined]
-            cast(core_model.DataProperty, _map_node(value.dp)),  # type: ignore[attr-defined]
-            _map_node(value.dr),  # type: ignore[attr-defined]
+            cast(  # type: ignore[attr-defined]
+                core_model.DataProperty,
+                _map_node(value.dp, literal_datatype),
+            ),
+            _map_node(value.dr, literal_datatype),  # type: ignore[attr-defined]
         )
 
     if name == "Variable":
         return core_swrl.Variable(_iri(value.first))  # type: ignore[attr-defined]
     if name == "ClassAtom":
         return core_swrl.ClassAtom(  # type: ignore[attr-defined]
-            _map_node(value.pred),
-            _map_node(value.arg),
+            _map_node(value.pred, literal_datatype),
+            _map_node(value.arg, literal_datatype),
         )
     if name == "DataRangeAtom":
         return core_swrl.DataRangeAtom(  # type: ignore[attr-defined]
-            _map_node(value.pred),
-            _map_node(value.arg),
+            _map_node(value.pred, literal_datatype),
+            _map_node(value.arg, literal_datatype),
         )
     if name == "ObjectPropertyAtom":
         source, target = value.args  # type: ignore[attr-defined]
         return core_swrl.ObjectPropertyAtom(
-            _map_node(value.pred),  # type: ignore[attr-defined]
-            _map_node(source),
-            _map_node(target),
+            _map_node(value.pred, literal_datatype),  # type: ignore[attr-defined]
+            _map_node(source, literal_datatype),
+            _map_node(target, literal_datatype),
         )
     if name == "DataPropertyAtom":
         source, target = value.args  # type: ignore[attr-defined]
         return core_swrl.DataPropertyAtom(
-            cast(core_model.DataProperty, _map_node(value.pred)),  # type: ignore[attr-defined]
-            _map_node(source),
-            _map_node(target),
+            cast(  # type: ignore[attr-defined]
+                core_model.DataProperty,
+                _map_node(value.pred, literal_datatype),
+            ),
+            _map_node(source, literal_datatype),
+            _map_node(target, literal_datatype),
         )
     if name == "BuiltInAtom":
         return core_swrl.BuiltInAtom(  # type: ignore[attr-defined]
             _iri(value.pred),
-            tuple(_map_node(item) for item in value.args),
+            tuple(_map_node(item, literal_datatype) for item in value.args),
         )
     if name in {"SameIndividualAtom", "DifferentIndividualsAtom"}:
         constructor = (
@@ -375,13 +408,20 @@ def _map_node(value: object) -> core_model.StructuralNode:
             if name == "SameIndividualAtom"
             else core_swrl.DifferentIndividualsAtom
         )
-        return constructor(_map_node(value.first), _map_node(value.second))  # type: ignore[attr-defined]
+        return constructor(  # type: ignore[attr-defined]
+            _map_node(value.first, literal_datatype),
+            _map_node(value.second, literal_datatype),
+        )
     raise RunnerContractError(f"unsupported py-horned structural value: {name}")
 
 
-def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
+def _map_axiom(
+    value: object,
+    annotations: object,
+    literal_datatype: core_model.Datatype,
+) -> core_model.AxiomNode:
     name = type(value).__name__
-    mapped_annotations = _canonical_set(annotations)
+    mapped_annotations = _canonical_set(annotations, literal_datatype)
     declarations = {
         "DeclareClass",
         "DeclareObjectProperty",
@@ -391,11 +431,14 @@ def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
         "DeclareDatatype",
     }
     if name in declarations:
-        return core_model.Declaration(_map_node(value.first), mapped_annotations)  # type: ignore[attr-defined]
+        return core_model.Declaration(  # type: ignore[attr-defined]
+            _map_node(value.first, literal_datatype),
+            mapped_annotations,
+        )
     if name == "SubClassOf":
         return core_model.SubClassOf(  # type: ignore[attr-defined]
-            _map_node(value.sub),
-            _map_node(value.sup),
+            _map_node(value.sub, literal_datatype),
+            _map_node(value.sup, literal_datatype),
             mapped_annotations,
         )
     class_sets = {
@@ -404,23 +447,26 @@ def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
     }
     class_set = class_sets.get(name)
     if class_set is not None:
-        return class_set(_canonical_set(value.first), mapped_annotations)  # type: ignore[attr-defined]
+        return class_set(  # type: ignore[attr-defined]
+            _canonical_set(value.first, literal_datatype),
+            mapped_annotations,
+        )
     if name == "DisjointUnion":
         return core_model.DisjointUnion(  # type: ignore[attr-defined]
-            cast(core_model.Class, _map_node(value.first)),
-            _canonical_set(value.second),
+            cast(core_model.Class, _map_node(value.first, literal_datatype)),
+            _canonical_set(value.second, literal_datatype),
             mapped_annotations,
         )
     if name == "SubObjectPropertyOf":
         sub = value.sub  # type: ignore[attr-defined]
         mapped_sub = (
-            core_model.ObjectPropertyChain(tuple(_map_node(item) for item in sub))
+            core_model.ObjectPropertyChain(tuple(_map_node(item, literal_datatype) for item in sub))
             if isinstance(sub, list)
-            else _map_node(sub)
+            else _map_node(sub, literal_datatype)
         )
         return core_model.SubObjectPropertyOf(
             mapped_sub,
-            _map_node(value.sup),  # type: ignore[attr-defined]
+            _map_node(value.sup, literal_datatype),  # type: ignore[attr-defined]
             mapped_annotations,
         )
     property_sets = {
@@ -431,11 +477,14 @@ def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
     }
     property_set = property_sets.get(name)
     if property_set is not None:
-        return property_set(_canonical_set(value.first), mapped_annotations)  # type: ignore[attr-defined]
+        return property_set(  # type: ignore[attr-defined]
+            _canonical_set(value.first, literal_datatype),
+            mapped_annotations,
+        )
     if name == "InverseObjectProperties":
         return core_model.InverseObjectProperties(  # type: ignore[attr-defined]
-            _map_node(value.first),
-            _map_node(value.second),
+            _map_node(value.first, literal_datatype),
+            _map_node(value.second, literal_datatype),
             mapped_annotations,
         )
     if name in {"ObjectPropertyDomain", "ObjectPropertyRange"}:
@@ -445,8 +494,8 @@ def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
             else core_model.ObjectPropertyRange
         )
         return constructor(
-            _map_node(value.ope),  # type: ignore[attr-defined]
-            _map_node(value.ce),  # type: ignore[attr-defined]
+            _map_node(value.ope, literal_datatype),  # type: ignore[attr-defined]
+            _map_node(value.ce, literal_datatype),  # type: ignore[attr-defined]
             mapped_annotations,
         )
     object_characteristics = {
@@ -460,41 +509,44 @@ def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
     }
     characteristic = object_characteristics.get(name)
     if characteristic is not None:
-        return characteristic(_map_node(value.first), mapped_annotations)  # type: ignore[attr-defined]
+        return characteristic(  # type: ignore[attr-defined]
+            _map_node(value.first, literal_datatype),
+            mapped_annotations,
+        )
     if name == "SubDataPropertyOf":
         return core_model.SubDataPropertyOf(  # type: ignore[attr-defined]
-            cast(core_model.DataProperty, _map_node(value.sub)),
-            cast(core_model.DataProperty, _map_node(value.sup)),
+            cast(core_model.DataProperty, _map_node(value.sub, literal_datatype)),
+            cast(core_model.DataProperty, _map_node(value.sup, literal_datatype)),
             mapped_annotations,
         )
     if name == "DataPropertyDomain":
         return core_model.DataPropertyDomain(  # type: ignore[attr-defined]
-            cast(core_model.DataProperty, _map_node(value.dp)),
-            _map_node(value.ce),
+            cast(core_model.DataProperty, _map_node(value.dp, literal_datatype)),
+            _map_node(value.ce, literal_datatype),
             mapped_annotations,
         )
     if name == "DataPropertyRange":
         return core_model.DataPropertyRange(  # type: ignore[attr-defined]
-            cast(core_model.DataProperty, _map_node(value.dp)),
-            _map_node(value.dr),
+            cast(core_model.DataProperty, _map_node(value.dp, literal_datatype)),
+            _map_node(value.dr, literal_datatype),
             mapped_annotations,
         )
     if name == "FunctionalDataProperty":
         return core_model.FunctionalDataProperty(  # type: ignore[attr-defined]
-            cast(core_model.DataProperty, _map_node(value.first)),
+            cast(core_model.DataProperty, _map_node(value.first, literal_datatype)),
             mapped_annotations,
         )
     if name == "DatatypeDefinition":
         return core_model.DatatypeDefinition(  # type: ignore[attr-defined]
-            cast(core_model.Datatype, _map_node(value.kind)),
-            _map_node(value.range),
+            cast(core_model.Datatype, _map_node(value.kind, literal_datatype)),
+            _map_node(value.range, literal_datatype),
             mapped_annotations,
         )
     if name == "HasKey":
         object_properties: list[core_model.StructuralNode] = []
         data_properties: list[core_model.StructuralNode] = []
         for item in value.vpe:  # type: ignore[attr-defined]
-            mapped = _map_node(item)
+            mapped = _map_node(item, literal_datatype)
             if isinstance(mapped, (core_model.ObjectProperty, core_model.ObjectInverseOf)):
                 object_properties.append(mapped)
             elif isinstance(mapped, core_model.DataProperty):
@@ -502,7 +554,7 @@ def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
             else:
                 raise RunnerContractError("py-horned HasKey contains a non-key property")
         return core_model.HasKey(
-            _map_node(value.ce),  # type: ignore[attr-defined]
+            _map_node(value.ce, literal_datatype),  # type: ignore[attr-defined]
             core_model.CanonicalSet(object_properties),
             core_model.CanonicalSet(data_properties),
             mapped_annotations,
@@ -513,11 +565,14 @@ def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
     }
     individual_set = individual_sets.get(name)
     if individual_set is not None:
-        return individual_set(_canonical_set(value.first), mapped_annotations)  # type: ignore[attr-defined]
+        return individual_set(  # type: ignore[attr-defined]
+            _canonical_set(value.first, literal_datatype),
+            mapped_annotations,
+        )
     if name == "ClassAssertion":
         return core_model.ClassAssertion(  # type: ignore[attr-defined]
-            _map_node(value.ce),
-            _map_node(value.i),
+            _map_node(value.ce, literal_datatype),
+            _map_node(value.i, literal_datatype),
             mapped_annotations,
         )
     if name in {"ObjectPropertyAssertion", "NegativeObjectPropertyAssertion"}:
@@ -527,9 +582,9 @@ def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
             else core_model.NegativeObjectPropertyAssertion
         )
         return constructor(
-            _map_node(value.ope),  # type: ignore[attr-defined]
-            _map_node(value.source),  # type: ignore[attr-defined]
-            _map_node(value.target),  # type: ignore[attr-defined]
+            _map_node(value.ope, literal_datatype),  # type: ignore[attr-defined]
+            _map_node(value.source, literal_datatype),  # type: ignore[attr-defined]
+            _map_node(value.target, literal_datatype),  # type: ignore[attr-defined]
             mapped_annotations,
         )
     if name in {"DataPropertyAssertion", "NegativeDataPropertyAssertion"}:
@@ -539,23 +594,35 @@ def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
             else core_model.NegativeDataPropertyAssertion
         )
         return constructor(
-            cast(core_model.DataProperty, _map_node(value.dp)),  # type: ignore[attr-defined]
-            _map_node(value.source),  # type: ignore[attr-defined]
-            cast(core_model.Literal, _map_node(value.target)),  # type: ignore[attr-defined]
+            cast(  # type: ignore[attr-defined]
+                core_model.DataProperty,
+                _map_node(value.dp, literal_datatype),
+            ),
+            _map_node(value.source, literal_datatype),  # type: ignore[attr-defined]
+            cast(  # type: ignore[attr-defined]
+                core_model.Literal,
+                _map_node(value.target, literal_datatype),
+            ),
             mapped_annotations,
         )
     if name == "AnnotationAssertion":
-        annotation = _map_annotation(value.ann)  # type: ignore[attr-defined]
+        annotation = _map_annotation(value.ann, literal_datatype)  # type: ignore[attr-defined]
         return core_model.AnnotationAssertion(
             annotation.property,
-            _map_node(value.subject),  # type: ignore[attr-defined]
+            _map_node(value.subject, literal_datatype),  # type: ignore[attr-defined]
             annotation.value,
             mapped_annotations,
         )
     if name == "SubAnnotationPropertyOf":
         return core_model.SubAnnotationPropertyOf(  # type: ignore[attr-defined]
-            cast(core_model.AnnotationProperty, _map_node(value.sub)),
-            cast(core_model.AnnotationProperty, _map_node(value.sup)),
+            cast(
+                core_model.AnnotationProperty,
+                _map_node(value.sub, literal_datatype),
+            ),
+            cast(
+                core_model.AnnotationProperty,
+                _map_node(value.sup, literal_datatype),
+            ),
             mapped_annotations,
         )
     if name in {"AnnotationPropertyDomain", "AnnotationPropertyRange"}:
@@ -565,19 +632,96 @@ def _map_axiom(value: object, annotations: object) -> core_model.AxiomNode:
             else core_model.AnnotationPropertyRange
         )
         return constructor(
-            cast(core_model.AnnotationProperty, _map_node(value.ap)),  # type: ignore[attr-defined]
+            cast(  # type: ignore[attr-defined]
+                core_model.AnnotationProperty,
+                _map_node(value.ap, literal_datatype),
+            ),
             _iri(value.iri),  # type: ignore[attr-defined]
             mapped_annotations,
         )
     raise RunnerContractError(f"unsupported py-horned axiom: {name}")
 
 
-def _map_rule(value: object, annotations: object) -> core_swrl.SWRLRule:
+def _map_rule(
+    value: object,
+    annotations: object,
+    literal_datatype: core_model.Datatype,
+) -> core_swrl.SWRLRule:
     return core_swrl.SWRLRule(  # type: ignore[attr-defined]
-        body=_canonical_set(value.body),  # type: ignore[attr-defined]
-        head=_canonical_set(value.head),  # type: ignore[attr-defined]
-        annotations=_canonical_set(annotations),
+        body=_canonical_set(value.body, literal_datatype),  # type: ignore[attr-defined]
+        head=_canonical_set(value.head, literal_datatype),  # type: ignore[attr-defined]
+        annotations=_canonical_set(annotations, literal_datatype),
     )
+
+
+def _literal_datatype(format: DocumentFormat) -> core_model.Datatype:
+    if format in _RDF_GRAPH_FORMATS or format is DocumentFormat.OWL_XML:
+        return core_model.XSD_STRING
+    return core_model.RDF_PLAIN_LITERAL
+
+
+def _coalesce_rdf_equivalence_axioms(
+    axioms: list[core_model.AxiomNode],
+) -> list[core_model.AxiomNode]:
+    member_fields = {
+        core_model.EquivalentClasses: "expressions",
+        core_model.EquivalentObjectProperties: "properties",
+        core_model.EquivalentDataProperties: "properties",
+        core_model.SameIndividual: "individuals",
+    }
+    output: list[tuple[int, core_model.AxiomNode]] = []
+    components: dict[
+        type[core_model.AxiomNode],
+        list[
+            tuple[
+                int,
+                set[core_model.StructuralNode],
+                set[core_model.Annotation],
+            ]
+        ],
+    ] = {}
+    for occurrence, axiom in enumerate(axioms):
+        member_field = member_fields.get(type(axiom))
+        if member_field is None:
+            output.append((occurrence, axiom))
+            continue
+        members = set(getattr(axiom, member_field))
+        annotations = set(axiom.annotations)
+        first_occurrence = occurrence
+        grouped = components.setdefault(type(axiom), [])
+        index = 0
+        while index < len(grouped):
+            if members.isdisjoint(grouped[index][1]):
+                index += 1
+                continue
+            other_occurrence, other_members, other_annotations = grouped.pop(index)
+            first_occurrence = min(first_occurrence, other_occurrence)
+            members.update(other_members)
+            annotations.update(other_annotations)
+            index = 0
+        grouped.append((first_occurrence, members, annotations))
+
+    for axiom_type, grouped in components.items():
+        for occurrence, members, annotations in grouped:
+            output.append(
+                (
+                    occurrence,
+                    axiom_type(
+                        core_model.CanonicalSet(members),
+                        core_model.CanonicalSet(annotations),
+                    ),
+                )
+            )
+    output.sort(key=lambda row: row[0])
+    return [axiom for _occurrence, axiom in output]
+
+
+def _rdf_origin_index(document: OntologyDocument) -> OriginIndex:
+    builder = OriginIndexBuilder(document.document_fingerprint.hex)
+    roots = (*document.axioms, *document.extension_components)
+    for occurrence, root in enumerate(roots):
+        builder.add(root, occurrence)
+    return builder.freeze()
 
 
 def _map_document(
@@ -598,6 +742,7 @@ def _map_document(
     ontology_annotations: list[core_model.Annotation] = []
     axioms: list[core_model.AxiomNode] = []
     extensions: list[core_model.StructuralNode] = []
+    literal_datatype = _literal_datatype(format)
     for annotated in ontology.get_components():  # type: ignore[attr-defined]
         component = annotated.component
         annotations = annotated.ann
@@ -607,11 +752,16 @@ def _map_document(
         if name == "Import":
             imports.append(_iri(component.first))
         elif name == "OntologyAnnotation":
-            ontology_annotations.append(_map_annotation(component.first, annotations))
+            ontology_annotations.append(
+                _map_annotation(component.first, literal_datatype, annotations)
+            )
         elif name == "Rule":
-            extensions.append(_map_rule(component, annotations))
+            extensions.append(_map_rule(component, annotations, literal_datatype))
         else:
-            axioms.append(_map_axiom(component, annotations))
+            axioms.append(_map_axiom(component, annotations, literal_datatype))
+
+    if format in _RDF_GRAPH_FORMATS:
+        axioms = _coalesce_rdf_equivalence_axioms(axioms)
 
     frozen_imports, frozen_annotations, frozen_axioms, frozen_extensions = (
         freeze_document_anonymous(
@@ -635,7 +785,7 @@ def _map_document(
         parser="pyhornedowl 1.4.0",
         backend="external-py-horned",
     )
-    return OntologyDocument(
+    document = OntologyDocument(
         ontology_id,
         IRI(document_iri),
         frozen_imports,
@@ -644,6 +794,9 @@ def _map_document(
         frozen_extensions,
         provenance,
     )
+    if format in _RDF_GRAPH_FORMATS:
+        document = replace(document, origin_index=_rdf_origin_index(document))
+    return document
 
 
 @contextmanager
