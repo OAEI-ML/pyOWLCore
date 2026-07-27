@@ -65,7 +65,7 @@ thread_ceiling = 1
 launcher_env = "PYOWL_CORE_DIRECT_RUNNER"
 runner_pin_state = "complete"
 runner_revision = "pyowl-core-direct-rust-common-runner-v2"
-runner_sha256 = "06d8d9da5492921343315dd553ba963c5d27a166c3d7d9e6dc00b8364640f21a"
+runner_sha256 = "e6b003221ea7d8dbca409da725a233e989ef9560871fea56e690a668688285f5"
 gating = true
 required = true
 
