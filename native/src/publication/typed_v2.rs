@@ -1479,13 +1479,6 @@ fn validate_table(
         let live_external = external_bytes
             .checked_add(prior_bytes)
             .ok_or_else(|| NativeError::limit("typed V2 ordering workspace overflow"))?;
-        let measured = arena.encoded_len(
-            *identifier,
-            limits,
-            cancellation.clone(),
-            interrupt.clone(),
-            live_external,
-        )?;
         let canonical = arena.encode(
             *identifier,
             limits,
@@ -1493,11 +1486,6 @@ fn validate_table(
             interrupt.clone(),
             live_external,
         )?;
-        if canonical.len() != measured {
-            return Err(NativeError::protocol(
-                "typed V2 component length diverged during freeze",
-            ));
-        }
         if previous
             .as_ref()
             .is_some_and(|prior| prior.as_slice() >= canonical.as_slice())
