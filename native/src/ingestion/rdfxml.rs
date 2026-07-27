@@ -3118,7 +3118,7 @@ fn list_graph_view<'graph>(
     Ok(output)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct KindRecord<'a> {
     iri: &'a str,
     kind: &'static str,
@@ -3215,6 +3215,26 @@ fn consume_owl1_redundant_types(
     consumed: &mut [bool],
     session: &mut Session<'_>,
 ) -> NativeResult<()> {
+    let mut type_index = HashSet::new();
+    for triple in triples {
+        session.step(1)?;
+        if triple.predicate != RDF_TYPE {
+            continue;
+        }
+        let Term::Iri(object) = &triple.object else {
+            continue;
+        };
+        let record = (&triple.subject, object.as_str());
+        if type_index.contains(&record) {
+            continue;
+        }
+        reserve_hash_item(&mut type_index, session)?;
+        if !type_index.insert(record) {
+            return Err(NativeError::protocol(
+                "native RDF type index changed during insertion",
+            ));
+        }
+    }
     for (index, triple) in triples.iter().enumerate() {
         session.step(1)?;
         if triple.predicate != RDF_TYPE {
@@ -3225,7 +3245,7 @@ fn consume_owl1_redundant_types(
         };
         let redundant = match object.as_str() {
             RDFS_CLASS => subject_has_type(
-                triples,
+                &type_index,
                 &triple.subject,
                 &[
                     OWL_ONTOLOGY,
@@ -3234,10 +3254,9 @@ fn consume_owl1_redundant_types(
                     OWL_DATA_RANGE,
                     OWL_RESTRICTION,
                 ],
-                session,
-            )?,
+            ),
             RDF_PROPERTY => subject_has_type(
-                triples,
+                &type_index,
                 &triple.subject,
                 &[
                     OWL_OBJECT_PROPERTY,
@@ -3249,9 +3268,8 @@ fn consume_owl1_redundant_types(
                     OWL_ANNOTATION_PROPERTY,
                     OWL_ONTOLOGY_PROPERTY,
                 ],
-                session,
-            )?,
-            OWL_CLASS => subject_has_type(triples, &triple.subject, &[OWL_RESTRICTION], session)?,
+            ),
+            OWL_CLASS => subject_has_type(&type_index, &triple.subject, &[OWL_RESTRICTION]),
             _ => false,
         };
         if redundant {
@@ -3265,21 +3283,13 @@ fn consume_owl1_redundant_types(
 }
 
 fn subject_has_type(
-    triples: &[Triple],
+    type_index: &HashSet<(&Resource, &str)>,
     subject: &Resource,
     expected: &[&str],
-    session: &mut Session<'_>,
-) -> NativeResult<bool> {
-    for triple in triples {
-        session.step(1)?;
-        if &triple.subject == subject
-            && triple.predicate == RDF_TYPE
-            && matches!(&triple.object, Term::Iri(value) if expected.contains(&value.as_str()))
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+) -> bool {
+    expected
+        .iter()
+        .any(|object| type_index.contains(&(subject, *object)))
 }
 
 fn collect_entity_kinds<'a>(
@@ -3287,6 +3297,7 @@ fn collect_entity_kinds<'a>(
     session: &mut Session<'_>,
 ) -> NativeResult<Vec<KindRecord<'a>>> {
     let mut output = Vec::new();
+    let mut seen = HashSet::new();
     for triple in triples {
         session.step(1)?;
         if triple.predicate != RDF_TYPE {
@@ -3300,18 +3311,30 @@ fn collect_entity_kinds<'a>(
             continue;
         };
         let record = KindRecord { iri: subject, kind };
-        if !output.contains(&record) {
-            reserve_vec_item(&mut output, session)?;
-            output.push(record);
+        if seen.contains(&record) {
+            continue;
         }
+        reserve_hash_item(&mut seen, session)?;
+        if !seen.insert(record) {
+            return Err(NativeError::protocol(
+                "native RDF entity-kind index changed during insertion",
+            ));
+        }
+        reserve_vec_item(&mut output, session)?;
+        output.push(record);
     }
+    output.sort_unstable_by(|left, right| {
+        left.iri
+            .cmp(right.iri)
+            .then_with(|| left.kind.cmp(right.kind))
+    });
     Ok(output)
 }
 
 fn has_kind(kinds: &[KindRecord<'_>], value: &str, kind: &str) -> bool {
     kinds
-        .iter()
-        .any(|record| record.iri == value && record.kind == kind)
+        .binary_search_by(|record| record.iri.cmp(value).then_with(|| record.kind.cmp(kind)))
+        .is_ok()
         || match kind {
             "object_property" => is_builtin_object_property(value),
             "data_property" => is_builtin_data_property(value),
@@ -3579,14 +3602,8 @@ fn established_named_list<'graph>(
         let Some(ListTerm::Iri(member)) = first else {
             return Ok(false);
         };
-        let mut established = false;
-        for record in kinds {
-            session.step(1)?;
-            if record.iri == member && record.kind == expected_kind {
-                established = true;
-                break;
-            }
-        }
+        session.step(1)?;
+        let established = has_kind(kinds, member, expected_kind);
         if !established
             && !((expected_kind == "class" && is_builtin_class(member))
                 || (expected_kind == "datatype" && is_builtin_datatype(member)))
@@ -8681,6 +8698,63 @@ mod tests {
     }
 
     #[test]
+    fn entity_kind_ledger_is_sorted_for_logarithmic_lookup() {
+        let triples = vec![
+            Triple {
+                subject: Resource::Iri("urn:z".to_owned()),
+                predicate: RDF_TYPE.to_owned(),
+                object: Term::Iri(OWL_CLASS.to_owned()),
+            },
+            Triple {
+                subject: Resource::Iri("urn:a".to_owned()),
+                predicate: RDF_TYPE.to_owned(),
+                object: Term::Iri(OWL_OBJECT_PROPERTY.to_owned()),
+            },
+            Triple {
+                subject: Resource::Iri("urn:z".to_owned()),
+                predicate: RDF_TYPE.to_owned(),
+                object: Term::Iri(OWL_CLASS.to_owned()),
+            },
+            Triple {
+                subject: Resource::Iri("urn:a".to_owned()),
+                predicate: RDF_TYPE.to_owned(),
+                object: Term::Iri(OWL_DATATYPE_PROPERTY.to_owned()),
+            },
+        ];
+        let limits = Limits::default();
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let kinds = collect_entity_kinds(&triples, &mut session).expect("entity kinds");
+
+        assert_eq!(
+            kinds,
+            [
+                KindRecord {
+                    iri: "urn:a",
+                    kind: "data_property",
+                },
+                KindRecord {
+                    iri: "urn:a",
+                    kind: "object_property",
+                },
+                KindRecord {
+                    iri: "urn:z",
+                    kind: "class",
+                },
+            ],
+        );
+        assert!(has_kind(&kinds, "urn:a", "data_property"));
+        assert!(has_kind(&kinds, "urn:a", "object_property"));
+        assert!(has_kind(&kinds, "urn:z", "class"));
+        assert!(!has_kind(&kinds, "urn:z", "datatype"));
+        assert!(has_kind(&kinds, OWL_TOP_OBJECT_PROPERTY, "object_property"));
+    }
+
+    #[test]
     fn retained_source_prefixes_track_rebindings_and_undeclarations() {
         let source = format!(
             "<rdf:RDF xmlns:rdf=\"{RDF}\" xmlns:owl=\"{OWL}\" \
@@ -10200,6 +10274,40 @@ mod tests {
             mapped(wrong_kind.as_bytes(), None).unwrap_err().code,
             "NATIVE_RDF_MAPPING_INCOMPLETE",
         );
+    }
+
+    #[test]
+    fn owl1_redundant_type_detection_uses_bounded_indexed_work() {
+        let mut triples = Vec::new();
+        for index in 0..64 {
+            let subject = Resource::Iri(format!("urn:class:{index}"));
+            triples.push(Triple {
+                subject: subject.clone(),
+                predicate: RDF_TYPE.to_owned(),
+                object: Term::Iri(RDFS_CLASS.to_owned()),
+            });
+            triples.push(Triple {
+                subject,
+                predicate: RDF_TYPE.to_owned(),
+                object: Term::Iri(OWL_CLASS.to_owned()),
+            });
+        }
+        let mut consumed = vec![false; triples.len()];
+        let mut limits = Limits::default();
+        limits.max_canonical_work = 256;
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("bounded session");
+
+        consume_owl1_redundant_types(&triples, &mut consumed, &mut session)
+            .expect("two linear graph passes fit the exact work budget");
+        assert!(consumed
+            .iter()
+            .enumerate()
+            .all(|(index, value)| *value == (index % 2 == 0)));
     }
 
     #[test]
