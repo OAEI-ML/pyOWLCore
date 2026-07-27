@@ -1,65 +1,65 @@
 {
   "schema": "pyowl-core.native-redesign-release-evidence/1",
-  "core_revision": "6750aa0d9a9fc50c0d6931f7ac8f6310623bc7cf",
+  "core_revision": "8243824019d10413bb00f53bbdbb52dd7253e094",
   "core_gates": [
     {
       "id": "semantic-differential-conformance",
       "status": "not-run",
-      "reason": "the complete retained-native format, constructor, W3C, corpus, and differential matrix is not implemented",
+      "reason": "the installed four-format retained-view matrix and local constructor/differential slices pass, but the complete approved W3C, hostile, option, import, and representative-corpus matrix has not run",
       "evidence": ["reports/workpackages/WP16.md"]
     },
     {
       "id": "security-resource-determinism",
       "status": "not-run",
-      "reason": "the retained path has no complete sanitizer, fuzz, allocation-failure, and supported-platform lifecycle matrix",
+      "reason": "local sanitizer, bounded fuzz, allocation-failure, lifecycle, fork, cancellation, and determinism checkpoints pass, but the hosted supported-platform and interpreter matrix is incomplete",
       "evidence": ["reports/security/control-matrix.json", "reports/workpackages/WP17.md"]
     },
     {
       "id": "retained-storage-no-eager-expansion",
       "status": "not-run",
-      "reason": "the guarded Functional owner-first path proves zero eager structural objects, but the complete format, option, anonymous-scope, and import-closure matrix has not run",
+      "reason": "the installed Functional, OWL/XML, RDF/XML, and Turtle matrix proves retained owners and zero eager structural expansion for its covered paths, but the complete corpus, option, anonymous-scope, import-closure, and supported-platform matrix has not run",
       "evidence": ["reports/workpackages/WP16.md", "tests/integration/native_consumers/test_retained_view_matrix.py"]
     },
     {
       "id": "encoded-view-installed-integration",
       "status": "not-run",
-      "reason": "one clean CPython 3.12 macOS Functional wheel passes the direct, decoded, mmap, overlay, composite, hostile, negative, lifetime, and zero-work checkpoint, but the every-format supported-platform external-consumer fence is incomplete",
+      "reason": "one clean CPython 3.12 macOS wheel passes the four-format direct, decoded, mmap, overlay, composite, hostile, negative, lifetime, and zero-work checkpoint plus installed pyHermiT and pyELK handoffs, but the supported-platform external-consumer fence is incomplete",
       "evidence": ["reports/integration/wp17-installed-view-matrix.json", "reports/workpackages/WP17.md", "schemas/version-decision-v1.toml"]
     },
     {
       "id": "direct-decoded-mmap-overlay-composite-parity",
       "status": "not-run",
-      "reason": "the retained Functional source-tree and installed checkpoint matrices pass, but the required every-format and import-closure cross-product is incomplete",
+      "reason": "the installed four-format direct, decoded, mmap, overlay, and composite matrix passes, but the required complete option, import-closure, hostile-corpus, and supported-platform cross-product is incomplete",
       "evidence": ["reports/integration/wp17-installed-view-matrix.json", "reports/workpackages/WP16.md", "reports/workpackages/WP17.md", "tests/integration/native_consumers/test_retained_view_matrix.py"]
     },
     {
       "id": "pure-and-native-artifact-matrix",
       "status": "not-run",
-      "reason": "no clean supported-Python and supported-platform pure/native artifact matrix exists for the redesign",
+      "reason": "a clean macOS CPython 3.12 sdist builds inspected pure and native wheels offline with identical non-native payloads, but the complete supported-Python and supported-platform artifact matrix and external ABI audits have not run",
       "evidence": ["reports/workpackages/WP12.md"]
     },
     {
       "id": "horned-direct-common-contract",
       "status": "not-run",
-      "reason": "the independently pinned direct Rust and Horned common-contract runners remain unavailable",
+      "reason": "the independently pinned direct Rust and Horned common-contract runners pass exact short contract samples, but the approved representative medium, list-heavy, large, wall-time, and RSS matrix has not run",
       "evidence": ["reports/workpackages/WP14.md", "benchmarks/comparators/comparators.toml"]
     },
     {
       "id": "horned-wheel-common-contract",
       "status": "not-run",
-      "reason": "the installed-wheel versus py-horned common-contract comparison has no runnable pinned evidence",
+      "reason": "the installed-wheel and py-horned runners are pinned and pass development common-contract samples, but the approved paired representative wall-time, RSS, and facade-overhead matrix has not run",
       "evidence": ["reports/workpackages/WP14.md", "benchmarks/comparators/comparators.toml"]
     },
     {
       "id": "version-schema-consistency",
       "status": "not-run",
-      "reason": "the WP17 schema decision is frozen, but capability promotion and the WP18 package release decision are not eligible",
+      "reason": "the advertised WP17 schema, API, adapter, model, wire, and development package versions agree, but the WP18 SemVer release decision is not eligible before the complete release matrix",
       "evidence": ["schemas/version-decision-v1.toml", "reports/workpackages/WP17.md"]
     },
     {
       "id": "artifact-license-sbom-java-audit",
       "status": "not-run",
-      "reason": "source and pure-artifact exclusion evidence is partial; native linkage, SBOM, license, name, and release artifact gates remain open",
+      "reason": "local sdist, pure/native wheel, linkage, payload, SBOM, license-inventory, name, and Java-exclusion audits pass, but owner-approved project URLs, legal approval, external ABI tooling, provenance aggregation, and the supported-platform release artifact matrix remain open",
       "evidence": ["reports/performance/redesign-baseline/dependency-audit-shared-host.json", "reports/workpackages/WP14.md"]
     }
   ],
@@ -68,40 +68,40 @@
       "id": "exact-om",
       "role": "compatibility-consumer",
       "status": "not-run",
-      "revision": "fe4614198eef968aa0c537d1f257b0990f31b918",
-      "reason": "the strict encoded evidence protocol exists, but required native compiler capabilities remain unadvertised",
+      "revision": "5fa44cffb9858aa7a52df08bebc9ab6ce6c2642a",
+      "reason": "the strict shared-stack protocol and public pyHermiT encoded-handoff guard pass, but the required Exact baseline, scale, provenance, dependency-DAG, and performance matrix has not run; repair and experiment packages are out of scope",
       "evidence": ["Exact-OM/reports/workpackages/WP-N.md"]
     },
     {
       "id": "oaei-bioml-eval",
       "role": "compatibility-consumer",
       "status": "not-run",
-      "revision": "2f91a3ada3dcc8830c472e9e0dc5cd0aa6d321b0",
-      "reason": "the evaluation performance protocol exists, but no advertised encoded reasoner path passes it",
+      "revision": "e5d1affaf66600b09b8d771c2bb691a10cfda852",
+      "reason": "the fail-closed evaluation protocol and public core/reasoner boundary guards pass, but the complete fixed-corpus reasoner performance evidence has not run",
       "evidence": ["OAEI-Bio-ML-eval/reports/encoded-reasoner-compatibility.md"]
     },
     {
       "id": "projector",
       "role": "encoded-native-compiler",
       "status": "not-run",
-      "revision": "be301790f323bab46998300d975d1d72cae005b4",
-      "reason": "the private Rust compiler covers named class/property/assertion and aggregate class-expression slices with exact counters, but the production structural compiler remains incomplete and unadvertised",
+      "revision": "a893e1bca5c0c44fb8fa53c272769d7f97d0ab69",
+      "reason": "private kernel v125 passes its direct, overlay, composite, nested-selector, and two-map scope-mapped four-table delta families with exact counters and bounded batches, but general recursive segmented traversal and public production dispatch remain incomplete and unadvertised",
       "evidence": ["pyOwl2Vec-Star-projector/reports/p7/encoded-native-compiler.md"]
     },
     {
       "id": "pyelk",
       "role": "encoded-native-compiler",
       "status": "not-run",
-      "revision": "2ca04b07e38202f8e44825aa3ef79741781224d2",
-      "reason": "the hidden compiler and local CPython 3.12 macOS pure/native artifacts pass, but released core negotiation, tier-one artifacts, corpora, and performance gates remain open",
+      "revision": "6ff9946e7b83f244948492bdb827f231fe5d750b",
+      "reason": "the hidden compiler, local CPython 3.12 macOS pure/native artifacts, and final-core installed handoff matrix pass, but capability promotion, tier-one artifacts, Java comparison, corpora, and performance gates remain open",
       "evidence": ["pyELK/reports/workpackages/WP14.md"]
     },
     {
       "id": "pyhermit",
       "role": "encoded-native-compiler",
       "status": "not-run",
-      "revision": "911cf751441a0f6e54697629048f86205760a2d1",
-      "reason": "the encoded compiler preserves annotated role constraints, characteristics, and named object assertions, but is still closing structural constructor coverage and remains unadvertised",
+      "revision": "80f97890a230e81820c04ef8c3c857250d272b68",
+      "reason": "the advertised encoded compiler, public zero-copy handoff, audited pure/native artifacts, and final-core installed matrix pass, but the supported-platform ABI/artifact matrix and controlled representative performance evidence have not run",
       "evidence": ["pyHermiT/specs/workpackages/WP18-native-structural-compiler.md"]
     }
   ]
