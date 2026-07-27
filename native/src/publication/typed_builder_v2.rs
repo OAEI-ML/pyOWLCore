@@ -1094,13 +1094,19 @@ fn append_scope_signature_tables(
         .iter()
         .zip(effective_documents)
     {
+        let live_external = signature_collection_external_bytes(
+            external_bytes,
+            tables,
+            tables.capacity(),
+            closure_entities.as_ref().map_or(0, Vec::capacity),
+        )?;
         let entities = collect_signature(
             arena,
             scope.roots.iter().map(Vec::as_slice),
             limits,
             cancellation.clone(),
             interrupt.clone(),
-            external_bytes,
+            live_external,
         )?;
         append_signature_tables(arena, scope, &entities, tables)?;
         if closure_entities.is_none() && reachable.as_slice() == closure_documents {
@@ -1118,17 +1124,45 @@ fn append_scope_signature_tables(
     let entities = if let Some(entities) = closure_entities.as_ref() {
         entities
     } else {
+        let live_external =
+            signature_collection_external_bytes(external_bytes, tables, tables.capacity(), 0)?;
         computed = collect_signature(
             arena,
             closure.roots.iter().map(Vec::as_slice),
             limits,
             cancellation,
             interrupt,
-            external_bytes,
+            live_external,
         )?;
         &computed
     };
     append_signature_tables(arena, closure, entities, tables)
+}
+
+fn signature_collection_external_bytes(
+    base_external_bytes: usize,
+    tables: &[TypedFacadeTableV2],
+    table_capacity: usize,
+    retained_entity_capacity: usize,
+) -> NativeResult<usize> {
+    let table_metadata = table_capacity
+        .checked_mul(size_of::<TypedFacadeTableV2>())
+        .ok_or_else(|| NativeError::limit("typed V2 signature metadata size overflow"))?;
+    let table_roots = tables.iter().try_fold(0_usize, |total, table| {
+        table
+            .root_capacity()
+            .checked_mul(size_of::<ComponentId>())
+            .and_then(|bytes| total.checked_add(bytes))
+            .ok_or_else(|| NativeError::limit("typed V2 signature root size overflow"))
+    })?;
+    let retained_entities = retained_entity_capacity
+        .checked_mul(size_of::<ComponentId>())
+        .ok_or_else(|| NativeError::limit("typed V2 retained signature size overflow"))?;
+    base_external_bytes
+        .checked_add(table_metadata)
+        .and_then(|total| total.checked_add(table_roots))
+        .and_then(|total| total.checked_add(retained_entities))
+        .ok_or_else(|| NativeError::limit("typed V2 signature external memory overflow"))
 }
 
 fn collect_signature<'a>(
@@ -1937,6 +1971,129 @@ mod tests {
         assert_eq!(counters.canonical_input_rows, 4);
         assert_eq!(counters.publication_structural_rows_copied, 0);
         assert_eq!(counters.publication_structural_bytes_copied, 0);
+    }
+
+    #[test]
+    fn retained_closure_signature_is_inside_later_scope_memory_envelope() {
+        let source_rows = sorted(
+            (0..256)
+                .map(|index| declaration("class", &format!("urn:builder:retained:{index:04}")))
+                .collect(),
+        );
+        let later_rows = sorted(vec![
+            declaration("class", "urn:builder:later:a"),
+            declaration("class", "urn:builder:later:b"),
+        ]);
+        let default_limits = Limits::default();
+        let mut builder = NativeComponentBuilder::new(&default_limits).expect("component builder");
+        let source_pending = source_rows
+            .iter()
+            .map(|row| builder.intern_canonical(row).expect("source axiom"))
+            .collect::<Vec<_>>();
+        let later_pending = later_rows
+            .iter()
+            .map(|row| builder.intern_canonical(row).expect("later axiom"))
+            .collect::<Vec<_>>();
+        let frozen = builder.freeze().expect("component arena");
+        let source_roots = source_pending
+            .into_iter()
+            .map(|identifier| frozen.resolve(identifier).expect("source root"))
+            .collect::<Vec<_>>();
+        let later_roots = later_pending
+            .into_iter()
+            .map(|identifier| frozen.resolve(identifier).expect("later root"))
+            .collect::<Vec<_>>();
+        let arena = frozen.into_arena();
+        let source_scope = EffectiveScopeV2 {
+            scope: TypedFacadeScopeV2::Document,
+            document_ordinal: Some(0),
+            roots: [Vec::new(), source_roots.clone(), Vec::new()],
+        };
+        let later_scope = EffectiveScopeV2 {
+            scope: TypedFacadeScopeV2::Document,
+            document_ordinal: Some(1),
+            roots: [Vec::new(), later_roots.clone(), Vec::new()],
+        };
+        let closure_scope = EffectiveScopeV2 {
+            scope: TypedFacadeScopeV2::Closure,
+            document_ordinal: None,
+            roots: [Vec::new(), source_roots, Vec::new()],
+        };
+
+        let retained_entities = collect_signature(
+            &arena,
+            source_scope.roots.iter().map(Vec::as_slice),
+            &default_limits,
+            Cancellation::with_duration(None),
+            None,
+            0,
+        )
+        .expect("source signature");
+        let mut retained_tables = Vec::new();
+        append_signature_tables(
+            &arena,
+            &source_scope,
+            &retained_entities,
+            &mut retained_tables,
+        )
+        .expect("source signature tables");
+        let retained_external = signature_collection_external_bytes(
+            0,
+            &retained_tables,
+            retained_tables.capacity(),
+            retained_entities.capacity(),
+        )
+        .expect("retained signature allocation");
+        let mut bounded = default_limits;
+        bounded.max_memory_bytes = Some(
+            arena
+                .counters()
+                .retained_bytes
+                .checked_add(u64::try_from(retained_external).expect("external bytes"))
+                .and_then(|value| value.checked_sub(1))
+                .expect("boundary"),
+        );
+
+        collect_signature(
+            &arena,
+            later_scope.roots.iter().map(Vec::as_slice),
+            &bounded,
+            Cancellation::with_duration(None),
+            None,
+            0,
+        )
+        .expect("later signature fits when retained allocations are omitted");
+        assert_eq!(
+            collect_signature(
+                &arena,
+                later_scope.roots.iter().map(Vec::as_slice),
+                &bounded,
+                Cancellation::with_duration(None),
+                None,
+                retained_external,
+            )
+            .expect_err("retained signature allocations must be counted")
+            .code,
+            "NATIVE_WIRE_LIMIT"
+        );
+
+        let scopes = [source_scope, later_scope, closure_scope];
+        assert_eq!(
+            append_scope_signature_tables(
+                &arena,
+                &scopes,
+                &[vec![0], vec![1]],
+                &[0],
+                &bounded,
+                Cancellation::with_duration(None),
+                None,
+                0,
+                &mut Vec::new(),
+            )
+            .expect_err("production signature collection must use the retained envelope")
+            .code,
+            "NATIVE_WIRE_LIMIT"
+        );
     }
 
     #[test]

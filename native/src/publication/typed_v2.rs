@@ -187,6 +187,10 @@ impl TypedFacadeTableV2 {
     pub(crate) fn is_empty(&self) -> bool {
         self.roots.is_empty()
     }
+
+    pub(crate) fn root_capacity(&self) -> usize {
+        self.roots.capacity()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -415,7 +419,7 @@ impl TypedFacadeStorageV2 {
         attach_axiom_indexes(
             &arena,
             &mut effective_tables,
-            true,
+            document_count == 1,
             &limits,
             cancellation.clone(),
             interrupt.clone(),
@@ -1523,13 +1527,28 @@ fn validate_table(
 fn attach_axiom_indexes(
     arena: &NativeComponentArena,
     tables: &mut [TypedFacadeTableV2],
-    share_within_effective: bool,
+    share_single_document_closure: bool,
     limits: &Limits,
     cancellation: Cancellation,
     interrupt: Option<InterruptSlot>,
     live_base_external: u64,
     retained_index_bytes: &mut u64,
 ) -> NativeResult<()> {
+    let mut guard = match interrupt.as_ref() {
+        Some(slot) => Guard::with_interrupt(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+            slot.clone(),
+        ),
+        None => Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        ),
+    };
+    let mut comparison_work = 0_u64;
+    guard.check(comparison_work, true)?;
     for table_index in 0..tables.len() {
         let (previous, following) = tables.split_at_mut(table_index);
         let table = following
@@ -1538,18 +1557,29 @@ fn attach_axiom_indexes(
         if table.coordinate.collection != TypedFacadeCollectionV2::Axioms {
             continue;
         }
-        if share_within_effective {
-            let shared = previous.iter().enumerate().find_map(|(index, candidate)| {
-                (candidate.roots == table.roots
-                    && matches!(
-                        candidate.axiom_index.as_ref(),
+        if share_single_document_closure && table.coordinate.scope == TypedFacadeScopeV2::Closure {
+            let source_coordinate =
+                TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0);
+            let shared = previous
+                .binary_search_by_key(&source_coordinate, |candidate| candidate.coordinate)
+                .ok()
+                .filter(|source| {
+                    matches!(
+                        previous[*source].axiom_index.as_ref(),
                         Some(TypedFacadeAxiomIndexV2::Owned(_))
-                    ))
-                .then_some(index)
-            });
+                    )
+                });
             if let Some(source) = shared {
-                table.axiom_index = Some(TypedFacadeAxiomIndexV2::SharedEffective(source));
-                continue;
+                if component_roots_equal(
+                    &previous[source].roots,
+                    &table.roots,
+                    limits,
+                    &mut guard,
+                    &mut comparison_work,
+                )? {
+                    table.axiom_index = Some(TypedFacadeAxiomIndexV2::SharedEffective(source));
+                    continue;
+                }
             }
         }
         let index_external = checked_add(live_base_external, *retained_index_bytes)?;
@@ -1573,7 +1603,44 @@ fn attach_axiom_indexes(
         check_retained_limit(arena, live_base_external, *retained_index_bytes, limits)?;
         table.axiom_index = Some(TypedFacadeAxiomIndexV2::Owned(index));
     }
+    guard.check(comparison_work, true)?;
     Ok(())
+}
+
+fn component_roots_equal(
+    left: &[ComponentId],
+    right: &[ComponentId],
+    limits: &Limits,
+    guard: &mut Guard,
+    work: &mut u64,
+) -> NativeResult<bool> {
+    *work = work
+        .checked_add(1)
+        .ok_or_else(|| NativeError::limit("typed V2 axiom index sharing work overflow"))?;
+    if *work > limits.max_canonical_work {
+        return Err(NativeError::limit(
+            "typed V2 axiom index sharing exceeds max_canonical_work",
+        ));
+    }
+    guard.check(*work, false)?;
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (left, right) in left.iter().zip(right) {
+        *work = work
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("typed V2 axiom index sharing work overflow"))?;
+        if *work > limits.max_canonical_work {
+            return Err(NativeError::limit(
+                "typed V2 axiom index sharing exceeds max_canonical_work",
+            ));
+        }
+        guard.check(*work, false)?;
+        if left != right {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn check_temporary_limit(
@@ -1992,6 +2059,76 @@ mod tests {
         assert_eq!(counters.contains_requests, 2);
         assert_eq!(counters.contains_hits, 1);
         assert!(counters.canonical_encode_requests >= 4);
+    }
+
+    #[test]
+    fn axiom_index_sharing_is_single_document_and_guarded() {
+        let rows = vec![
+            declaration("urn:typed:shared-a"),
+            declaration("urn:typed:shared-b"),
+        ];
+        let (arena, roots, _entity) = frozen_axioms(&rows);
+        let storage = TypedFacadeStorageV2::freeze(
+            arena,
+            vec![
+                table(
+                    TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0),
+                    roots.clone(),
+                ),
+                table(
+                    TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 1),
+                    roots.clone(),
+                ),
+                table(
+                    TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms),
+                    roots.clone(),
+                ),
+            ],
+            Vec::new(),
+            2,
+            Limits::default(),
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect("multi-document owner");
+        for coordinate in [
+            TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 0),
+            TypedFacadeCoordinateV2::document(TypedFacadeCollectionV2::Axioms, 1),
+            TypedFacadeCoordinateV2::closure(TypedFacadeCollectionV2::Axioms),
+        ] {
+            let table = storage
+                .select_table(coordinate, false)
+                .expect("axiom table");
+            assert!(matches!(
+                table.axiom_index.as_ref(),
+                Some(TypedFacadeAxiomIndexV2::Owned(_))
+            ));
+        }
+
+        let mut bounded = Limits::default();
+        bounded.max_canonical_work = 1;
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            bounded.deadline,
+            bounded.cancellation_stride,
+        );
+        let mut work = 0_u64;
+        assert_eq!(
+            component_roots_equal(&roots, &roots, &bounded, &mut guard, &mut work)
+                .expect_err("root comparison must be work-bounded")
+                .code,
+            "NATIVE_WIRE_LIMIT"
+        );
+
+        let cancelled = Cancellation::with_duration(Some(Duration::ZERO));
+        let mut guard = Guard::new(cancelled, None, 1);
+        let mut work = 0_u64;
+        assert_eq!(
+            component_roots_equal(&roots, &roots, &Limits::default(), &mut guard, &mut work,)
+                .expect_err("root comparison must poll cancellation")
+                .code,
+            "NATIVE_DEADLINE"
+        );
     }
 
     #[test]
