@@ -527,14 +527,41 @@ def _import_diamond_scenario(backend: BackendPreference) -> Scenario:
         digests = [document.provenance.source_sha256.hex() for document in snapshot.documents]
         if len(snapshot.documents) != 4 or digests.count(shared_digest) != 1:
             raise HarnessError("import diamond did not retain one shared physical document")
-        if counters.parser_calls != 4:
+        backend_counts: dict[str, int] = {}
+        for document in snapshot.documents:
+            selected = document.provenance.backend
+            backend_counts[selected] = backend_counts.get(selected, 0) + 1
+        expected_document_backend = (
+            "native" if backend is BackendPreference.NATIVE else "python"
+        )
+        if (
+            snapshot.report.document_count != 4
+            or snapshot.report.backend != expected_document_backend
+        ):
             raise HarnessError(
-                f"import diamond parsed {counters.parser_calls} documents, expected 4"
+                "import diamond retained-report evidence is incompatible: "
+                f"backend={snapshot.report.backend!r}, "
+                f"documents={snapshot.report.document_count}"
+            )
+        if backend_counts != {expected_document_backend: 4}:
+            raise HarnessError(
+                "import diamond retained incompatible parser provenance: "
+                f"{dict(sorted(backend_counts.items()))!r}"
+            )
+        expected_python_calls = 4 if backend is BackendPreference.PYTHON else 0
+        if counters.parser_calls != expected_python_calls:
+            raise HarnessError(
+                "import diamond crossed PythonParser.parse "
+                f"{counters.parser_calls} times, expected {expected_python_calls} "
+                f"for backend {backend.value}"
             )
         return ScenarioOutput(
             snapshot.structural_fingerprint.hex,
             {
                 "documents": len(snapshot.documents),
+                "document_backend_counts": dict(sorted(backend_counts.items())),
+                "report_backend": snapshot.report.backend,
+                "reported_documents": snapshot.report.document_count,
                 "shared_digest": shared_digest,
                 "shared_parse_count": digests.count(shared_digest),
                 "counters": counters.as_dict(),

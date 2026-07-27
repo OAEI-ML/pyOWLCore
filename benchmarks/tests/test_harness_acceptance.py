@@ -35,6 +35,9 @@ def test_python_smoke_harness_validates_every_incremental_and_bounded_lane() -> 
 
     diamond = scenarios["generated-import-diamond/python/load-closure"]["output"]
     assert diamond["shared_parse_count"] == 1
+    assert diamond["document_backend_counts"] == {"python": 4}
+    assert diamond["report_backend"] == "python"
+    assert diamond["reported_documents"] == 4
     assert diamond["counters"]["parser_calls"] == 4
 
     for phase in ("overlay-create-1", "composite-create-2"):
@@ -65,6 +68,18 @@ def test_auto_and_native_smoke_outputs_have_exact_parity() -> None:
     assert report["passed"] is True
     assert len(parity) >= 13
     assert all(item["passed"] is True for item in parity)
+    scenarios = {row["id"]: row for row in cast(list[dict[str, Any]], report["scenarios"])}
+    expected_evidence = {
+        "python": ({"python": 4}, 4),
+        "auto": ({"python": 4}, 0),
+        "native": ({"native": 4}, 0),
+    }
+    for backend, (backend_counts, python_calls) in expected_evidence.items():
+        output = scenarios[f"generated-import-diamond/{backend}/load-closure"]["output"]
+        assert output["document_backend_counts"] == backend_counts
+        assert output["report_backend"] == next(iter(backend_counts))
+        assert output["reported_documents"] == 4
+        assert output["counters"]["parser_calls"] == python_calls
 
 
 def test_profile_captures_measured_phase_and_excludes_validation() -> None:
