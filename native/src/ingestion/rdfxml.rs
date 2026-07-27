@@ -11,7 +11,7 @@ use crate::error::{NativeError, NativeResult};
 use crate::limits::LimitKey;
 use crate::session::Session;
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 use std::time::Instant;
 
 use super::rdf_class_expressions::{
@@ -479,13 +479,13 @@ impl<'a> XmlStream<'a> {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(super) enum Resource {
     Iri(String),
     Blank(String),
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(super) enum Term {
     Iri(String),
     Blank(String),
@@ -505,7 +505,7 @@ impl From<Resource> for Term {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(super) struct Triple {
     pub(super) subject: Resource,
     pub(super) predicate: String,
@@ -624,7 +624,7 @@ struct GraphParser<'text, 'session, 'guard> {
     namespaces: Vec<NamespaceBinding>,
     rdf_ids: Vec<RdfIdBinding>,
     frames: Vec<Frame>,
-    triples: Vec<Triple>,
+    triples: HashSet<Triple>,
     document_base: Option<String>,
     blank_counter: u64,
     prefix_declarations: u64,
@@ -660,7 +660,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             namespaces,
             rdf_ids: Vec::new(),
             frames: Vec::new(),
-            triples: Vec::new(),
+            triples: HashSet::new(),
             document_base,
             blank_counter: 0,
             prefix_declarations: 0,
@@ -690,16 +690,17 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
         if !self.frames.is_empty() || !self.root_closed {
             return Err(xml_syntax());
         }
-        // Duplicate RDF triples collapse deterministically before mapping.
-        self.triples.sort_unstable();
-        self.triples.dedup();
+        // Hash-based duplicate detection avoids quadratic graph construction;
+        // the owned rows are still sorted before the mapper observes them.
+        let mut triples = hash_graph_into_vec(self.triples, self.session)?;
+        triples.sort_unstable();
         self.source_prefixes
             .sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
         self.source_blank_labels
             .sort_unstable_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
         self.source_blank_labels.dedup();
         Ok(ParsedGraph {
-            triples: self.triples,
+            triples,
             language_spellings: self.language_spellings,
             source_blank_labels: self.source_blank_labels,
             source_prefixes: self.source_prefixes,
@@ -2120,10 +2121,7 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
     }
 
     fn add(&mut self, triple: Triple) -> NativeResult<()> {
-        self.session.step(
-            u64::try_from(self.triples.len())
-                .map_err(|_| NativeError::limit("native RDF duplicate work exceeds u64"))?,
-        )?;
+        self.session.step(1)?;
         if self.triples.contains(&triple) {
             return Ok(());
         }
@@ -2137,8 +2135,12 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             self.session.limits().value(LimitKey::MaxTriples),
             "native RDF graph exceeds max_triples",
         )?;
-        reserve_vec_item(&mut self.triples, self.session)?;
-        self.triples.push(triple);
+        reserve_hash_item(&mut self.triples, self.session)?;
+        if !self.triples.insert(triple) {
+            return Err(NativeError::protocol(
+                "native RDF duplicate index changed during insertion",
+            ));
+        }
         Ok(())
     }
 }
@@ -8465,6 +8467,36 @@ fn reserve_vec_item<T>(values: &mut Vec<T>, session: &mut Session<'_>) -> Native
     Ok(())
 }
 
+fn reserve_hash_item<T: Eq + std::hash::Hash>(
+    values: &mut HashSet<T>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    let bytes = std::mem::size_of::<T>()
+        .checked_add(std::mem::size_of::<usize>())
+        .ok_or_else(|| NativeError::limit("native RDF hash allocation accounting overflow"))?;
+    session.reserve_bytes(bytes)?;
+    values
+        .try_reserve(1)
+        .map_err(|_| NativeError::limit("native RDF hash allocation failed"))
+}
+
+fn hash_graph_into_vec(
+    triples: HashSet<Triple>,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<Triple>> {
+    let bytes = triples
+        .len()
+        .checked_mul(std::mem::size_of::<Triple>())
+        .ok_or_else(|| NativeError::limit("native RDF graph allocation accounting overflow"))?;
+    session.reserve_bytes(bytes)?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(triples.len())
+        .map_err(|_| NativeError::limit("native RDF graph allocation failed"))?;
+    output.extend(triples);
+    Ok(output)
+}
+
 fn reserve_temporary_vec_item<T>(
     values: &mut Vec<T>,
     session: &mut Session<'_>,
@@ -8614,6 +8646,38 @@ mod tests {
 
     fn graph(source: &str) -> NativeResult<Vec<Triple>> {
         graph_with_limits(source, &Limits::default())
+    }
+
+    #[test]
+    fn graph_duplicate_detection_is_linear_and_preserves_set_semantics() {
+        let mut limits = Limits::default();
+        limits.max_canonical_work = 256;
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut parser = GraphParser::new("", None, XmlSourceEncoding::Utf8, false, &mut session)
+            .expect("graph parser");
+
+        for index in 0..64 {
+            parser
+                .add(Triple {
+                    subject: Resource::Iri(format!("urn:subject:{index}")),
+                    predicate: "urn:predicate".to_owned(),
+                    object: Term::Iri("urn:object".to_owned()),
+                })
+                .expect("unique triple within the work and count limits");
+        }
+        parser
+            .add(Triple {
+                subject: Resource::Iri("urn:subject:0".to_owned()),
+                predicate: "urn:predicate".to_owned(),
+                object: Term::Iri("urn:object".to_owned()),
+            })
+            .expect("duplicate after the unique table fills");
+        assert_eq!(parser.triples.len(), 64);
     }
 
     #[test]

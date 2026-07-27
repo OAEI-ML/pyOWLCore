@@ -34,6 +34,7 @@ from tools.benchmark.comparators.adapters import (
 )
 from tools.benchmark.comparators.common_contract import (
     CommonContractError,
+    _canonical_provenance_origins,
     _document_preimage_parts,
     _logical_preimage_parts,
     _signature_preimage_parts,
@@ -195,6 +196,133 @@ def test_core_common_contract_reconstructs_all_four_fingerprint_preimages() -> N
         for origin in contract["provenance"]["origins"]
         for occurrence in origin["occurrences"]
     )
+
+
+def test_rdf_provenance_ordinals_are_canonical_and_parser_order_independent() -> None:
+    source = equivalent_source(DocumentFormat.RDF_XML, 3)
+    snapshot = load_snapshot(source, options=default_options(DocumentFormat.RDF_XML))
+    document_key = snapshot.root_document_key
+    first_digest = b"\x11" * 32
+    second_digest = b"\x22" * 32
+    records = [
+        (second_digest, document_key, 7, None),
+        (first_digest, document_key, 42, None),
+        (first_digest, document_key, 4, None),
+        (second_digest, document_key, 1, None),
+    ]
+
+    document_formats = {document_key: DocumentFormat.RDF_XML}
+    origins, row_count = _canonical_provenance_origins(records, document_formats=document_formats)
+    reversed_origins, reversed_row_count = _canonical_provenance_origins(
+        reversed(records), document_formats=document_formats
+    )
+
+    assert origins == reversed_origins
+    assert row_count == reversed_row_count == 4
+    assert origins == [
+        {
+            "structural_sha256": first_digest.hex(),
+            "occurrences": [
+                {"document_key": document_key, "occurrence": 0, "span": None},
+                {"document_key": document_key, "occurrence": 1, "span": None},
+            ],
+        },
+        {
+            "structural_sha256": second_digest.hex(),
+            "occurrences": [
+                {"document_key": document_key, "occurrence": 2, "span": None},
+                {"document_key": document_key, "occurrence": 3, "span": None},
+            ],
+        },
+    ]
+
+
+def test_rdf_provenance_ordinals_span_documents_before_regrouping() -> None:
+    first_digest = b"\x11" * 32
+    second_digest = b"\x22" * 32
+    records = [
+        (second_digest, "d:rdf-z", 3, None),
+        (first_digest, "d:turtle-b", 8, None),
+        (first_digest, "d:functional", 17, None),
+        (first_digest, "d:rdf-a", 21, None),
+    ]
+
+    origins, row_count = _canonical_provenance_origins(
+        records,
+        document_formats={
+            "d:rdf-a": DocumentFormat.RDF_XML,
+            "d:rdf-z": DocumentFormat.RDF_XML,
+            "d:turtle-b": DocumentFormat.TURTLE,
+            "d:functional": DocumentFormat.FUNCTIONAL,
+        },
+    )
+
+    assert row_count == 4
+    assert origins == [
+        {
+            "structural_sha256": first_digest.hex(),
+            "occurrences": [
+                {"document_key": "d:functional", "occurrence": 17, "span": None},
+                {"document_key": "d:rdf-a", "occurrence": 0, "span": None},
+                {"document_key": "d:turtle-b", "occurrence": 1, "span": None},
+            ],
+        },
+        {
+            "structural_sha256": second_digest.hex(),
+            "occurrences": [{"document_key": "d:rdf-z", "occurrence": 2, "span": None}],
+        },
+    ]
+
+
+def test_common_contract_preserves_non_rdf_source_ordinals() -> None:
+    source = equivalent_source(DocumentFormat.FUNCTIONAL, 2)
+    snapshot = load_snapshot(source, options=default_options(DocumentFormat.FUNCTIONAL))
+    document_key = snapshot.root_document_key
+    digest = b"\x33" * 32
+
+    origins, row_count = _canonical_provenance_origins(
+        [
+            (digest, document_key, 9, None),
+            (digest, document_key, 3, None),
+        ],
+        document_formats={document_key: DocumentFormat.FUNCTIONAL},
+    )
+
+    assert row_count == 2
+    assert origins == [
+        {
+            "structural_sha256": digest.hex(),
+            "occurrences": [
+                {"document_key": document_key, "occurrence": 3, "span": None},
+                {"document_key": document_key, "occurrence": 9, "span": None},
+            ],
+        }
+    ]
+
+
+def test_rdf_common_contract_does_not_rewrite_actual_origin_index() -> None:
+    source = equivalent_source(DocumentFormat.RDF_XML, 4)
+    options = default_options(DocumentFormat.RDF_XML)
+    snapshot = load_snapshot(source, options=options)
+    actual_origins = tuple(
+        (digest, tuple(occurrences))
+        for digest, occurrences in snapshot.origin_index.entries.items()
+    )
+
+    contract = build_core_common_contract(
+        snapshot,
+        corpus_id="rdf-origin-ordinals",
+        source_sha256=hashlib.sha256(source).hexdigest(),
+        options_sha256=options_digest(options),
+    )
+
+    published_occurrences = [
+        occurrence["occurrence"]
+        for origin in contract["provenance"]["origins"]
+        for occurrence in origin["occurrences"]
+    ]
+    assert published_occurrences == list(range(len(published_occurrences)))
+    assert tuple(snapshot.origin_index.entries.items()) == actual_origins
 
 
 def test_encoded_common_contract_matches_scalar_without_model_callbacks(

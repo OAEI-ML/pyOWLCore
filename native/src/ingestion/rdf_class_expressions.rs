@@ -101,7 +101,7 @@ pub(crate) struct RdfClassExpressionDecoder<'graph, 'data> {
     blank_roles: Vec<BlankRole<'data>>,
     data_properties: Vec<&'data str>,
     datatypes: Vec<&'data str>,
-    literals: Vec<RdfLiteralMetadata<'data>>,
+    literals: Vec<Option<RdfLiteralMetadata<'data>>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,7 +112,6 @@ struct BlankRole<'data> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RdfLiteralMetadata<'data> {
-    triple_index: usize,
     datatype: Option<&'data str>,
     language: Option<&'data str>,
 }
@@ -219,25 +218,20 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 "native RDF literal metadata targets a resource",
             ));
         }
-        session.step(usize_as_u64(
-            self.literals.len(),
-            "native RDF literal-metadata work exceeds u64",
-        )?)?;
-        if self
-            .literals
-            .iter()
-            .any(|metadata| metadata.triple_index == triple_index)
-        {
+        session.step(1)?;
+        if self.literals.is_empty() {
+            self.literals = reserved_vec(self.triples.len(), session)?;
+            self.literals.resize(self.triples.len(), None);
+        }
+        let metadata = self.literals.get_mut(triple_index).ok_or_else(|| {
+            NativeError::protocol("native RDF literal metadata index exceeds graph")
+        })?;
+        if metadata.is_some() {
             return Err(NativeError::protocol(
                 "native RDF literal metadata is duplicated",
             ));
         }
-        reserve_item(&mut self.literals, session)?;
-        self.literals.push(RdfLiteralMetadata {
-            triple_index,
-            datatype,
-            language,
-        });
+        *metadata = Some(RdfLiteralMetadata { datatype, language });
         Ok(())
     }
 
@@ -1430,15 +1424,12 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
                 "native RDF literal decoder received a resource",
             ));
         };
-        session.step(usize_as_u64(
-            self.literals.len(),
-            "native RDF literal-metadata work exceeds u64",
-        )?)?;
+        session.step(1)?;
         let metadata = self
             .literals
-            .iter()
-            .find(|metadata| metadata.triple_index == triple_index)
+            .get(triple_index)
             .copied()
+            .flatten()
             .ok_or_else(|| unsupported("native RDF literal metadata is unavailable"))?;
         if metadata.datatype.is_some() && metadata.language.is_some() {
             return Err(unsupported(
@@ -2346,6 +2337,36 @@ mod tests {
         .unwrap();
         assert_eq!(decoded.node.as_bytes(), expected.as_bytes());
         assert_eq!(decoded.consumed, [0, 1, 2]);
+    }
+
+    #[test]
+    fn literal_metadata_registration_and_lookup_are_linear() {
+        let graph = vec![edge("s", "urn:predicate", RdfTerm::Literal("value")); 64];
+        let mut limits = Limits::default();
+        limits.max_canonical_work = 1_024;
+        let mut guard = Guard::new(
+            Cancellation::with_duration(None),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let mut decoder = RdfClassExpressionDecoder::new(&graph);
+
+        for index in 0..graph.len() {
+            decoder
+                .register_literal(index, Some(XSD_STRING), None, &mut session)
+                .expect("indexed literal metadata");
+        }
+        decoder
+            .decode_literal(graph.len() - 1, &mut session)
+            .expect("indexed literal lookup");
+        assert_eq!(
+            decoder
+                .register_literal(0, Some(XSD_STRING), None, &mut session)
+                .expect_err("duplicate metadata")
+                .code,
+            "NATIVE_PROTOCOL",
+        );
     }
 
     #[test]

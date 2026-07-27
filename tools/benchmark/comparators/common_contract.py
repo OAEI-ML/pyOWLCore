@@ -20,6 +20,7 @@ from typing import Any, cast
 from pyowl_core import (
     AxiomScope,
     CanonicalSet,
+    DocumentFormat,
     OntologyDocument,
     OntologySnapshot,
     SourceSpan,
@@ -44,6 +45,7 @@ from ..native_redesign.encoded_contract import (
 COMMON_CONTRACT_SCHEMA = "pyowl-core/comparator-common-contract/v1"
 _SHA256 = frozenset("0123456789abcdef")
 _RECORD_INVENTORY_DOMAIN = b"pyowl-core:comparator-record-inventory:v1\x00"
+_RDF_GRAPH_FORMATS = frozenset((DocumentFormat.RDF_XML, DocumentFormat.TURTLE))
 
 
 class CommonContractError(ValueError):
@@ -845,21 +847,15 @@ def _provenance_inventory(snapshot: OntologySnapshot) -> dict[str, object]:
     document key, and occurrence ordinal, plus exact source/document counts.
     """
 
-    origins: list[dict[str, object]] = []
-    for digest, occurrences in sorted(snapshot.origin_index.entries.items()):
-        origins.append(
-            {
-                "structural_sha256": digest.hex(),
-                "occurrences": [
-                    {
-                        "document_key": item.document_key,
-                        "occurrence": item.occurrence,
-                        "span": None,
-                    }
-                    for item in occurrences
-                ],
-            }
-        )
+    records = (
+        (digest, item.document_key, item.occurrence, item.span)
+        for digest, occurrences in snapshot.origin_index.entries.items()
+        for item in occurrences
+    )
+    origins, _row_count = _canonical_provenance_origins(
+        records,
+        document_formats=_provenance_document_formats(snapshot),
+    )
     return {
         "origins": origins,
         "origin_entry_count": len(origins),
@@ -877,10 +873,8 @@ def _encoded_provenance_inventory(
             "installed native lane did not publish validated retained provenance records"
         )
 
-    origins: list[dict[str, object]] = []
-    occurrences: list[dict[str, object]] = []
+    records: list[tuple[bytes, str, int, SourceSpan | None]] = []
     active_digest: bytes | None = None
-    row_count = 0
     for record in bulk_records():
         if type(record) is not tuple or len(record) != 4:
             raise CommonContractError(
@@ -907,6 +901,64 @@ def _encoded_provenance_inventory(
             raise CommonContractError(
                 "bulk retained provenance records are not canonical"
             )
+        active_digest = digest
+        records.append((digest, document_key, occurrence, span))
+    origins, row_count = _canonical_provenance_origins(
+        records,
+        document_formats=_provenance_document_formats(snapshot),
+    )
+    return (
+        {
+            "origins": origins,
+            "origin_entry_count": len(origins),
+            "source_byte_count": snapshot.report.total_source_bytes,
+            "document_count": snapshot.report.document_count,
+        },
+        row_count,
+    )
+
+
+def _canonical_provenance_origins(
+    records: Iterable[tuple[bytes, str, int, SourceSpan | None]],
+    *,
+    document_formats: Mapping[str, DocumentFormat],
+) -> tuple[list[dict[str, object]], int]:
+    """Publish parser-neutral ordinals for RDF graph documents.
+
+    RDF parsers do not share a meaningful triple traversal order. Their
+    producer ordinals are therefore used only to break ties between otherwise
+    indistinguishable duplicate origins. Non-RDF syntax ordinals retain their
+    source-order meaning and are published unchanged.
+    """
+
+    rdf_records: list[tuple[bytes, str, int, SourceSpan | None]] = []
+    non_rdf_records: list[tuple[bytes, str, int, SourceSpan | None]] = []
+    row_count = 0
+    for record in records:
+        digest, document_key, occurrence, _span = record
+        format = document_formats.get(document_key)
+        if format is None:
+            raise CommonContractError(
+                "provenance record refers to a document outside the import manifest"
+            )
+        if format in _RDF_GRAPH_FORMATS:
+            rdf_records.append(record)
+        else:
+            non_rdf_records.append(record)
+        row_count += 1
+
+    rdf_records.sort(key=lambda row: (row[0], row[1].encode("utf-8"), row[2]))
+    canonical_records = [
+        (digest, document_key, occurrence, span)
+        for occurrence, (digest, document_key, _prior_occurrence, span) in enumerate(rdf_records)
+    ]
+    canonical_records.extend(non_rdf_records)
+    canonical_records.sort(key=lambda row: (row[0], row[1].encode("utf-8"), row[2]))
+
+    origins: list[dict[str, object]] = []
+    active_digest: bytes | None = None
+    occurrences: list[dict[str, object]] = []
+    for digest, document_key, occurrence, _span in canonical_records:
         if digest != active_digest:
             if active_digest is not None:
                 origins.append(
@@ -924,7 +976,6 @@ def _encoded_provenance_inventory(
                 "span": None,
             }
         )
-        row_count += 1
     if active_digest is not None:
         origins.append(
             {
@@ -932,15 +983,13 @@ def _encoded_provenance_inventory(
                 "occurrences": occurrences,
             }
         )
-    return (
-        {
-            "origins": origins,
-            "origin_entry_count": len(origins),
-            "source_byte_count": snapshot.report.total_source_bytes,
-            "document_count": snapshot.report.document_count,
-        },
-        row_count,
-    )
+    return origins, row_count
+
+
+def _provenance_document_formats(
+    snapshot: OntologySnapshot,
+) -> dict[str, DocumentFormat]:
+    return {record.document_key: record.format for record in snapshot.import_manifest.documents}
 
 
 def _optional_canonical(value: StructuralNode | None) -> str | None:

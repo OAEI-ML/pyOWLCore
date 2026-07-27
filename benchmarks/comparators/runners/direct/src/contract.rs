@@ -48,7 +48,7 @@ pub(crate) fn build_contract(
         ));
     }
     let identity = identity(evidence, source_sha256, format);
-    let provenance = provenance(evidence);
+    let provenance = provenance(evidence, format)?;
     let diagnostics = Value::Array(Vec::new());
     let identity_bytes = canonical_json(&identity)?;
     let provenance_bytes = canonical_json(&provenance)?;
@@ -238,15 +238,28 @@ fn identity(evidence: &ComparatorCommonEvidence, source_sha256: &str, format: &s
     })
 }
 
-fn provenance(evidence: &ComparatorCommonEvidence) -> Value {
+fn provenance(evidence: &ComparatorCommonEvidence, format: &str) -> Result<Value, ContractError> {
     let mut grouped: BTreeMap<[u8; 32], Vec<Value>> = BTreeMap::new();
-    for origin in &evidence.origins {
+    let mut origin_rows = evidence.origins.iter().collect::<Vec<_>>();
+    let canonical_rdf_ordinals = format == "rdfxml";
+    if canonical_rdf_ordinals {
+        // The direct comparator is import-free, so every row has the same
+        // document key. The producer ordinal is only a duplicate tie-break.
+        origin_rows.sort_by_key(|origin| (origin.structural_sha256, origin.occurrence));
+    }
+    for (index, origin) in origin_rows.into_iter().enumerate() {
+        let occurrence = if canonical_rdf_ordinals {
+            u64::try_from(index)
+                .map_err(|_| ContractError::new("RDF provenance exceeds u64 ordinals"))?
+        } else {
+            origin.occurrence
+        };
         grouped
             .entry(origin.structural_sha256)
             .or_default()
             .push(json!({
                 "document_key": evidence.document_key,
-                "occurrence": origin.occurrence,
+                "occurrence": occurrence,
                 "span": null,
             }));
     }
@@ -260,12 +273,12 @@ fn provenance(evidence: &ComparatorCommonEvidence) -> Value {
         })
         .collect::<Vec<_>>();
     let origin_entry_count = origins.len();
-    json!({
+    Ok(json!({
         "origins": origins,
         "origin_entry_count": origin_entry_count,
         "source_byte_count": evidence.source_byte_count,
         "document_count": 1,
-    })
+    }))
 }
 
 fn fingerprint(value: ComparatorFingerprintEvidence) -> Value {
@@ -552,7 +565,7 @@ fn is_sha256(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyowl_native::comparator::load_functional_common;
+    use pyowl_native::comparator::{load_functional_common, load_rdfxml_common};
 
     #[test]
     fn contract_digest_and_nested_ledgers_are_self_consistent() {
@@ -576,5 +589,71 @@ mod tests {
         let mut tampered = contract;
         tampered["ledger"]["provenance_bytes"] = json!(0);
         assert!(validate_contract(&tampered).is_err());
+    }
+
+    #[test]
+    fn rdf_provenance_ordinals_are_canonical_and_producer_order_independent() {
+        let source = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+            xmlns:owl="http://www.w3.org/2002/07/owl#">
+          <owl:Ontology rdf:about="https://example.org/o"/>
+          <owl:Class rdf:about="https://example.org/A"/>
+          <owl:Class rdf:about="https://example.org/B"/>
+        </rdf:RDF>"#;
+        let source_sha256 = hex_digest(source);
+        let mut evidence = load_rdfxml_common(
+            source,
+            &format!("urn:pyowl-core:comparator-source:sha256:{source_sha256}"),
+        )
+        .expect("retained RDF/XML evidence");
+        for (index, origin) in evidence.origins.iter_mut().enumerate() {
+            origin.occurrence = 100 - u64::try_from(index).expect("test ordinal");
+        }
+        let mut reversed = evidence.clone();
+        reversed.origins.reverse();
+
+        let canonical = provenance(&evidence, "rdfxml").expect("canonical provenance");
+        let reversed_canonical =
+            provenance(&reversed, "rdfxml").expect("reversed canonical provenance");
+
+        assert_eq!(canonical, reversed_canonical);
+        assert_eq!(
+            published_occurrences(&canonical),
+            (0..u64::try_from(evidence.origins.len()).expect("origin count")).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn functional_provenance_preserves_source_ordinals() {
+        let source = b"Ontology(Declaration(Class(<https://example.org/C>)))";
+        let source_sha256 = hex_digest(source);
+        let mut evidence = load_functional_common(
+            source,
+            &format!("urn:pyowl-core:comparator-source:sha256:{source_sha256}"),
+        )
+        .expect("retained evidence");
+        evidence.origins[0].occurrence = 41;
+
+        let value = provenance(&evidence, "functional").expect("functional provenance");
+
+        assert_eq!(published_occurrences(&value), vec![41]);
+    }
+
+    fn published_occurrences(provenance: &Value) -> Vec<u64> {
+        provenance["origins"]
+            .as_array()
+            .expect("origin groups")
+            .iter()
+            .flat_map(|origin| {
+                origin["occurrences"]
+                    .as_array()
+                    .expect("occurrences")
+                    .iter()
+            })
+            .map(|occurrence| {
+                occurrence["occurrence"]
+                    .as_u64()
+                    .expect("published u64 occurrence")
+            })
+            .collect()
     }
 }
