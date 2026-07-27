@@ -43,6 +43,13 @@ EXPECTED_PROVENANCE_INPUTS = {
 }
 
 
+def test_sdist_manifest_prunes_native_test_build_outputs() -> None:
+    manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines()
+
+    assert "prune tests/fuzz/native/target" in manifest
+    assert "prune tests/miri/native/target" in manifest
+
+
 def _copy_dependency_manifests(target: Path) -> None:
     shutil.copytree(ROOT / "THIRD_PARTY_LICENSES", target / "THIRD_PARTY_LICENSES")
     shutil.copy2(ROOT / "NOTICE", target / "NOTICE")

@@ -29,6 +29,7 @@ recursive-include tools *.py *.md
 prune tools/benchmark/comparators
 recursive-include THIRD_PARTY_LICENSES *
 prune tests/fuzz/native/target
+prune tests/miri/native/target
 global-exclude *.py[cod]
 global-exclude __pycache__
 global-exclude .DS_Store
