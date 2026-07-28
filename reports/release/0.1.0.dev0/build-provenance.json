@@ -66,8 +66,8 @@
       "sha256": "b995193756be7c3d750b4b6f5295d91e8c8be25142b5c12b11dc9cf5fd7fedfd"
     },
     "tools/packaging/import_probe.py": {
-      "bytes": 3282,
-      "sha256": "8d61345349dbf9b228edd859e739758d48a4f2a3c88c8bbdd0ed149f937893b8"
+      "bytes": 3374,
+      "sha256": "2d599faecbd7095138377c4572636496560de36dbd02e6b6671d7d6832dad5d2"
     },
     "tools/packaging/platform_audit.py": {
       "bytes": 23376,
