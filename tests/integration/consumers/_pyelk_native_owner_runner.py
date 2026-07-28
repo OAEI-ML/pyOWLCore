@@ -75,8 +75,8 @@ def main() -> None:
         raise AssertionError("pyOWLCore did not advertise its frozen encoded-view schema")
     if ENCODED_SCHEMA_NAME not in probe.features:
         raise AssertionError("pyOWLCore probe omitted its encoded-view capability")
-    if cast(Any, pyelk_native).encoded_view_schemas():
-        raise AssertionError("pyELK fixture advertised an unfinished encoded input capability")
+    if cast(Any, pyelk_native).encoded_view_schemas() != expected_core_schemas:
+        raise AssertionError("pyELK omitted its reviewed encoded input capability")
 
     functional_source = b"""Prefix(:=<urn:core-pyelk#>) Ontology(<urn:core-pyelk>
       Declaration(Class(:A))
@@ -178,11 +178,6 @@ def main() -> None:
             scalar_error = AssertionError("pyELK handoff crossed scalar ontology traversal")
             with (
                 ExitStack() as reasoner_stack,
-                patch.object(
-                    pyelk_native,
-                    "encoded_view_schemas",
-                    return_value={ENCODED_SCHEMA_NAME: ENCODED_SCHEMA_VERSION},
-                ),
                 patch.object(type(selected), "iter_axioms", side_effect=scalar_error),
                 patch.object(type(selected), "iter_extensions", side_effect=scalar_error),
                 patch.object(type(selected), "ontology_annotations", side_effect=scalar_error),
@@ -269,8 +264,8 @@ def main() -> None:
                 }
             if dict(selected.capabilities.encoded_view_schemas) != expected_core_schemas:
                 raise AssertionError("public core capability changed after pyELK use")
-            if cast(Any, pyelk_native).encoded_view_schemas():
-                raise AssertionError("test-local pyELK capability leaked into the native module")
+            if cast(Any, pyelk_native).encoded_view_schemas() != expected_core_schemas:
+                raise AssertionError("public pyELK capability changed after encoded use")
             return result
         finally:
             expected.close()
@@ -323,13 +318,6 @@ def main() -> None:
         result: dict[str, object]
         try:
             with ExitStack() as stack:
-                stack.enter_context(
-                    patch.object(
-                        pyelk_native,
-                        "encoded_view_schemas",
-                        return_value={ENCODED_SCHEMA_NAME: ENCODED_SCHEMA_VERSION},
-                    )
-                )
                 scalar_view_types = {type(base) for base in native_bases}
                 scalar_view_types.add(type(candidate))
                 for view_type in scalar_view_types:
@@ -545,8 +533,8 @@ def main() -> None:
         result["fingerprint_accesses"] = dict(fingerprint_accesses)
         if dict(candidate.capabilities.encoded_view_schemas) != expected_core_schemas:
             raise AssertionError("public core capability changed after owner-matrix use")
-        if cast(Any, pyelk_native).encoded_view_schemas():
-            raise AssertionError("test-local pyELK capability leaked after owner-matrix use")
+        if cast(Any, pyelk_native).encoded_view_schemas() != expected_core_schemas:
+            raise AssertionError("public pyELK capability changed after owner-matrix use")
         return result
 
     def native_snapshot(source: bytes, format: DocumentFormat) -> Any:
