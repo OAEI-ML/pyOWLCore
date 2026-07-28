@@ -8,7 +8,7 @@
 mod canonical;
 mod common;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Cursor, Read, Write};
 use std::panic::{self, AssertUnwindSafe};
@@ -25,6 +25,8 @@ use horned_owl::model::{
 };
 use horned_owl::ontology::iri_mapped::RcIRIMappedOntology;
 use horned_owl::visitor::immutable::{Visit, Walk};
+use oxrdf::{NamedOrBlankNode, Term, Triple};
+use oxrdfio::{RdfFormat, RdfParser, RdfSerializer};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -37,7 +39,7 @@ const ENGINE_SHA256: &str = "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5
 const ALLOCATOR: &str = "Rust system allocator";
 const THREAD_CEILING: u64 = 1;
 const RAW_RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v2";
-const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v2";
+const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v3";
 const RUNNER_FEATURES: &[&str] = &["default", "independent-common-contract-v1"];
 
 const ADAPTER_REQUEST_SCHEMA: &str = "pyowl-core/comparator-adapter-request/v2";
@@ -696,9 +698,9 @@ fn execute_common(request: ValidatedRequest, lane: Lane) -> Result<Value, Runner
     let (ontology, diagnostic_count) = match prepared.as_ref() {
         Some(file) => {
             let stream = File::open(&file.path)?;
-            parse_ontology(BufReader::new(stream), request.format, rewrite_swrl)?
+            parse_common_ontology(BufReader::new(stream), request.format, rewrite_swrl)?
         }
-        None => parse_ontology(
+        None => parse_common_ontology(
             BufReader::new(Cursor::new(request.source.as_slice())),
             request.format,
             rewrite_swrl,
@@ -1154,6 +1156,210 @@ fn parse_ontology<R: BufRead>(
             "Horned Turtle requests must be rejected before parsing",
         )),
     }
+}
+
+const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const OWL_AXIOM_IRI: &str = "http://www.w3.org/2002/07/owl#Axiom";
+const OWL_ANNOTATION_IRI: &str = "http://www.w3.org/2002/07/owl#Annotation";
+const OWL_ANNOTATED_SOURCE_IRI: &str = "http://www.w3.org/2002/07/owl#annotatedSource";
+const OWL_ANNOTATED_PROPERTY_IRI: &str = "http://www.w3.org/2002/07/owl#annotatedProperty";
+const OWL_ANNOTATED_TARGET_IRI: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
+
+#[derive(Default)]
+struct ReificationMetadata {
+    kinds: HashSet<String>,
+    source: Vec<Term>,
+    property: Vec<Term>,
+    target: Vec<Term>,
+}
+
+fn referenced_node(value: &Term) -> Option<NamedOrBlankNode> {
+    match value {
+        Term::NamedNode(value) => Some(value.clone().into()),
+        Term::BlankNode(value) => Some(value.clone().into()),
+        Term::Literal(_) => None,
+    }
+}
+
+fn replacement_term(
+    value: Term,
+    replacements: &HashMap<NamedOrBlankNode, NamedOrBlankNode>,
+) -> Term {
+    let Some(mut node) = referenced_node(&value) else {
+        return value;
+    };
+    while let Some(replacement) = replacements.get(&node) {
+        node = replacement.clone();
+    }
+    match node {
+        NamedOrBlankNode::NamedNode(value) => value.into(),
+        NamedOrBlankNode::BlankNode(value) => value.into(),
+    }
+}
+
+fn reification_key(
+    metadata: &ReificationMetadata,
+    replacements: &HashMap<NamedOrBlankNode, NamedOrBlankNode>,
+) -> Option<String> {
+    if metadata.kinds.len() != 1
+        || metadata.source.len() != 1
+        || metadata.property.len() != 1
+        || metadata.target.len() != 1
+    {
+        return None;
+    }
+    let kind = metadata.kinds.iter().next()?;
+    if kind != OWL_AXIOM_IRI {
+        return None;
+    }
+    let source = replacement_term(metadata.source[0].clone(), replacements);
+    let property = replacement_term(metadata.property[0].clone(), replacements);
+    let target = replacement_term(metadata.target[0].clone(), replacements);
+    Some(format!("{kind}\0{source}\0{property}\0{target}"))
+}
+
+// Horned 1.4 stores annotations by the reified main triple.  When several
+// owl:Axiom resources describe that triple, randomized blank-node traversal
+// makes the last resource overwrite the others.  Collapse equivalent
+// resources before Horned sees them so its one map entry contains the union of
+// their qualifier triples. References to the folded resources are redirected
+// too, so nested annotations keep pointing at the surviving axiom resource.
+fn coalesce_duplicate_rdf_reifications(source: &[u8]) -> Result<Option<Vec<u8>>, RunnerError> {
+    let triples = RdfParser::from_format(RdfFormat::RdfXml)
+        .for_reader(Cursor::new(source))
+        .map(|quad| {
+            quad.map(Triple::from)
+                .map_err(|error| RunnerError::new(format!("RDF/XML preparse failed: {error}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut metadata = HashMap::<NamedOrBlankNode, ReificationMetadata>::new();
+    for triple in &triples {
+        match triple.predicate.as_str() {
+            RDF_TYPE_IRI => {
+                if let Term::NamedNode(kind) = &triple.object {
+                    if matches!(kind.as_str(), OWL_AXIOM_IRI | OWL_ANNOTATION_IRI) {
+                        metadata
+                            .entry(triple.subject.clone())
+                            .or_default()
+                            .kinds
+                            .insert(kind.as_str().to_owned());
+                    }
+                }
+            }
+            OWL_ANNOTATED_SOURCE_IRI => {
+                metadata
+                    .entry(triple.subject.clone())
+                    .or_default()
+                    .source
+                    .push(triple.object.clone());
+            }
+            OWL_ANNOTATED_PROPERTY_IRI => {
+                metadata
+                    .entry(triple.subject.clone())
+                    .or_default()
+                    .property
+                    .push(triple.object.clone());
+            }
+            OWL_ANNOTATED_TARGET_IRI => {
+                metadata
+                    .entry(triple.subject.clone())
+                    .or_default()
+                    .target
+                    .push(triple.object.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let mut replacements = HashMap::<NamedOrBlankNode, NamedOrBlankNode>::new();
+    loop {
+        let mut groups = HashMap::<String, Vec<NamedOrBlankNode>>::new();
+        for (node, value) in &metadata {
+            if let Some(key) = reification_key(value, &replacements) {
+                groups.entry(key).or_default().push(node.clone());
+            }
+        }
+        let mut changed = false;
+        for nodes in groups.values_mut() {
+            if nodes.len() < 2 {
+                continue;
+            }
+            nodes.sort_by_key(ToString::to_string);
+            let representative = nodes[0].clone();
+            for node in &nodes[1..] {
+                if replacements.insert(node.clone(), representative.clone())
+                    != Some(representative.clone())
+                {
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    if replacements.is_empty() {
+        return Ok(None);
+    }
+
+    let mut rewritten = Vec::with_capacity(triples.len());
+    let mut seen = HashSet::with_capacity(triples.len());
+    for triple in triples {
+        let subject = match replacement_term(triple.subject.clone().into(), &replacements) {
+            Term::NamedNode(value) => value.into(),
+            Term::BlankNode(value) => value.into(),
+            Term::Literal(_) => unreachable!("RDF triple subjects are resources"),
+        };
+        let object = replacement_term(triple.object, &replacements);
+        let triple = Triple {
+            subject,
+            predicate: triple.predicate,
+            object,
+        };
+        if seen.insert(triple.clone()) {
+            rewritten.push(triple);
+        }
+    }
+    let mut serializer = RdfSerializer::from_format(RdfFormat::NTriples).for_writer(Vec::new());
+    for triple in &rewritten {
+        serializer.serialize_triple(triple).map_err(|error| {
+            RunnerError::new(format!("RDF reification rewrite failed: {error}"))
+        })?;
+    }
+    serializer
+        .finish()
+        .map(Some)
+        .map_err(|error| RunnerError::new(format!("RDF reification rewrite failed: {error}")))
+}
+
+fn parse_common_ontology<R: BufRead>(
+    mut reader: R,
+    format: Format,
+    rewrite_swrl: bool,
+) -> Result<(RcIRIMappedOntology, u64), RunnerError> {
+    if !matches!(format, Format::RdfXml) {
+        return parse_ontology(reader, format, rewrite_swrl);
+    }
+    let mut source = Vec::new();
+    reader.read_to_end(&mut source)?;
+    let Some(rewritten) = coalesce_duplicate_rdf_reifications(&source)? else {
+        return parse_ontology(BufReader::new(Cursor::new(source)), format, rewrite_swrl);
+    };
+    let config = ParserConfiguration {
+        rdf: RDFParserConfiguration {
+            lax: true,
+            format: Some(RdfFormat::NTriples),
+        },
+        ..ParserConfiguration::default()
+    };
+    let (ontology, incomplete) =
+        horned_io::rdf::reader::read(&mut BufReader::new(Cursor::new(rewritten)), config).map_err(
+            |error| RunnerError::new(format!("Horned rewritten RDF parse failed: {error}")),
+        )?;
+    let diagnostic_count = incomplete_count(&incomplete)?;
+    let set_ontology: horned_owl::ontology::set::SetOntology<RcStr> = ontology.into();
+    Ok((set_ontology.into(), diagnostic_count))
 }
 
 fn incomplete_count(

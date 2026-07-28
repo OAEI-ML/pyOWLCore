@@ -564,6 +564,8 @@ dependencies = [
  "base64",
  "horned-owl",
  "libc",
+ "oxrdf",
+ "oxrdfio",
  "serde",
  "serde_json",
  "sha2",

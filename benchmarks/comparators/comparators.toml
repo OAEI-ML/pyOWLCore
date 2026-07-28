@@ -86,7 +86,7 @@ thread_ceiling = 1
 launcher_env = "PYOWL_CORE_HORNED_RUNNER"
 runner_pin_state = "complete"
 runner_revision = "pyowl-core-horned-raw-runner-v2"
-runner_sha256 = "a7817c2831f958acaf7d6acbd6fab584564c3768e7304491615ac76cae220ebf"
+runner_sha256 = "37b64e372a4f31a19040f8620cdcf1288c3049d0c00e614192d1861429c15bce"
 gating = false
 required = true
 
@@ -106,8 +106,8 @@ allocator = "Rust system allocator"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_HORNED_RUNNER"
 runner_pin_state = "complete"
-runner_revision = "pyowl-core-horned-common-runner-v2"
-runner_sha256 = "a7817c2831f958acaf7d6acbd6fab584564c3768e7304491615ac76cae220ebf"
+runner_revision = "pyowl-core-horned-common-runner-v3"
+runner_sha256 = "37b64e372a4f31a19040f8620cdcf1288c3049d0c00e614192d1861429c15bce"
 gating = true
 required = true
 

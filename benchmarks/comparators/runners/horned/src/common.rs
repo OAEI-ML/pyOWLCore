@@ -2948,7 +2948,7 @@ mod tests {
     use std::io::{BufReader, Cursor};
 
     use super::*;
-    use crate::{functional_swrl_edits, parse_ontology, sha256_hex, Format};
+    use crate::{functional_swrl_edits, parse_common_ontology, sha256_hex, Format};
 
     const FUNCTIONAL_OPTIONS_SHA256: &str =
         "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c";
@@ -2983,7 +2983,8 @@ mod tests {
         let rewrite_swrl = matches!(format, Format::Functional)
             && !functional_swrl_edits(source).unwrap().is_empty();
         let (ontology, diagnostics) =
-            parse_ontology(BufReader::new(Cursor::new(source)), format, rewrite_swrl).unwrap();
+            parse_common_ontology(BufReader::new(Cursor::new(source)), format, rewrite_swrl)
+                .unwrap();
         build_common_contract(&ontology, &request, diagnostics)
             .unwrap()
             .contract
@@ -3106,6 +3107,67 @@ mod tests {
             value["contract_sha256"],
             "9034dbb5b3448dde1baf34adf9e5b92948dd677e8d83d6d2b29d865dad7c9c3e"
         );
+    }
+
+    #[test]
+    fn rdfxml_duplicate_axiom_reifications_match_direct_reference_deterministically() {
+        let source = concat!(
+            "<?xml version=\"1.0\"?>\n",
+            "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"\n",
+            "         xmlns:owl=\"http://www.w3.org/2002/07/owl#\"\n",
+            "         xmlns:e=\"urn:\">\n",
+            "  <owl:AnnotationProperty rdf:about=\"urn:p\"/>\n",
+            "  <rdf:Description rdf:about=\"urn:s\">\n",
+            "    <e:p rdf:resource=\"urn:o\"/>\n",
+            "  </rdf:Description>\n",
+            "  <owl:Axiom rdf:nodeID=\"first\">\n",
+            "    <owl:annotatedSource rdf:resource=\"urn:s\"/>\n",
+            "    <owl:annotatedProperty rdf:resource=\"urn:p\"/>\n",
+            "    <owl:annotatedTarget rdf:resource=\"urn:o\"/>\n",
+            "    <e:first rdf:resource=\"urn:one\"/>\n",
+            "  </owl:Axiom>\n",
+            "  <owl:Axiom rdf:nodeID=\"second\">\n",
+            "    <owl:annotatedSource rdf:resource=\"urn:s\"/>\n",
+            "    <owl:annotatedProperty rdf:resource=\"urn:p\"/>\n",
+            "    <owl:annotatedTarget rdf:resource=\"urn:o\"/>\n",
+            "    <e:second rdf:resource=\"urn:two\"/>\n",
+            "  </owl:Axiom>\n",
+            "</rdf:RDF>\n",
+        );
+        assert_eq!(
+            sha256_hex(source.as_bytes()),
+            "cd26e53712c8edaf49cd594b3f73ff02d6f3b5b18ccf24d105d1e9303e3134f1"
+        );
+        let expected = contract_for(
+            source.as_bytes(),
+            "probe-duplicate-reifications",
+            Format::RdfXml,
+            RDFXML_OPTIONS_SHA256,
+        );
+        assert_eq!(
+            expected["contract_sha256"],
+            "186f5521f2e029ca5cf246c03916719e1c65a73f5f75daa410d9278f170b675d"
+        );
+        assert_eq!(
+            expected["ledger"]["inventories"]["axioms"],
+            json!({
+                "count": 2,
+                "canonical_bytes": 203,
+                "transcript_bytes": 249,
+                "sha256": "04e80b339173a0746a0ce2cd5acc63ac02978ab3e6fa95936add9e30893ca55c",
+            })
+        );
+        for _ in 0..8 {
+            assert_eq!(
+                contract_for(
+                    source.as_bytes(),
+                    "probe-duplicate-reifications",
+                    Format::RdfXml,
+                    RDFXML_OPTIONS_SHA256,
+                ),
+                expected
+            );
+        }
     }
 
     #[test]
