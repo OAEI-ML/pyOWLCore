@@ -57,6 +57,30 @@ def test_manifest_covers_required_lanes_and_locks_every_generated_input() -> Non
             assert hashlib.sha256(generated_bytes(corpus)).hexdigest() == corpus.sha256
 
 
+def test_ncit_is_the_pinned_exact_large_horned_comparison_corpus() -> None:
+    corpus = load_manifest().by_id("oaei-bioml-ncit-2024")
+
+    assert corpus.tier == "large"
+    assert corpus.format is DocumentFormat.RDF_XML
+    assert set(corpus.families) >= {
+        "annotation-list-heavy",
+        "biomedical",
+        "oaei-composite",
+    }
+    assert corpus.sha256 == (
+        "379a37f47c0c8e7c30397769358cca955140d16b2797a1cc75da4b1fc2b354eb"
+    )
+    assert corpus.archive_member == "ncit-doid/ncit.owl"
+    assert corpus.counts == CorpusCounts(
+        bytes=57_163_710,
+        triples=805_332,
+        axioms=243_099,
+        entities=15_992,
+        imports=0,
+        basis="pyowl-core native exact full RDF mapping",
+    )
+
+
 def test_equivalent_generated_syntaxes_have_identical_public_structure() -> None:
     documents = []
     for format in DocumentFormat:

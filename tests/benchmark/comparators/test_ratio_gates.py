@@ -238,7 +238,7 @@ def _required_corpora() -> tuple[Corpus, Corpus]:
     manifest = load_manifest()
     return (
         manifest.by_id("oaei-bioml-doid-2024"),
-        manifest.by_id("hpo-base-2026-06-23"),
+        manifest.by_id("oaei-bioml-ncit-2024"),
     )
 
 

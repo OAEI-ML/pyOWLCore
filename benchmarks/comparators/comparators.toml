@@ -1,6 +1,6 @@
 schema = 1
 common_contract_schema = 1
-corpus_manifest_sha256 = "1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928"
+corpus_manifest_sha256 = "9442d9c813c3333a4e65dbbee9ce7519d4af9a10b3c1df3ccec31c2d43ba26d1"
 resolver_map_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 jdk = "Eclipse Temurin 21.0.7+6; isolated OWLAPI lane only"
 jvm_gc = "G1GC; -XX:+AlwaysPreTouch; one active processor unless a reviewed lane says otherwise"

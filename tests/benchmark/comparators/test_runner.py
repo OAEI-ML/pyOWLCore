@@ -329,9 +329,12 @@ def test_committed_shared_host_smoke_is_self_bound_historical_evidence() -> None
         evidence["comparator_manifest_sha256"]
         != hashlib.sha256(DEFAULT_COMPARATOR_MANIFEST.read_bytes()).hexdigest()
     )
+    assert evidence["corpus_manifest_sha256"] == (
+        "1059cde0173e9d9f787d16596158b6a134508740b9c27a87e786db11caf5b928"
+    )
     assert (
         evidence["corpus_manifest_sha256"]
-        == hashlib.sha256(DEFAULT_MANIFEST.read_bytes()).hexdigest()
+        != hashlib.sha256(DEFAULT_MANIFEST.read_bytes()).hexdigest()
     )
     source_identity = cast(dict[str, Any], evidence["source_identity"])
     source_inputs = cast(list[dict[str, Any]], source_identity["inputs"])
