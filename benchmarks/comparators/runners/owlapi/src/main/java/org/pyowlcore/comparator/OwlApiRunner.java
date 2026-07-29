@@ -56,7 +56,7 @@ public final class OwlApiRunner {
             "747b1a5269fee2992487dcde946f16dfbc14aa458d50854994a0485cf263ce07";
     private static final String ALLOCATOR = "HotSpot G1GC";
     private static final long THREAD_CEILING = 1;
-    private static final String RUNNER_REVISION = "pyowl-core-owlapi-common-runner-v2";
+    private static final String RUNNER_REVISION = "pyowl-core-owlapi-common-runner-v3";
     private static final List<String> FEATURES =
             List.of("isolated-java", "common-contract-v1");
 
@@ -65,17 +65,21 @@ public final class OwlApiRunner {
     private static final String VALIDATION_SCHEMA =
             "pyowl-core/comparator-timed-validation/v1";
     private static final String PROTOCOL_SCHEMA =
-            "pyowl-core/comparator-persistent-runner/v1";
+            "pyowl-core/comparator-persistent-runner/v2";
     private static final String HANDSHAKE_SCHEMA =
-            "pyowl-core/comparator-persistent-handshake/v1";
+            "pyowl-core/comparator-persistent-handshake/v2";
     private static final String PERSISTENT_REQUEST_SCHEMA =
-            "pyowl-core/comparator-persistent-request/v1";
+            "pyowl-core/comparator-persistent-request/v2";
+    private static final String PREPARED_SCHEMA =
+            "pyowl-core/comparator-persistent-prepared/v1";
+    private static final String EXECUTE_SCHEMA =
+            "pyowl-core/comparator-persistent-execute/v1";
     private static final String PERSISTENT_RESPONSE_SCHEMA =
-            "pyowl-core/comparator-persistent-response/v1";
+            "pyowl-core/comparator-persistent-response/v2";
     private static final String SHUTDOWN_SCHEMA =
-            "pyowl-core/comparator-persistent-shutdown/v1";
+            "pyowl-core/comparator-persistent-shutdown/v2";
     private static final String SHUTDOWN_ACK_SCHEMA =
-            "pyowl-core/comparator-persistent-shutdown-ack/v1";
+            "pyowl-core/comparator-persistent-shutdown-ack/v2";
     private static final String DOCUMENT_IRI_PREFIX =
             "urn:pyowl-core:comparator-source:sha256:";
     private static final int MAX_REQUEST_BYTES = 512 * 1024 * 1024;
@@ -125,6 +129,30 @@ public final class OwlApiRunner {
         public String schema;
         public String protocol;
         public long sequence;
+    }
+
+    private static final class PreparedExecution {
+        final Map<String, Object> fallback;
+        final ValidatedRequest request;
+        final Map<String, Object> completed;
+
+        private PreparedExecution(
+                Map<String, Object> fallback,
+                ValidatedRequest request,
+                Map<String, Object> completed) {
+            this.fallback = fallback;
+            this.request = request;
+            this.completed = completed;
+        }
+
+        static PreparedExecution ready(
+                Map<String, Object> fallback, ValidatedRequest request) {
+            return new PreparedExecution(fallback, request, null);
+        }
+
+        static PreparedExecution complete(Map<String, Object> completed) {
+            return new PreparedExecution(null, null, completed);
+        }
     }
 
     private static final class ValidatedRequest {
@@ -311,19 +339,30 @@ public final class OwlApiRunner {
 
     private static Map<String, Object> runRequest(
             AdapterRequest request, String protocolMode) {
+        return executePrepared(prepareRequest(request, protocolMode));
+    }
+
+    private static PreparedExecution prepareRequest(
+            AdapterRequest request, String protocolMode) {
         Map<String, Object> fallback = requestIdentity(request);
         try {
-            ValidatedRequest validated = validate(request, protocolMode);
-            return execute(validated);
+            return PreparedExecution.ready(fallback, validate(request, protocolMode));
+        } catch (RuntimeException error) {
+            return PreparedExecution.complete(
+                    fallbackStatus(fallback, "error", safeReason(error)));
+        }
+    }
+
+    private static Map<String, Object> executePrepared(PreparedExecution prepared) {
+        if (prepared.completed != null) {
+            return prepared.completed;
+        }
+        try {
+            return execute(prepared.request);
         } catch (ModelMapper.IneligibleException error) {
-            try {
-                ValidatedRequest validated = validate(request, protocolMode);
-                return status(validated, "ineligible", error.getMessage());
-            } catch (RuntimeException validationError) {
-                return fallbackStatus(fallback, "error", safeReason(validationError));
-            }
+            return status(prepared.request, "ineligible", error.getMessage());
         } catch (RuntimeException | IOException error) {
-            return fallbackStatus(fallback, "error", safeReason(error));
+            return fallbackStatus(prepared.fallback, "error", safeReason(error));
         }
     }
 
@@ -544,6 +583,8 @@ public final class OwlApiRunner {
                 "pid", pid,
                 "protocol", PROTOCOL_SCHEMA,
                 "request_schema", REQUEST_SCHEMA,
+                "prepared_schema", PREPARED_SCHEMA,
+                "execute_schema", EXECUTE_SCHEMA,
                 "result_schema", RESULT_SCHEMA,
                 "schema", HANDSHAKE_SCHEMA));
         long expectedSequence = 0;
@@ -572,17 +613,54 @@ public final class OwlApiRunner {
                 throw new IllegalArgumentException(
                         "persistent request sequence is nonmonotonic");
             }
-            Map<String, Object> result = runRequest(envelope.request, "persistent");
-            String instance = pid + ":" + instanceCounter + ":" + envelope.sequence;
+            long sequence = envelope.sequence;
+            PreparedExecution prepared = prepareRequest(envelope.request, "persistent");
+            writeFrame(object(
+                    "pid", pid,
+                    "protocol", PROTOCOL_SCHEMA,
+                    "schema", PREPARED_SCHEMA,
+                    "sequence", sequence));
+            JsonNode execute = JSON.readTree(readFrame(System.in));
+            validatePersistentExecute(execute, sequence, pid);
+            Map<String, Object> result = executePrepared(prepared);
+            String instance = pid + ":" + instanceCounter + ":" + sequence;
             writeFrame(object(
                     "ontology_instance_id", Canonical.hex(Canonical.sha256(
                             instance.getBytes(StandardCharsets.UTF_8))),
                     "protocol", PROTOCOL_SCHEMA,
                     "result", result,
                     "schema", PERSISTENT_RESPONSE_SCHEMA,
-                    "sequence", envelope.sequence));
+                    "sequence", sequence));
             instanceCounter = Math.addExact(instanceCounter, 1);
             expectedSequence = Math.addExact(expectedSequence, 1);
+        }
+    }
+
+    static void validatePersistentExecute(JsonNode node, long sequence, long pid) {
+        if (node == null
+                || !node.isObject()
+                || node.size() != 4
+                || !node.has("schema")
+                || !node.has("protocol")
+                || !node.has("sequence")
+                || !node.has("pid")) {
+            throw new IllegalArgumentException(
+                    "persistent execute fields differ from schema v1");
+        }
+        requireEqual("persistent execute schema", text(node, "schema"), EXECUTE_SCHEMA);
+        requireEqual("persistent execute protocol", text(node, "protocol"), PROTOCOL_SCHEMA);
+        requireUnsignedLong("persistent execute sequence", node.get("sequence"), sequence);
+        requireUnsignedLong("persistent execute pid", node.get("pid"), pid);
+    }
+
+    private static void requireUnsignedLong(String name, JsonNode node, long expected) {
+        if (expected < 0
+                || node == null
+                || !node.isIntegralNumber()
+                || !node.canConvertToLong()
+                || node.longValue() < 0
+                || node.longValue() != expected) {
+            throw new IllegalArgumentException(name + " differs");
         }
     }
 
