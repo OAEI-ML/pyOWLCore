@@ -1,0 +1,819 @@
+{
+  "schema": "pyowl-core/doid-installed-vs-py-horned-evidence/v1",
+  "scope": {
+    "corpus_ids": [
+      "oaei-bioml-doid-2024"
+    ],
+    "input_modes": [
+      "resident-bytes"
+    ],
+    "process_modes": [
+      "fresh-process",
+      "steady-process"
+    ],
+    "lanes": [
+      "pyowl-native-wheel-common",
+      "py-horned-common"
+    ],
+    "repetitions_per_lane_and_mode": 3,
+    "raw_sample_count": 12,
+    "schedule_seed": 180643,
+    "python_reference_included": false,
+    "larger_corpora_included": false,
+    "approved_reference_host": false,
+    "formal_release_claim": false
+  },
+  "source_artifacts": {
+    "fresh": {
+      "filename": "pyowl-doid-installed-vs-pyhorned-v9-005c3cc-fresh-r3-seed180643.json",
+      "bytes": 43532571,
+      "sha256": "d4f7283faa88f4a85ad86ac03361ebd2058bfd65816b29c2adde7c4b11a04acc",
+      "captured_utc": "2026-07-29T11:36:55.432353+00:00",
+      "raw_schema": "pyowl-core/comparator-baseline/v1",
+      "raw_contract_valid": false,
+      "comparative_complete": false,
+      "contract_valid_false_reason": "Python common-contract reference was not run"
+    },
+    "steady": {
+      "filename": "pyowl-doid-installed-vs-pyhorned-v9-005c3cc-steady-w1-r3-seed180643.json",
+      "bytes": 43534346,
+      "sha256": "ad64fb80e058d228f6d62e4d56cb1c4d5207549ddf78145be6eb19c0067fe022",
+      "captured_utc": "2026-07-29T11:43:05.271932+00:00",
+      "raw_schema": "pyowl-core/comparator-baseline/v1",
+      "raw_contract_valid": false,
+      "comparative_complete": false,
+      "contract_valid_false_reason": "Python common-contract reference was not run"
+    }
+  },
+  "identities": {
+    "pyowl_core": {
+      "git_commit": "005c3ccad129757b3a9be125dc064b812b607ef5",
+      "git_tree": "d4f3f29f6594b59f3d45a4811c38fb761a7028b9",
+      "git_dirty": false,
+      "version": "0.1.0.dev0",
+      "comparator_runtime_source_sha256": "06f5b9c34c3daefd3cf110dde4b8c66883c61de9a7aa4711021bc27ba07c1c70",
+      "comparator_runtime_source_input_count": 182,
+      "comparator_runtime_source_bytes": 5487517,
+      "comparator_manifest_sha256": "9ce89e228341de71e8349beab6dad427ca0431224b778d98b92e5c61939c9824",
+      "corpus_manifest_sha256": "9442d9c813c3333a4e65dbbee9ce7519d4af9a10b3c1df3ccec31c2d43ba26d1"
+    },
+    "input": {
+      "corpus_id": "oaei-bioml-doid-2024",
+      "format": "rdfxml",
+      "tier": "medium",
+      "bytes": 6687536,
+      "sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f"
+    },
+    "installed_native": {
+      "wheel": {
+        "artifact": "pyowl_core-0.1.0.dev0-cp312-cp312-macosx_14_0_x86_64.whl",
+        "bytes": 1631524,
+        "sha256": "18269febae8e34592a5e80ce67710da34df1e16a36d23001b2e92ede60d7123b"
+      },
+      "extension": {
+        "artifact": "_native.cpython-312-darwin.so",
+        "bytes": 2972028,
+        "sha256": "39e02360635ff698b4113dbb9695617c77641d16142688d050bf9993ddf1e4a1"
+      },
+      "pin_state": "runtime-captured",
+      "thread_ceiling": 1
+    },
+    "py_horned": {
+      "package": "py-horned-owl",
+      "version": "1.4.0",
+      "release_date": "2026-02-11",
+      "artifact": "py_horned_owl-1.4.0.tar.gz",
+      "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
+      "runner_revision": "pyowl-core-py-horned-common-runner-v9",
+      "runner_sha256": "a0560ea886258c8f2291a2bf0565bbcb14a40feebe069ba6a757a9d821a60849",
+      "pin_state": "complete",
+      "thread_ceiling": 1
+    }
+  },
+  "contract": {
+    "schema": "pyowl-core/comparator-common-contract/v1",
+    "sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+    "model_schema": 1,
+    "root_document_key": "d1:dbef92323c63898fb4ad77284112cfa3fffbe37aa4ba99098a4450b35e3f40b6",
+    "fingerprints": {
+      "document": "dba81ae191733905b32bdf92e0c40de44ab81a246086db1d28e6db97f4bea1e7",
+      "logical": "29a73cd4f700a45d34fceb789ca387a661190d93f44e18c26ff1b249d5029ef6",
+      "signature": "02e6380f8f7eb796fb88c69c214cba4a636e3ab918a906fe407a28ae451423ad",
+      "structural": "d6462e88a2223e7e9bdb7bad071828298b694eae998b6d9e0333091ab441dd57"
+    },
+    "axiom_count": 55687,
+    "signature_count": 8516,
+    "origin_entry_count": 55687,
+    "all_12_sample_digests_equal": true,
+    "native_and_py_horned_equal": true,
+    "full_validation_inside_every_timed_envelope": true,
+    "raw_reports_contract_valid": false,
+    "raw_reports_contract_valid_false_only_because": "the user-scoped two-lane run omitted the Python common-contract reference",
+    "lane_mismatch_observed": false
+  },
+  "environment": {
+    "comparison_key": "8c9dcb967c12caeab3452e7a9b4a6ebcd674562d971717f05b28b5f7f00b6c0e",
+    "host_class": "shared concurrent development host",
+    "reference_machine_id": "shared-darwin25-x86_64",
+    "reference_machine_approval": "pending",
+    "reference_machine_matches": false,
+    "power_mode": "shared development power state; uncontrolled",
+    "storage": "local development storage; cache uncontrolled",
+    "logical_cpu_count": 12,
+    "physical_memory_bytes": 34359738368,
+    "platform": {
+      "system": "Darwin",
+      "release": "25.5.0",
+      "machine": "x86_64",
+      "processor": "i386",
+      "python_build_platform": "macOS-26.5.2-x86_64-i386-64bit"
+    },
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.3",
+      "compiler": "Clang 15.0.0 (clang-1500.3.9.4)"
+    },
+    "rust": {
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Homebrew)",
+      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Homebrew)"
+    }
+  },
+  "measurement_contract": {
+    "ratio_direction": "pyowl-core native / py-horned",
+    "comparison_order": "seeded implementation-order shuffle within every paired measured block",
+    "fresh_wall_boundary": "authenticated startup-to-common-contract-ready completion",
+    "steady_wall_boundary": "call-to-common-contract-ready completion after persistent startup",
+    "fresh_rss_selector": "metrics.rss_peak_increment_bytes",
+    "steady_rss_selector": "transport_metrics.rss_interval.incremental_peak_bytes",
+    "steady_rss_maximum_accepted_sample_gap_ns": 10000000,
+    "bootstrap_method": "stratified-paired-bootstrap-percentile",
+    "bootstrap_resamples": 10000,
+    "confidence_level": 0.95
+  },
+  "raw_samples": [
+    {
+      "process_mode": "fresh-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 0,
+      "paired_block_size": 2,
+      "implementation_order": 0,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 9222376355,
+        "load_ns": 5336618302,
+        "common_adapter_ns": 3885754858,
+        "cpu_ns": 8675929000,
+        "startup_to_ready_ns": 11543787649,
+        "startup_to_ready_cpu_ns": 10346649000,
+        "rss_peak_before_bytes": 78831616,
+        "rss_peak_after_bytes": 272777216,
+        "rss_peak_increment_bytes": 193945600,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 1179390464
+      },
+      "transport": {
+        "parent_wall_ns": 11543787649,
+        "parent_cpu_ns": 473760000,
+        "rss_interval_incremental_peak_bytes": null,
+        "rss_interval_peak_bytes": null,
+        "rss_interval_quiescent_current_bytes": null,
+        "rss_interval_maximum_sample_gap_ns": null,
+        "rss_interval_sample_count": null
+      }
+    },
+    {
+      "process_mode": "fresh-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 1,
+      "paired_block_size": 2,
+      "implementation_order": 1,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 7271519042,
+        "load_ns": 4062340471,
+        "common_adapter_ns": 3209175536,
+        "cpu_ns": 7060777000,
+        "startup_to_ready_ns": 8859541975,
+        "startup_to_ready_cpu_ns": 8271088000,
+        "rss_peak_before_bytes": 78303232,
+        "rss_peak_after_bytes": 268267520,
+        "rss_peak_increment_bytes": 189964288,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 1040436051
+      },
+      "transport": {
+        "parent_wall_ns": 8859541975,
+        "parent_cpu_ns": 365752000,
+        "rss_interval_incremental_peak_bytes": null,
+        "rss_interval_peak_bytes": null,
+        "rss_interval_quiescent_current_bytes": null,
+        "rss_interval_maximum_sample_gap_ns": null,
+        "rss_interval_sample_count": null
+      }
+    },
+    {
+      "process_mode": "fresh-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 2,
+      "paired_block_size": 2,
+      "implementation_order": 1,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 7904302903,
+        "load_ns": 4828578348,
+        "common_adapter_ns": 3075722325,
+        "cpu_ns": 7535431000,
+        "startup_to_ready_ns": 9707725776,
+        "startup_to_ready_cpu_ns": 8909777000,
+        "rss_peak_before_bytes": 77688832,
+        "rss_peak_after_bytes": 268722176,
+        "rss_peak_increment_bytes": 191033344,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 941331518
+      },
+      "transport": {
+        "parent_wall_ns": 9707725776,
+        "parent_cpu_ns": 410144000,
+        "rss_interval_incremental_peak_bytes": null,
+        "rss_interval_peak_bytes": null,
+        "rss_interval_quiescent_current_bytes": null,
+        "rss_interval_maximum_sample_gap_ns": null,
+        "rss_interval_sample_count": null
+      }
+    },
+    {
+      "process_mode": "fresh-process",
+      "lane": "py-horned-common",
+      "paired_block": 0,
+      "paired_block_size": 2,
+      "implementation_order": 1,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 66470508660,
+        "load_ns": 1796422469,
+        "common_adapter_ns": 64674084486,
+        "cpu_ns": 62396602000,
+        "startup_to_ready_ns": null,
+        "startup_to_ready_cpu_ns": 64112835000,
+        "rss_peak_before_bytes": 92360704,
+        "rss_peak_after_bytes": 317419520,
+        "rss_peak_increment_bytes": 225058816,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 1169871231
+      },
+      "transport": {
+        "parent_wall_ns": 68861543017,
+        "parent_cpu_ns": 548677000,
+        "rss_interval_incremental_peak_bytes": null,
+        "rss_interval_peak_bytes": null,
+        "rss_interval_quiescent_current_bytes": null,
+        "rss_interval_maximum_sample_gap_ns": null,
+        "rss_interval_sample_count": null
+      }
+    },
+    {
+      "process_mode": "fresh-process",
+      "lane": "py-horned-common",
+      "paired_block": 1,
+      "paired_block_size": 2,
+      "implementation_order": 0,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 51643997286,
+        "load_ns": 1568657390,
+        "common_adapter_ns": 50075338489,
+        "cpu_ns": 49898639000,
+        "startup_to_ready_ns": null,
+        "startup_to_ready_cpu_ns": 51678481000,
+        "rss_peak_before_bytes": 92651520,
+        "rss_peak_after_bytes": 313520128,
+        "rss_peak_increment_bytes": 220868608,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 900634643
+      },
+      "transport": {
+        "parent_wall_ns": 54219622806,
+        "parent_cpu_ns": 549048000,
+        "rss_interval_incremental_peak_bytes": null,
+        "rss_interval_peak_bytes": null,
+        "rss_interval_quiescent_current_bytes": null,
+        "rss_interval_maximum_sample_gap_ns": null,
+        "rss_interval_sample_count": null
+      }
+    },
+    {
+      "process_mode": "fresh-process",
+      "lane": "py-horned-common",
+      "paired_block": 2,
+      "paired_block_size": 2,
+      "implementation_order": 0,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 69125964170,
+        "load_ns": 1434902152,
+        "common_adapter_ns": 67691060241,
+        "cpu_ns": 63892725000,
+        "startup_to_ready_ns": null,
+        "startup_to_ready_cpu_ns": 65591522000,
+        "rss_peak_before_bytes": 92270592,
+        "rss_peak_after_bytes": 322998272,
+        "rss_peak_increment_bytes": 230727680,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 1035081687
+      },
+      "transport": {
+        "parent_wall_ns": 71305584032,
+        "parent_cpu_ns": 480782000,
+        "rss_interval_incremental_peak_bytes": null,
+        "rss_interval_peak_bytes": null,
+        "rss_interval_quiescent_current_bytes": null,
+        "rss_interval_maximum_sample_gap_ns": null,
+        "rss_interval_sample_count": null
+      }
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 0,
+      "paired_block_size": 2,
+      "implementation_order": 1,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 8305596516,
+        "load_ns": 5121173980,
+        "common_adapter_ns": 3184420423,
+        "cpu_ns": 7673332000,
+        "startup_to_ready_ns": null,
+        "startup_to_ready_cpu_ns": null,
+        "rss_peak_before_bytes": 385421312,
+        "rss_peak_after_bytes": 452640768,
+        "rss_peak_increment_bytes": 67219456,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 1019283565
+      },
+      "transport": {
+        "parent_wall_ns": null,
+        "parent_cpu_ns": null,
+        "rss_interval_incremental_peak_bytes": 67219456,
+        "rss_interval_peak_bytes": 452640768,
+        "rss_interval_quiescent_current_bytes": 385421312,
+        "rss_interval_maximum_sample_gap_ns": 80547233,
+        "rss_interval_sample_count": 6308
+      }
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 1,
+      "paired_block_size": 2,
+      "implementation_order": 0,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 8816712659,
+        "load_ns": 4655165356,
+        "common_adapter_ns": 4161545996,
+        "cpu_ns": 7945920000,
+        "startup_to_ready_ns": null,
+        "startup_to_ready_cpu_ns": null,
+        "rss_peak_before_bytes": 452640768,
+        "rss_peak_after_bytes": 474243072,
+        "rss_peak_increment_bytes": 21602304,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 1081440598
+      },
+      "transport": {
+        "parent_wall_ns": null,
+        "parent_cpu_ns": null,
+        "rss_interval_incremental_peak_bytes": 76222464,
+        "rss_interval_peak_bytes": 474243072,
+        "rss_interval_quiescent_current_bytes": 398020608,
+        "rss_interval_maximum_sample_gap_ns": 92736020,
+        "rss_interval_sample_count": 6568
+      }
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 2,
+      "paired_block_size": 2,
+      "implementation_order": 1,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 7246971450,
+        "load_ns": 4124892201,
+        "common_adapter_ns": 3122077901,
+        "cpu_ns": 6907852000,
+        "startup_to_ready_ns": null,
+        "startup_to_ready_cpu_ns": null,
+        "rss_peak_before_bytes": 563744768,
+        "rss_peak_after_bytes": 627757056,
+        "rss_peak_increment_bytes": 64012288,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 1028417052
+      },
+      "transport": {
+        "parent_wall_ns": null,
+        "parent_cpu_ns": null,
+        "rss_interval_incremental_peak_bytes": 64012288,
+        "rss_interval_peak_bytes": 627757056,
+        "rss_interval_quiescent_current_bytes": 563744768,
+        "rss_interval_maximum_sample_gap_ns": 84862623,
+        "rss_interval_sample_count": 5702
+      }
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "py-horned-common",
+      "paired_block": 0,
+      "paired_block_size": 2,
+      "implementation_order": 0,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 52785322955,
+        "load_ns": 1217201967,
+        "common_adapter_ns": 51568119920,
+        "cpu_ns": 49975721000,
+        "startup_to_ready_ns": null,
+        "startup_to_ready_cpu_ns": null,
+        "rss_peak_before_bytes": 308043776,
+        "rss_peak_after_bytes": 391106560,
+        "rss_peak_increment_bytes": 83062784,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 1017537659
+      },
+      "transport": {
+        "parent_wall_ns": 53584755592,
+        "parent_cpu_ns": 538637000,
+        "rss_interval_incremental_peak_bytes": 129073152,
+        "rss_interval_peak_bytes": 391106560,
+        "rss_interval_quiescent_current_bytes": 262033408,
+        "rss_interval_maximum_sample_gap_ns": 100707655,
+        "rss_interval_sample_count": 40449
+      }
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "py-horned-common",
+      "paired_block": 1,
+      "paired_block_size": 2,
+      "implementation_order": 1,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 66593760177,
+        "load_ns": 1568446734,
+        "common_adapter_ns": 65025312048,
+        "cpu_ns": 61807381000,
+        "startup_to_ready_ns": null,
+        "startup_to_ready_cpu_ns": null,
+        "rss_peak_before_bytes": 391106560,
+        "rss_peak_after_bytes": 424730624,
+        "rss_peak_increment_bytes": 33624064,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 956799335
+      },
+      "transport": {
+        "parent_wall_ns": 67421536832,
+        "parent_cpu_ns": 556201000,
+        "rss_interval_incremental_peak_bytes": 115027968,
+        "rss_interval_peak_bytes": 424730624,
+        "rss_interval_quiescent_current_bytes": 309702656,
+        "rss_interval_maximum_sample_gap_ns": 115866696,
+        "rss_interval_sample_count": 50420
+      }
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "py-horned-common",
+      "paired_block": 2,
+      "paired_block_size": 2,
+      "implementation_order": 0,
+      "schedule_seed": 180643,
+      "status": "ok",
+      "source_sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc",
+      "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+      "contract_sha256": "e52c01bbbaf8a4ad9b9a57277a6fbaf420ccba3da0390575f21c256cbe0f3ff1",
+      "metrics": {
+        "wall_ns": 53362097726,
+        "load_ns": 1237287053,
+        "common_adapter_ns": 52124809345,
+        "cpu_ns": 50749445000,
+        "startup_to_ready_ns": null,
+        "startup_to_ready_cpu_ns": null,
+        "rss_peak_before_bytes": 424730624,
+        "rss_peak_after_bytes": 440799232,
+        "rss_peak_increment_bytes": 16068608,
+        "temporary_bytes": 0,
+        "timed_validation_ns": 907792110
+      },
+      "transport": {
+        "parent_wall_ns": 54203738115,
+        "parent_cpu_ns": 552595000,
+        "rss_interval_incremental_peak_bytes": 93630464,
+        "rss_interval_peak_bytes": 440799232,
+        "rss_interval_quiescent_current_bytes": 347168768,
+        "rss_interval_maximum_sample_gap_ns": 141865551,
+        "rss_interval_sample_count": 41639
+      }
+    }
+  ],
+  "paired_comparisons": [
+    {
+      "id": "fresh-process/raw-engine-load",
+      "process_mode": "fresh-process",
+      "boundary": "raw-engine-load",
+      "numerator_selector": "metrics.load_ns",
+      "denominator_selector": "metrics.load_ns",
+      "pairs": [
+        {
+          "paired_block": 0,
+          "numerator": 5336618302,
+          "denominator": 1796422469,
+          "ratio": 2.970692247559502
+        },
+        {
+          "paired_block": 1,
+          "numerator": 4062340471,
+          "denominator": 1568657390,
+          "ratio": 2.5896926230653845
+        },
+        {
+          "paired_block": 2,
+          "numerator": 4828578348,
+          "denominator": 1434902152,
+          "ratio": 3.36509241502622
+        }
+      ],
+      "numerator_median": 4828578348,
+      "denominator_median": 1568657390,
+      "paired_ratio_median": 2.970692247559502,
+      "confidence_interval_95": {
+        "lower": 2.5896926230653845,
+        "upper": 3.36509241502622,
+        "bootstrap_seed": 180643,
+        "resamples": 10000,
+        "classification": "diagnostic-recomputed-not-harness-gate"
+      },
+      "gate": null,
+      "interpretation": "native-slower"
+    },
+    {
+      "id": "fresh-process/common-contract-ready-wall",
+      "process_mode": "fresh-process",
+      "boundary": "common-contract-ready",
+      "numerator_selector": "metrics.startup_to_ready_ns",
+      "denominator_selector": "transport.parent_wall_ns",
+      "pairs": [
+        {
+          "paired_block": 0,
+          "numerator": 11543787649,
+          "denominator": 68861543017,
+          "ratio": 0.16763765584152188
+        },
+        {
+          "paired_block": 1,
+          "numerator": 8859541975,
+          "denominator": 54219622806,
+          "ratio": 0.16340102561575906
+        },
+        {
+          "paired_block": 2,
+          "numerator": 9707725776,
+          "denominator": 71305584032,
+          "ratio": 0.13614257435495428
+        }
+      ],
+      "numerator_median": 9707725776,
+      "denominator_median": 68861543017,
+      "paired_ratio_median": 0.16340102561575906,
+      "confidence_interval_95": {
+        "lower": 0.13614257435495428,
+        "upper": 0.16763765584152188,
+        "bootstrap_seed": 14685341971116617407,
+        "resamples": 10000
+      },
+      "gate": {
+        "threshold": 1.1,
+        "statistic": "upper-confidence-bound",
+        "evaluable": true,
+        "passed": true
+      },
+      "interpretation": "native-faster"
+    },
+    {
+      "id": "fresh-process/incremental-peak-rss",
+      "process_mode": "fresh-process",
+      "boundary": "common-contract-ready",
+      "numerator_selector": "metrics.rss_peak_increment_bytes",
+      "denominator_selector": "metrics.rss_peak_increment_bytes",
+      "pairs": [
+        {
+          "paired_block": 0,
+          "numerator": 193945600,
+          "denominator": 225058816,
+          "ratio": 0.8617551778109417
+        },
+        {
+          "paired_block": 1,
+          "numerator": 189964288,
+          "denominator": 220868608,
+          "ratio": 0.8600782597407415
+        },
+        {
+          "paired_block": 2,
+          "numerator": 191033344,
+          "denominator": 230727680,
+          "ratio": 0.8279602343333925
+        }
+      ],
+      "numerator_median": 191033344,
+      "denominator_median": 225058816,
+      "paired_ratio_median": 0.8600782597407415,
+      "confidence_interval_95": {
+        "lower": 0.8279602343333925,
+        "upper": 0.8617551778109417,
+        "bootstrap_seed": 5004746821794558928,
+        "resamples": 10000
+      },
+      "gate": {
+        "threshold": 1.15,
+        "statistic": "upper-confidence-bound",
+        "evaluable": true,
+        "passed": true
+      },
+      "interpretation": "pass"
+    },
+    {
+      "id": "steady-process/raw-engine-load",
+      "process_mode": "steady-process",
+      "boundary": "raw-engine-load",
+      "numerator_selector": "metrics.load_ns",
+      "denominator_selector": "metrics.load_ns",
+      "pairs": [
+        {
+          "paired_block": 0,
+          "numerator": 5121173980,
+          "denominator": 1217201967,
+          "ratio": 4.207332980755855
+        },
+        {
+          "paired_block": 1,
+          "numerator": 4655165356,
+          "denominator": 1568446734,
+          "ratio": 2.9680098501834107
+        },
+        {
+          "paired_block": 2,
+          "numerator": 4124892201,
+          "denominator": 1237287053,
+          "ratio": 3.3338199013709393
+        }
+      ],
+      "numerator_median": 4655165356,
+      "denominator_median": 1237287053,
+      "paired_ratio_median": 3.3338199013709393,
+      "confidence_interval_95": {
+        "lower": 2.9680098501834107,
+        "upper": 4.207332980755855,
+        "bootstrap_seed": 180643,
+        "resamples": 10000,
+        "classification": "diagnostic-recomputed-not-harness-gate"
+      },
+      "gate": null,
+      "interpretation": "native-slower"
+    },
+    {
+      "id": "steady-process/common-contract-ready-wall",
+      "process_mode": "steady-process",
+      "boundary": "common-contract-ready",
+      "numerator_selector": "metrics.wall_ns",
+      "denominator_selector": "transport.parent_wall_ns",
+      "pairs": [
+        {
+          "paired_block": 0,
+          "numerator": 8305596516,
+          "denominator": 53584755592,
+          "ratio": 0.1549992423076386
+        },
+        {
+          "paired_block": 1,
+          "numerator": 8816712659,
+          "denominator": 67421536832,
+          "ratio": 0.13076997459979822
+        },
+        {
+          "paired_block": 2,
+          "numerator": 7246971450,
+          "denominator": 54203738115,
+          "ratio": 0.1336987392755947
+        }
+      ],
+      "numerator_median": 8305596516,
+      "denominator_median": 54203738115,
+      "paired_ratio_median": 0.1336987392755947,
+      "confidence_interval_95": {
+        "lower": 0.13076997459979825,
+        "upper": 0.1549992423076386,
+        "bootstrap_seed": 13356044730617259990,
+        "resamples": 10000
+      },
+      "gate": {
+        "threshold": 1.1,
+        "statistic": "upper-confidence-bound",
+        "evaluable": true,
+        "passed": true
+      },
+      "interpretation": "native-faster"
+    },
+    {
+      "id": "steady-process/incremental-peak-rss",
+      "process_mode": "steady-process",
+      "boundary": "common-contract-ready",
+      "numerator_selector": "transport.rss_interval_incremental_peak_bytes",
+      "denominator_selector": "transport.rss_interval_incremental_peak_bytes",
+      "pairs": [
+        {
+          "paired_block": 0,
+          "numerator": 67219456,
+          "denominator": 129073152,
+          "ratio": 0.5207857324193957
+        },
+        {
+          "paired_block": 1,
+          "numerator": 76222464,
+          "denominator": 115027968,
+          "ratio": 0.6626428800341844
+        },
+        {
+          "paired_block": 2,
+          "numerator": 64012288,
+          "denominator": 93630464,
+          "ratio": 0.6836694518570366
+        }
+      ],
+      "numerator_median": 67219456,
+      "denominator_median": 115027968,
+      "paired_ratio_median": 0.6626428800341844,
+      "confidence_interval_95": null,
+      "gate": {
+        "threshold": 1.15,
+        "statistic": "upper-confidence-bound",
+        "evaluable": false,
+        "passed": null,
+        "reason": "all steady RSS sample rows exceeded the 10000000 ns maximum accepted sampler gap"
+      },
+      "interpretation": "no-formal-decision"
+    }
+  ],
+  "interpretations": {
+    "raw_engine_load": "Native load_ns is slower in both process modes; this raw parser/load boundary excludes common-contract construction.",
+    "common_contract_ready": "At the fair common-contract-ready boundary, fresh wall, fresh incremental RSS, and steady wall pass their configured paired upper-confidence-bound thresholds.",
+    "steady_rss": "No formal steady RSS decision is made because every observed sampler gap exceeded 10 ms.",
+    "raw_contract_valid": "Both raw reports set contract_valid=false only because the user-scoped two-lane run omitted the Python common-contract reference; the selected native and py-horned contract digests are exactly equal.",
+    "release_scope": "This DOID-only run is shared-host and unapproved, omits larger corpora, and does not make a formal release claim."
+  }
+}
