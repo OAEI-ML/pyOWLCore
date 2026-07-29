@@ -725,15 +725,21 @@ def _preserved_documents(
 def _document_anonymous_scopes(document: OntologyDocument) -> frozenset[bytes]:
     return frozenset(
         node.document_scope
-        for collection in (
-            document.ontology_annotations,
-            document.axioms,
-            document.extension_components,
-        )
-        for root in collection
+        for root in _document_roots(document)
         for node in _walk(root)
         if isinstance(node, AnonymousIndividual)
     )
+
+
+def _document_roots(document: OntologyDocument) -> Iterator[StructuralNode]:
+    """Stream document roots in canonical collection order without buffering."""
+
+    for collection in (
+        document.ontology_annotations,
+        document.axioms,
+        document.extension_components,
+    ):
+        yield from collection
 
 
 def _scope_documents(
@@ -749,13 +755,10 @@ def _scope_documents(
             key=lambda item: (item[0].source_sha256, item[0].document_key),
         )
         for ordinal, (record, document) in enumerate(group):
-            roots: tuple[StructuralNode, ...] = (
-                *document.ontology_annotations,
-                *document.axioms,
-                *document.extension_components,
-            )
             if not any(
-                isinstance(node, AnonymousIndividual) for root in roots for node in _walk(root)
+                isinstance(node, AnonymousIndividual)
+                for root in _document_roots(document)
+                for node in _walk(root)
             ):
                 result[record.document_key] = _ScopedDocument(
                     document.ontology_annotations,
@@ -763,7 +766,7 @@ def _scope_documents(
                     document.extension_components,
                     ()
                     if document.origin_index is not None
-                    else tuple((root, root) for root in roots),
+                    else tuple((root, root) for root in _document_roots(document)),
                     True,
                     frozenset(),
                 )

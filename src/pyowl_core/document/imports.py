@@ -1082,11 +1082,12 @@ def _enforce_closure_limits(
 def _document_terms(document: OntologyDocument) -> int:
     return sum(
         1
-        for root in (
-            *document.ontology_annotations,
-            *document.axioms,
-            *document.extension_components,
+        for collection in (
+            document.ontology_annotations,
+            document.axioms,
+            document.extension_components,
         )
+        for root in collection
         for _ in walk(root)
     )
 
