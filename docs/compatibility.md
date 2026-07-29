@@ -8,24 +8,29 @@
 | Model | `1` | equality/fingerprint changes require a new schema |
 | Wire | `(1,1)` | major incompatible; minor only backwards-compatible additions |
 | Adapter | `1` | provider/plugin negotiation must match |
+| Encoded structural view | `pyowl-core/structural-columns` v1 | consumers require the named schema at version 1 or newer |
 
 ## Tested workspace consumers
 
-The coordinated native-redesign compatibility run used runtime implementation
-`af9bdb0b9178766b5f15806fb6a2f00b05e00e22`. The later core revision
-`15992ca5b19f795da7870ec183727100758b08d9` changes only the pinned pure-package
-CI image, release provenance, benchmark evidence validation, and their checks;
-it does not change runtime sources.
+The coordinated native-redesign compatibility run used core runtime
+`21503cf5a35c22c1fa35653c13df958df4fca100`. The final recorded core tree is
+`9251059e10ab1c4474d58d7c3d61b63c0ae3d23c`; its later commits change consumer
+and release/benchmark evidence, not the `pyowl_core` package runtime.
 
-These exact consumer revisions passed the recorded short compatibility selections:
+Every recorded workflow requires public encoded structural schema
+`pyowl-core/structural-columns` v1. Compatibility consumers observe that
+capability only through public core/reasoner contracts; encoded-native
+compilers consume the public buffers through their own private compilers.
+The runtime commit is the last package-runtime change, while the final commit
+also binds subsequent tests, documentation, and release evidence.
 
-| Consumer | Tested package | Core range/API | Exact commit |
-|---|---:|---|---|
-| Exact-OM | `2.0.0` | `pyowl-core>=0.1,<0.2` | `d172cfa355a5d2683fc47824a5d8f2ed24cf9125` |
-| OAEI Bio-ML eval | `0.2.0` | `pyowl-core>=0.1,<0.2` | `04573c09dd0e62825c3fa7c5b2490b43d5a22874` |
-| pyELK | `0.1.0.dev0` | core API `(0,1)` | `a909cfcea341834ab6d6598f80445a697b338f13` |
-| pyHermiT | `0.1.0.dev0` | core API `(0,1)` | `04bd8163b532f623044d7391706ff728d1aed4b1` |
-| OWL2Vec* projector | `0.1.0rc1` | `pyowl-core>=0.1,<0.2` | `53a23e2d385696e2be042568ade0d178580c6de4` |
+| Consumer | Public role | Tested package | Core range/API | Runtime commit | Final commit |
+|---|---|---:|---|---|---|
+| Exact-OM | `compatibility-consumer` | `2.0.0` | `pyowl-core>=0.1,<0.2` | `ab4b76644f6ed58894d0920e47de713ba1ffb358` | `abba717bd5b3f186678bd6f3e88bf73066c2ae49` |
+| OAEI Bio-ML eval | `compatibility-consumer` | `0.2.0` | `pyowl-core>=0.1,<0.2` | `fd75aedbf9f5ed4351d3f6d634a6e07721d21778` | `e5d1affaf66600b09b8d771c2bb691a10cfda852` |
+| pyELK | `encoded-native-compiler` | `0.1.0.dev0` | core API `(0,1)` | `bc75f4be609626f231cdc91af800f52bae46c766` | `faf7a995bd4b44964d7e5a56007ae484df79d597` |
+| pyHermiT | `encoded-native-compiler` | `0.1.0.dev0` | core API `(0,1)` | `f0d4ebb270f3521b848cd2a858761afd66e72ae2` | `f0d4ebb270f3521b848cd2a858761afd66e72ae2` |
+| OWL2Vec* projector | `encoded-native-compiler` | `0.1.0rc1` | `pyowl-core>=0.1,<0.2` | `46b066f698cc790aceae4f8eaf50212934e94708` | `8f599fb00708703f3bdbdbbf2d0064bc2935167c` |
 
 The machine-readable authority is
 [`reports/integration/consumer-compatibility.json`](../reports/integration/consumer-compatibility.json).

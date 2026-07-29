@@ -37,15 +37,19 @@ def test_documented_consumer_handoff_matches_exact_revision_evidence() -> None:
     documentation = (ROOT / "docs" / "compatibility.md").read_text(encoding="utf-8")
     core = cast(dict[str, Any], payload["core"])
     assert core["package_version"] in documentation
-    assert core["implementation_commit"] in documentation
-    release_evidence = cast(dict[str, Any], core["release_evidence"])
-    assert release_evidence["commit"] in documentation
+    assert core["final_commit"] in documentation
+    assert core["runtime_commit"] in documentation
     assert f"`({core['api_version'][0]},{core['api_version'][1]})`" in documentation
     assert f"`({core['wire_format'][0]},{core['wire_format'][1]})`" in documentation
+    for name, version in cast(dict[str, int], core["encoded_view_schemas"]).items():
+        assert f"`{name}` v{version}" in documentation
     for consumer in cast(list[dict[str, Any]], payload["consumers"]):
-        assert consumer["commit"] in documentation
+        assert consumer["final_commit"] in documentation
+        assert consumer["runtime_commit"] in documentation
+        assert f"`{consumer['role']}`" in documentation
         assert consumer["package_version"] in documentation
         assert consumer["core_requirement"] in documentation
+        assert consumer["required_encoded_view_schemas"] == core["encoded_view_schemas"]
 
 
 def test_release_checklist_does_not_claim_external_approvals() -> None:

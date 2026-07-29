@@ -6,19 +6,40 @@ from pathlib import Path
 from typing import Any, cast
 
 import pyowl_core
-from pyowl_core.adapters import AdapterRequirement, negotiate_view
+from pyowl_core.adapters import AdapterRequirement, negotiate_capabilities, negotiate_view
 
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "reports" / "integration" / "consumer-compatibility.json"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
-CORE_IMPLEMENTATION_COMMIT = "af9bdb0b9178766b5f15806fb6a2f00b05e00e22"
-CORE_RELEASE_EVIDENCE_COMMIT = "15992ca5b19f795da7870ec183727100758b08d9"
-CONSUMER_COMMITS = {
-    "exact-om": "d172cfa355a5d2683fc47824a5d8f2ed24cf9125",
-    "oaei-bioml-eval": "04573c09dd0e62825c3fa7c5b2490b43d5a22874",
-    "pyelk": "a909cfcea341834ab6d6598f80445a697b338f13",
-    "pyhermit": "04bd8163b532f623044d7391706ff728d1aed4b1",
-    "projector": "53a23e2d385696e2be042568ade0d178580c6de4",
+CORE_FINAL_COMMIT = "9251059e10ab1c4474d58d7c3d61b63c0ae3d23c"
+CORE_RUNTIME_COMMIT = "21503cf5a35c22c1fa35653c13df958df4fca100"
+STRUCTURAL_SCHEMA_REQUIREMENT = {"pyowl-core/structural-columns": 1}
+CONSUMER_IDENTITIES = {
+    "exact-om": {
+        "final_commit": "abba717bd5b3f186678bd6f3e88bf73066c2ae49",
+        "runtime_commit": "ab4b76644f6ed58894d0920e47de713ba1ffb358",
+        "role": "compatibility-consumer",
+    },
+    "oaei-bioml-eval": {
+        "final_commit": "e5d1affaf66600b09b8d771c2bb691a10cfda852",
+        "runtime_commit": "fd75aedbf9f5ed4351d3f6d634a6e07721d21778",
+        "role": "compatibility-consumer",
+    },
+    "pyelk": {
+        "final_commit": "faf7a995bd4b44964d7e5a56007ae484df79d597",
+        "runtime_commit": "bc75f4be609626f231cdc91af800f52bae46c766",
+        "role": "encoded-native-compiler",
+    },
+    "pyhermit": {
+        "final_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
+        "runtime_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
+        "role": "encoded-native-compiler",
+    },
+    "projector": {
+        "final_commit": "8f599fb00708703f3bdbdbbf2d0064bc2935167c",
+        "runtime_commit": "46b066f698cc790aceae4f8eaf50212934e94708",
+        "role": "encoded-native-compiler",
+    },
 }
 CONSUMER_TESTS = {
     "exact-om": {
@@ -52,7 +73,7 @@ CONSUMER_TESTS = {
             "tests/unit/datatypes/test_language_tags.py "
             "tests/unit/datatypes/test_literal_identities.py"
         ),
-        "result": "85 passed",
+        "result": "86 passed",
     },
     "projector": {
         "selection": "tests/test_consumer_conformance.py",
@@ -68,64 +89,94 @@ def _snapshot(iri: str) -> pyowl_core.OntologySnapshot:
     )
 
 
+def _requirement(item: dict[str, Any]) -> AdapterRequirement:
+    return AdapterRequirement(
+        consumer=item["package"],
+        consumer_version=item["package_version"],
+        consumer_api=item["consumer_api"],
+        required_features=frozenset(item["required_features"]),
+        required_encoded_view_schemas=item["required_encoded_view_schemas"],
+    )
+
+
 def test_recorded_consumer_contracts_negotiate_with_the_implementation_checkpoint() -> None:
     payload = cast(dict[str, Any], json.loads(MANIFEST.read_text(encoding="utf-8")))
-    assert payload["schema"] == "pyowl-core.consumer-compatibility/2"
-    assert payload["recorded_date"] == "2026-07-26"
+    assert payload["schema"] == "pyowl-core.consumer-compatibility/3"
+    assert payload["recorded_date"] == "2026-07-28"
     core = cast(dict[str, Any], payload["core"])
     assert core["package_version"] == pyowl_core.__version__
     assert tuple(core["api_version"]) == pyowl_core.API_VERSION
     assert core["model_schema"] == pyowl_core.MODEL_SCHEMA_VERSION
     assert tuple(core["wire_format"]) == pyowl_core.WIRE_FORMAT_VERSION
     assert core["adapter_protocol"] == pyowl_core.ADAPTER_PROTOCOL_VERSION
-    assert core["implementation_commit"] == CORE_IMPLEMENTATION_COMMIT
+    assert core["final_commit"] == CORE_FINAL_COMMIT
+    assert core["runtime_commit"] == CORE_RUNTIME_COMMIT
+    assert core["encoded_view_schemas"] == STRUCTURAL_SCHEMA_REQUIREMENT
     assert HEX40.fullmatch(core["adapter_contract_commit"])
-    assert core["release_evidence"] == {
-        "commit": CORE_RELEASE_EVIDENCE_COMMIT,
-        "implementation_commit": CORE_IMPLEMENTATION_COMMIT,
-        "classification": "behavior-preserving-release-evidence-only",
-        "runtime_source_changed": False,
-        "changed_paths": [
-            ".github/workflows/ci.yml",
-            "benchmarks/tests/test_harness_acceptance.py",
-            "reports/release/0.1.0.dev0/build-provenance.json",
-            "tests/packaging/test_supply_chain.py",
-            "tests/packaging/test_workflows.py",
-            "tools/benchmark/harness.py",
-            "tools/packaging/supply_chain.py",
-        ],
-    }
 
     snapshot = _snapshot("urn:manifest:one")
     second = _snapshot("urn:manifest:two")
     composite = pyowl_core.compose_views(snapshot, second, roles=("source", "target"))
     consumers = cast(list[dict[str, Any]], payload["consumers"])
-    assert [item["id"] for item in consumers] == list(CONSUMER_COMMITS)
+    assert [item["id"] for item in consumers] == list(CONSUMER_IDENTITIES)
     for item in consumers:
-        assert item["commit"] == CONSUMER_COMMITS[item["id"]]
+        identity = CONSUMER_IDENTITIES[item["id"]]
+        assert item["final_commit"] == identity["final_commit"]
+        assert item["runtime_commit"] == identity["runtime_commit"]
+        assert item["role"] == identity["role"]
+        assert HEX40.fullmatch(item["final_commit"])
+        assert HEX40.fullmatch(item["runtime_commit"])
         assert item["core_requirement"] == ">=0.1,<0.2"
+        assert item["required_encoded_view_schemas"] == STRUCTURAL_SCHEMA_REQUIREMENT
         test = cast(dict[str, Any], item["test"])
         assert set(test) == {
-            "core_implementation_commit",
+            "consumer_final_commit",
+            "consumer_runtime_commit",
+            "core_runtime_commit",
             "result",
             "selection",
             "status",
             "tested_commit_tree",
         }
-        assert test["core_implementation_commit"] == CORE_IMPLEMENTATION_COMMIT
+        assert test["core_runtime_commit"] == CORE_RUNTIME_COMMIT
+        assert test["consumer_final_commit"] == item["final_commit"]
+        assert test["consumer_runtime_commit"] == item["runtime_commit"]
         assert test["status"] == "pass"
         assert test["tested_commit_tree"] is True
         assert test["selection"] == CONSUMER_TESTS[item["id"]]["selection"]
         assert test["result"] == CONSUMER_TESTS[item["id"]]["result"]
-        requirement = AdapterRequirement(
-            consumer=item["package"],
-            consumer_version=item["package_version"],
-            consumer_api=item["consumer_api"],
-            required_features=frozenset(item["required_features"]),
-        )
         view = composite if item["view_kind"] == "composite" else snapshot
-        report = negotiate_view(view, requirement)
+        report = negotiate_view(view, _requirement(item))
         assert report.compatible, (item["id"], report.to_dict())
+
+
+def test_recorded_consumers_fail_closed_without_structural_columns_v1() -> None:
+    payload = cast(dict[str, Any], json.loads(MANIFEST.read_text(encoding="utf-8")))
+    snapshot = _snapshot("urn:manifest:missing-schema")
+    capabilities = snapshot.capabilities
+    without_encoded_views = pyowl_core.CoreCapabilities(
+        adapter_protocol=capabilities.adapter_protocol,
+        model_schema=capabilities.model_schema,
+        wire_format=capabilities.wire_format,
+        features=capabilities.features,
+        encoded_view_schemas={},
+        backend=capabilities.backend,
+    )
+
+    for item in cast(list[dict[str, Any]], payload["consumers"]):
+        report = negotiate_capabilities(without_encoded_views, _requirement(item))
+        assert not report.compatible
+        encoded_issues = [
+            (issue.code, issue.field)
+            for issue in report.issues
+            if issue.field.startswith("encoded_view:")
+        ]
+        assert encoded_issues == [
+            (
+                "MISSING_ENCODED_VIEW",
+                "encoded_view:pyowl-core/structural-columns",
+            )
+        ]
 
 
 def test_compatibility_evidence_is_path_free_and_records_no_runtime_coupling() -> None:

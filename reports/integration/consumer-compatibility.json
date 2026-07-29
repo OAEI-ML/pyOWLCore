@@ -1,37 +1,28 @@
 {
-  "schema": "pyowl-core.consumer-compatibility/2",
-  "recorded_date": "2026-07-26",
+  "schema": "pyowl-core.consumer-compatibility/3",
+  "recorded_date": "2026-07-28",
   "core": {
     "repository": "pyOWLCore",
-    "implementation_commit": "af9bdb0b9178766b5f15806fb6a2f00b05e00e22",
+    "final_commit": "9251059e10ab1c4474d58d7c3d61b63c0ae3d23c",
+    "runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
     "adapter_contract_commit": "75132daaf8f665b6f72dbbd7c9fcf30ef23e1eb7",
-    "release_evidence": {
-      "commit": "15992ca5b19f795da7870ec183727100758b08d9",
-      "implementation_commit": "af9bdb0b9178766b5f15806fb6a2f00b05e00e22",
-      "classification": "behavior-preserving-release-evidence-only",
-      "runtime_source_changed": false,
-      "changed_paths": [
-        ".github/workflows/ci.yml",
-        "benchmarks/tests/test_harness_acceptance.py",
-        "reports/release/0.1.0.dev0/build-provenance.json",
-        "tests/packaging/test_supply_chain.py",
-        "tests/packaging/test_workflows.py",
-        "tools/benchmark/harness.py",
-        "tools/packaging/supply_chain.py"
-      ]
-    },
     "package_version": "0.1.0.dev0",
     "python": ">=3.10",
     "api_version": [0, 1],
     "model_schema": 1,
     "wire_format": [1, 1],
-    "adapter_protocol": 1
+    "adapter_protocol": 1,
+    "encoded_view_schemas": {
+      "pyowl-core/structural-columns": 1
+    }
   },
   "consumers": [
     {
       "id": "exact-om",
       "repository": "Exact-OM",
-      "commit": "d172cfa355a5d2683fc47824a5d8f2ed24cf9125",
+      "final_commit": "abba717bd5b3f186678bd6f3e88bf73066c2ae49",
+      "runtime_commit": "ab4b76644f6ed58894d0920e47de713ba1ffb358",
+      "role": "compatibility-consumer",
       "branch": "dev",
       "package": "Exact-OM",
       "package_version": "2.0.0",
@@ -49,8 +40,13 @@
         "owl2-structural",
         "structural-indexes"
       ],
+      "required_encoded_view_schemas": {
+        "pyowl-core/structural-columns": 1
+      },
       "test": {
-        "core_implementation_commit": "af9bdb0b9178766b5f15806fb6a2f00b05e00e22",
+        "core_runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
+        "consumer_final_commit": "abba717bd5b3f186678bd6f3e88bf73066c2ae49",
+        "consumer_runtime_commit": "ab4b76644f6ed58894d0920e47de713ba1ffb358",
         "selection": "tests/ontology_stack_provenance_test.py tests/reasoner_adapters_test.py tests/shared_owl_stack_test.py tests/owl_stack_scale_test.py tests/owl_public_boundary_test.py",
         "result": "82 passed, 1 expected NativeBackendFallbackWarning",
         "status": "pass",
@@ -60,7 +56,9 @@
     {
       "id": "oaei-bioml-eval",
       "repository": "OAEI-Bio-ML-eval",
-      "commit": "04573c09dd0e62825c3fa7c5b2490b43d5a22874",
+      "final_commit": "e5d1affaf66600b09b8d771c2bb691a10cfda852",
+      "runtime_commit": "fd75aedbf9f5ed4351d3f6d634a6e07721d21778",
+      "role": "compatibility-consumer",
       "branch": "main",
       "package": "oaei-bioml-eval",
       "package_version": "0.2.0",
@@ -79,8 +77,13 @@
         "owl2-structural",
         "zero-copy-view"
       ],
+      "required_encoded_view_schemas": {
+        "pyowl-core/structural-columns": 1
+      },
       "test": {
-        "core_implementation_commit": "af9bdb0b9178766b5f15806fb6a2f00b05e00e22",
+        "core_runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
+        "consumer_final_commit": "e5d1affaf66600b09b8d771c2bb691a10cfda852",
+        "consumer_runtime_commit": "fd75aedbf9f5ed4351d3f6d634a6e07721d21778",
         "selection": "tests/test_coherence.py tests/test_native_reasoners.py tests/test_java_free_runtime.py",
         "result": "95 tests, OK",
         "status": "pass",
@@ -90,7 +93,9 @@
     {
       "id": "pyelk",
       "repository": "pyELK",
-      "commit": "a909cfcea341834ab6d6598f80445a697b338f13",
+      "final_commit": "faf7a995bd4b44964d7e5a56007ae484df79d597",
+      "runtime_commit": "bc75f4be609626f231cdc91af800f52bae46c766",
+      "role": "encoded-native-compiler",
       "branch": "main",
       "package": "pyelk-reasoner",
       "package_version": "0.1.0.dev0",
@@ -106,8 +111,13 @@
         "import-manifest",
         "owl2-structural"
       ],
+      "required_encoded_view_schemas": {
+        "pyowl-core/structural-columns": 1
+      },
       "test": {
-        "core_implementation_commit": "af9bdb0b9178766b5f15806fb6a2f00b05e00e22",
+        "core_runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
+        "consumer_final_commit": "faf7a995bd4b44964d7e5a56007ae484df79d597",
+        "consumer_runtime_commit": "bc75f4be609626f231cdc91af800f52bae46c766",
         "selection": "tests/unit/core/test_core_contract.py tests/unit/indexing/test_literals.py tests/integration/test_shared_snapshot_input.py tests/unit/inputs/test_policy_cache.py",
         "result": "32 passed",
         "status": "pass",
@@ -117,7 +127,9 @@
     {
       "id": "pyhermit",
       "repository": "pyHermiT",
-      "commit": "04bd8163b532f623044d7391706ff728d1aed4b1",
+      "final_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
+      "runtime_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
+      "role": "encoded-native-compiler",
       "branch": "main",
       "package": "pyHermiT",
       "package_version": "0.1.0.dev0",
@@ -134,10 +146,15 @@
         "ontology-identity-index",
         "owl2-structural"
       ],
+      "required_encoded_view_schemas": {
+        "pyowl-core/structural-columns": 1
+      },
       "test": {
-        "core_implementation_commit": "af9bdb0b9178766b5f15806fb6a2f00b05e00e22",
+        "core_runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
+        "consumer_final_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
+        "consumer_runtime_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
         "selection": "tests/unit/core/test_core_contract.py tests/integration/shared_snapshot/test_inputs.py tests/unit/datatypes/test_language_tags.py tests/unit/datatypes/test_literal_identities.py",
-        "result": "85 passed",
+        "result": "86 passed",
         "status": "pass",
         "tested_commit_tree": true
       }
@@ -145,7 +162,9 @@
     {
       "id": "projector",
       "repository": "pyOwl2Vec-Star-projector",
-      "commit": "53a23e2d385696e2be042568ade0d178580c6de4",
+      "final_commit": "8f599fb00708703f3bdbdbbf2d0064bc2935167c",
+      "runtime_commit": "46b066f698cc790aceae4f8eaf50212934e94708",
+      "role": "encoded-native-compiler",
       "branch": "main",
       "package": "pyowl2vec-star-projector",
       "package_version": "0.1.0rc1",
@@ -156,8 +175,13 @@
       "compatibility_id": "mowl-d993536-v1",
       "view_kind": "snapshot",
       "required_features": [],
+      "required_encoded_view_schemas": {
+        "pyowl-core/structural-columns": 1
+      },
       "test": {
-        "core_implementation_commit": "af9bdb0b9178766b5f15806fb6a2f00b05e00e22",
+        "core_runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
+        "consumer_final_commit": "8f599fb00708703f3bdbdbbf2d0064bc2935167c",
+        "consumer_runtime_commit": "46b066f698cc790aceae4f8eaf50212934e94708",
         "selection": "tests/test_consumer_conformance.py",
         "result": "13 passed",
         "status": "pass",
