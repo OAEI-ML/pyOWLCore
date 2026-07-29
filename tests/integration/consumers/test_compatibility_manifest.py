@@ -11,32 +11,38 @@ from pyowl_core.adapters import AdapterRequirement, negotiate_capabilities, nego
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "reports" / "integration" / "consumer-compatibility.json"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
-CORE_FINAL_COMMIT = "9251059e10ab1c4474d58d7c3d61b63c0ae3d23c"
-CORE_RUNTIME_COMMIT = "21503cf5a35c22c1fa35653c13df958df4fca100"
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+CORE_FINAL_COMMIT = "4fe32971780e38d2d83932bb93b8c2195bdfcc5f"
+CORE_RUNTIME_COMMIT = "005c3ccad129757b3a9be125dc064b812b607ef5"
+CORE_RUNTIME_TREE = "d4f3f29f6594b59f3d45a4811c38fb761a7028b9"
+CORE_DIRECT_SAFETY_COMMIT = "a81665241ae86036a3fbe0325f7bcf43660f3a12"
+CORE_PERFORMANCE_EVIDENCE_COMMIT = "4fe32971780e38d2d83932bb93b8c2195bdfcc5f"
+CORE_ADAPTER_CONTRACT_COMMIT = "75132daaf8f665b6f72dbbd7c9fcf30ef23e1eb7"
+STRUCTURAL_SCHEMA_DESCRIPTOR = "9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5"
 STRUCTURAL_SCHEMA_REQUIREMENT = {"pyowl-core/structural-columns": 1}
 CONSUMER_IDENTITIES = {
     "exact-om": {
-        "final_commit": "abba717bd5b3f186678bd6f3e88bf73066c2ae49",
+        "final_commit": "74b48779f1a3ca3e85614d50186ecf40a7f6db65",
         "runtime_commit": "ab4b76644f6ed58894d0920e47de713ba1ffb358",
         "role": "compatibility-consumer",
     },
     "oaei-bioml-eval": {
-        "final_commit": "e5d1affaf66600b09b8d771c2bb691a10cfda852",
-        "runtime_commit": "fd75aedbf9f5ed4351d3f6d634a6e07721d21778",
+        "final_commit": "94713d5068ce78d90f42e7fb100c7631b6490924",
+        "runtime_commit": "94713d5068ce78d90f42e7fb100c7631b6490924",
         "role": "compatibility-consumer",
     },
     "pyelk": {
-        "final_commit": "faf7a995bd4b44964d7e5a56007ae484df79d597",
+        "final_commit": "70302fcd6abc27d703eeb8f59027fc1392f4709b",
         "runtime_commit": "bc75f4be609626f231cdc91af800f52bae46c766",
         "role": "encoded-native-compiler",
     },
     "pyhermit": {
-        "final_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
+        "final_commit": "af8f7fc669b28dfc15728c84c78f9094787d288b",
         "runtime_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
         "role": "encoded-native-compiler",
     },
     "projector": {
-        "final_commit": "8f599fb00708703f3bdbdbbf2d0064bc2935167c",
+        "final_commit": "9f19db3de54b7bdffe45498479edadd72af37218",
         "runtime_commit": "46b066f698cc790aceae4f8eaf50212934e94708",
         "role": "encoded-native-compiler",
     },
@@ -44,40 +50,46 @@ CONSUMER_IDENTITIES = {
 CONSUMER_TESTS = {
     "exact-om": {
         "selection": (
+            "tests/ontology_backend_test.py "
+            "tests/ontology_parity_test.py "
             "tests/ontology_stack_provenance_test.py "
             "tests/reasoner_adapters_test.py "
             "tests/shared_owl_stack_test.py "
             "tests/owl_stack_scale_test.py "
-            "tests/owl_public_boundary_test.py"
+            "tests/owl_public_boundary_test.py "
+            "tests/ontology_compatibility_test.py "
+            "tests/ontology_public_handoff_test.py"
         ),
-        "result": "82 passed, 1 expected NativeBackendFallbackWarning",
+        "result": "107 passed, 1 expected NativeBackendFallbackWarning",
     },
     "oaei-bioml-eval": {
-        "selection": (
-            "tests/test_coherence.py tests/test_native_reasoners.py tests/test_java_free_runtime.py"
+        "selection": "python -m unittest discover -s tests; strict installed owner matrix",
+        "result": (
+            "Ran 238 tests, OK (skipped=13); 4 formats / 20 owners / 40 reasoner runs, "
+            "semantic identity true"
         ),
-        "result": "95 tests, OK",
     },
     "pyelk": {
         "selection": (
-            "tests/unit/core/test_core_contract.py tests/unit/indexing/test_literals.py "
+            "tests/packaging/test_supply_chain.py "
             "tests/integration/test_shared_snapshot_input.py "
-            "tests/unit/inputs/test_policy_cache.py"
+            "tests/unit/core/test_core_contract.py "
+            "tests/unit/reasoning/test_contracts.py"
         ),
-        "result": "32 passed",
+        "result": "63 passed",
     },
     "pyhermit": {
         "selection": (
-            "tests/unit/core/test_core_contract.py "
-            "tests/integration/shared_snapshot/test_inputs.py "
-            "tests/unit/datatypes/test_language_tags.py "
-            "tests/unit/datatypes/test_literal_identities.py"
+            "final-core Python/core/encoded/public parity; release/workflow and fail-closed "
+            "contracts; focused Rust parity"
         ),
-        "result": "86 passed",
+        "result": (
+            "53 passed; 20 release/workflow plus 3 fail-closed passed; focused Rust parity passed"
+        ),
     },
     "projector": {
-        "selection": "tests/test_consumer_conformance.py",
-        "result": "13 passed",
+        "selection": "tests/test_release_tooling.py tests/test_consumer_conformance.py",
+        "result": "50 passed",
     },
 }
 
@@ -101,8 +113,8 @@ def _requirement(item: dict[str, Any]) -> AdapterRequirement:
 
 def test_recorded_consumer_contracts_negotiate_with_the_implementation_checkpoint() -> None:
     payload = cast(dict[str, Any], json.loads(MANIFEST.read_text(encoding="utf-8")))
-    assert payload["schema"] == "pyowl-core.consumer-compatibility/3"
-    assert payload["recorded_date"] == "2026-07-28"
+    assert payload["schema"] == "pyowl-core.consumer-compatibility/4"
+    assert payload["recorded_date"] == "2026-07-29"
     core = cast(dict[str, Any], payload["core"])
     assert core["package_version"] == pyowl_core.__version__
     assert tuple(core["api_version"]) == pyowl_core.API_VERSION
@@ -111,8 +123,22 @@ def test_recorded_consumer_contracts_negotiate_with_the_implementation_checkpoin
     assert core["adapter_protocol"] == pyowl_core.ADAPTER_PROTOCOL_VERSION
     assert core["final_commit"] == CORE_FINAL_COMMIT
     assert core["runtime_commit"] == CORE_RUNTIME_COMMIT
+    assert core["runtime_tree"] == CORE_RUNTIME_TREE
+    assert core["direct_safety_commit"] == CORE_DIRECT_SAFETY_COMMIT
+    assert core["performance_evidence_commit"] == CORE_PERFORMANCE_EVIDENCE_COMMIT
+    assert core["adapter_contract_commit"] == CORE_ADAPTER_CONTRACT_COMMIT
+    assert core["encoded_view_descriptor_sha256"] == STRUCTURAL_SCHEMA_DESCRIPTOR
     assert core["encoded_view_schemas"] == STRUCTURAL_SCHEMA_REQUIREMENT
-    assert HEX40.fullmatch(core["adapter_contract_commit"])
+    assert HEX40.fullmatch(core["runtime_tree"])
+    assert HEX64.fullmatch(core["encoded_view_descriptor_sha256"])
+    for field in (
+        "final_commit",
+        "runtime_commit",
+        "direct_safety_commit",
+        "performance_evidence_commit",
+        "adapter_contract_commit",
+    ):
+        assert HEX40.fullmatch(core[field])
 
     snapshot = _snapshot("urn:manifest:one")
     second = _snapshot("urn:manifest:two")

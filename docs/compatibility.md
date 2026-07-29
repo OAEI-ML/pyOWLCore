@@ -12,25 +12,46 @@
 
 ## Tested workspace consumers
 
-The coordinated native-redesign compatibility run used core runtime
-`21503cf5a35c22c1fa35653c13df958df4fca100`. The final recorded core tree is
-`9251059e10ab1c4474d58d7c3d61b63c0ae3d23c`; its later commits change consumer
-and release/benchmark evidence, not the `pyowl_core` package runtime.
+The coordinated native-redesign compatibility run used exact core runtime
+`005c3ccad129757b3a9be125dc064b812b607ef5`, tree
+`d4f3f29f6594b59f3d45a4811c38fb761a7028b9`. Its public encoded descriptor is
+SHA-256 `9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5`.
+The direct-comparator safety successor is
+`a81665241ae86036a3fbe0325f7bcf43660f3a12`; it repeats the native release
+profile and makes its build-contract revision a Cargo-tracked input. The final
+performance-evidence commit is `4fe32971780e38d2d83932bb93b8c2195bdfcc5f`,
+which adds the paired DOID result. The compatibility manifest records that
+evidence subject instead of attempting to embed its own circular Git identity.
+Neither successor changes the `pyowl_core` package runtime used by consumers.
 
 Every recorded workflow requires public encoded structural schema
 `pyowl-core/structural-columns` v1. Compatibility consumers observe that
 capability only through public core/reasoner contracts; encoded-native
 compilers consume the public buffers through their own private compilers.
-The runtime commit is the last package-runtime change, while the final commit
-also binds subsequent tests, documentation, and release evidence.
+The runtime commit is the exact tested source, while the direct-safety and
+final commits bind subsequent comparator and performance evidence.
 
 | Consumer | Public role | Tested package | Core range/API | Runtime commit | Final commit |
 |---|---|---:|---|---|---|
-| Exact-OM | `compatibility-consumer` | `2.0.0` | `pyowl-core>=0.1,<0.2` | `ab4b76644f6ed58894d0920e47de713ba1ffb358` | `abba717bd5b3f186678bd6f3e88bf73066c2ae49` |
-| OAEI Bio-ML eval | `compatibility-consumer` | `0.2.0` | `pyowl-core>=0.1,<0.2` | `fd75aedbf9f5ed4351d3f6d634a6e07721d21778` | `e5d1affaf66600b09b8d771c2bb691a10cfda852` |
-| pyELK | `encoded-native-compiler` | `0.1.0.dev0` | core API `(0,1)` | `bc75f4be609626f231cdc91af800f52bae46c766` | `faf7a995bd4b44964d7e5a56007ae484df79d597` |
-| pyHermiT | `encoded-native-compiler` | `0.1.0.dev0` | core API `(0,1)` | `f0d4ebb270f3521b848cd2a858761afd66e72ae2` | `f0d4ebb270f3521b848cd2a858761afd66e72ae2` |
-| OWL2Vec* projector | `encoded-native-compiler` | `0.1.0rc1` | `pyowl-core>=0.1,<0.2` | `46b066f698cc790aceae4f8eaf50212934e94708` | `8f599fb00708703f3bdbdbbf2d0064bc2935167c` |
+| Exact-OM | `compatibility-consumer` | `2.0.0` | `pyowl-core>=0.1,<0.2` | `ab4b76644f6ed58894d0920e47de713ba1ffb358` | `74b48779f1a3ca3e85614d50186ecf40a7f6db65` |
+| OAEI Bio-ML eval | `compatibility-consumer` | `0.2.0` | `pyowl-core>=0.1,<0.2` | `94713d5068ce78d90f42e7fb100c7631b6490924` | `94713d5068ce78d90f42e7fb100c7631b6490924` |
+| pyELK | `encoded-native-compiler` | `0.1.0.dev0` | core API `(0,1)` | `bc75f4be609626f231cdc91af800f52bae46c766` | `70302fcd6abc27d703eeb8f59027fc1392f4709b` |
+| pyHermiT | `encoded-native-compiler` | `0.1.0.dev0` | core API `(0,1)` | `f0d4ebb270f3521b848cd2a858761afd66e72ae2` | `af8f7fc669b28dfc15728c84c78f9094787d288b` |
+| OWL2Vec* projector | `encoded-native-compiler` | `0.1.0rc1` | `pyowl-core>=0.1,<0.2` | `46b066f698cc790aceae4f8eaf50212934e94708` | `9f19db3de54b7bdffe45498479edadd72af37218` |
+
+The final concise validations were:
+
+- Exact-OM: the nine-file ontology-only closure passed 107 tests with one
+  expected native-fallback warning; the focused closure passed 69 tests with
+  one warning.
+- OAEI: `python -m unittest discover -s tests` ran 238 tests successfully
+  with 13 optional skips. Its installed matrix covered 4 formats, 20 owners,
+  and 40 reasoner runs with semantic identity preserved.
+- pyELK: its release provenance, shared-snapshot handoff, core contract, and
+  reasoner contract selection passed 63 tests against the exact core runtime.
+- pyHermiT: 53 final-core parity tests, 20 release/workflow tests, 3
+  fail-closed cases, and the focused Rust parity selection passed.
+- Projector: release tooling and consumer conformance passed 50 tests.
 
 The machine-readable authority is
 [`reports/integration/consumer-compatibility.json`](../reports/integration/consumer-compatibility.json).

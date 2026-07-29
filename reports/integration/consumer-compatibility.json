@@ -1,10 +1,13 @@
 {
-  "schema": "pyowl-core.consumer-compatibility/3",
-  "recorded_date": "2026-07-28",
+  "schema": "pyowl-core.consumer-compatibility/4",
+  "recorded_date": "2026-07-29",
   "core": {
     "repository": "pyOWLCore",
-    "final_commit": "9251059e10ab1c4474d58d7c3d61b63c0ae3d23c",
-    "runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
+    "final_commit": "4fe32971780e38d2d83932bb93b8c2195bdfcc5f",
+    "runtime_commit": "005c3ccad129757b3a9be125dc064b812b607ef5",
+    "runtime_tree": "d4f3f29f6594b59f3d45a4811c38fb761a7028b9",
+    "direct_safety_commit": "a81665241ae86036a3fbe0325f7bcf43660f3a12",
+    "performance_evidence_commit": "4fe32971780e38d2d83932bb93b8c2195bdfcc5f",
     "adapter_contract_commit": "75132daaf8f665b6f72dbbd7c9fcf30ef23e1eb7",
     "package_version": "0.1.0.dev0",
     "python": ">=3.10",
@@ -12,6 +15,7 @@
     "model_schema": 1,
     "wire_format": [1, 1],
     "adapter_protocol": 1,
+    "encoded_view_descriptor_sha256": "9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5",
     "encoded_view_schemas": {
       "pyowl-core/structural-columns": 1
     }
@@ -20,7 +24,7 @@
     {
       "id": "exact-om",
       "repository": "Exact-OM",
-      "final_commit": "abba717bd5b3f186678bd6f3e88bf73066c2ae49",
+      "final_commit": "74b48779f1a3ca3e85614d50186ecf40a7f6db65",
       "runtime_commit": "ab4b76644f6ed58894d0920e47de713ba1ffb358",
       "role": "compatibility-consumer",
       "branch": "dev",
@@ -44,11 +48,11 @@
         "pyowl-core/structural-columns": 1
       },
       "test": {
-        "core_runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
-        "consumer_final_commit": "abba717bd5b3f186678bd6f3e88bf73066c2ae49",
+        "core_runtime_commit": "005c3ccad129757b3a9be125dc064b812b607ef5",
+        "consumer_final_commit": "74b48779f1a3ca3e85614d50186ecf40a7f6db65",
         "consumer_runtime_commit": "ab4b76644f6ed58894d0920e47de713ba1ffb358",
-        "selection": "tests/ontology_stack_provenance_test.py tests/reasoner_adapters_test.py tests/shared_owl_stack_test.py tests/owl_stack_scale_test.py tests/owl_public_boundary_test.py",
-        "result": "82 passed, 1 expected NativeBackendFallbackWarning",
+        "selection": "tests/ontology_backend_test.py tests/ontology_parity_test.py tests/ontology_stack_provenance_test.py tests/reasoner_adapters_test.py tests/shared_owl_stack_test.py tests/owl_stack_scale_test.py tests/owl_public_boundary_test.py tests/ontology_compatibility_test.py tests/ontology_public_handoff_test.py",
+        "result": "107 passed, 1 expected NativeBackendFallbackWarning",
         "status": "pass",
         "tested_commit_tree": true
       }
@@ -56,8 +60,8 @@
     {
       "id": "oaei-bioml-eval",
       "repository": "OAEI-Bio-ML-eval",
-      "final_commit": "e5d1affaf66600b09b8d771c2bb691a10cfda852",
-      "runtime_commit": "fd75aedbf9f5ed4351d3f6d634a6e07721d21778",
+      "final_commit": "94713d5068ce78d90f42e7fb100c7631b6490924",
+      "runtime_commit": "94713d5068ce78d90f42e7fb100c7631b6490924",
       "role": "compatibility-consumer",
       "branch": "main",
       "package": "oaei-bioml-eval",
@@ -81,11 +85,11 @@
         "pyowl-core/structural-columns": 1
       },
       "test": {
-        "core_runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
-        "consumer_final_commit": "e5d1affaf66600b09b8d771c2bb691a10cfda852",
-        "consumer_runtime_commit": "fd75aedbf9f5ed4351d3f6d634a6e07721d21778",
-        "selection": "tests/test_coherence.py tests/test_native_reasoners.py tests/test_java_free_runtime.py",
-        "result": "95 tests, OK",
+        "core_runtime_commit": "005c3ccad129757b3a9be125dc064b812b607ef5",
+        "consumer_final_commit": "94713d5068ce78d90f42e7fb100c7631b6490924",
+        "consumer_runtime_commit": "94713d5068ce78d90f42e7fb100c7631b6490924",
+        "selection": "python -m unittest discover -s tests; strict installed owner matrix",
+        "result": "Ran 238 tests, OK (skipped=13); 4 formats / 20 owners / 40 reasoner runs, semantic identity true",
         "status": "pass",
         "tested_commit_tree": true
       }
@@ -93,7 +97,7 @@
     {
       "id": "pyelk",
       "repository": "pyELK",
-      "final_commit": "faf7a995bd4b44964d7e5a56007ae484df79d597",
+      "final_commit": "70302fcd6abc27d703eeb8f59027fc1392f4709b",
       "runtime_commit": "bc75f4be609626f231cdc91af800f52bae46c766",
       "role": "encoded-native-compiler",
       "branch": "main",
@@ -115,11 +119,11 @@
         "pyowl-core/structural-columns": 1
       },
       "test": {
-        "core_runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
-        "consumer_final_commit": "faf7a995bd4b44964d7e5a56007ae484df79d597",
+        "core_runtime_commit": "005c3ccad129757b3a9be125dc064b812b607ef5",
+        "consumer_final_commit": "70302fcd6abc27d703eeb8f59027fc1392f4709b",
         "consumer_runtime_commit": "bc75f4be609626f231cdc91af800f52bae46c766",
-        "selection": "tests/unit/core/test_core_contract.py tests/unit/indexing/test_literals.py tests/integration/test_shared_snapshot_input.py tests/unit/inputs/test_policy_cache.py",
-        "result": "32 passed",
+        "selection": "tests/packaging/test_supply_chain.py tests/integration/test_shared_snapshot_input.py tests/unit/core/test_core_contract.py tests/unit/reasoning/test_contracts.py",
+        "result": "63 passed",
         "status": "pass",
         "tested_commit_tree": true
       }
@@ -127,7 +131,7 @@
     {
       "id": "pyhermit",
       "repository": "pyHermiT",
-      "final_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
+      "final_commit": "af8f7fc669b28dfc15728c84c78f9094787d288b",
       "runtime_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
       "role": "encoded-native-compiler",
       "branch": "main",
@@ -150,11 +154,11 @@
         "pyowl-core/structural-columns": 1
       },
       "test": {
-        "core_runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
-        "consumer_final_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
+        "core_runtime_commit": "005c3ccad129757b3a9be125dc064b812b607ef5",
+        "consumer_final_commit": "af8f7fc669b28dfc15728c84c78f9094787d288b",
         "consumer_runtime_commit": "f0d4ebb270f3521b848cd2a858761afd66e72ae2",
-        "selection": "tests/unit/core/test_core_contract.py tests/integration/shared_snapshot/test_inputs.py tests/unit/datatypes/test_language_tags.py tests/unit/datatypes/test_literal_identities.py",
-        "result": "86 passed",
+        "selection": "final-core Python/core/encoded/public parity; release/workflow and fail-closed contracts; focused Rust parity",
+        "result": "53 passed; 20 release/workflow plus 3 fail-closed passed; focused Rust parity passed",
         "status": "pass",
         "tested_commit_tree": true
       }
@@ -162,7 +166,7 @@
     {
       "id": "projector",
       "repository": "pyOwl2Vec-Star-projector",
-      "final_commit": "8f599fb00708703f3bdbdbbf2d0064bc2935167c",
+      "final_commit": "9f19db3de54b7bdffe45498479edadd72af37218",
       "runtime_commit": "46b066f698cc790aceae4f8eaf50212934e94708",
       "role": "encoded-native-compiler",
       "branch": "main",
@@ -179,11 +183,11 @@
         "pyowl-core/structural-columns": 1
       },
       "test": {
-        "core_runtime_commit": "21503cf5a35c22c1fa35653c13df958df4fca100",
-        "consumer_final_commit": "8f599fb00708703f3bdbdbbf2d0064bc2935167c",
+        "core_runtime_commit": "005c3ccad129757b3a9be125dc064b812b607ef5",
+        "consumer_final_commit": "9f19db3de54b7bdffe45498479edadd72af37218",
         "consumer_runtime_commit": "46b066f698cc790aceae4f8eaf50212934e94708",
-        "selection": "tests/test_consumer_conformance.py",
-        "result": "13 passed",
+        "selection": "tests/test_release_tooling.py tests/test_consumer_conformance.py",
+        "result": "50 passed",
         "status": "pass",
         "tested_commit_tree": true
       }
