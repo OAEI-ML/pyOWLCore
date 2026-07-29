@@ -15,6 +15,7 @@ already-delivered functionality. Begin with the master specification.
 | [`wire-format.md`](wire-format.md) | PYOCORE v1 cache/IPC bytes, mmap and validation |
 | [`adapters.md`](adapters.md) | Exact-OM, pyELK, pyHermiT, projector and evaluator integration |
 | [`native-backend.md`](native-backend.md) | Rust acceleration and complete Python fallback |
+| [`native-ontology-redesign.md`](native-ontology-redesign.md) | retained-native ontology engine, lazy facade, comparator targets, and WP14-WP18 plan |
 | [`security.md`](security.md) | hostile input, resource, filesystem, network and supply-chain policy |
 | [`performance.md`](performance.md) | large biomedical benchmarks and regression gates |
 | [`packaging.md`](packaging.md) | Python 3.10, pure/native artifacts, license/Java/name release gates |
@@ -25,4 +26,3 @@ already-delivered functionality. Begin with the master specification.
 Specification precedence and change control are defined in `SPEC.md`. A public
 contract change updates every affected focused spec, test/golden, version
 decision, and consumer specification in the same coordinated change.
-

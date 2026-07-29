@@ -180,19 +180,41 @@ ontology roots, axioms, or terms.
 ## 10. Bulk access and native acceleration
 
 For large ontologies, public scalar iterators remain correct but consumers may
-request a stable core `EncodedView`:
+request `ontology.view(EncodedStructuralView, schema_version=1, ...)`. WP17
+freezes schema 1 and its generated descriptor ledger before a stable release:
 
 ```text
-EncodedView:
-  schema/version, backing owner, read-only buffers, term dictionary,
-  row constructor/field descriptors, content fingerprint
+EncodedStructuralView:
+  schema_name = "pyowl-core/structural-columns"
+  schema_version: positive integer
+  model_schema: exact core model schema
+  scope/options: explicit structural selection
+  owner: strong reference to originating OntologyView/storage
+  buffers: immutable mapping of named read-only byte buffers
+  descriptor: canonical field/tag/offset/width/sequence metadata
+  structural_fingerprint: content covered by this view
+  segments: base/delta/member metadata for overlays/composites
 ```
 
-It is a core-owned, documented, versioned structural representation—not a Rust
-object or consumer IR. The Python fallback produces the same buffers. Consumers
-must validate schema/capabilities and retain the owner. This API remains
-provisional until profiling proves it avoids material Python object expansion;
-the stable wire format is the cross-process alternative.
+All scalar columns use specified little-endian exact-width fields; strings and
+variable sequences use checked offset/length columns. Tags come from the model
+schema ledger, never a Rust enum discriminant. IDs are dense and valid only
+within the retained owner/schema/view; they are not semantic identities and are
+not persisted in consumer caches.
+
+This is a core-owned, documented, versioned structural representation—not a
+Rust object or consumer IR. The Python fallback produces identical logical
+buffers. Consumers validate schema/capabilities, retain the owner, and compile
+their private IR in a bounded number of coarse calls. The native/mmap backend
+MUST expose matching owned columns without ontology-sized copying where its
+layout already satisfies the schema. The stable wire format remains the cross-
+process alternative; in-process consumers do not encode/decode wire merely to
+obtain this view.
+
+Overlay/composite views prefer a small segment table referencing base encoded
+views plus canonical add/remove/member postings. A consumer may request an
+explicit materialized encoded view, but the default repair path cannot hide a
+base-sized flattening copy.
 
 Never expose a raw pointer, mutable NumPy view, borrowed PyO3 buffer that outlives
 the call, machine-width enum, or native-endian struct. Optional array libraries
@@ -231,5 +253,9 @@ semantics/fallback/resource behavior are specified here.
   for small deltas;
 - simultaneous build/cancel/evict/read is race- and leak-free;
 - Python/native deterministic and semantic parity passes;
+- encoded structural buffers cover every constructor, match scalar traversal,
+  retain their owner safely, and require no per-axiom Python callback;
+- native direct/mmap publication performs no ontology-sized copy, while Python
+  fallback buffer construction is measured and explicit;
 - index bytes and build latency are reported in biomedical benchmarks; and
 - consumer import checks forbid reasoner/projector IR in `pyowl_core.index`.

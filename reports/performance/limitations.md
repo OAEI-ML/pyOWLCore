@@ -31,11 +31,12 @@ but the following external/evidence limits remain explicit.
    evidence. The original observations and member hashes remain in
    `biomedical-observations.json`.
 
-5. Exact-OM and py-horned-owl were not installed or otherwise runnable in this
-   isolated repository environment. No comparative speedup against them is
-   claimed, and WP10 did not add a dependency or fetch unreviewed code merely
-   to manufacture a comparison. The harness can accept an independently
-   prepared future comparison lane under equivalent semantics.
+5. Exact-OM, direct Horned-OWL/py-horned, and OWLAPI were not all available in
+   one pinned equivalent-semantics comparator environment. Their comparative
+   status is therefore `not-run`: no Horned-equivalence, Horned speedup, or
+   OWLAPI speedup is claimed. WP14 must establish the isolated comparator lanes
+   and exact correctness fence required by the successor performance contract;
+   neither Horned nor Java is added to distributed runtime/build dependencies.
 
 6. Native Functional parsing is 1.12x faster for public parse and 1.65x for
    load/freeze on the generated large source, not 2x. The native artifact is

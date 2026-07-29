@@ -7,6 +7,12 @@ private concepts. It never creates a second OWL model or parser. Standalone
 consumer entry points may accept paths/bytes for convenience, but their first
 step is `pyowl_core.coerce_snapshot`; an already-loaded view retains identity.
 
+For high-throughput compilation, a consumer first negotiates
+`pyowl-core/structural-columns` and requests `EncodedStructuralView` from the
+same identity. Scalar iteration remains a complete fallback. Encoded access
+does not permit reparsing, in-process wire encode/decode, private native imports,
+or persistence of view-local dense IDs.
+
 Core has no runtime dependency on consumers. Adapter code belongs in the
 consumer unless it is a syntax-only view useful to multiple consumers.
 
@@ -78,7 +84,8 @@ pyELK public constructors accept `OntologyInput` and store the resulting
 manifest. The EL compiler:
 
 1. checks closure/profile policy and core capabilities;
-2. scans core axioms/encoded structural view;
+2. scans the encoded structural view in its native performance path, or core
+   scalar axioms in its complete fallback path;
 3. emits an EL profile/support report for every unsupported constructor;
 4. compiles to pyELK's canonical EL indexed IR; and
 5. keys that IR by core logical/signature fingerprints plus compiler schema.
@@ -107,7 +114,9 @@ pyHermiT accepts `OntologyInput`/`OntologyView`, then requires:
 - canonical language/anonymous identity.
 
 It compiles the shared logical closure into its own normalization, role graph,
-DL clauses, and tableau IR. Core structural fingerprints identify input only;
+DL clauses, and tableau IR. The native performance path consumes the encoded
+structural view in coarse batches while retaining its owner; the scalar path is
+semantically complete. Core structural fingerprints identify input only;
 compiled IR has a pyHermiT schema and private wire format. Incremental updates
 may inspect an `OntologyOverlay.delta`, but correctness must match full compile;
 a composite is compiled as its effective view.
@@ -120,8 +129,10 @@ not mutate it.
 ## 6. pyOwl2Vec-Star-projector adapter
 
 The projector accepts `OntologyInput` and immediately obtains an
-`OntologyView`. It uses structural indexes/bulk access to compile its private
-projection plan and produces edge values/buffers defined by the projector.
+`OntologyView`. Its native performance path uses `EncodedStructuralView` and
+structural indexes in coarse batches to compile its private projection plan;
+the Python fallback may use scalar access. It produces edge values/buffers
+defined by the projector.
 Projection choices (bidirectionality, literal inclusion, taxonomy handling,
 annotation predicates) are not core semantics.
 

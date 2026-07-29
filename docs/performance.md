@@ -24,6 +24,12 @@ parser claim is made. Large mmap open used under 1% of full-decode traced
 allocation; in-process handoff retained exact identity with zero parser,
 resolver, wire, or construction calls.
 
+These measurements predate the retained-native redesign specified for
+WP14-WP18. They do not demonstrate a retained Rust ontology, Horned-OWL-
+equivalent loading, or an OWLAPI speedup. Those claims remain blocked until the
+pinned common-readiness comparisons in the normative performance specification
+pass.
+
 OAEI NCIt/DOID and ORDO/OMIM members are hash-pinned, but strict full-pair core
 mapping was not established in the recorded WP10 run. A later diagnostic on the
 pinned NCIt–DOID pair did establish an exact composite and a 159,392,315-byte

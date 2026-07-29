@@ -96,6 +96,31 @@ values, reports/diagnostic codes, fingerprints, writer bytes where canonical,
 wire bytes, indexes, limits/cancellation, and consumer outputs. Randomized tests
 run forced backend and reject native fallback.
 
+Retained-native tests additionally compare lazy scalar materialization and the
+complete `EncodedStructuralView` against independent Python traversal for every
+constructor. Allocation/object counters assert publication is not proportional
+to terms/axioms, facade caches remain bounded, and direct/mapped owners survive
+iteration, close, GC, fork, and concurrent reads without dangling buffers.
+
+Native capability advertisement is an installed-path integration gate, not a
+unit-test conclusion. Before a format or encoded-view schema appears in
+`CoreCapabilities`, a forced-native test must start from real syntax bytes (or
+a deliberately corrupt descriptor), pass through acquisition, parse/RDF
+mapping, canonical freeze, snapshot publication, scalar facade, encoded view,
+wire/mmap where applicable, and at least one public consumer operation. It runs
+positive, interacting-feature, negative, limit, cancellation, and malformed
+cases and asserts Python/native values and public error categories exactly.
+The capability bit is absent until that whole matrix passes; fallback is
+disabled during the test.
+
+The retained regression corpus includes cross-layer shapes that isolated unit
+suites historically missed. It includes the OAEI/pyHermiT incoherent ontology
+with an unsatisfiable class below a multi-level satisfiable superclass chain,
+plus nested RDF lists/annotations/import provenance and segmented composite
+variants. Core does not assert reasoner semantics, but it must hand the exact
+same structural view to forced Python/native consumer runs so any downstream
+parity mismatch blocks the corresponding consumer/workspace claim.
+
 ### 6.2 Independent wire/canonical implementation
 
 A deliberately small independent Python schema reader/encoder under test tools
@@ -112,6 +137,10 @@ artifacts, or normal CI lanes.
 
 External output is normalized only by documented syntax/blank-node rules. A
 disagreement is investigated against W3C; majority vote does not decide.
+
+For comparative performance, the external adapter must also emit the exact
+inventory/digest fence in `performance.md`; an unsupported or unequal result is
+ineligible for timing rather than normalized into apparent parity.
 
 ## 7. Import and lifecycle verification
 
@@ -160,6 +189,20 @@ Java process/module/artifact. Consumer private IR/results match path baselines.
 Profile-incompatible inputs produce complete diagnostics, never silent axiom
 drops or incomplete reasoning.
 
+Native performance lanes negotiate `EncodedStructuralView` and additionally
+assert zero scalar axiom materializations/per-axiom Python callbacks during
+consumer compilation. Overlay/composite runs prove the encoded representation
+retains base owners and transfers only delta/member postings unless explicit
+materialization was requested.
+
+The matrix distinguishes core capability advertisement from external consumer
+optimization. Core advertisement requires the independent decoder and the
+installed-path integration fence in section 6.1. Specific successor companion
+artifacts may be `not-run` for `core_release_eligible`, but they must all pass
+before `workspace_optimization_complete` or multi-consumer native-performance
+claims. Exact and OAEI are compatibility consumers; only pyELK, pyHermiT, and
+the projector own encoded compilers.
+
 The language-tag compatibility fixture proves canonical shared identity,
 pyHermiT canonical consumption, and pyELK's isolated legacy key behavior with/
 without source map.
@@ -202,6 +245,17 @@ cold structure. Memory gates include retained and peak allocations. A speedup
 that skips unsupported triples, source annotations, imports, validation, or
 digest checks is a correctness failure.
 
+Horned/OWLAPI ratios are reported only after exact comparator output equality
+and the common-readiness materialization fence. The direct native engine and
+installed Python wheel are distinct lanes; wrapper conversion cannot be hidden
+outside the delivered-path timer.
+
+For Horned, the common-contract adapter's canonical ledger, all four
+fingerprints, provenance/diagnostics reconstruction, and traversal are timed.
+Only comparison of already-produced outputs is post-timer. Raw Horned model
+readiness is retained as an explicitly asymmetric diagnostic and never used as
+the equivalence denominator.
+
 Raw results/environment/corpus manifests are retained. Regression thresholds
 and methodology are in `performance.md`.
 
@@ -234,4 +288,3 @@ Any of these blocks release:
 - missing/inaccurate third-party license obligations;
 - unreserved/uncontrolled PyPI name or placeholder release metadata; or
 - failed performance gates without an explicitly approved spec/baseline change.
-

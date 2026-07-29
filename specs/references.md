@@ -30,10 +30,15 @@ decision ledger, and covered by a regression where applicable.
 - [py-horned-owl documentation](https://ontology-tools.github.io/py-horned-owl/)
 - [Horned-OWL source](https://github.com/ontology-tools/horned-owl)
 - [py-horned-owl source](https://github.com/ontology-tools/py-horned-owl)
+- [Horned-OWL design and performance evaluation](https://doi.org/10.4230/TGDK.2.2.9)
+- [OWLAPI source](https://github.com/owlcs/owlapi)
+- [OWLAPI documentation](https://owlcs.github.io/owlapi/)
 
 These are implementation candidates and differential comparators, not semantic
 authorities. Their output never overrides a W3C requirement or a documented
-core decision.
+core decision. WP14 pins exact comparator revisions, features, artifacts, and
+hashes; mutable documentation URLs are discovery references, not benchmark
+provenance.
 
 ## Workspace consumer references
 

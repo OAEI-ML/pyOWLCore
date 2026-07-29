@@ -16,7 +16,7 @@ pyowl_core.wire           validated canonical persistence/IPC
 pyowl_core.api            load/coerce/encode facade
 
 pyowl_core.backends.python  complete reference implementation
-pyowl_core.backends.native  private adapter to pyowl_core._native
+pyowl_core.backends.native  private facade over retained pyowl_core._native storage
 ```
 
 The arrows mean “may depend on.” The model never imports a parser, resolver,
@@ -42,6 +42,14 @@ src/pyowl_core/
   _native.pyi              private extension typing
 native/                    Rust cdylib and parser/model/wire kernels
 ```
+
+The optimized implementation is a vertical native path: syntax parsing,
+structural mapping, canonical freeze, retained storage, common indexes, and
+wire/mmap access remain in Rust for every operation advertised as native. The
+Python modules above remain the public contract and orchestration layer; they
+do not imply that a native load must be expanded into Python storage between
+layers. The detailed successor design is
+[`native-ontology-redesign.md`](native-ontology-redesign.md).
 
 ## 2. Ownership boundary
 
@@ -73,14 +81,24 @@ Implementations may use:
 - snapshot-local dense IDs behind accessors; or
 - copy-on-write/persistent maps for overlays.
 
+When native is selected, the ordinary large-ontology representation MUST be a
+retained immutable native arena or validated mapped column store owned by a
+thin public Python facade. Native load/freeze MUST NOT eagerly instantiate one
+Python object per native term or axiom. Scalar model values materialize on
+demand and remain bounded/weakly cached; performance consumers request the
+documented `EncodedStructuralView` in coarse operations.
+
 Snapshot-local IDs are not equality, not serialized API identifiers, and not
 valid across compaction or decoding. Public equality and hashes use canonical
 structure. No caller receives a mutable buffer or pointer.
 
 Native-backed and Python-backed values must interoperate. Equality cannot
-perform a per-node FFI call in a hot loop; bulk iterators and encoded column
-views are permitted through private/experimental APIs only after lifetime and
-fallback parity are specified.
+perform a per-node FFI call in a hot loop. The versioned core
+`EncodedStructuralView` is the stable bulk boundary once WP17 freezes its
+schema/lifetime contract; private arena objects and raw pointers remain
+forbidden. The Python backend can construct the same encoded view, although
+zero-copy is required only when the native/mapped layout already owns matching
+columns.
 
 ## 4. Object lifecycle
 
@@ -91,12 +109,21 @@ fallback parity are specified.
 annotations, axioms, prefix/source metadata, parser diagnostics, and an
 optional source map. It performs no network or recursive import work.
 
+For native parsing, that public document owns a retained native document
+storage handle. Only bounded facade/report metadata crosses into Python at
+publication; iterating scalar axioms materializes them lazily.
+
 ### 4.2 Snapshot
 
 `load_snapshot` obtains or accepts the root document, resolves imports under an
 explicit policy, standardizes anonymous-individual scope per document, and
 freezes a closure plus resolution manifest. The snapshot is safe for concurrent
 read-only access.
+
+Native closure assembly shares document arenas/intern pools and publishes
+postings over them. It does not flatten every imported axiom into a duplicate
+Python or native graph. Python resolver callbacks remain outside Rust-only/GIL-
+released regions.
 
 ### 4.3 Overlay
 
@@ -146,6 +173,12 @@ Shared lazy indexes are cached on the snapshot so pyELK, Exact-OM, and the
 projector asking for the same core `AxiomTypeIndex` reuse it. Private consumer
 indexes are never placed there merely to share memory.
 
+Native consumers compile through a negotiated, read-only encoded structural
+view while retaining its owner. This path makes one coarse boundary crossing,
+does not serialize through the wire format in-process, and does not expose core
+arena IDs as semantic identities. Scalar iteration remains the portable
+compatibility path, not the required high-throughput path.
+
 ## 6. Cross-process communication
 
 The only stable cross-process object interchange is the wire format:
@@ -160,6 +193,11 @@ Paths to original ontology documents are acquisition references, not IPC.
 Pickle, `marshal`, JSON dumps of Python object internals, and native pointer
 sharing are forbidden. Shared-memory transport MAY carry the same validated
 wire bytes with an authenticated length/fingerprint envelope.
+
+A content-addressed wire artifact is also the persistent compiled snapshot.
+`open_snapshot(mmap=True)` validates it in bulk and exposes lazy native/mapped
+views without reconstructing every row. A second machine-dependent native dump
+format is not introduced merely for speed.
 
 ## 7. Concurrency and reentrancy
 
@@ -201,6 +239,12 @@ Every top-level load exposes a `LoadReport` with:
 - peak tracked memory and limit headroom;
 - warnings/diagnostics; and
 - all fingerprints.
+
+Native reports additionally distinguish acquisition, tokenization/RDF parse,
+RDF-to-OWL mapping, arena construction, canonical freeze, closure assembly,
+scalar materialization, encoded-view publication, and wire/mmap work. Object
+and allocation counters prove whether ontology-sized Python materialization or
+an unintended second structural copy occurred.
 
 Reports contain sanitized IRIs/paths under the caller's redaction policy and no
 source credentials. Metrics are optional and bounded; disabling them does not

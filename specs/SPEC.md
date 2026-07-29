@@ -57,8 +57,8 @@ The first stable release includes:
   views, all lazy and thread-safe;
 - canonical fingerprints and a stable versioned wire/cache format;
 - adapter contracts for Exact-OM, pyELK, pyHermiT, projectors, and evaluators;
-- a complete pure-Python implementation plus an equivalent optimized Rust
-  backend; and
+- a complete pure-Python implementation plus a semantically equivalent,
+  retained-native Rust ontology engine behind the same public contracts; and
 - conformance, differential, fuzz, security, packaging, and performance gates.
 
 Support for RDF-star syntax is not part of OWL 2 and is outside 1.0. RDF 1.2
@@ -74,8 +74,10 @@ The package MUST NOT:
 - embed ELK/HermiT normalization, clausification, saturation, dependency sets,
   blocking, taxonomy, or tableau state;
 - define OWL meaning by the quirks of one parser or Java implementation;
-- expose Rust/PyO3 objects, RDFLib nodes, Horned-OWL objects, integer arena IDs,
-  or a parser-specific graph as stable public values;
+- expose Rust/PyO3 objects, RDFLib nodes, Horned-OWL objects, private native
+  arena IDs, or a parser-specific graph as stable public values (schema-local
+  IDs inside the documented encoded structural/wire formats are permitted only
+  under their owner and version contracts);
 - silently fetch imports, guess a security-sensitive policy, or hide an
   unresolved import;
 - use pickle for trusted or untrusted interchange;
@@ -182,7 +184,11 @@ Queries never cause import fetching. `parse_document` never resolves imports.
 The Python backend is the semantic reference and complete fallback. Rust is an
 optimization with byte-for-byte canonical/wire and diagnostic parity where the
 contract specifies bytes/order, and normalized semantic parity elsewhere.
-There is no native-only OWL feature.
+There is no native-only OWL feature. A selected native operation retains its
+complete immutable ontology in native storage behind the public Python facade;
+it does not eagerly rebuild an ontology-sized Python object graph. Scalar
+objects are materialized lazily, while bulk consumers use documented encoded
+structural views. See `native-ontology-redesign.md`.
 
 ### 7.7 Resource safety
 
@@ -221,7 +227,10 @@ available. If unavailable or self-test-incompatible, it selects the complete
 Python backend and emits `NativeBackendUnavailableWarning` once per process,
 including the selected backend and remediation. `backend="python"` is an
 explicit choice and emits no fallback warning. `backend="native"` raises
-`BackendUnavailableError` rather than falling back.
+`BackendUnavailableError` rather than falling back. Native capability is
+advertised only for a complete top-level operation that ends in a retained-
+native document/view; parsing natively and then silently reconstructing the
+complete Python model is not the optimized native contract.
 
 Horned-OWL is an implementation/reference candidate for Rust parsing because
 its model follows OWL 2, but it is behind an internal adapter. Its LGPL and any
@@ -262,6 +271,9 @@ See [`adapters.md`](adapters.md) for exact adapter rules.
 - [`wire-format.md`](wire-format.md): stable cache/IPC schema and validation.
 - [`adapters.md`](adapters.md): integrations and extension points.
 - [`native-backend.md`](native-backend.md): Rust boundary and Python fallback.
+- [`native-ontology-redesign.md`](native-ontology-redesign.md): retained-native
+  storage, lazy facade, zero-copy consumer path, comparative goals, and
+  successor work plan.
 - [`security.md`](security.md): hostile inputs, limits, network and filesystem.
 - [`performance.md`](performance.md): biomedical benchmark methodology/gates.
 - [`packaging.md`](packaging.md): source/wheels, Python matrix, Java audit.
@@ -287,8 +299,9 @@ Version 1.0 requires all of the following:
 6. The pure wheel installs with no compiler and passes the full semantic suite
    on Python 3.10 through the supported upper matrix.
 7. Native wheels pass parity, sanitizer/fuzz, ABI, and platform tests.
-8. Large biomedical benchmark gates meet the targets in `performance.md` with
-   no unbounded memory growth.
+8. Large biomedical benchmark gates meet the targets in `performance.md`,
+   including at least Horned-OWL-equivalent query-ready native loading under
+   the approved comparative methodology, with no unbounded memory growth.
 9. Artifacts, dependency graphs, sdists, wheels, docs, examples, and CI images
    contain no Java runtime/build dependency or bundled Java bytecode/archive.
 10. Security/resource-limit and reproducibility gates pass.

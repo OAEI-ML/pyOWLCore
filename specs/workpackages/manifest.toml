@@ -102,3 +102,38 @@ brief = "WP13-docs-api-stabilization.md"
 wave = 12
 depends = ["WP11", "WP12"]
 owns = ["README.md", "CHANGELOG.md", "MIGRATION.md", "docs/", "src/pyowl_core/__init__.py", "tests/docs/", "tests/release/"]
+
+[[package]]
+id = "WP14"
+brief = "WP14-native-contract-comparators.md"
+wave = 13
+depends = ["WP09", "WP10", "WP13"]
+owns = ["specs/native-ontology-redesign.md", "tools/benchmark/comparators/", "benchmarks/comparators/", "reports/performance/redesign-baseline/", "reports/workpackages/WP14.md", "tests/benchmark/comparators/"]
+
+[[package]]
+id = "WP15"
+brief = "WP15-retained-native-arena.md"
+wave = 14
+depends = ["WP07", "WP09", "WP14"]
+owns = ["schemas/native-snapshot-publication-v1.toml", "schemas/native-snapshot-publication-v2.toml", "tools/schema/native_snapshot_publication_v2.py", "native/Cargo.toml", "native/Cargo.lock", "native/src/lib.rs", "native/src/error.rs", "native/src/limits.rs", "native/src/cancel.rs", "native/src/handoff.rs", "native/src/bindings/mod.rs", "native/src/bindings/ingestion.rs", "native/src/bindings/views.rs", "native/src/builder.rs", "native/src/document.rs", "native/src/snapshot.rs", "native/src/facade.rs", "native/src/model/", "src/pyowl_core/_native.pyi", "src/pyowl_core/backends/__init__.py", "src/pyowl_core/backends/dispatch.py", "src/pyowl_core/backends/native.py", "src/pyowl_core/backends/native_handoff.py", "src/pyowl_core/document/__init__.py", "src/pyowl_core/document/document.py", "src/pyowl_core/document/snapshot.py", "src/pyowl_core/document/native_storage.py", "reports/workpackages/WP15.md", "tests/native/arena/", "tests/native/lazy_facade/", "tests/native/publication_handoff/"]
+
+[[package]]
+id = "WP16"
+brief = "WP16-native-streaming-ingestion.md"
+wave = 15
+depends = ["WP02", "WP03", "WP15"]
+owns = ["native/src/bindings/ingestion.rs", "native/src/source.rs", "native/src/session.rs", "native/src/parse/", "native/src/map_rdf.rs", "native/src/canonical.rs", "src/pyowl_core/api.py", "src/pyowl_core/backends/native_ingestion.py", "src/pyowl_core/document/imports.py", "src/pyowl_core/io/__init__.py", "src/pyowl_core/io/source.py", "src/pyowl_core/io/formats/", "reports/workpackages/WP16.md", "tests/native/formats/", "tests/differential/backends/", "tests/native/imports/"]
+
+[[package]]
+id = "WP17"
+brief = "WP17-native-views-wire-consumers.md"
+wave = 15
+depends = ["WP05", "WP06", "WP11", "WP15"]
+owns = ["schemas/encoded-view-v1.toml", "schemas/version-decision-v1.toml", "native/build.rs", "native/src/bindings/views.rs", "native/src/facade.rs", "native/src/index/", "native/src/wire/", "src/pyowl_core/__init__.py", "src/pyowl_core/versions.py", "src/pyowl_core/adapters/", "src/pyowl_core/backends/native_views.py", "src/pyowl_core/index/", "src/pyowl_core/wire/", "src/pyowl_core/document/snapshot.py", "src/pyowl_core/document/overlay.py", "src/pyowl_core/document/composite.py", "tools/schema/", "tools/audit/public-api-v0.txt", "reports/integration/consumer-compatibility.json", "reports/workpackages/WP17.md", "docs/api.md", "docs/compatibility.md", "docs/consumer-handoff.md", "docs/views-and-architecture.md", "tests/docs/", "tests/release/", "tests/native/encoded_views/", "tests/native/indexes/", "tests/native/wire/", "tests/integration/cache/", "tests/consumer_contract/native/"]
+
+[[package]]
+id = "WP18"
+brief = "WP18-native-performance-release.md"
+wave = 16
+depends = ["WP12", "WP16", "WP17"]
+owns = ["pyproject.toml", "setup.py", "MANIFEST.in", "NOTICE", "THIRD_PARTY_LICENSES/", "native/Cargo.toml", "native/Cargo.lock", "src/pyowl_core/__init__.py", "README.md", "CHANGELOG.md", "MIGRATION.md", "docs/performance.md", "docs/compatibility.md", "docs/release-checklist.md", "docs/releasing.md", "docs/spec-traceability.md", "tools/audit/", "tools/benchmark/", "tools/packaging/", "benchmarks/", "reports/integration/consumer-compatibility.json", "reports/performance/limitations.md", "reports/performance/native-redesign/", "reports/release/", "reports/workpackages/WP18.md", "tests/benchmark/native_redesign/", "tests/docs/", "tests/packaging/", "tests/release/", "tests/integration/native_consumers/", ".github/workflows/native-performance.yml", ".github/workflows/wheels.yml", ".github/workflows/release.yml"]

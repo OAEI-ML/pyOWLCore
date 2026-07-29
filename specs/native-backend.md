@@ -1,24 +1,36 @@
-# Rust acceleration and complete Python fallback
+# Retained Rust ontology engine and complete Python fallback
 
 ## 1. Architecture decision
 
 The optimized backend is a private Rust extension built with PyO3 (or a later
-reviewed equivalent). It accelerates coarse parser, canonicalization, indexing,
-and wire operations. It is not the public model and is never required for
-semantic completeness.
+reviewed equivalent). It owns complete coarse parser, structural mapping,
+canonicalization, retained ontology storage, indexing, and wire operations for
+every capability it advertises. It is not the public model and is never
+required for semantic completeness.
 
 ```text
-pyowl_core public API/model
-        |
-pyowl_core.backends.dispatch
-       / \
- complete Python   private pyowl_core._native
+                 pyowl_core public API/model
+                            |
+                pyowl_core.backends.dispatch
+                       /              \
+       complete Python storage   public Python facade
+                                         |
+                               private pyowl_core._native
+                                         |
+                           retained immutable Rust arena
 ```
 
-All public values/reports/errors are core Python contracts. No PyO3 class,
-Horned-OWL type, raw buffer owner, pointer, or Rust enum appears in a stable
-signature. Python and native values compare/interoperate without a format or
-semantic fork.
+All public values/reports/errors are core Python contracts. A public document
+or snapshot MAY privately own a native handle, but no PyO3 class, Horned-OWL
+type, raw pointer, or Rust enum appears in a stable signature. Scalar Python
+values are materialized lazily; consumers needing throughput use the documented
+core encoded structural view. Python and native values compare/interoperate
+without a format or semantic fork.
+
+Returning canonical bytes to Python and immediately decoding the complete
+ontology into Python objects is a transitional accelerator shape, not the
+completed native engine. The required retained-storage design and comparative
+goal are normative in `native-ontology-redesign.md`.
 
 ## 2. Candidate Rust workspace
 
@@ -31,8 +43,18 @@ native/
     limits.rs
     cancel.rs
     source.rs
+    builder.rs                 # bounded mutable construction/interning
+    document.rs                # retained immutable document storage
+    snapshot.rs                # closure/postings/shared arena ownership
+    facade.rs                  # lazy scalar and encoded-view access
+    bindings/
+      mod.rs                   # stable registration seam frozen by WP15
+      ingestion.rs             # WP16-owned parser/load bindings
+      views.rs                 # WP17-owned encoded/index/wire bindings
     parse/
       rdf.rs
+      rdfxml.rs
+      turtle.rs
       owlxml.rs
       functional.rs
     map_rdf.rs
@@ -47,6 +69,12 @@ Parsing/model code has no PyO3 dependency; `lib.rs` converts validated inputs
 and results. Rust dependencies are minimal, pinned in `Cargo.lock`, audited for
 license/advisories/MSRV, and compiled with reproducible feature sets.
 
+WP15 freezes `lib.rs`, the private stub, and shared dispatch around separate
+ingestion/view registration seams. WP16 and WP17 then implement their distinct
+binding modules in parallel. Either seam fails closed and advertises no feature
+while its implementation is absent; parallel work does not require both agents
+to edit one module registry or Python adapter.
+
 Horned-OWL may be used only after a recorded capability/conformance/performance
 spike and release-blocking legal review of its LGPL/transitive obligations.
 Acceptable outcomes, in order of preference, are (a) a clean-room
@@ -56,10 +84,10 @@ relinking, and user documentation. Project Apache metadata must not conceal
 linked third-party terms. `py-horned-owl` is not a runtime bridge dependency
 merely to expose its Python model.
 
-## 3. Coarse private API
+## 3. Coarse private API and retained handles
 
-The authoritative `src/pyowl_core/_native.pyi` exposes only private functions
-similar to:
+The authoritative `src/pyowl_core/_native.pyi` exposes only private handle
+classes and coarse functions similar to:
 
 ```python
 ABI_VERSION: int
@@ -67,21 +95,33 @@ MODEL_SCHEMA_VERSION: int
 WIRE_FORMAT_VERSION: tuple[int, int]
 FEATURES: tuple[str, ...]
 
+class _NativeDocumentHandle: ...
+class _NativeSnapshotHandle: ...
+class _NativeEncodedViewHandle: ...
+
 def self_test() -> None: ...
-def parse_document(source: ReadOnlyBuffer, config: bytes, cancel: object) -> bytes: ...
-def build_snapshot(documents: Sequence[ReadOnlyBuffer], config: bytes, cancel: object) -> bytes: ...
-def build_index(snapshot_wire: ReadOnlyBuffer, request: bytes, cancel: object) -> bytes: ...
+def parse_document(source: ReadOnlyBuffer, config: bytes, cancel: object) -> _NativeDocumentHandle: ...
+def build_snapshot(documents: Sequence[_NativeDocumentHandle], config: bytes, cancel: object) -> _NativeSnapshotHandle: ...
+def export_encoded_view(snapshot: _NativeSnapshotHandle, request: bytes) -> _NativeEncodedViewHandle: ...
+def build_index(snapshot: _NativeSnapshotHandle, request: bytes, cancel: object) -> _NativeEncodedViewHandle: ...
+def encode_snapshot(snapshot: _NativeSnapshotHandle, config: bytes, cancel: object) -> ReadOnlyBuffer: ...
 def validate_wire(snapshot_wire: ReadOnlyBuffer, config: bytes) -> bytes: ...
+def open_mapped_snapshot(owner: object, config: bytes) -> _NativeSnapshotHandle: ...
 ```
 
-Results are validated core wire/mini-wire buffers or bounded diagnostic values,
-not millions of nested per-node Python calls. Exact signatures are frozen in
-WP07 after benchmarks. Resolver callbacks stay in Python; native parsing never
-opens arbitrary imports/network paths.
+Private handles are opaque lifetime owners used only by core facade modules.
+They are not public values and cannot be imported by consumers. Encoded views
+return documented, read-only core buffers with a strong owner; other results
+are canonical wire/mini-wire buffers or bounded diagnostic values, not millions
+of nested per-node Python calls. Exact successor signatures are frozen in WP15
+after WP14 benchmarks/design review. Resolver callbacks stay in Python; native
+parsing never opens arbitrary imports/network paths.
 
-The extension takes owned data or retains a Python buffer only during the call
-under the correct buffer/GIL lifetime. It never keeps a borrowed pointer for a
-later session. Read-only mmap ownership stays with the core snapshot.
+The extension takes owned input data or retains a Python buffer only during the
+call under the correct buffer/GIL lifetime. A retained handle owns all arena
+memory itself or holds a strong reference to an immutable validated mapping
+owner. It never keeps an unowned borrowed pointer for a later session.
+Read-only mmap ownership stays with the core snapshot.
 
 ## 4. Dispatch and fallback
 
@@ -105,6 +145,10 @@ Capability selection occurs before an operation. Native cannot parse half a
 document and hand unsupported constructs to Python. Until a native feature has
 full parity, `AUTO` chooses Python for the whole operation and forced native
 raises a capability error.
+
+An advertised native load ends in a retained-native document or snapshot. A
+native parse followed by eager complete Python model reconstruction does not
+qualify for `retained-native-load-v1` and is excluded from comparative claims.
 
 The Python backend cannot import/call native or Horned-OWL. Installing the pure
 wheel therefore provides every model/format/import/index/wire feature, albeit
@@ -142,6 +186,18 @@ Preferred internal techniques, only where measured:
 - streaming SHA-256 and external/bounded sort for extreme workloads;
 - zero-copy mmap views for stable wire sections; and
 - delta posting adapters rather than base copies.
+
+The frozen native ontology uses dense typed tables and immutable shared
+ownership. Parsing/freezing creates only bounded Python facade/report objects;
+allocation instrumentation fails the retained-native gate if Python object
+growth is proportional to terms or axioms before scalar access. Scalar facade
+caches are bounded or weak so a complete scan does not permanently duplicate
+the native ontology as a Python heap.
+
+Native table/column layouts SHOULD align with `EncodedStructuralView` and wire
+sections where this eliminates copies, but the stable schemas remain defined
+independently of Rust memory layout. Consumers receive documented buffers, not
+arena pointers or private handles.
 
 All arithmetic uses checked operations. Allocations reserve against
 `max_memory_bytes` before growth. Process OOM/abort is not a resource strategy.
@@ -190,17 +246,19 @@ separate native contract passes.
 
 ## 9. Parity and rollout
 
-Native work lands feature-by-feature only after Python semantics/goldens freeze:
+The original feature-by-feature accelerator rollout remains valid historical
+evidence. The retained-native successor lands in these ordered stages:
 
-1. extension self-test/errors and empty wire;
-2. strings/IRIs/literals/canonical primitives;
-3. one format at a time plus structural mapping;
-4. anonymous canonicalization/fingerprints;
-5. document/snapshot/import assembly;
-6. wire encode/decode/mmap;
-7. built-in indexes;
-8. overlay/composite posting merges; and
-9. controlled parallel/performance work.
+1. pin comparator/phase baselines and freeze retained-handle/encoded-view
+   boundaries (WP14);
+2. implement builder, typed arena, immutable ownership, and lazy scalar facade
+   over generated/wire inputs (WP15);
+3. implement one complete format at a time plus structural/RDF mapping and
+   closure assembly, starting with RDF/XML (WP16);
+4. publish zero-copy encoded views, common indexes, canonical wire/mmap, and
+   overlay/composite posting segments (WP17); and
+5. integrate consumers, profile/remove remaining copies, exercise controlled
+   parallelism, build wheels, and pass comparative gates (WP18).
 
 For each stage, forced native runs identical golden, generative, hostile, and
 consumer suites. `AUTO` advertises only complete capability sets. There is no
@@ -219,5 +277,12 @@ consumer suites. `AUTO` advertises only complete capability sets. There is no
   dynamic library dependency scan;
 - Java archive/class/runtime scan and SBOM/license/source obligations;
 - compiler-free pure wheel full-suite install; and
-- performance gates measured without weakening deterministic/resource modes.
-
+- allocation/object counters proving native parse/freeze does not eagerly
+  materialize an ontology-sized Python graph;
+- encoded-view consumer handoff with no parser/wire round trip or per-axiom
+  Python callback;
+- query-ready native loading at least equivalent to the pinned Horned-OWL
+  comparator under `performance.md`, while faster-than-Horned and faster-than-
+  OWLAPI remain the optimization target; and
+- all performance gates measured without weakening deterministic/resource
+  modes.

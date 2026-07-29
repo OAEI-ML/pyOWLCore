@@ -233,12 +233,39 @@ class OntologySnapshot:
     @property
     def import_manifest(self) -> ImportManifest: ...
     # All OntologyView members above.
+
+class EncodedStructuralView:
+    """Versioned read-only bulk structural columns owned by an OntologyView."""
+    @property
+    def schema_name(self) -> str: ...
+    @property
+    def schema_version(self) -> int: ...
+    @property
+    def model_schema(self) -> int: ...
+    @property
+    def owner(self) -> OntologyView: ...
+    @property
+    def buffers(self) -> Mapping[str, memoryview]: ...
+    @property
+    def descriptor(self) -> bytes: ...
+    @property
+    def structural_fingerprint(self) -> Fingerprint: ...
 ```
+
+`view.view(EncodedStructuralView, schema_version=1, scope=...)` is the stable
+bulk acquisition shape frozen by WP17. Every returned memoryview is read-only
+and remains valid while the encoded view/owner is alive. Exact buffer names,
+rows, tags, and segment rules live in the generated schema ledger required by
+`indexes-views.md`; they do not expose private native layout.
 
 Built-in direct, overlay, composite, decoded, and mapped views advertise
 `ontology-identity-index` and support `view(OntologyIdentityIndex)` without
 layout introspection. Successfully decoded and mmap-validated wire sources also
 advertise `wire-v1` and `wire-verified`; direct parsed/loaded snapshots do not.
+
+“Materialized” in `OntologySnapshot` means that the resolved closure/edit view
+has been frozen into one concrete semantic snapshot. It does not require eager
+creation of Python objects for every native/mapped term or axiom.
 
 `iter_axioms` canonical order is guaranteed only when `order="canonical"` is
 requested by the concrete overload; default iteration is stable for a snapshot
@@ -481,6 +508,8 @@ strict type tests on all public examples. Public union aliases are usable on
 requires it.
 
 Only documented protocols are structural extension points. Private attributes,
-integer term IDs, native buffers, and lazy-cache internals are never consumed.
+private arena IDs/buffers, and lazy-cache internals are never consumed. Dense
+IDs and read-only buffers explicitly published by `EncodedStructuralView` are
+the sole bulk exception and are valid only under that view's owner/schema rules.
 Third-party parser/writer plugins are explicit by name; merely installing one
 must not execute it or alter `auto` behavior.

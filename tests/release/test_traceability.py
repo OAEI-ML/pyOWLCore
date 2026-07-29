@@ -16,6 +16,7 @@ def test_every_normative_spec_has_an_explicit_traceability_entry() -> None:
         "indexes-views.md",
         "model.md",
         "native-backend.md",
+        "native-ontology-redesign.md",
         "packaging.md",
         "parsing-imports.md",
         "performance.md",
