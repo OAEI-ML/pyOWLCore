@@ -157,7 +157,45 @@ def main() -> None:
                 resolver=cast(Any, resolver),
             )
 
-    observed: dict[str, dict[str, object]] = {}
+    def forced_native_document(
+        source: bytes,
+        format_value: DocumentFormat,
+        *,
+        load_options: LoadOptions | None = None,
+        document_iri: object | None = None,
+    ) -> Any:
+        unexpected = AssertionError(
+            f"{format_value.value} forced-native document matrix crossed a Python parser"
+        )
+        with (
+            patch(
+                "pyowl_core.backends.python.parser.parse_functional",
+                side_effect=unexpected,
+            ),
+            patch(
+                "pyowl_core.backends.python.parser.parse_rdfxml",
+                side_effect=unexpected,
+            ),
+            patch(
+                "pyowl_core.backends.python.parser.parse_turtle",
+                side_effect=unexpected,
+            ),
+            patch(
+                "pyowl_core.backends.python.parser.parse_owlxml",
+                side_effect=unexpected,
+            ),
+        ):
+            return parse_document(
+                source,
+                document_iri=cast(Any, document_iri),
+                options=(
+                    options(format_value, BackendPreference.NATIVE)
+                    if load_options is None
+                    else load_options
+                ),
+            )
+
+    observed: dict[str, object] = {}
     malformed_sources = {
         DocumentFormat.FUNCTIONAL: b"Ontology(Declaration(Class(<urn:broken>))",
         DocumentFormat.RDF_XML: (
@@ -197,6 +235,12 @@ def main() -> None:
             syntax_error_code = error.code
         else:
             raise AssertionError(f"{format_value.value} malformed source did not fail")
+        try:
+            forced_native_document(malformed_sources[format_value], format_value)
+        except OntologySyntaxError as error:
+            document_syntax_error_code = error.code
+        else:
+            raise AssertionError(f"{format_value.value} malformed document source did not fail")
 
         limited_options = replace(
             options(format_value, BackendPreference.NATIVE),
@@ -212,6 +256,16 @@ def main() -> None:
             limit_error_code = error.code
         else:
             raise AssertionError(f"{format_value.value} axiom limit did not fail")
+        try:
+            forced_native_document(
+                source,
+                format_value,
+                load_options=limited_options,
+            )
+        except ResourceLimitError as error:
+            document_limit_error_code = error.code
+        else:
+            raise AssertionError(f"{format_value.value} document axiom limit did not fail")
 
         cancellation = CancellationSource()
         cancellation.cancel(f"{format_value.value} matrix cancellation")
@@ -225,7 +279,6 @@ def main() -> None:
             cancellation_error_code = error.code
         else:
             raise AssertionError(f"{format_value.value} cancellation did not fail")
-
         selected = forced_native_snapshot(source, format_value)
         right_selected = forced_native_snapshot(right_source, format_value)
 
@@ -424,6 +477,8 @@ def main() -> None:
             "decoded_root_parity": decoded_roots == expected_roots,
             "direct_owner_identity": direct.owner is selected,
             "direct_root_parity": direct_roots == expected_roots,
+            "document_limit_error_code": document_limit_error_code,
+            "document_syntax_error_code": document_syntax_error_code,
             "eager_structural_objects": ingestion.eager_structural_objects_materialized,
             "fingerprint_parity": fingerprint_parity,
             "hostile_descriptor_code": hostile_descriptor_code,
@@ -466,6 +521,326 @@ def main() -> None:
         gc.collect()
         selected.close()
         right_selected.close()
+
+    option_root_document = parse_document(
+        b"Ontology(<urn:format-option-matrix:root> "
+        b"Import(<urn:format-option-matrix:child>) "
+        b"Declaration(Class(<urn:format-option-matrix:Root>)))",
+        options=options(DocumentFormat.FUNCTIONAL, BackendPreference.PYTHON),
+    )
+    option_child_document = parse_document(
+        b"Ontology(<urn:format-option-matrix:child> "
+        b"Declaration(Class(<urn:format-option-matrix:Child>)) "
+        b"SubClassOf(<urn:format-option-matrix:Child> "
+        b"<urn:format-option-matrix:Root>))",
+        options=options(DocumentFormat.FUNCTIONAL, BackendPreference.PYTHON),
+    )
+    option_pairs = ((False, False), (True, False), (False, True), (True, True))
+    import_scenarios = (
+        (ImportPolicy.IGNORE, False),
+        (ImportPolicy.RECORD_UNRESOLVED, False),
+        (ImportPolicy.RESOLVE_LOCAL, True),
+        (ImportPolicy.RESOLVE_STRICT, True),
+    )
+
+    def option_resolver(
+        child_source: bytes,
+        format_value: DocumentFormat,
+    ) -> MappingResolver:
+        return MappingResolver(
+            {
+                "urn:format-option-matrix:child": ResolvedDocument(
+                    child_source,
+                    IRI(f"urn:format-option-matrix:child-source:{format_value.value}"),
+                    format=format_value,
+                )
+            }
+        )
+
+    def option_load_options(
+        format_value: DocumentFormat,
+        import_policy: ImportPolicy,
+        backend: BackendPreference,
+        collect_provenance: bool,
+        preserve_source_map: bool,
+    ) -> LoadOptions:
+        return LoadOptions(
+            format=format_value,
+            imports=import_policy,
+            backend=backend,
+            collect_provenance=collect_provenance,
+            preserve_source_map=preserve_source_map,
+        )
+
+    option_matrix: dict[str, dict[str, object]] = {}
+    for format_value in formats:
+        root_source = render_document(option_root_document, format=format_value)
+        child_source = render_document(option_child_document, format=format_value)
+        source_iri = IRI(f"urn:format-option-matrix:source:{format_value.value}")
+
+        cases = 0
+        document_cases = 0
+        document_zero_copy_cases = 0
+        native_documents = 0
+        native_snapshots = 0
+        resolved_cases = 0
+        wire_parity_cases = 0
+        zero_copy_cases = 0
+        for import_policy, resolve_import in import_scenarios:
+            for collect_provenance, preserve_source_map in option_pairs:
+                reference_document = parse_document(
+                    root_source,
+                    document_iri=source_iri,
+                    options=option_load_options(
+                        format_value,
+                        import_policy,
+                        BackendPreference.PYTHON,
+                        collect_provenance,
+                        preserve_source_map,
+                    ),
+                )
+                selected_document = forced_native_document(
+                    root_source,
+                    format_value,
+                    load_options=option_load_options(
+                        format_value,
+                        import_policy,
+                        BackendPreference.NATIVE,
+                        collect_provenance,
+                        preserve_source_map,
+                    ),
+                    document_iri=source_iri,
+                )
+                try:
+                    document_cases += 1
+                    if type(selected_document).__name__ != "_NativeOntologyDocument":
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "option case did not publish a native document"
+                        )
+                    native_documents += 1
+                    document_owner = object.__getattribute__(
+                        selected_document._native_document_state.owner.handle,
+                        "_owner_v2",
+                    )
+                    document_counters = document_owner._publication_counters_v2()
+                    if document_counters.parser_bytes != len(root_source):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "document did not account for the exact parsed bytes"
+                        )
+                    if (document_counters.retained_origin_rows > 0) is not collect_provenance:
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "document provenance retention did not follow the option"
+                        )
+                    if (document_counters.retained_source_map_rows > 0) is not preserve_source_map:
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "document source-map retention did not follow the option"
+                        )
+                    if (
+                        document_counters.publication_structural_rows_copied != 0
+                        or document_counters.publication_structural_bytes_copied != 0
+                    ):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "document performed forbidden publication copies"
+                        )
+                    document_zero_copy_cases += 1
+                    if selected_document != reference_document:
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} document structure differs"
+                        )
+                    if (
+                        selected_document.document_fingerprint
+                        != reference_document.document_fingerprint
+                        or selected_document.direct_imports != reference_document.direct_imports
+                        or selected_document.source_map != reference_document.source_map
+                        or selected_document.origin_index != reference_document.origin_index
+                        or selected_document.rdf_mapping_report
+                        != reference_document.rdf_mapping_report
+                        or selected_document.diagnostics != reference_document.diagnostics
+                    ):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} document metadata differs"
+                        )
+                    if selected_document.direct_imports != (IRI("urn:format-option-matrix:child"),):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "parse_document did not preserve its direct import"
+                        )
+                    if (
+                        selected_document.provenance.backend != "native"
+                        or selected_document.provenance.parser != "pyowl_core.backends.native"
+                    ):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "document did not retain native provenance"
+                        )
+                finally:
+                    selected_document.close()
+
+                reference = load_snapshot(
+                    root_source,
+                    document_iri=source_iri,
+                    options=option_load_options(
+                        format_value,
+                        import_policy,
+                        BackendPreference.PYTHON,
+                        collect_provenance,
+                        preserve_source_map,
+                    ),
+                    resolver=(
+                        option_resolver(child_source, format_value) if resolve_import else None
+                    ),
+                )
+                selected = forced_native_snapshot(
+                    root_source,
+                    format_value,
+                    load_options=option_load_options(
+                        format_value,
+                        import_policy,
+                        BackendPreference.NATIVE,
+                        collect_provenance,
+                        preserve_source_map,
+                    ),
+                    document_iri=source_iri,
+                    resolver=(
+                        option_resolver(child_source, format_value) if resolve_import else None
+                    ),
+                )
+                try:
+                    cases += 1
+                    if type(selected).__name__ != "_NativeOntologySnapshot":
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "option case did not publish a native snapshot"
+                        )
+                    native_snapshots += 1
+                    owner = object.__getattribute__(
+                        selected._native_snapshot_state.owner.handle,
+                        "_owner_v2",
+                    )
+                    counters = owner._publication_counters_v2()
+                    ingestion = selected._native_ingestion_counters_v2()
+                    expected_document_count = 2 if resolve_import else 1
+                    expected_parser_bytes = len(root_source) + (
+                        len(child_source) if resolve_import else 0
+                    )
+                    if len(selected.documents) != expected_document_count:
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "published the wrong document count"
+                        )
+                    if not all(
+                        type(item).__name__ == "_NativeOntologyDocument"
+                        for item in selected.documents
+                    ):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "published a non-native closure member"
+                        )
+                    if counters.parser_bytes != expected_parser_bytes:
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "did not account for the exact parsed bytes"
+                        )
+                    if (counters.retained_origin_rows > 0) is not collect_provenance:
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "provenance retention did not follow the option"
+                        )
+                    if (counters.retained_source_map_rows > 0) is not preserve_source_map:
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "source-map retention did not follow the option"
+                        )
+                    if (
+                        counters.publication_structural_rows_copied != 0
+                        or counters.publication_structural_bytes_copied != 0
+                        or ingestion.parser_result_bytes_scanned != 0
+                        or ingestion.eager_structural_objects_materialized != 0
+                    ):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "performed forbidden publication work"
+                        )
+                    zero_copy_cases += 1
+
+                    if selected.capabilities.backend != "native":
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "did not report the forced native backend"
+                        )
+                    if selected.import_manifest != reference.import_manifest:
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} import manifests differ"
+                        )
+                    if selected.diagnostics != reference.diagnostics:
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "snapshot diagnostics differ"
+                        )
+                    if tuple(item.diagnostics for item in selected.documents) != tuple(
+                        item.diagnostics for item in reference.documents
+                    ):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} "
+                            "document diagnostics differ"
+                        )
+                    if tuple(item.source_map for item in selected.documents) != tuple(
+                        item.source_map for item in reference.documents
+                    ):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} source maps differ"
+                        )
+                    if tuple(item.rdf_mapping_report for item in selected.documents) != tuple(
+                        item.rdf_mapping_report for item in reference.documents
+                    ):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} RDF mapping reports differ"
+                        )
+                    if selected.origin_index != reference.origin_index:
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} origin indexes differ"
+                        )
+                    if (
+                        selected.structural_fingerprint != reference.structural_fingerprint
+                        or selected.logical_fingerprint != reference.logical_fingerprint
+                        or selected.signature_fingerprint != reference.signature_fingerprint
+                    ):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} fingerprints differ"
+                        )
+                    if encode_snapshot(selected) != encode_snapshot(reference):
+                        raise AssertionError(
+                            f"{format_value.value} {import_policy.value} wire bytes differ"
+                        )
+                    wire_parity_cases += 1
+                    resolved_cases += int(resolve_import)
+                finally:
+                    selected.close()
+
+        option_matrix[format_value.value] = {
+            "cases": cases,
+            "document_cases": document_cases,
+            "document_zero_copy_cases": document_zero_copy_cases,
+            "import_policies": [policy.value for policy, _ in import_scenarios],
+            "native_documents": native_documents,
+            "native_snapshots": native_snapshots,
+            "option_pairs": [
+                {
+                    "collect_provenance": collect_provenance,
+                    "preserve_source_map": preserve_source_map,
+                }
+                for collect_provenance, preserve_source_map in option_pairs
+            ],
+            "resolved_cases": resolved_cases,
+            "wire_parity_cases": wire_parity_cases,
+            "zero_copy_cases": zero_copy_cases,
+        }
+    observed["option_matrix"] = option_matrix
 
     observed["capabilities"] = {
         "ingestion_features": list(extension.INGESTION_FEATURES),

@@ -354,13 +354,13 @@ class PythonParser:
             DocumentFormat.TURTLE,
             DocumentFormat.OWL_XML,
         }
-        publish_structural_document = (
+        publish_retained_document = (
             publish_native_document
-            and is_retained_structural_format
+            and (is_retained_structural_format or detection.format is DocumentFormat.FUNCTIONAL)
             and selected_backend == "native"
         )
         materialize_retained_structural_closure = (
-            not publish_structural_document
+            not publish_retained_document
             and is_retained_structural_format
             and selected_backend == "native"
             and (
@@ -392,7 +392,7 @@ class PythonParser:
         materialize_structural_closure = (
             materialize_retained_structural_closure or materialize_functional_closure
         )
-        retain_payload_storage = retain_native_storage or publish_structural_document
+        retain_payload_storage = retain_native_storage or publish_retained_document
         parsed_result = _parse_payload(
             payload.data,
             detection.format,
@@ -408,7 +408,7 @@ class PythonParser:
             record_unresolved=(selected_options.imports is ImportPolicy.RECORD_UNRESOLVED),
             require_empty_imports=(
                 not is_retained_structural_format
-                and not publish_structural_document
+                and not publish_retained_document
                 and not materialize_functional_closure
                 and (
                     selected_options.imports
@@ -442,7 +442,7 @@ class PythonParser:
                 )
             publication_options = (
                 replace(selected_options, imports=ImportPolicy.IGNORE)
-                if publish_structural_document or materialize_structural_closure
+                if publish_retained_document or materialize_structural_closure
                 else selected_options
             )
             if detection.format is DocumentFormat.FUNCTIONAL:
@@ -509,7 +509,7 @@ class PythonParser:
                 )
             else:
                 raise AssertionError("retained native result has an unsupported document format")
-            if publish_structural_document:
+            if publish_retained_document:
                 return _ParsedDocumentResult(snapshot.root)
             if materialize_structural_closure:
                 if not materialize_native_document and not snapshot.root.direct_imports:
@@ -714,11 +714,7 @@ class PythonParser:
         return _ParsedDocumentResult(
             document,
             parsed_result.native_storage,
-            (
-                parsed_result.phase_timings
-                if parsed_result.native_storage is not None
-                else ()
-            ),
+            (parsed_result.phase_timings if parsed_result.native_storage is not None else ()),
         )
 
 

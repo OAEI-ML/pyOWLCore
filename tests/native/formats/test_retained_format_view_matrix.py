@@ -40,6 +40,7 @@ def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -
         "capabilities",
         "functional",
         "mixed_closure",
+        "option_matrix",
         "owlxml",
         "rdfxml",
         "turtle",
@@ -55,6 +56,45 @@ def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -
         "probe_contains_ingestion_partition": True,
         "probe_contains_view_partition": True,
         "view_features": ["pyowl-core/structural-columns"],
+    }
+    option_matrix = observed.pop("option_matrix")
+    expected_option_summary = {
+        "cases": 16,
+        "document_cases": 16,
+        "document_zero_copy_cases": 16,
+        "import_policies": [
+            "ignore",
+            "record_unresolved",
+            "resolve_local",
+            "resolve_strict",
+        ],
+        "native_documents": 16,
+        "native_snapshots": 16,
+        "option_pairs": [
+            {
+                "collect_provenance": False,
+                "preserve_source_map": False,
+            },
+            {
+                "collect_provenance": True,
+                "preserve_source_map": False,
+            },
+            {
+                "collect_provenance": False,
+                "preserve_source_map": True,
+            },
+            {
+                "collect_provenance": True,
+                "preserve_source_map": True,
+            },
+        ],
+        "resolved_cases": 8,
+        "wire_parity_cases": 16,
+        "zero_copy_cases": 16,
+    }
+    assert option_matrix == {
+        format_name: expected_option_summary
+        for format_name in ("functional", "owlxml", "rdfxml", "turtle")
     }
     mixed_closure = observed.pop("mixed_closure")
     assert mixed_closure == {
@@ -98,6 +138,8 @@ def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -
             "decoded_root_parity": True,
             "direct_owner_identity": True,
             "direct_root_parity": True,
+            "document_limit_error_code": "NATIVE_WIRE_LIMIT",
+            "document_syntax_error_code": syntax_codes[format_name],
             "eager_structural_objects": 0,
             "fingerprint_parity": True,
             "hostile_descriptor_code": "ENCODED_VIEW_DESCRIPTOR",
