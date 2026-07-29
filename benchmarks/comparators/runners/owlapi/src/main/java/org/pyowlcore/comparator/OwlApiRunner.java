@@ -24,6 +24,7 @@ import java.util.function.Supplier;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -61,7 +62,7 @@ public final class OwlApiRunner {
             "747b1a5269fee2992487dcde946f16dfbc14aa458d50854994a0485cf263ce07";
     private static final String ALLOCATOR = "HotSpot G1GC";
     private static final long THREAD_CEILING = 1;
-    private static final String RUNNER_REVISION = "pyowl-core-owlapi-common-runner-v5";
+    private static final String RUNNER_REVISION = "pyowl-core-owlapi-common-runner-v6";
     private static final List<String> FEATURES =
             List.of("isolated-java", "common-contract-v1");
 
@@ -116,6 +117,10 @@ public final class OwlApiRunner {
         ObjectMapper mapper = new ObjectMapper(
                 JsonFactory.builder()
                         .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+                        .streamReadConstraints(
+                                StreamReadConstraints.builder()
+                                        .maxStringLength(MAX_REQUEST_FRAME_BYTES)
+                                        .build())
                         .build())
                 .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
                 .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
@@ -622,13 +627,13 @@ public final class OwlApiRunner {
 
     private static void freshMain() throws IOException {
         long pid = ProcessHandle.current().pid();
-        JsonNode request = JSON.readTree(readFrame(System.in, MAX_REQUEST_FRAME_BYTES));
+        JsonNode request = decodeJson(readFrame(System.in, MAX_REQUEST_FRAME_BYTES));
         validateFreshRequest(request);
         Map<String, Object> result =
                 runRequest(decodeAdapterRequest(request.get("request")), "fresh");
         String ontologyInstanceId = freshOntologyInstanceId(pid);
         writeFrame(freshCompletedFrame(0, pid, ontologyInstanceId));
-        JsonNode publish = JSON.readTree(readFrame(System.in, MAX_CONTROL_FRAME_BYTES));
+        JsonNode publish = decodeJson(readFrame(System.in, MAX_CONTROL_FRAME_BYTES));
         validateFreshPublish(publish, pid, ontologyInstanceId);
         requireFreshEndOfInput(System.in);
         writeFrame(freshResponseFrame(0, ontologyInstanceId, result));
@@ -655,7 +660,7 @@ public final class OwlApiRunner {
         long instanceCounter = 0;
         while (true) {
             byte[] payload = readFrame(System.in, MAX_REQUEST_FRAME_BYTES);
-            JsonNode node = JSON.readTree(payload);
+            JsonNode node = decodeJson(payload);
             if (SHUTDOWN_SCHEMA.equals(text(node, "schema"))) {
                 validatePersistentShutdown(node, expectedSequence);
                 writeFrame(object(
@@ -674,14 +679,14 @@ public final class OwlApiRunner {
                     "protocol", PROTOCOL_SCHEMA,
                     "schema", PREPARED_SCHEMA,
                     "sequence", sequence));
-            JsonNode execute = JSON.readTree(readFrame(System.in, MAX_CONTROL_FRAME_BYTES));
+            JsonNode execute = decodeJson(readFrame(System.in, MAX_CONTROL_FRAME_BYTES));
             validatePersistentExecute(execute, sequence, pid);
             Map<String, Object> result = executePrepared(prepared);
             String instance = pid + ":" + instanceCounter + ":" + sequence;
             String ontologyInstanceId = Canonical.hex(Canonical.sha256(
                     instance.getBytes(StandardCharsets.UTF_8)));
             writeFrame(persistentCompletedFrame(sequence, pid, ontologyInstanceId));
-            JsonNode publish = JSON.readTree(readFrame(System.in, MAX_CONTROL_FRAME_BYTES));
+            JsonNode publish = decodeJson(readFrame(System.in, MAX_CONTROL_FRAME_BYTES));
             validatePersistentPublish(publish, sequence, pid, ontologyInstanceId);
             writeFrame(object(
                     "ontology_instance_id", ontologyInstanceId,
@@ -696,6 +701,10 @@ public final class OwlApiRunner {
 
     static AdapterRequest decodeAdapterRequest(JsonNode node) throws IOException {
         return JSON.treeToValue(node, AdapterRequest.class);
+    }
+
+    static JsonNode decodeJson(byte[] payload) throws IOException {
+        return JSON.readTree(payload);
     }
 
     static String freshOntologyInstanceId(long pid) {

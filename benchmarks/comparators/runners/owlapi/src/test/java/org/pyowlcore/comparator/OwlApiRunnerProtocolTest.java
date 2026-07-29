@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -124,6 +125,18 @@ final class OwlApiRunnerProtocolTest {
         assertEquals("pyowl-core/comparator-adapter-request/v2", request.schema);
         assertEquals(Long.valueOf(1), Long.valueOf(request.expectedThreadCeiling));
         assertEquals(List.of("isolated-java", "common-contract-v1"), request.expectedFeatures);
+    }
+
+    @Test
+    void decodesRepresentativeCorpusStringAboveJacksonDefault() {
+        String encodedSource = "a".repeat(20_100_000);
+        byte[] payload = ("{\"source_b64\":\"" + encodedSource + "\"}")
+                .getBytes(StandardCharsets.UTF_8);
+
+        JsonNode decoded =
+                assertDoesNotThrow(() -> OwlApiRunner.decodeJson(payload));
+
+        assertEquals(encodedSource.length(), decoded.get("source_b64").textValue().length());
     }
 
     @Test
@@ -544,7 +557,7 @@ final class OwlApiRunnerProtocolTest {
         request.put("expected_thread_ceiling", 1);
         request.put(
                 "expected_runner_revision",
-                "pyowl-core-owlapi-common-runner-v5");
+                "pyowl-core-owlapi-common-runner-v6");
         request.put("expected_runner_sha256", "d".repeat(64));
         return request;
     }

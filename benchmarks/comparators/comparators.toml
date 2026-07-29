@@ -148,8 +148,8 @@ allocator = "HotSpot G1GC"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_OWLAPI_RUNNER"
 runner_pin_state = "complete"
-runner_revision = "pyowl-core-owlapi-common-runner-v5"
-runner_sha256 = "f5ec6238b3d1ee75e8f46228c48ba0fa3e0661138a03326174c1a7a70c9856a6"
+runner_revision = "pyowl-core-owlapi-common-runner-v6"
+runner_sha256 = "c372c49bd4d8f992700871290a5043eefc9621aef8bb05fcd5dae4ed6805f6f5"
 gating = true
 required = true
 

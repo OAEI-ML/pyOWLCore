@@ -4,8 +4,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.NavigableSet;
 import java.util.Set;
 import java.util.TreeSet;
@@ -132,8 +134,10 @@ final class ModelMapper {
         List<OWLAxiom> ontologyAxioms =
                 ontology.axioms().collect(Collectors.toCollection(ArrayList::new));
         if (isRdfGraph(format)) {
-            ontologyAxioms = coalesceRdfEquivalenceAxioms(
-                    ontologyAxioms, ontology.getOWLOntologyManager().getOWLDataFactory());
+            ontologyAxioms = coalesceRdfAxiomAnnotations(
+                    coalesceRdfEquivalenceAxioms(
+                            ontologyAxioms,
+                            ontology.getOWLOntologyManager().getOWLDataFactory()));
         }
         ontologyAxioms.forEach(axiom -> {
             byte[] mapped = axiom(axiom, true);
@@ -222,6 +226,21 @@ final class ModelMapper {
                         component.members, component.annotations)));
         individuals.forEach(component -> output.add(dataFactory.getOWLSameIndividualAxiom(
                 component.members, component.annotations)));
+        return output;
+    }
+
+    private static List<OWLAxiom> coalesceRdfAxiomAnnotations(List<OWLAxiom> axioms) {
+        Map<OWLAxiom, Set<OWLAnnotation>> annotationsByAxiom = new LinkedHashMap<>();
+        for (OWLAxiom value : axioms) {
+            OWLAxiom unannotated = value.getAxiomWithoutAnnotations();
+            Set<OWLAnnotation> annotations =
+                    annotationsByAxiom.computeIfAbsent(
+                            unannotated, ignored -> new LinkedHashSet<>());
+            value.annotations().forEach(annotations::add);
+        }
+        List<OWLAxiom> output = new ArrayList<>(annotationsByAxiom.size());
+        annotationsByAxiom.forEach(
+                (axiom, annotations) -> output.add(axiom.getAnnotatedAxiom(annotations)));
         return output;
     }
 

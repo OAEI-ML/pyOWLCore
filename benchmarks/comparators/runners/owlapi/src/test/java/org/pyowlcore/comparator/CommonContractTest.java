@@ -16,10 +16,13 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.semanticweb.owlapi.apibinding.OWLManager;
 import org.semanticweb.owlapi.formats.FunctionalSyntaxDocumentFormat;
+import org.semanticweb.owlapi.formats.RDFXMLDocumentFormat;
 import org.semanticweb.owlapi.formats.TurtleDocumentFormat;
 import org.semanticweb.owlapi.io.StreamDocumentSource;
 import org.semanticweb.owlapi.model.IRI;
 import org.semanticweb.owlapi.model.OWLAnnotation;
+import org.semanticweb.owlapi.model.OWLAnnotationAssertionAxiom;
+import org.semanticweb.owlapi.model.OWLAnnotationProperty;
 import org.semanticweb.owlapi.model.OWLClass;
 import org.semanticweb.owlapi.model.OWLDataFactory;
 import org.semanticweb.owlapi.model.OWLDataProperty;
@@ -186,6 +189,70 @@ final class CommonContractTest {
                     expectedMapped.axioms.get(index).value,
                     actualMapped.axioms.get(index).value);
             assertArrayEquals(actualMapped.axioms.get(index).value, actualRoots.get(index));
+        }
+    }
+
+    @Test
+    void duplicateRdfAxiomReificationsUnionAllAnnotations() throws Exception {
+        byte[] source = ("<?xml version=\"1.0\"?>\n"
+                + "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" "
+                + "xmlns:owl=\"http://www.w3.org/2002/07/owl#\" xmlns:p=\"urn:p#\">\n"
+                + "<owl:Ontology rdf:about=\"urn:duplicate\"/>\n"
+                + "<owl:AnnotationProperty rdf:about=\"urn:p#value\"/>\n"
+                + "<owl:AnnotationProperty rdf:about=\"urn:p#qualifier\"/>\n"
+                + "<rdf:Description rdf:about=\"urn:assertion-subject\">"
+                + "<p:value>assertion-value</p:value></rdf:Description>\n"
+                + "<owl:Axiom rdf:nodeID=\"first\">"
+                + "<owl:annotatedSource rdf:resource=\"urn:assertion-subject\"/>"
+                + "<owl:annotatedProperty rdf:resource=\"urn:p#value\"/>"
+                + "<owl:annotatedTarget>assertion-value</owl:annotatedTarget>"
+                + "<p:qualifier>first</p:qualifier></owl:Axiom>\n"
+                + "<owl:Axiom rdf:nodeID=\"second\">"
+                + "<owl:annotatedSource rdf:resource=\"urn:assertion-subject\"/>"
+                + "<owl:annotatedProperty rdf:resource=\"urn:p#value\"/>"
+                + "<owl:annotatedTarget>assertion-value</owl:annotatedTarget>"
+                + "<p:qualifier>second</p:qualifier></owl:Axiom>\n"
+                + "</rdf:RDF>\n")
+                .getBytes(StandardCharsets.UTF_8);
+        OWLOntologyManager manager = OWLManager.createOWLOntologyManager();
+        OWLDataFactory dataFactory = manager.getOWLDataFactory();
+        OWLAnnotationProperty property =
+                dataFactory.getOWLAnnotationProperty(IRI.create("urn:p#value"));
+        OWLAnnotationProperty qualifier =
+                dataFactory.getOWLAnnotationProperty(IRI.create("urn:p#qualifier"));
+        OWLAnnotation first = dataFactory.getOWLAnnotation(
+                qualifier, dataFactory.getOWLLiteral("first"));
+        OWLAnnotation second = dataFactory.getOWLAnnotation(
+                qualifier, dataFactory.getOWLLiteral("second"));
+        IRI subject = IRI.create("urn:assertion-subject");
+        OWLAnnotationAssertionAxiom expectedAssertion =
+                dataFactory.getOWLAnnotationAssertionAxiom(
+                        property,
+                        subject,
+                        dataFactory.getOWLLiteral("assertion-value"),
+                        Set.of(first, second));
+
+        OWLOntology graph = manager.loadOntologyFromOntologyDocument(
+                new StreamDocumentSource(
+                        new ByteArrayInputStream(source),
+                        IRI.create("urn:duplicate-document"),
+                        new RDFXMLDocumentFormat(),
+                        null));
+        OWLOntology expected = manager.createOntology(IRI.create("urn:duplicate-expected"));
+        manager.addAxiom(expected, dataFactory.getOWLDeclarationAxiom(property));
+        manager.addAxiom(expected, dataFactory.getOWLDeclarationAxiom(qualifier));
+        manager.addAxiom(expected, expectedAssertion);
+
+        ModelMapper.MappedDocument actualMapped = new ModelMapper().map(graph, "rdfxml");
+        ModelMapper.MappedDocument expectedMapped =
+                new ModelMapper().map(expected, "functional");
+
+        assertEquals(3, actualMapped.axioms.size());
+        assertEquals(3, actualMapped.provenanceRoots.size());
+        for (int index = 0; index < expectedMapped.axioms.size(); index++) {
+            assertArrayEquals(
+                    expectedMapped.axioms.get(index).value,
+                    actualMapped.axioms.get(index).value);
         }
     }
 
