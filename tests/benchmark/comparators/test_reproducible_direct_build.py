@@ -4,18 +4,23 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import tomllib
 
 from tools.benchmark.comparators import build_direct_runner as build_module
 from tools.benchmark.comparators.build_direct_runner import (
+    _BUILD_CONTRACT,
     DirectRunnerBuildError,
     build_direct_runner,
     direct_runner_artifact,
     reproducible_environment,
 )
 from tools.benchmark.comparators.reproducible_rustc import (
+    _METADATA_DOMAIN,
     _local_metadata,
     _replace_cargo_metadata,
 )
+
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def _root_with_wrapper(tmp_path: Path) -> Path:
@@ -25,6 +30,16 @@ def _root_with_wrapper(tmp_path: Path) -> Path:
     wrapper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     wrapper.chmod(0o755)
     return root
+
+
+def test_direct_runner_matches_native_release_safety_profile() -> None:
+    direct = tomllib.loads(
+        (ROOT / "benchmarks/comparators/runners/direct/Cargo.toml").read_text(encoding="utf-8")
+    )
+    native = tomllib.loads((ROOT / "native/Cargo.toml").read_text(encoding="utf-8"))
+
+    for field in ("panic", "overflow-checks", "codegen-units", "lto", "strip"):
+        assert direct["profile"]["release"][field] == native["profile"]["release"][field]
 
 
 def test_direct_build_environment_remaps_every_host_path_and_darwin_uuid(
@@ -43,6 +58,7 @@ def test_direct_build_environment_remaps_every_host_path_and_darwin_uuid(
 
     flags = selected["CARGO_ENCODED_RUSTFLAGS"].split("\x1f")
     assert flags == [
+        "--cfg=pyowl_core_direct_runner_v8",
         f"--remap-path-prefix={target.resolve()}=/rust/target",
         f"--remap-path-prefix={root.resolve()}=/rust/pyowl-core",
         f"--remap-path-prefix={cargo_home.resolve() / 'registry' / 'src'}=/rust/cargo-registry",
@@ -56,6 +72,7 @@ def test_direct_build_environment_remaps_every_host_path_and_darwin_uuid(
     assert selected["PYOWL_CORE_DIRECT_REPRO_ROOT"] == str(root.resolve())
     assert selected["CARGO_INCREMENTAL"] == "0"
     assert selected["CARGO_TARGET_DIR"] == str(target.resolve())
+    assert _BUILD_CONTRACT.encode() + b"\0" == _METADATA_DOMAIN
 
 
 def test_windows_build_keeps_path_remaps_but_does_not_spawn_python_wrapper(

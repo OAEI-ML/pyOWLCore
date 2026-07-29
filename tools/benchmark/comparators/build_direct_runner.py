@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 TOOLCHAIN = "1.97.1"
+_BUILD_CONTRACT = "pyowl-core-direct-runner-v8"
 _ROOT = Path(__file__).resolve().parents[3]
 _MANIFEST = Path("benchmarks/comparators/runners/direct/Cargo.toml")
 _RUNNER_DIRECTORY = _MANIFEST.parent
@@ -59,6 +60,10 @@ def reproducible_environment(
     selected_target = target_dir.resolve()
     cargo_home = Path(selected.get("CARGO_HOME", Path.home() / ".cargo")).expanduser()
     rust_flags = [
+        # Cargo fingerprints encoded Rust flags. Keep the build-contract token
+        # compiler-visible so an existing target directory cannot reuse local
+        # crate artifacts produced by an older metadata-wrapper contract.
+        f"--cfg={_BUILD_CONTRACT.replace('-', '_')}",
         f"--remap-path-prefix={selected_target}=/rust/target",
         f"--remap-path-prefix={selected_root}=/rust/pyowl-core",
         f"--remap-path-prefix={cargo_home.resolve() / 'registry' / 'src'}=/rust/cargo-registry",

@@ -64,8 +64,8 @@ allocator = "Rust system allocator"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_DIRECT_RUNNER"
 runner_pin_state = "complete"
-runner_revision = "pyowl-core-direct-rust-common-runner-v7"
-runner_sha256 = "0d901712131cd64c1e51970383f0c79591bc1d6fa28348f9edd303ddd2ad23fb"
+runner_revision = "pyowl-core-direct-rust-common-runner-v8"
+runner_sha256 = "3013b122acd4f454901786bc19b56823bed5827a62cfc2356cd57d3c863a3316"
 gating = true
 required = true
 

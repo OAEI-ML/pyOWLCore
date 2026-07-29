@@ -80,27 +80,31 @@ Reproduce and authenticate the pinned Darwin x86_64 executable with:
 ```console
 PYTHONPATH=. python -m tools.benchmark.comparators.build_direct_runner --print-sha256
 printf '%s  %s\n' \
-  0d901712131cd64c1e51970383f0c79591bc1d6fa28348f9edd303ddd2ad23fb \
+  3013b122acd4f454901786bc19b56823bed5827a62cfc2356cd57d3c863a3316 \
   benchmarks/comparators/runners/direct/target/release/pyowl-core-direct-comparator \
   | shasum -a 256 -c -
 export PYOWL_CORE_DIRECT_RUNNER="$PWD/benchmarks/comparators/runners/direct/target/release/pyowl-core-direct-comparator"
 PYTHONPATH=src:. python -m tools.benchmark.comparators.linkage_audit \
   --binary benchmarks/comparators/runners/direct/target/release/pyowl-core-direct-comparator \
   --expected-runner-sha256 \
-  0d901712131cd64c1e51970383f0c79591bc1d6fa28348f9edd303ddd2ad23fb \
+  3013b122acd4f454901786bc19b56823bed5827a62cfc2356cd57d3c863a3316 \
   --output \
   reports/performance/redesign-baseline/dependency-audit-direct-linkage-darwin-x86_64.json
 ```
 
-The build helper rejects inherited compiler seams, remaps the checkout, target,
-and Cargo source paths, and replaces Cargo's checkout-dependent metadata for
-the two local Rust crates without changing Cargo's artifact names. On Darwin
-it also suppresses `LC_UUID`; the resulting pinned executable is byte-identical
-across distinct checkout and target paths. Windows linkage CI keeps the path
-remaps but deliberately omits the POSIX Python wrapper, so it publishes linkage
-evidence rather than a cross-checkout reproducibility claim.
+The direct workspace also repeats the native crate's release panic, overflow,
+code-generation, and LTO settings because Cargo ignores dependency-local
+profiles. The build helper rejects inherited compiler seams, remaps the
+checkout, target, and Cargo source paths, and replaces Cargo's checkout-
+dependent metadata for the two local Rust crates without changing Cargo's
+artifact names. A versioned compiler configuration token is part of Cargo's
+fingerprint, so an older cached runner contract is rebuilt. On Darwin it also
+suppresses `LC_UUID`; the resulting pinned executable is byte-identical across
+distinct checkout and target paths. Windows linkage CI keeps the path remaps but
+deliberately omits the POSIX Python wrapper, so it publishes linkage evidence
+rather than a cross-checkout reproducibility claim.
 
-Runner v7 verifies its embedded native `Cargo.lock`, executable hash, exact
+Runner v8 verifies its embedded native `Cargo.lock`, executable hash, exact
 semantic options, source/document identity, allocator, thread ceiling, lane,
 and boundary. Functional Syntax uses the retained parser arena and RDF/XML uses
 the streaming mapper's retained arena. Both construct and fully validate the

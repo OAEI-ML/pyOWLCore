@@ -27,7 +27,7 @@ const ENGINE_REVISION: &str = "Cargo.lock SHA-256 plus exact Git revision captur
 const ENGINE_ARTIFACT: &str = "release direct-engine runner built from native/Cargo.lock";
 const ALLOCATOR: &str = "Rust system allocator";
 const THREAD_CEILING: u64 = 1;
-const RUNNER_REVISION: &str = "pyowl-core-direct-rust-common-runner-v7";
+const RUNNER_REVISION: &str = "pyowl-core-direct-rust-common-runner-v8";
 const FEATURES: &[&str] = &[
     "direct-rust-engine",
     "common-contract-v1",
