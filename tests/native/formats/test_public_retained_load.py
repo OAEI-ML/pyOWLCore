@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 import threading
+import time
+import warnings
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -38,6 +40,7 @@ from pyowl_core.backends.native_views import (
     ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
     ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
 )
+from pyowl_core.document import native_storage
 from pyowl_core.exceptions import (
     BackendProtocolError,
     BackendUnavailableError,
@@ -1079,10 +1082,17 @@ def test_resolver_built_closure_cancellation_precedes_owner_publication(
         preserve_source_map=True,
     )
     real_retain = native_ingestion.retain_native_snapshot_v2
-    with patch.object(
-        native_ingestion,
-        "retain_native_snapshot_v2",
-        side_effect=lambda snapshot, **_keywords: snapshot,
+    with (
+        patch.object(
+            native_ingestion,
+            "_publish_parsed_native_closure_v2",
+            return_value=None,
+        ),
+        patch.object(
+            native_ingestion,
+            "retain_native_snapshot_v2",
+            side_effect=lambda snapshot, **_keywords: snapshot,
+        ),
     ):
         unpublished = load_snapshot(
             root,
@@ -1458,16 +1468,42 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         "_retain_structural_snapshot_v2",
         unexpected_structural,
     )
-    selected = SnapshotLoader(
-        acquisition_cache=AcquisitionCache(),
-        document_cache=ParsedDocumentCache(),
-    ).load(
-        root,
-        options=options(BackendPreference.NATIVE),
-        resolver=MappingResolver(sources),
-    )
+    real_consume = native_storage._NativeSharedState.consume
+    structural_consumes = 0
+
+    def reject_structural_consume(
+        state: native_storage._NativeSharedState,
+        collection: Any,
+        encoded: bytes,
+        decoded: object,
+    ) -> object:
+        nonlocal structural_consumes
+        if collection in native_storage._STRUCTURAL_COLLECTIONS:
+            structural_consumes += 1
+            raise AssertionError("owner-first closure materialized a Python structural row")
+        return real_consume(state, collection, encoded, decoded)
+
+    with patch.object(
+        native_storage._NativeSharedState,
+        "consume",
+        reject_structural_consume,
+    ):
+        selected = SnapshotLoader(
+            acquisition_cache=AcquisitionCache(),
+            document_cache=ParsedDocumentCache(),
+        ).load(
+            root,
+            options=options(BackendPreference.NATIVE),
+            resolver=MappingResolver(sources),
+        )
 
     assert type(selected).__name__ == "_NativeOntologySnapshot"
+    assert structural_consumes == 0
+    assert cast(Any, selected)._native_python_counters().model_rows_materialized == 0
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    initial_counters = cast(Any, raw_owner)._publication_counters_v2()
+    assert initial_counters.page_requests == 0
     assert selected.capabilities.backend == "native"
     assert selected.capabilities.encoded_view_schemas == EXPECTED_ENCODED_VIEW_SCHEMAS
     assert len(selected.documents) == len(reference.documents) == 4
@@ -1517,8 +1553,6 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
         len(occurrences) for occurrences in reference.origin_index.entries.values()
     )
 
-    handle = cast(Any, selected)._native_snapshot_state.owner.handle
-    raw_owner = object.__getattribute__(handle, "_owner_v2")
     counters = cast(Any, raw_owner)._publication_counters_v2()
     assert counters.retained_document_tables == 4
     assert counters.canonical_input_rows == 4
@@ -1569,6 +1603,606 @@ def test_resolved_functional_diamond_retains_one_native_closure_owner(
     selected.close()
     assert selected.closed
     assert decode_root_canonical_bytes(encoded.buffers) == expected
+
+
+def test_owner_first_closure_enforces_aggregate_max_terms_before_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-terms:root> "
+        b"Import(<urn:retained-terms:child>) "
+        b"Declaration(Class(<urn:retained-terms:Root>)))"
+    )
+    child = b"Ontology(<urn:retained-terms:child> Declaration(Class(<urn:retained-terms:Child>)))"
+    sources = {"urn:retained-terms:child": child}
+    prepare = cast(Any, extension)._prepare_parsed_structural_closure_v2
+    finalize = cast(Any, extension)._finalize_parsed_structural_closure_v2
+    prepare_calls = 0
+    finalizations = 0
+
+    def counted_prepare(*arguments: object, **keywords: object) -> object:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return prepare(*arguments, **keywords)
+
+    def counted_finalize(*arguments: object, **keywords: object) -> object:
+        nonlocal finalizations
+        finalizations += 1
+        return finalize(*arguments, **keywords)
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_prepare_parsed_structural_closure_v2",
+        counted_prepare,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_finalize_parsed_structural_closure_v2",
+        counted_finalize,
+    )
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+        limits=replace(ParseLimits(), max_terms=5),
+    )
+
+    with pytest.raises(ResourceLimitError) as raised:
+        load_snapshot(
+            root,
+            options=options,
+            resolver=MappingResolver(sources),
+        )
+
+    assert raised.value.limit == "max_terms"
+    assert raised.value.allowed == 5
+    assert prepare_calls == 1
+    assert finalizations == 0
+
+    recovered = load_snapshot(
+        root,
+        options=replace(
+            options,
+            limits=replace(options.limits, max_terms=64),
+        ),
+        resolver=MappingResolver(sources),
+    )
+    assert type(recovered).__name__ == "_NativeOntologySnapshot"
+    assert prepare_calls == 2
+    assert finalizations == 1
+
+
+def test_owner_first_closure_uses_one_absolute_deadline_before_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-deadline:root> "
+        b"Import(<urn:retained-deadline:child>) "
+        b"Declaration(Class(<urn:retained-deadline:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-deadline:child> Declaration(Class(<urn:retained-deadline:Child>)))"
+    )
+    sources = {"urn:retained-deadline:child": child}
+    prepare = cast(Any, extension)._prepare_parsed_structural_closure_v2
+    finalize = cast(Any, extension)._finalize_parsed_structural_closure_v2
+    real_monotonic = time.monotonic
+    expire_after_prepare = True
+    prepare_calls = 0
+    finalizations = 0
+
+    class _Clock:
+        expired = False
+
+        @classmethod
+        def monotonic(cls) -> float:
+            return real_monotonic() + (120.0 if cls.expired else 0.0)
+
+    def expiring_prepare(*arguments: object, **keywords: object) -> object:
+        nonlocal prepare_calls
+        prepared = prepare(*arguments, **keywords)
+        prepare_calls += 1
+        if expire_after_prepare:
+            _Clock.expired = True
+        return prepared
+
+    def counted_finalize(*arguments: object, **keywords: object) -> object:
+        nonlocal finalizations
+        finalizations += 1
+        return finalize(*arguments, **keywords)
+
+    monkeypatch.setattr(native_ingestion, "time", _Clock)
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_prepare_parsed_structural_closure_v2",
+        expiring_prepare,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_finalize_parsed_structural_closure_v2",
+        counted_finalize,
+    )
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+        limits=replace(ParseLimits(), deadline_seconds=60.0),
+    )
+
+    with pytest.raises(ResourceLimitError) as raised:
+        load_snapshot(
+            root,
+            options=options,
+            resolver=MappingResolver(sources),
+        )
+
+    assert raised.value.limit == "deadline_seconds"
+    assert raised.value.allowed == 60.0
+    assert prepare_calls == 1
+    assert finalizations == 0
+
+    expire_after_prepare = False
+    _Clock.expired = False
+    recovered = load_snapshot(
+        root,
+        options=options,
+        resolver=MappingResolver(sources),
+    )
+    assert type(recovered).__name__ == "_NativeOntologySnapshot"
+    assert prepare_calls == 2
+    assert finalizations == 1
+
+
+@pytest.mark.parametrize("phase", ("prepare", "finalize"))
+def test_owner_first_closure_translates_in_phase_native_deadlines(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+    phase: str,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-phase-deadline:root> "
+        b"Import(<urn:retained-phase-deadline:child>) "
+        b"Declaration(Class(<urn:retained-phase-deadline:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-phase-deadline:child> "
+        b"Declaration(Class(<urn:retained-phase-deadline:Child>)))"
+    )
+    sources = {"urn:retained-phase-deadline:child": child}
+    prepare = cast(Any, extension)._prepare_parsed_structural_closure_v2
+    finalize = cast(Any, extension)._finalize_parsed_structural_closure_v2
+    native_error = cast(Any, extension)._NativeError
+    inject_deadline = True
+    prepare_calls = 0
+    finalize_calls = 0
+
+    def deadline_prepare(*arguments: object, **keywords: object) -> object:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        if inject_deadline and phase == "prepare":
+            raise native_error("NATIVE_DEADLINE", "native operation deadline exceeded")
+        return prepare(*arguments, **keywords)
+
+    def deadline_finalize(*arguments: object, **keywords: object) -> object:
+        nonlocal finalize_calls
+        finalize_calls += 1
+        if inject_deadline and phase == "finalize":
+            raise native_error("NATIVE_DEADLINE", "native operation deadline exceeded")
+        return finalize(*arguments, **keywords)
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_prepare_parsed_structural_closure_v2",
+        deadline_prepare,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_finalize_parsed_structural_closure_v2",
+        deadline_finalize,
+    )
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+        limits=replace(ParseLimits(), deadline_seconds=60.0),
+    )
+
+    with pytest.raises(ResourceLimitError) as raised:
+        load_snapshot(
+            root,
+            options=options,
+            resolver=MappingResolver(sources),
+        )
+
+    assert raised.value.code == "NATIVE_DEADLINE"
+    assert raised.value.limit == "deadline_seconds"
+    assert raised.value.allowed == 60.0
+    assert prepare_calls == 1
+    assert finalize_calls == (1 if phase == "finalize" else 0)
+
+    inject_deadline = False
+    recovered = load_snapshot(
+        root,
+        options=options,
+        resolver=MappingResolver(sources),
+    )
+    assert type(recovered).__name__ == "_NativeOntologySnapshot"
+    assert prepare_calls == 2
+    assert finalize_calls == (2 if phase == "finalize" else 1)
+
+
+def test_owner_first_closure_preserves_caller_token_deadline_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    import pyowl_core.cancellation as cancellation_module
+
+    root = (
+        b"Ontology(<urn:retained-token-deadline:root> "
+        b"Import(<urn:retained-token-deadline:child>) "
+        b"Declaration(Class(<urn:retained-token-deadline:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-token-deadline:child> "
+        b"Declaration(Class(<urn:retained-token-deadline:Child>)))"
+    )
+    sources = {"urn:retained-token-deadline:child": child}
+    native_error = cast(Any, extension)._NativeError
+    real_monotonic = time.monotonic
+    prepare_calls = 0
+    finalize_calls = 0
+
+    class _TokenClock:
+        offset = 0.0
+
+        @classmethod
+        def monotonic(cls) -> float:
+            return real_monotonic() + cls.offset
+
+    def deadline_prepare(*_arguments: object, **_keywords: object) -> object:
+        nonlocal prepare_calls
+        prepare_calls += 1
+        _TokenClock.offset = 120.0
+        raise native_error("NATIVE_DEADLINE", "native operation deadline exceeded")
+
+    def unexpected_finalize(*_arguments: object, **_keywords: object) -> object:
+        nonlocal finalize_calls
+        finalize_calls += 1
+        raise AssertionError("caller deadline reached native closure finalization")
+
+    monkeypatch.setattr(cancellation_module, "time", _TokenClock)
+    cancellation = CancellationSource(deadline_seconds=30.0)
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_prepare_parsed_structural_closure_v2",
+        deadline_prepare,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_finalize_parsed_structural_closure_v2",
+        unexpected_finalize,
+    )
+
+    with pytest.raises(OperationCancelledError, match="deadline exceeded") as raised:
+        load_snapshot(
+            root,
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.RESOLVE_STRICT,
+                backend=BackendPreference.NATIVE,
+                limits=replace(ParseLimits(), deadline_seconds=60.0),
+            ),
+            resolver=MappingResolver(sources),
+            cancellation_token=cancellation.token,
+        )
+
+    assert raised.value.reason == "deadline exceeded"
+    assert prepare_calls == 1
+    assert finalize_calls == 0
+
+
+def test_owner_first_closure_checks_cancellation_after_native_prepare(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-post-prepare-cancel:root> "
+        b"Import(<urn:retained-post-prepare-cancel:child>) "
+        b"Declaration(Class(<urn:retained-post-prepare-cancel:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-post-prepare-cancel:child> "
+        b"Declaration(Class(<urn:retained-post-prepare-cancel:Child>)))"
+    )
+    sources = {"urn:retained-post-prepare-cancel:child": child}
+    prepare = cast(Any, extension)._prepare_parsed_structural_closure_v2
+    finalize = cast(Any, extension)._finalize_parsed_structural_closure_v2
+    cancellation = CancellationSource()
+    cancel_after_prepare = True
+    prepare_calls = 0
+    finalizations = 0
+
+    def cancelling_prepare(*arguments: object, **keywords: object) -> object:
+        nonlocal prepare_calls
+        prepared = prepare(*arguments, **keywords)
+        prepare_calls += 1
+        if cancel_after_prepare:
+            cancellation.cancel("cancelled after native closure preparation")
+        return prepared
+
+    def counted_finalize(*arguments: object, **keywords: object) -> object:
+        nonlocal finalizations
+        finalizations += 1
+        return finalize(*arguments, **keywords)
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_prepare_parsed_structural_closure_v2",
+        cancelling_prepare,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_finalize_parsed_structural_closure_v2",
+        counted_finalize,
+    )
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+    )
+
+    with pytest.raises(
+        OperationCancelledError,
+        match="cancelled after native closure preparation",
+    ):
+        load_snapshot(
+            root,
+            options=options,
+            resolver=MappingResolver(sources),
+            cancellation_token=cancellation.token,
+        )
+
+    assert prepare_calls == 1
+    assert finalizations == 0
+
+    cancel_after_prepare = False
+    recovered = load_snapshot(
+        root,
+        options=options,
+        resolver=MappingResolver(sources),
+        cancellation_token=CancellationSource().token,
+    )
+    assert type(recovered).__name__ == "_NativeOntologySnapshot"
+    assert prepare_calls == 2
+    assert finalizations == 1
+
+
+@pytest.mark.parametrize(
+    ("seam", "failure_type"),
+    (
+        ("seal", RuntimeError),
+        ("freeze", KeyboardInterrupt),
+        ("conversion", SystemExit),
+    ),
+)
+def test_owner_first_closure_closes_finalized_owner_when_envelope_build_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+    seam: str,
+    failure_type: type[BaseException],
+) -> None:
+    namespace = f"urn:retained-envelope-failure:{seam}"
+    root = (
+        f"Ontology(<{namespace}:root> "
+        f"Import(<{namespace}:child>) "
+        f"Declaration(Class(<{namespace}:Root>)))"
+    ).encode()
+    child = (
+        f"Ontology(<{namespace}:child> "
+        f"Declaration(Class(<{namespace}:Child>)))"
+    ).encode()
+    sources = {f"{namespace}:child": child}
+    finalize = cast(Any, extension)._finalize_parsed_structural_closure_v2
+    seal = native_handoff_v2._seal_native_snapshot_owner_v2
+    freeze = native_handoff_v2.freeze_native_snapshot_publication_v2
+    convert = native_storage.ontology_snapshot_from_native_publication_v2
+    inject_failure = True
+    closure_finalized = False
+    finalizations = 0
+    fallback_calls = 0
+    captured: dict[str, object] = {}
+
+    def capture_finalize(*arguments: object, **keywords: object) -> object:
+        nonlocal closure_finalized, finalizations
+        raw_owner = finalize(*arguments, **keywords)
+        finalizations += 1
+        closure_finalized = True
+        return raw_owner
+
+    def remember_handle(handle: object) -> None:
+        captured["handle"] = handle
+        captured["raw_owner"] = object.__getattribute__(handle, "_owner_v2")
+
+    def fail_seal(raw_owner: object) -> object:
+        if inject_failure and closure_finalized and seam == "seal":
+            captured["raw_owner"] = raw_owner
+            raise failure_type("injected post-finalize envelope failure")
+        return seal(raw_owner)
+
+    def fail_freeze(values: object) -> object:
+        if inject_failure and closure_finalized and seam == "freeze":
+            remember_handle(cast(dict[str, object], values)["handle"])
+            raise failure_type("injected post-finalize envelope failure")
+        return freeze(cast(Any, values))
+
+    def fail_conversion(
+        publication: object,
+        *arguments: object,
+        **keywords: object,
+    ) -> object:
+        if inject_failure and closure_finalized and seam == "conversion":
+            remember_handle(cast(Any, publication).handle)
+            raise failure_type("injected post-finalize envelope failure")
+        return convert(cast(Any, publication), *arguments, **keywords)
+
+    def unexpected_fallback(*_arguments: object, **_keywords: object) -> object:
+        nonlocal fallback_calls
+        fallback_calls += 1
+        raise AssertionError("post-finalize failure reached a fallback owner path")
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_finalize_parsed_structural_closure_v2",
+        capture_finalize,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_retain_structural_snapshot_v2",
+        unexpected_fallback,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_merge_parsed_structural_snapshot_v2",
+        unexpected_fallback,
+    )
+    monkeypatch.setattr(
+        native_handoff_v2,
+        "_seal_native_snapshot_owner_v2",
+        fail_seal,
+    )
+    monkeypatch.setattr(
+        native_handoff_v2,
+        "freeze_native_snapshot_publication_v2",
+        fail_freeze,
+    )
+    monkeypatch.setattr(
+        native_storage,
+        "ontology_snapshot_from_native_publication_v2",
+        fail_conversion,
+    )
+    options = LoadOptions(
+        format=DocumentFormat.FUNCTIONAL,
+        imports=ImportPolicy.RESOLVE_STRICT,
+        backend=BackendPreference.NATIVE,
+    )
+
+    with pytest.raises(failure_type, match="injected post-finalize envelope failure"):
+        SnapshotLoader(
+            acquisition_cache=AcquisitionCache(),
+            document_cache=ParsedDocumentCache(),
+        ).load(
+            root,
+            options=options,
+            resolver=MappingResolver(sources),
+        )
+
+    assert finalizations == 1
+    assert fallback_calls == 0
+    if "handle" in captured:
+        assert cast(Any, captured["handle"]).closed
+    assert cast(Any, captured["raw_owner"])._publication_closed_v2()
+
+    inject_failure = False
+    recovered = SnapshotLoader(
+        acquisition_cache=AcquisitionCache(),
+        document_cache=ParsedDocumentCache(),
+    ).load(
+        root,
+        options=options,
+        resolver=MappingResolver(sources),
+    )
+    assert type(recovered).__name__ == "_NativeOntologySnapshot"
+    assert finalizations == 2
+    assert fallback_calls == 0
+
+
+def test_owner_first_unresolved_warning_error_closes_retained_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    extension: NativeTestExtension,
+) -> None:
+    root = (
+        b"Ontology(<urn:retained-warning-error:root> "
+        b"Import(<urn:retained-warning-error:child>) "
+        b"Import(<urn:retained-warning-error:missing>) "
+        b"Declaration(Class(<urn:retained-warning-error:Root>)))"
+    )
+    child = (
+        b"Ontology(<urn:retained-warning-error:child> "
+        b"Declaration(Class(<urn:retained-warning-error:Child>)))"
+    )
+    finalize = cast(Any, extension)._finalize_parsed_structural_closure_v2
+    publish = native_ingestion._publish_parsed_native_closure_v2
+    raw_owners: list[object] = []
+    captured: dict[str, object] = {}
+    finalizations = 0
+    fallback_calls = 0
+
+    def capture_finalize(*arguments: object, **keywords: object) -> object:
+        nonlocal finalizations
+        finalizations += 1
+        raw_owner = finalize(*arguments, **keywords)
+        raw_owners.append(raw_owner)
+        return raw_owner
+
+    def capture_publication(*arguments: object, **keywords: object) -> object:
+        retained = publish(*arguments, **keywords)
+        assert retained is not None
+        captured["snapshot"] = retained
+        captured["documents"] = retained.documents
+        return retained
+
+    def unexpected_fallback(*_arguments: object, **_keywords: object) -> object:
+        nonlocal fallback_calls
+        fallback_calls += 1
+        raise AssertionError("warning failure reached a fallback owner path")
+
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_finalize_parsed_structural_closure_v2",
+        capture_finalize,
+    )
+    monkeypatch.setattr(
+        native_ingestion,
+        "_publish_parsed_native_closure_v2",
+        capture_publication,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_retain_structural_snapshot_v2",
+        unexpected_fallback,
+    )
+    monkeypatch.setattr(
+        cast(Any, extension),
+        "_merge_parsed_structural_snapshot_v2",
+        unexpected_fallback,
+    )
+
+    with (
+        warnings.catch_warnings(),
+        pytest.raises(UnresolvedImportWarning),
+    ):
+        warnings.simplefilter("error", UnresolvedImportWarning)
+        load_snapshot(
+            root,
+            options=LoadOptions(
+                format=DocumentFormat.FUNCTIONAL,
+                imports=ImportPolicy.RECORD_UNRESOLVED,
+                backend=BackendPreference.NATIVE,
+            ),
+            resolver=MappingResolver({"urn:retained-warning-error:child": child}),
+        )
+
+    assert finalizations == 1
+    assert fallback_calls == 0
+    assert len(raw_owners) == 1
+    assert cast(Any, raw_owners[0])._publication_closed_v2()
+    assert cast(Any, captured["snapshot"]).closed
+    assert all(
+        cast(Any, document).closed
+        for document in cast(tuple[object, ...], captured["documents"])
+    )
 
 
 def test_legacy_native_extension_without_fork_keeps_complete_closure_path(

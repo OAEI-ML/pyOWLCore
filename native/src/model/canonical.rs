@@ -133,8 +133,13 @@ impl ScanBudget {
             .terms
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("canonical term counter overflow"))?;
-        if depth > self.max_depth || self.terms > self.max_terms {
-            return Err(NativeError::limit("canonical model row exceeds limits"));
+        if depth > self.max_depth {
+            return Err(NativeError::limit(
+                "canonical model row exceeds max_nesting_depth",
+            ));
+        }
+        if self.terms > self.max_terms {
+            return Err(NativeError::limit("canonical model row exceeds max_terms"));
         }
         Ok(())
     }

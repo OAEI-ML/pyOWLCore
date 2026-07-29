@@ -9,9 +9,10 @@ import time
 import warnings
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from pyowl_core.cancellation import CancellationToken
@@ -439,15 +440,21 @@ class SnapshotLoader:
         ontology_identity: dict[tuple[str, ...], _Node] = {}
         version_identity: dict[str, _Node] = {}
         _register_identity(root_node, ontology_identity, version_identity)
+        term_counts_complete = native_storage is None
         counters = {
             "total_source_bytes": root.provenance.byte_length,
             "axioms": len(root.axioms),
-            "terms": _document_terms(root),
+            "terms": _document_terms(root) if term_counts_complete else 0,
             "resolver_attempts": 0,
             "acquisition_cache_hits": int(root_cache_hit),
             "document_cache_hits": 0,
         }
-        _enforce_closure_limits(selected, len(nodes), counters)
+        _enforce_closure_limits(
+            selected,
+            len(nodes),
+            counters,
+            enforce_terms=term_counts_complete,
+        )
         edges: list[ImportEdge] = []
         diagnostics: list[Diagnostic] = []
         pending = _initial_pending(root_node, selected)
@@ -584,8 +591,16 @@ class SnapshotLoader:
                     source_identity[_source_identity(document)] = candidate
                     counters["total_source_bytes"] += document.provenance.byte_length
                     counters["axioms"] += len(document.axioms)
-                    counters["terms"] += _document_terms(document)
-                    _enforce_closure_limits(selected, len(nodes), counters)
+                    if term_counts_complete and parsed_storage is None:
+                        counters["terms"] += _document_terms(document)
+                    elif parsed_storage is not None:
+                        term_counts_complete = False
+                    _enforce_closure_limits(
+                        selected,
+                        len(nodes),
+                        counters,
+                        enforce_terms=term_counts_complete,
+                    )
                     next_pending.extend(_initial_pending(candidate, selected, parent=item))
                     if parsed_storage is not None:
                         native_storages[_source_identity(document)] = parsed_storage
@@ -620,6 +635,65 @@ class SnapshotLoader:
         if native_storage is not None:
             timings["root_parse_seconds"] = root_parse_seconds
             timings.update(native_phase_timings)
+        parsed_native_storages: tuple[object, ...] | None = None
+        if (
+            native_storage is not None
+            and len(ordered_documents) > 1
+            and len(native_storages) == len(ordered_documents)
+        ):
+            parsed_native_storages = tuple(
+                native_storages[_source_identity(document)] for document in ordered_documents
+            )
+            from pyowl_core.backends.native_ingestion import (
+                _publish_parsed_native_closure_v2,
+            )
+
+            _check_operation(cancellation_token, started, selected)
+            operation_deadline = (
+                None
+                if selected.limits.deadline_seconds is None
+                else started + selected.limits.deadline_seconds
+            )
+            retained_snapshot = _publish_parsed_native_closure_v2(
+                ordered_documents,
+                manifest,
+                root_node.key,
+                selected,
+                tuple(diagnostics),
+                timings,
+                counters["resolver_attempts"],
+                counters["acquisition_cache_hits"],
+                counters["document_cache_hits"],
+                parsed_native_storages,
+                cancellation_token=cancellation_token,
+                operation_deadline=operation_deadline,
+            )
+            if retained_snapshot is not None:
+                try:
+                    for diagnostic in diagnostics:
+                        warnings.warn(
+                            diagnostic.message,
+                            UnresolvedImportWarning,
+                            stacklevel=3,
+                        )
+                except BaseException:
+                    with suppress(BaseException):
+                        for document in retained_snapshot.documents:
+                            with suppress(BaseException):
+                                cast(Any, document).close()
+                    with suppress(BaseException):
+                        cast(Any, retained_snapshot).close()
+                    raise
+                return retained_snapshot
+        if not term_counts_complete:
+            counters["terms"] = sum(_document_terms(document) for document in ordered_documents)
+            term_counts_complete = True
+            _enforce_closure_limits(
+                selected,
+                len(nodes),
+                counters,
+                enforce_terms=True,
+            )
         snapshot = OntologySnapshot(
             root,
             ordered_documents,
@@ -636,10 +710,8 @@ class SnapshotLoader:
             from pyowl_core.backends.native_ingestion import retain_native_snapshot_v2
 
             parsed_native_storage: object | None = native_storage
-            if len(ordered_documents) > 1 and len(native_storages) == len(ordered_documents):
-                parsed_native_storage = tuple(
-                    native_storages[_source_identity(document)] for document in ordered_documents
-                )
+            if parsed_native_storages is not None:
+                parsed_native_storage = parsed_native_storages
             snapshot = retain_native_snapshot_v2(
                 snapshot,
                 cancellation_token=cancellation_token,
@@ -1072,11 +1144,14 @@ def _enforce_closure_limits(
     options: LoadOptions,
     document_count: int,
     counters: Mapping[str, int],
+    *,
+    enforce_terms: bool = True,
 ) -> None:
     options.limits.enforce("max_documents", document_count)
     options.limits.enforce("max_total_source_bytes", counters["total_source_bytes"])
     options.limits.enforce("max_axioms", counters["axioms"])
-    options.limits.enforce("max_terms", counters["terms"])
+    if enforce_terms:
+        options.limits.enforce("max_terms", counters["terms"])
 
 
 def _document_terms(document: OntologyDocument) -> int:

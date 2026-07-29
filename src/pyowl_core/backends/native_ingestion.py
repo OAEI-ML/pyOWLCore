@@ -5,11 +5,16 @@ from __future__ import annotations
 import hashlib
 import time
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from pyowl_core.exceptions import BackendProtocolError
+from pyowl_core.exceptions import (
+    BackendProtocolError,
+    ResourceLimitError,
+    WireLimitError,
+)
 
 from . import native
 
@@ -18,6 +23,8 @@ if TYPE_CHECKING:
     from pyowl_core.cancellation import CancellationToken
     from pyowl_core.config import LoadOptions
     from pyowl_core.diagnostics import Diagnostic
+    from pyowl_core.document import OntologyDocument
+    from pyowl_core.document.imports import ImportManifest
     from pyowl_core.document.snapshot import OntologySnapshot
     from pyowl_core.io.formats.detection import FormatDetection
     from pyowl_core.io.resolver import ImportResolver
@@ -39,6 +46,42 @@ class _RetainedStructuralExtension(NativeIngestionExtension, Protocol):
     _finalize_parsed_structural_closure_v2: Callable[..., object]
 
 
+@dataclass(frozen=True, slots=True)
+class _ParsedStructuralClosureContextV2:
+    """Bounded resolver metadata needed to publish parser-owned documents."""
+
+    documents: tuple[OntologyDocument, ...]
+    import_manifest: ImportManifest
+    root_document_key: str
+    load_options: LoadOptions
+    diagnostics: tuple[Diagnostic, ...]
+    timings: Mapping[str, float]
+    resolution_attempts: int
+    acquisition_cache_hits: int
+    document_cache_hits: int
+    deadline_at: float | None
+
+
+def _remaining_closure_limits_v2(
+    context: _ParsedStructuralClosureContextV2,
+) -> ParseLimits:
+    """Derive a fresh native deadline from the loader's one overall deadline."""
+
+    from dataclasses import replace
+
+    limits = context.load_options.limits
+    if context.deadline_at is None:
+        return limits
+    remaining = context.deadline_at - time.monotonic()
+    if remaining <= 0:
+        raise ResourceLimitError(
+            "resource limit deadline_seconds exceeded",
+            limit="deadline_seconds",
+            allowed=limits.deadline_seconds,
+        )
+    return replace(limits, deadline_seconds=remaining)
+
+
 def _closure_publication_checkpoint_v2(
     cancellation_token: CancellationToken | None,
 ) -> None:
@@ -46,6 +89,31 @@ def _closure_publication_checkpoint_v2(
 
     if cancellation_token is not None:
         cancellation_token.check()
+
+
+def _closure_resource_limit_v2(
+    error: WireLimitError,
+    context: _ParsedStructuralClosureContextV2,
+    cancellation_token: CancellationToken | None,
+) -> ResourceLimitError | None:
+    """Normalize native closure budgets while preserving caller deadlines."""
+
+    if error.code == "NATIVE_DEADLINE":
+        _closure_publication_checkpoint_v2(cancellation_token)
+        return ResourceLimitError(
+            "resource limit deadline_seconds exceeded",
+            limit="deadline_seconds",
+            allowed=context.load_options.limits.deadline_seconds,
+            code=error.code,
+        )
+    if error.code == "NATIVE_WIRE_LIMIT" and "max_terms" in str(error):
+        return ResourceLimitError(
+            "resource limit max_terms exceeded",
+            limit="max_terms",
+            allowed=context.load_options.limits.max_terms,
+            code=error.code,
+        )
+    return None
 
 
 def _closure_canonical_rows_v2(
@@ -103,14 +171,14 @@ def _snapshot_anonymous_scope_targets_v2(
     )
 
 
-def _snapshot_anonymous_scope_candidates_v2(
-    snapshot: OntologySnapshot,
+def _manifest_anonymous_scope_candidates_v2(
+    manifest: ImportManifest,
 ) -> tuple[bytes | None, ...]:
     """Return repeated-fingerprint scope candidates using O(documents) metadata."""
 
     from pyowl_core.model import encode_varint
 
-    records = snapshot.import_manifest.documents
+    records = manifest.documents
     grouped: dict[bytes, list[tuple[bytes, str, int]]] = {}
     for document_ordinal, record in enumerate(records):
         grouped.setdefault(record.document_fingerprint.digest, []).append(
@@ -1920,17 +1988,21 @@ def retain_native_snapshot_v2(
     }
     formats = {document.provenance.format for document in snapshot.documents}
     functional_documents = formats == {DocumentFormat.FUNCTIONAL}
-    retained_documents_eligible = bool(formats) and formats <= retained_formats and all(
-        (
-            (report := document.rdf_mapping_report) is not None
-            and report.conformant
-            and not report.unconsumed
-            and not report.rule_ids
-            and not report.diagnostics
+    retained_documents_eligible = (
+        bool(formats)
+        and formats <= retained_formats
+        and all(
+            (
+                (report := document.rdf_mapping_report) is not None
+                and report.conformant
+                and not report.unconsumed
+                and not report.rule_ids
+                and not report.diagnostics
+            )
+            if document.provenance.format in rdf_formats
+            else document.rdf_mapping_report is None
+            for document in snapshot.documents
         )
-        if document.provenance.format in rdf_formats
-        else document.rdf_mapping_report is None
-        for document in snapshot.documents
     )
     common_ineligible = (
         snapshot.load_options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
@@ -2015,6 +2087,109 @@ def retain_native_snapshot_v2(
         extension,
         cancellation_token,
         parsed_native_storage,
+    )
+
+
+def _publish_parsed_native_closure_v2(
+    documents: tuple[OntologyDocument, ...],
+    import_manifest: ImportManifest,
+    root_document_key: str,
+    load_options: LoadOptions,
+    diagnostics: tuple[Diagnostic, ...],
+    timings: Mapping[str, float],
+    resolution_attempts: int,
+    acquisition_cache_hits: int,
+    document_cache_hits: int,
+    parsed_native_storages: tuple[object, ...],
+    *,
+    cancellation_token: CancellationToken | None = None,
+    operation_deadline: float | None = None,
+) -> OntologySnapshot | None:
+    """Publish an aligned parser-owned closure before Python snapshot construction."""
+
+    from pyowl_core.backends.parser import _NativeBackendDriver
+    from pyowl_core.config import BackendPreference, DocumentFormat
+
+    _closure_publication_checkpoint_v2(cancellation_token)
+    records = import_manifest.documents
+    if (
+        len(documents) <= 1
+        or type(parsed_native_storages) is not tuple
+        or len(parsed_native_storages) != len(documents)
+        or len(records) != len(documents)
+        or not any(record.document_key == root_document_key for record in records)
+    ):
+        return None
+    retained_formats = {
+        DocumentFormat.FUNCTIONAL,
+        DocumentFormat.RDF_XML,
+        DocumentFormat.TURTLE,
+        DocumentFormat.OWL_XML,
+    }
+    rdf_formats = {
+        DocumentFormat.RDF_XML,
+        DocumentFormat.TURTLE,
+    }
+    formats = {document.provenance.format for document in documents}
+    retained_documents_eligible = (
+        bool(formats)
+        and formats <= retained_formats
+        and all(
+            (
+                (report := document.rdf_mapping_report) is not None
+                and report.conformant
+                and not report.unconsumed
+                and not report.rule_ids
+                and not report.diagnostics
+            )
+            if document.provenance.format in rdf_formats
+            else document.rdf_mapping_report is None
+            for document in documents
+        )
+    )
+    if (
+        load_options.backend not in {BackendPreference.AUTO, BackendPreference.NATIVE}
+        or load_options.validate_owl2_dl
+        or not retained_documents_eligible
+        or any(document.provenance.backend != "native" for document in documents)
+    ):
+        return None
+    functional_documents = formats == {DocumentFormat.FUNCTIONAL}
+    if functional_documents:
+        extension = native.require("parse-functional-v1")
+        if not _NativeBackendDriver().supports_retained_storage_fork():
+            return None
+    else:
+        runtime = native._runtime()
+        runtime_extension = runtime.extension
+        if not runtime.probe.available or runtime_extension is None:
+            return None
+        extension = runtime_extension
+    required_hooks = (
+        "_prepare_parsed_structural_closure_v2",
+        "_finalize_parsed_structural_closure_v2",
+    )
+    if any(not callable(getattr(extension, name, None)) for name in required_hooks):
+        raise BackendProtocolError(
+            "native closure has no retained publication boundary",
+            code="NATIVE_INGESTION_REGISTRATION",
+        )
+    return _publish_parsed_structural_closure_snapshot_v2(
+        _ParsedStructuralClosureContextV2(
+            documents=documents,
+            import_manifest=import_manifest,
+            root_document_key=root_document_key,
+            load_options=load_options,
+            diagnostics=diagnostics,
+            timings=timings,
+            resolution_attempts=resolution_attempts,
+            acquisition_cache_hits=acquisition_cache_hits,
+            document_cache_hits=document_cache_hits,
+            deadline_at=operation_deadline,
+        ),
+        extension,
+        cancellation_token,
+        parsed_native_storages,
     )
 
 
@@ -2428,7 +2603,7 @@ def _publish_structural_snapshot_v2(
 
 
 def _publish_parsed_structural_closure_snapshot_v2(
-    snapshot: OntologySnapshot,
+    context: _ParsedStructuralClosureContextV2,
     extension: native._Extension,
     cancellation_token: CancellationToken | None,
     parsed_native_storages: tuple[object, ...],
@@ -2462,11 +2637,12 @@ def _publish_parsed_structural_closure_snapshot_v2(
         ontology_snapshot_from_native_publication_v2,
     )
 
-    records = snapshot.import_manifest.documents
+    source_documents = context.documents
+    records = context.import_manifest.documents
     if (
         type(parsed_native_storages) is not tuple
         or len(parsed_native_storages) != len(records)
-        or len(snapshot.documents) != len(records)
+        or len(source_documents) != len(records)
     ):
         raise BackendProtocolError(
             "native parser-owner closure is not document-aligned",
@@ -2483,28 +2659,38 @@ def _publish_parsed_structural_closure_snapshot_v2(
         )
     topology = tuple((ordinal,) for ordinal in range(len(records)))
     closure_ordinals = tuple(range(len(records)))
+    prepare_limits = _remaining_closure_limits_v2(context)
     config = native._encode_config(
-        snapshot.load_options.limits,
+        prepare_limits,
         cancellation_token,
         verify=False,
     )
-    with native._relay(extension, snapshot.load_options.limits, cancellation_token) as cancel:
-        result = native._call(
-            extension,
-            lambda: prepare(
-                parsed_native_storages,
-                snapshot.import_manifest.canonical_bytes(),
-                snapshot.root_document_key,
-                tuple(record.document_key for record in records),
-                snapshot.load_options.collect_provenance,
-                snapshot.load_options.preserve_source_map,
-                config,
-                cancel,
-                effective_document_ordinals=topology,
-                closure_document_ordinals=closure_ordinals,
-                anonymous_scope_targets=_snapshot_anonymous_scope_candidates_v2(snapshot),
-            ),
-        )
+    try:
+        with native._relay(extension, prepare_limits, cancellation_token) as cancel:
+            result = native._call(
+                extension,
+                lambda: prepare(
+                    parsed_native_storages,
+                    context.import_manifest.canonical_bytes(),
+                    context.root_document_key,
+                    tuple(record.document_key for record in records),
+                    context.load_options.collect_provenance,
+                    context.load_options.preserve_source_map,
+                    config,
+                    cancel,
+                    effective_document_ordinals=topology,
+                    closure_document_ordinals=closure_ordinals,
+                    anonymous_scope_targets=_manifest_anonymous_scope_candidates_v2(
+                        context.import_manifest
+                    ),
+                ),
+            )
+    except WireLimitError as error:
+        translated = _closure_resource_limit_v2(error, context, cancellation_token)
+        if translated is None:
+            raise
+        raise translated from error
+    _closure_publication_checkpoint_v2(cancellation_token)
     if (
         type(result) is not tuple
         or len(result) != 2
@@ -2520,41 +2706,56 @@ def _publish_parsed_structural_closure_snapshot_v2(
     prepared = _decode_prepared_retained_closure_v2(
         prepared_encoded,
         document_count=len(records),
-        collect_provenance=snapshot.load_options.collect_provenance,
-        preserve_source_map=snapshot.load_options.preserve_source_map,
+        collect_provenance=context.load_options.collect_provenance,
+        preserve_source_map=context.load_options.preserve_source_map,
         allow_partial_rdf_mapping=False,
-        limits=snapshot.load_options.limits,
+        limits=context.load_options.limits,
     )
+    _closure_publication_checkpoint_v2(cancellation_token)
     document_fingerprints = tuple(
         Fingerprint("sha256", 1, document.fingerprint.digest) for document in prepared.documents
     )
     global_fingerprints = tuple(
         Fingerprint("sha256", 1, evidence.digest) for evidence in prepared.fingerprints
     )
+    document_counts = tuple(
+        (
+            len(document.ontology_annotations),
+            len(document.axioms),
+            len(document.extension_components),
+        )
+        for document in source_documents
+    )
     if (
         document_fingerprints
-        != tuple(document.document_fingerprint for document in snapshot.documents)
+        != tuple(document.document_fingerprint for document in source_documents)
         or document_fingerprints != tuple(record.document_fingerprint for record in records)
-        or global_fingerprints
-        != (
-            snapshot.structural_fingerprint,
-            snapshot.logical_fingerprint,
-            snapshot.signature_fingerprint,
+        or tuple(document.raw_counts for document in prepared.documents) != document_counts
+        or any(
+            record.ontology_id != document.ontology_id
+            or record.document_iri != document.document_iri
+            or record.source_sha256 != document.provenance.source_sha256
+            or record.format is not document.provenance.format
+            for record, document in zip(
+                records,
+                source_documents,
+                strict=True,
+            )
         )
     ):
         raise BackendProtocolError(
-            "native prepared closure fingerprints diverge from resolver metadata",
+            "native prepared closure fingerprints or counts diverge from resolver metadata",
             code="NATIVE_FINGERPRINT_INPUTS",
         )
 
     document_diagnostics = tuple(
         tuple(freeze_native_diagnostic_publication_v1(value) for value in document.diagnostics)
-        for document in snapshot.documents
+        for document in source_documents
     )
     documents: list[NativeDocumentPublicationV1] = []
     for record, document, diagnostics, selected in zip(
         records,
-        snapshot.documents,
+        source_documents,
         document_diagnostics,
         prepared.documents,
         strict=True,
@@ -2600,20 +2801,20 @@ def _publish_parsed_structural_closure_snapshot_v2(
         )
     frozen_documents = tuple(documents)
     diagnostics = tuple(
-        freeze_native_diagnostic_publication_v1(value) for value in snapshot.diagnostics
+        freeze_native_diagnostic_publication_v1(value) for value in context.diagnostics
     )
-    timings = dict(snapshot.report.timings)
+    timings = dict(context.timings)
     timings["native_closure_publication_prepare_seconds"] = prepared.prepare_seconds
     report = NativeLoadReportPublicationV1(
         backend="native",
-        api_version=snapshot.report.api_version,
-        model_schema=snapshot.report.model_schema,
+        api_version=(0, 1),
+        model_schema=1,
         document_count=len(frozen_documents),
-        total_source_bytes=snapshot.report.total_source_bytes,
+        total_source_bytes=sum(document.provenance.byte_length for document in source_documents),
         effective_axiom_count=prepared.closure_counts[1],
-        resolution_attempts=snapshot.report.resolution_attempts,
-        acquisition_cache_hits=snapshot.report.acquisition_cache_hits,
-        document_cache_hits=snapshot.report.document_cache_hits,
+        resolution_attempts=context.resolution_attempts,
+        acquisition_cache_hits=context.acquisition_cache_hits,
+        document_cache_hits=context.document_cache_hits,
         timings=tuple(sorted(timings.items(), key=lambda item: item[0].encode("utf-8"))),
         structural_fingerprint=global_fingerprints[0],
         logical_fingerprint=global_fingerprints[1],
@@ -2624,20 +2825,20 @@ def _publish_parsed_structural_closure_snapshot_v2(
     )
     capability_bits = (
         7
-        | (8 if snapshot.load_options.preserve_source_map else 0)
-        | (16 if snapshot.load_options.collect_provenance else 0)
+        | (8 if context.load_options.preserve_source_map else 0)
+        | (16 if context.load_options.collect_provenance else 0)
         | (32 if any(document.rdf_report is not None for document in prepared.documents) else 0)
     )
-    import_manifest = freeze_native_import_manifest_publication_v1(snapshot.import_manifest)
+    import_manifest = freeze_native_import_manifest_publication_v1(context.import_manifest)
     sidecars = NativeDiagnosticReferenceSidecarsV2(
-        snapshot=tuple(_diagnostic_reference_kinds(value) for value in snapshot.diagnostics),
+        snapshot=tuple(_diagnostic_reference_kinds(value) for value in context.diagnostics),
         documents=tuple(
             tuple(_diagnostic_reference_kinds(value) for value in document.diagnostics)
-            for document in snapshot.documents
+            for document in source_documents
         ),
         import_edges=tuple(
             None if edge.diagnostic is None else _diagnostic_reference_kinds(edge.diagnostic)
-            for edge in snapshot.import_manifest.edges
+            for edge in context.import_manifest.edges
         ),
     )
     facade_summary = NativeFacadeCardinalitySummaryV2(
@@ -2681,8 +2882,8 @@ def _publish_parsed_structural_closure_snapshot_v2(
     attestation = native_snapshot_publication_attestation_v2(
         documents=frozen_documents,
         import_manifest=import_manifest,
-        root_document_key=snapshot.root_document_key,
-        load_options=snapshot.load_options,
+        root_document_key=context.root_document_key,
+        load_options=context.load_options,
         diagnostics=diagnostics,
         diagnostic_reference_sidecars=sidecars,
         facade_cardinality_summary=facade_summary,
@@ -2692,62 +2893,83 @@ def _publish_parsed_structural_closure_snapshot_v2(
         max_facade_row_bytes=prepared.max_facade_row_bytes,
         owl2_dl_report_summary=None,
     )
-    with native._relay(extension, snapshot.load_options.limits, cancellation_token) as cancel:
-        raw_owner = native._call(
-            extension,
-            lambda: finalize(
-                parsed_native_storages,
-                prepared_owner,
-                prepared_encoded,
-                attestation,
-                cancel,
+    _closure_publication_checkpoint_v2(cancellation_token)
+    finalize_limits = _remaining_closure_limits_v2(context)
+    try:
+        with native._relay(extension, finalize_limits, cancellation_token) as cancel:
+
+            def checked_finalize() -> object:
+                _closure_publication_checkpoint_v2(cancellation_token)
+                return finalize(
+                    parsed_native_storages,
+                    prepared_owner,
+                    prepared_encoded,
+                    attestation,
+                    cancel,
+                )
+
+            raw_owner = native._call(extension, checked_finalize)
+    except WireLimitError as error:
+        translated = _closure_resource_limit_v2(error, context, cancellation_token)
+        if translated is None:
+            raise
+        raise translated from error
+    try:
+        handle = _seal_native_snapshot_owner_v2(raw_owner)
+    except BaseException:
+        with suppress(BaseException):
+            cast(Any, raw_owner)._publication_close_v2()
+        raise
+    try:
+        values: dict[str, object] = {
+            "version": NATIVE_SNAPSHOT_PUBLICATION_VERSION_V2,
+            "ledger_sha256": NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2,
+            "handle": handle,
+            "documents": frozen_documents,
+            "import_manifest": import_manifest,
+            "root_document_key": context.root_document_key,
+            "load_options": context.load_options,
+            "diagnostics": diagnostics,
+            "diagnostic_reference_sidecars": sidecars,
+            "facade_cardinality_summary": facade_summary,
+            "report": report,
+            "capability_bits": capability_bits,
+            "max_facade_row_bytes": prepared.max_facade_row_bytes,
+            "owl2_dl_report_summary": None,
+        }
+        for field in fields(content):
+            values[field.name] = getattr(content, field.name)
+        publication = freeze_native_snapshot_publication_v2(values)
+        ingestion_counters = _NativeIngestionCountersV2(
+            parser_result_bytes_scanned=0,
+            parser_summary_bytes_materialized=(
+                prepared.parser_summary_bytes_materialized + len(prepared_encoded)
             ),
+            canonical_rows_scanned=prepared.canonical_rows_scanned,
+            structural_occurrence_rows_scanned=prepared.structural_occurrence_rows_scanned,
+            structural_root_rows_published=sum(prepared.closure_counts),
+            eager_structural_objects_materialized=0,
+            metadata_iri_objects_materialized=prepared.metadata_iri_objects_materialized,
+            provenance_occurrence_records_materialized=0,
+            canonical_bytes_copied_to_python=0,
+            fingerprint_preimage_bytes_materialized_in_python=0,
+            native_publication_canonical_rows_encoded=prepared.canonical_rows_encoded,
+            native_publication_canonical_bytes_encoded=prepared.canonical_bytes_encoded,
+            native_fingerprint_temporary_bytes=prepared.fingerprint_temporary_bytes,
+            native_origin_rows_retained=prepared.closure_origin_rows,
+            native_origin_bytes_retained=prepared.origin_bytes_retained,
         )
-    values: dict[str, object] = {
-        "version": NATIVE_SNAPSHOT_PUBLICATION_VERSION_V2,
-        "ledger_sha256": NATIVE_SNAPSHOT_PUBLICATION_LEDGER_SHA256_V2,
-        "handle": _seal_native_snapshot_owner_v2(raw_owner),
-        "documents": frozen_documents,
-        "import_manifest": import_manifest,
-        "root_document_key": snapshot.root_document_key,
-        "load_options": snapshot.load_options,
-        "diagnostics": diagnostics,
-        "diagnostic_reference_sidecars": sidecars,
-        "facade_cardinality_summary": facade_summary,
-        "report": report,
-        "capability_bits": capability_bits,
-        "max_facade_row_bytes": prepared.max_facade_row_bytes,
-        "owl2_dl_report_summary": None,
-    }
-    for field in fields(content):
-        values[field.name] = getattr(content, field.name)
-    publication = freeze_native_snapshot_publication_v2(values)
-    ingestion_counters = _NativeIngestionCountersV2(
-        parser_result_bytes_scanned=0,
-        parser_summary_bytes_materialized=(
-            prepared.parser_summary_bytes_materialized + len(prepared_encoded)
-        ),
-        canonical_rows_scanned=prepared.canonical_rows_scanned,
-        structural_occurrence_rows_scanned=prepared.structural_occurrence_rows_scanned,
-        structural_root_rows_published=sum(prepared.closure_counts),
-        eager_structural_objects_materialized=0,
-        metadata_iri_objects_materialized=prepared.metadata_iri_objects_materialized,
-        provenance_occurrence_records_materialized=0,
-        canonical_bytes_copied_to_python=0,
-        fingerprint_preimage_bytes_materialized_in_python=0,
-        native_publication_canonical_rows_encoded=prepared.canonical_rows_encoded,
-        native_publication_canonical_bytes_encoded=prepared.canonical_bytes_encoded,
-        native_fingerprint_temporary_bytes=prepared.fingerprint_temporary_bytes,
-        native_origin_rows_retained=prepared.closure_origin_rows,
-        native_origin_bytes_retained=prepared.origin_bytes_retained,
-    )
-    return ontology_snapshot_from_native_publication_v2(
-        publication,
-        _wire_structural_aliases=None,
-        _ingestion_counters=ingestion_counters,
-        _anonymous_scope_evidence=None,
-        _common_contract_summary=None,
-    )
+        return ontology_snapshot_from_native_publication_v2(
+            publication,
+            _wire_structural_aliases=None,
+            _ingestion_counters=ingestion_counters,
+            _anonymous_scope_evidence=None,
+            _common_contract_summary=None,
+        )
+    except BaseException:
+        with suppress(BaseException):
+            handle.close()
+        raise
 
 
 def _publish_structural_closure_snapshot_v2(
@@ -2808,7 +3030,18 @@ def _publish_structural_closure_snapshot_v2(
     _closure_publication_checkpoint_v2(cancellation_token)
     if parsed_native_storages is not None:
         return _publish_parsed_structural_closure_snapshot_v2(
-            snapshot,
+            _ParsedStructuralClosureContextV2(
+                documents=snapshot.documents,
+                import_manifest=snapshot.import_manifest,
+                root_document_key=snapshot.root_document_key,
+                load_options=snapshot.load_options,
+                diagnostics=snapshot.diagnostics,
+                timings=snapshot.report.timings,
+                resolution_attempts=snapshot.report.resolution_attempts,
+                acquisition_cache_hits=snapshot.report.acquisition_cache_hits,
+                document_cache_hits=snapshot.report.document_cache_hits,
+                deadline_at=None,
+            ),
             extension,
             cancellation_token,
             parsed_native_storages,

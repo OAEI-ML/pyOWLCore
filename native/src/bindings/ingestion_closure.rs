@@ -12,7 +12,7 @@ use crate::cancel::{Cancellation, Guard, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
 use crate::hash::Sha256;
 use crate::limits::{LimitKey, Limits};
-use crate::model::{canonical_field_count, structural_digest_v1};
+use crate::model::{canonical_field_count, scan_canonical, structural_digest_v1, ScanBudget};
 use crate::parse::RetainedParseMetadataV2;
 use crate::publication::{
     PreparedTypedAuxiliaryV2, TypedFacadeBuilderV2, TypedFacadeCollectionV2, TypedFacadeScopeV2,
@@ -1217,6 +1217,7 @@ fn prepare_composite_evidence(
     let mut canonical_rows_encoded = 0_u64;
     let mut canonical_bytes_encoded = 0_u64;
     let mut max_facade_row_bytes = storage.maximum_row_bytes();
+    let mut aggregate_term_budget = ScanBudget::from_limits(limits);
 
     for (ordinal, ((document_key, metadata), scope_map)) in document_keys
         .iter()
@@ -1269,6 +1270,7 @@ fn prepare_composite_evidence(
                 cancellation.clone(),
                 interrupt.clone(),
                 |row| {
+                    scan_canonical(row, &mut aggregate_term_budget)?;
                     account_canonical_row(
                         row,
                         &mut canonical_rows_encoded,
