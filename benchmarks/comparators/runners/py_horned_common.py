@@ -85,7 +85,7 @@ FEATURES = (
 )
 ALLOCATOR = "Rust system allocator and CPython platform allocator"
 THREAD_CEILING = 1
-RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v5"
+RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v6"
 
 MAX_REQUEST_BYTES = 512 * 1024**2
 MAX_FRAME_HEADER_BYTES = 32
@@ -1066,90 +1066,101 @@ def _persistent_main() -> None:
     instance_counter = 0
     expected_sequence = 0
     while True:
-        frame = _json_object(_read_frame(), "persistent request")
-        schema = frame.get("schema")
-        if schema == PERSISTENT_SHUTDOWN_SCHEMA:
-            if set(frame) != {"schema", "protocol", "sequence"}:
-                raise RunnerContractError("persistent shutdown fields differ")
-            if frame.get("protocol") != PERSISTENT_PROTOCOL_SCHEMA:
-                raise RunnerContractError("persistent shutdown protocol differs")
-            sequence = _u64(frame.get("sequence"), "persistent shutdown sequence")
-            if sequence != expected_sequence:
-                raise RunnerContractError("persistent shutdown sequence is nonmonotonic")
-            _write_frame(
-                {
-                    "schema": PERSISTENT_SHUTDOWN_ACK_SCHEMA,
-                    "protocol": PERSISTENT_PROTOCOL_SCHEMA,
-                    "sequence": sequence,
-                    "pid": os.getpid(),
-                }
-            )
+        if not _serve_persistent_request(
+            expected_sequence=expected_sequence,
+            instance_counter=instance_counter,
+        ):
             return
-        if set(frame) != {"schema", "protocol", "sequence", "request"}:
-            raise RunnerContractError("persistent request fields differ")
-        if schema != PERSISTENT_REQUEST_SCHEMA:
-            raise RunnerContractError("persistent request schema differs")
-        if frame.get("protocol") != PERSISTENT_PROTOCOL_SCHEMA:
-            raise RunnerContractError("persistent request protocol differs")
-        sequence = _u64(frame.get("sequence"), "persistent request sequence")
-        if sequence != expected_sequence:
-            raise RunnerContractError("persistent request sequence is nonmonotonic")
-        request = frame.get("request")
-        try:
-            if not isinstance(request, Mapping):
-                raise RunnerContractError("persistent adapter request must be an object")
-            source, format = _validate_request(request, protocol_mode="persistent")
-        except Exception as error:
-            prepared: tuple[Mapping[str, Any], bytes, DocumentFormat] | dict[str, object]
-            prepared = _error_result(request, error)
-        else:
-            prepared = (request, source, format)
-        _write_frame(
-            {
-                "schema": PERSISTENT_PREPARED_SCHEMA,
-                "protocol": PERSISTENT_PROTOCOL_SCHEMA,
-                "sequence": sequence,
-                "pid": os.getpid(),
-            }
-        )
-        execute = _json_object(_read_frame(), "persistent execute")
-        if set(execute) != {"schema", "protocol", "sequence", "pid"}:
-            raise RunnerContractError("persistent execute fields differ")
-        if execute.get("schema") != PERSISTENT_EXECUTE_SCHEMA:
-            raise RunnerContractError("persistent execute schema differs")
-        if execute.get("protocol") != PERSISTENT_PROTOCOL_SCHEMA:
-            raise RunnerContractError("persistent execute protocol differs")
-        if _u64(execute.get("sequence"), "persistent execute sequence") != sequence:
-            raise RunnerContractError("persistent execute sequence differs")
-        if _u64(execute.get("pid"), "persistent execute pid") != os.getpid():
-            raise RunnerContractError("persistent execute pid differs")
-        if isinstance(prepared, tuple):
-            prepared_request, source, format = prepared
-            try:
-                result = _run_validated_request(
-                    prepared_request,
-                    source=source,
-                    format=format,
-                )
-            except Exception as error:
-                result = _error_result(prepared_request, error)
-        else:
-            result = prepared
-        instance_preimage = f"{os.getpid()}:{instance_counter}:{sequence}".encode("ascii")
-        _write_frame(
-            {
-                "schema": PERSISTENT_RESPONSE_SCHEMA,
-                "protocol": PERSISTENT_PROTOCOL_SCHEMA,
-                "sequence": sequence,
-                "ontology_instance_id": hashlib.sha256(instance_preimage).hexdigest(),
-                "result": result,
-            }
-        )
         instance_counter += 1
         expected_sequence = _u64(
             expected_sequence + 1,
             "persistent request sequence",
         )
+
+
+def _serve_persistent_request(*, expected_sequence: int, instance_counter: int) -> bool:
+    """Serve one scoped frame so request-sized state dies before the next read."""
+
+    frame = _json_object(_read_frame(), "persistent request")
+    schema = frame.get("schema")
+    if schema == PERSISTENT_SHUTDOWN_SCHEMA:
+        if set(frame) != {"schema", "protocol", "sequence"}:
+            raise RunnerContractError("persistent shutdown fields differ")
+        if frame.get("protocol") != PERSISTENT_PROTOCOL_SCHEMA:
+            raise RunnerContractError("persistent shutdown protocol differs")
+        sequence = _u64(frame.get("sequence"), "persistent shutdown sequence")
+        if sequence != expected_sequence:
+            raise RunnerContractError("persistent shutdown sequence is nonmonotonic")
+        _write_frame(
+            {
+                "schema": PERSISTENT_SHUTDOWN_ACK_SCHEMA,
+                "protocol": PERSISTENT_PROTOCOL_SCHEMA,
+                "sequence": sequence,
+                "pid": os.getpid(),
+            }
+        )
+        return False
+    if set(frame) != {"schema", "protocol", "sequence", "request"}:
+        raise RunnerContractError("persistent request fields differ")
+    if schema != PERSISTENT_REQUEST_SCHEMA:
+        raise RunnerContractError("persistent request schema differs")
+    if frame.get("protocol") != PERSISTENT_PROTOCOL_SCHEMA:
+        raise RunnerContractError("persistent request protocol differs")
+    sequence = _u64(frame.get("sequence"), "persistent request sequence")
+    if sequence != expected_sequence:
+        raise RunnerContractError("persistent request sequence is nonmonotonic")
+    request = frame.get("request")
+    try:
+        if not isinstance(request, Mapping):
+            raise RunnerContractError("persistent adapter request must be an object")
+        source, format = _validate_request(request, protocol_mode="persistent")
+    except Exception as error:
+        prepared: tuple[Mapping[str, Any], bytes, DocumentFormat] | dict[str, object]
+        prepared = _error_result(request, error)
+    else:
+        prepared = (request, source, format)
+    _write_frame(
+        {
+            "schema": PERSISTENT_PREPARED_SCHEMA,
+            "protocol": PERSISTENT_PROTOCOL_SCHEMA,
+            "sequence": sequence,
+            "pid": os.getpid(),
+        }
+    )
+    execute = _json_object(_read_frame(), "persistent execute")
+    if set(execute) != {"schema", "protocol", "sequence", "pid"}:
+        raise RunnerContractError("persistent execute fields differ")
+    if execute.get("schema") != PERSISTENT_EXECUTE_SCHEMA:
+        raise RunnerContractError("persistent execute schema differs")
+    if execute.get("protocol") != PERSISTENT_PROTOCOL_SCHEMA:
+        raise RunnerContractError("persistent execute protocol differs")
+    if _u64(execute.get("sequence"), "persistent execute sequence") != sequence:
+        raise RunnerContractError("persistent execute sequence differs")
+    if _u64(execute.get("pid"), "persistent execute pid") != os.getpid():
+        raise RunnerContractError("persistent execute pid differs")
+    if isinstance(prepared, tuple):
+        prepared_request, source, format = prepared
+        try:
+            result = _run_validated_request(
+                prepared_request,
+                source=source,
+                format=format,
+            )
+        except Exception as error:
+            result = _error_result(prepared_request, error)
+    else:
+        result = prepared
+    instance_preimage = f"{os.getpid()}:{instance_counter}:{sequence}".encode("ascii")
+    _write_frame(
+        {
+            "schema": PERSISTENT_RESPONSE_SCHEMA,
+            "protocol": PERSISTENT_PROTOCOL_SCHEMA,
+            "sequence": sequence,
+            "ontology_instance_id": hashlib.sha256(instance_preimage).hexdigest(),
+            "result": result,
+        }
+    )
+    return True
 
 
 def _read_frame() -> bytes:

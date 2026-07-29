@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import importlib.util
 import json
 import os
 import sys
-from collections.abc import Iterator
+import weakref
+from collections import deque
+from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -20,6 +23,67 @@ from tools.benchmark.comparators.adapters import default_options
 from tools.benchmark.comparators.common_contract import build_core_common_contract
 
 RUNNER = Path("benchmarks/comparators/runners/py_horned_common.py")
+
+
+class _WeakMapping(dict[str, object]):
+    pass
+
+
+class _WeakSource:
+    pass
+
+
+def _retention_test_frames(
+    runner_module: ModuleType,
+    references: dict[str, weakref.ReferenceType[object]],
+) -> deque[object]:
+    request = _WeakMapping({"test": "first-request"})
+    request_frame = _WeakMapping(
+        {
+            "schema": runner_module.PERSISTENT_REQUEST_SCHEMA,
+            "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+            "sequence": 0,
+            "request": request,
+        }
+    )
+    execute = _WeakMapping(
+        {
+            "schema": runner_module.PERSISTENT_EXECUTE_SCHEMA,
+            "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+            "sequence": 0,
+            "pid": os.getpid(),
+        }
+    )
+    references.update(
+        {
+            "execute": weakref.ref(execute),
+            "frame": weakref.ref(request_frame),
+            "request": weakref.ref(request),
+        }
+    )
+    return deque(
+        (
+            request_frame,
+            execute,
+            {
+                "schema": runner_module.PERSISTENT_REQUEST_SCHEMA,
+                "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                "sequence": 1,
+                "request": {"test": "second-request"},
+            },
+            {
+                "schema": runner_module.PERSISTENT_EXECUTE_SCHEMA,
+                "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                "sequence": 1,
+                "pid": os.getpid(),
+            },
+            {
+                "schema": runner_module.PERSISTENT_SHUTDOWN_SCHEMA,
+                "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                "sequence": 2,
+            },
+        )
+    )
 
 
 @pytest.fixture(scope="module")
@@ -210,6 +274,74 @@ def test_persistent_runner_rejects_a_wrong_shutdown_sequence(
 
     with pytest.raises(runner_module.RunnerContractError, match="sequence is nonmonotonic"):
         runner_module._persistent_main()
+
+
+def test_persistent_runner_releases_request_state_before_the_next_request(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    references: dict[str, weakref.ReferenceType[object]] = {}
+    frames = _retention_test_frames(runner_module, references)
+    validate_calls = 0
+    result_calls = 0
+    release_checked = False
+
+    def read_frame() -> object:
+        nonlocal release_checked
+        if len(frames) == 3:
+            gc.collect()
+            assert set(references) == {"execute", "frame", "request", "result", "source"}
+            assert {
+                name for name, reference in references.items() if reference() is not None
+            } == set()
+            release_checked = True
+        return frames.popleft()
+
+    def json_object(value: object, _label: str) -> Mapping[str, Any]:
+        assert isinstance(value, Mapping)
+        return value
+
+    def validate_request(
+        _request: Mapping[str, Any],
+        *,
+        protocol_mode: str,
+    ) -> tuple[object, DocumentFormat]:
+        nonlocal validate_calls
+        assert protocol_mode == "persistent"
+        validate_calls += 1
+        source = _WeakSource()
+        if validate_calls == 1:
+            references["source"] = weakref.ref(source)
+        return source, DocumentFormat.FUNCTIONAL
+
+    def run_validated_request(
+        _request: Mapping[str, Any],
+        *,
+        source: object,
+        format: DocumentFormat,
+    ) -> dict[str, object]:
+        nonlocal result_calls
+        assert isinstance(source, _WeakSource)
+        assert format is DocumentFormat.FUNCTIONAL
+        result_calls += 1
+        result = _WeakMapping({"status": "ok"})
+        if result_calls == 1:
+            references["result"] = weakref.ref(result)
+        return result
+
+    def write_frame(value: Mapping[str, object]) -> None:
+        assert isinstance(value.get("schema"), str)
+
+    monkeypatch.setattr(runner_module, "_read_frame", read_frame)
+    monkeypatch.setattr(runner_module, "_json_object", json_object)
+    monkeypatch.setattr(runner_module, "_validate_request", validate_request)
+    monkeypatch.setattr(runner_module, "_run_validated_request", run_validated_request)
+    monkeypatch.setattr(runner_module, "_write_frame", write_frame)
+
+    runner_module._persistent_main()
+
+    assert release_checked is True
+    assert validate_calls == result_calls == 2
 
 
 @pytest.mark.parametrize(
