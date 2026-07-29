@@ -6,8 +6,8 @@
       "sha256": "35a6becdbc14c384ba87a283dd1b1900f73b19e46e535db23244617d7c0bfed8"
     },
     ".github/workflows/native-safety.yml": {
-      "bytes": 7082,
-      "sha256": "0ac4909e1794224c9b9172554fedc5bf763657770c9713f39e1a91da5fde67fd"
+      "bytes": 11349,
+      "sha256": "1ebcd905475f6bffba38f3667ee9c80b7bcb1c9f028cb9467e613eb55f3fddd0"
     },
     ".github/workflows/release.yml": {
       "bytes": 24917,
@@ -26,12 +26,12 @@
       "sha256": "143c6038631949aaddc13f33f21d3d37e421497e80de6a7cff76c38eb9779707"
     },
     "native/Cargo.toml": {
-      "bytes": 901,
-      "sha256": "6bcedfcbb646b4f9a89371c846589906867d55fe6b07d94b3e46f69bdba35e93"
+      "bytes": 990,
+      "sha256": "2df3046b1addc56b0a14c5c94cced87fdd69569168c2be6f042c85e94ec5d564"
     },
     "native/build.rs": {
-      "bytes": 9090,
-      "sha256": "4c911604b24c07f1a724f6c8a5a04f297489586444d863d29b65f69aa7b8fa08"
+      "bytes": 9147,
+      "sha256": "cc3a71afa1bcdfaafe06ba4a9f3d0ac0f0842ce91ece7ac56f786cc09905e7f4"
     },
     "pyowl_build.py": {
       "bytes": 9961,

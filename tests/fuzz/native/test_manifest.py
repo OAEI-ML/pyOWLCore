@@ -37,7 +37,10 @@ def test_native_fuzz_targets_track_the_current_production_module_graph() -> None
         assert "native/src/hash.rs" in target
         assert "native/src/model/mod.rs" in target
     assert "#[cfg(not(fuzzing))]\nmod retained;" in parser
-    assert "#[cfg(fuzzing)]\npub(crate) type InterruptSlot = Arc<()>;" in cancellation
+    assert (
+        '#[cfg(any(fuzzing, not(feature = "extension-module")))]\n'
+        "pub(crate) type InterruptSlot = Arc<()>;"
+    ) in cancellation
 
 
 def test_wire_fuzzer_uses_the_production_abi_version() -> None:
