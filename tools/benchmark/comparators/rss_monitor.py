@@ -16,7 +16,7 @@ from .rss_interval import (
     RssIntervalEvidence,
 )
 
-_MONITOR_PROTOCOL: Final = "pyowl-core/comparator-rss-monitor/v1"
+_MONITOR_PROTOCOL: Final = "pyowl-core/comparator-rss-monitor/v2"
 _MONITOR_TIMEOUT_SECONDS: Final = 10.0
 _MONITOR_CLEANUP_TIMEOUT_SECONDS: Final = 1.0
 _MAX_U64: Final = 2**64 - 1
@@ -54,29 +54,32 @@ class SubprocessRssIntervalSampler:
         self._process: BaseProcess | None = None
         self._process_started = False
         self._process_closed = False
+        self._prepared = False
         self._started = False
         self._stopped = False
 
-    def start(self) -> None:
-        """Start the helper and wait until its quiescent sample is captured."""
+    def prepare(self) -> None:
+        """Spawn an idle helper without beginning the measured RSS interval."""
 
         if self._started:
-            raise RssIntervalError("RSS monitor cannot be started twice")
+            raise RssIntervalError("RSS monitor cannot prepare after sampling started")
+        if self._prepared:
+            raise RssIntervalError("RSS monitor cannot be prepared twice")
         if self._stopped:
-            raise RssIntervalError("RSS monitor cannot start after it was aborted")
-        self._started = True
+            raise RssIntervalError("RSS monitor cannot prepare after it was aborted")
         try:
             self._create_process()
             process = self._require_process()
             self._process_started = True
             process.start()
             self._close_child_connection()
-            message = self._receive("startup")
+            message = self._receive("prepare")
             if message != {
                 "protocol": _MONITOR_PROTOCOL,
-                "state": "ready",
+                "state": "prepared",
             }:
-                raise RssIntervalError("RSS monitor startup acknowledgement is invalid")
+                raise RssIntervalError("RSS monitor prepare acknowledgement is invalid")
+            self._prepared = True
         except RssIntervalError:
             self._stopped = True
             self._terminate()
@@ -85,6 +88,40 @@ class SubprocessRssIntervalSampler:
             self._stopped = True
             self._terminate()
             raise RssIntervalError("RSS monitor process could not start") from error
+
+    def start(self) -> None:
+        """Arm the prepared helper and wait until its baseline is captured."""
+
+        if self._started:
+            raise RssIntervalError("RSS monitor cannot be started twice")
+        if self._stopped:
+            raise RssIntervalError("RSS monitor cannot start after it was aborted")
+        if not self._prepared:
+            self.prepare()
+        self._started = True
+        connection = self._require_connection()
+        try:
+            connection.send(
+                {
+                    "protocol": _MONITOR_PROTOCOL,
+                    "command": "start",
+                }
+            )
+        except (BrokenPipeError, EOFError, OSError, ValueError) as error:
+            self._stopped = True
+            self._terminate()
+            raise RssIntervalError("RSS monitor start request failed") from error
+        try:
+            message = self._receive("start")
+            if message != {
+                "protocol": _MONITOR_PROTOCOL,
+                "state": "ready",
+            }:
+                raise RssIntervalError("RSS monitor start acknowledgement is invalid")
+        except RssIntervalError:
+            self._stopped = True
+            self._terminate()
+            raise
 
     def stop(self) -> RssIntervalEvidence:
         """Stop the helper and return its complete interval evidence."""
@@ -262,6 +299,18 @@ def _monitor(
     sampler: CurrentRssIntervalSampler | None = None
     sampler_running = False
     try:
+        connection.send(
+            {
+                "protocol": _MONITOR_PROTOCOL,
+                "state": "prepared",
+            }
+        )
+        request = connection.recv()
+        if request != {
+            "protocol": _MONITOR_PROTOCOL,
+            "command": "start",
+        }:
+            raise RssIntervalError("RSS monitor start request is invalid")
         sampler = CurrentRssIntervalSampler(
             pid,
             sample_interval_seconds=sample_interval_seconds,
@@ -274,8 +323,8 @@ def _monitor(
                 "state": "ready",
             }
         )
-        request = connection.recv()
-        if request != {
+        stop_request = connection.recv()
+        if stop_request != {
             "protocol": _MONITOR_PROTOCOL,
             "command": "stop",
         }:

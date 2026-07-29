@@ -24,10 +24,15 @@ from tools.benchmark.comparators.persistent import (
     PERSISTENT_EXECUTE_SCHEMA,
     PERSISTENT_PREPARED_SCHEMA,
     PERSISTENT_PROTOCOL_SCHEMA,
+    PERSISTENT_REQUEST_SCHEMA,
     PersistentExternalRunner,
     PersistentRunnerError,
 )
-from tools.benchmark.comparators.rss_interval import RSS_INTERVAL_SCHEMA, RssIntervalError
+from tools.benchmark.comparators.rss_interval import (
+    RSS_INTERVAL_SCHEMA,
+    RssIntervalError,
+    RssIntervalEvidence,
+)
 from tools.benchmark.manifest import generated_bytes, load_manifest
 
 _TEST_HANDSHAKE_TIMEOUT_SECONDS = 2.0
@@ -112,21 +117,273 @@ def test_persistent_runner_samples_only_after_the_prepared_boundary(
     assert audit["status"] == "pass"
 
 
+def test_persistent_runner_brackets_execute_with_subprocess_rss_sampling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pin, executable = _pinned_runner(tmp_path)
+    _set_launcher(monkeypatch, pin, executable)
+    runner = PersistentExternalRunner.open(
+        pin,
+        handshake_timeout_seconds=_TEST_HANDSHAKE_TIMEOUT_SECONDS,
+        timeout_seconds=1.0,
+        shutdown_timeout_seconds=1.0,
+    )
+    events: list[str] = []
+    original_exchange = runner._exchange_frame
+    cpu_clock = iter((1_000, 1_400))
+    wall_clock = iter((2_000, 2_900))
+
+    def recording_exchange(
+        value: dict[str, object],
+        **kwargs: Any,
+    ) -> tuple[bytes, int, int]:
+        events.append(f"exchange:{value['schema']}")
+        return original_exchange(value, **kwargs)
+
+    class RecordingSampler:
+        def __init__(self, pid: int) -> None:
+            assert pid == runner._process.pid
+            self._pid = pid
+            events.append("sampler:init")
+
+        def prepare(self) -> None:
+            events.append("sampler:prepare")
+
+        def start(self) -> None:
+            events.append("sampler:start")
+
+        def stop(self) -> RssIntervalEvidence:
+            events.append("sampler:stop")
+            return RssIntervalEvidence(
+                source="test-spawned-rss-monitor",
+                pid=self._pid,
+                quiescent_current_bytes=100,
+                interval_peak_bytes=125,
+                incremental_peak_bytes=25,
+                sample_count=2,
+                maximum_sample_gap_ns=1,
+            )
+
+        def abort(self) -> None:
+            events.append("sampler:abort")
+
+    def process_time_ns() -> int:
+        events.append("clock:cpu")
+        return next(cpu_clock)
+
+    def perf_counter_ns() -> int:
+        events.append("clock:wall")
+        return next(wall_clock)
+
+    monkeypatch.setattr(runner, "_exchange_frame", recording_exchange)
+    monkeypatch.setattr(persistent_module, "SubprocessRssIntervalSampler", RecordingSampler)
+    monkeypatch.setattr(time, "process_time_ns", process_time_ns)
+    monkeypatch.setattr(time, "perf_counter_ns", perf_counter_ns)
+
+    result = runner.run(_steady_request())
+    audit = runner.close()
+
+    assert result["status"] == "ok"
+    assert events[:9] == [
+        "sampler:init",
+        "sampler:prepare",
+        "clock:cpu",
+        "clock:wall",
+        f"exchange:{PERSISTENT_REQUEST_SCHEMA}",
+        "sampler:start",
+        f"exchange:{PERSISTENT_EXECUTE_SCHEMA}",
+        "sampler:stop",
+        "clock:wall",
+    ]
+    assert events[9] == "clock:cpu"
+    assert "sampler:abort" not in events
+    assert result["transport_metrics"]["parent_wall_ns"] == 900
+    assert result["transport_metrics"]["parent_cpu_ns"] == 400
+    assert result["transport_metrics"]["rss_interval"] == {
+        "schema": RSS_INTERVAL_SCHEMA,
+        "source": "test-spawned-rss-monitor",
+        "pid": runner._process.pid,
+        "quiescent_current_bytes": 100,
+        "interval_peak_bytes": 125,
+        "incremental_peak_bytes": 25,
+        "sample_count": 2,
+        "maximum_sample_gap_ns": 1,
+    }
+    assert audit["status"] == "pass"
+
+
+def test_persistent_runner_aborts_rss_monitor_when_execute_exchange_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pin, executable = _pinned_runner(tmp_path)
+    _set_launcher(monkeypatch, pin, executable)
+    runner = PersistentExternalRunner.open(
+        pin,
+        handshake_timeout_seconds=_TEST_HANDSHAKE_TIMEOUT_SECONDS,
+        timeout_seconds=0.5,
+        shutdown_timeout_seconds=0.1,
+    )
+    events: list[str] = []
+    exchanges = 0
+    original_exchange = runner._exchange_frame
+
+    def failing_exchange(
+        value: dict[str, object],
+        **kwargs: Any,
+    ) -> tuple[bytes, int, int]:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 2:
+            raise PersistentRunnerError("injected execute exchange failure")
+        return original_exchange(value, **kwargs)
+
+    class RecordingSampler:
+        def __init__(self, pid: int) -> None:
+            assert pid == runner._process.pid
+
+        def prepare(self) -> None:
+            events.append("prepare")
+
+        def start(self) -> None:
+            events.append("start")
+
+        def stop(self) -> RssIntervalEvidence:
+            raise AssertionError("failed execute exchange must not accept RSS evidence")
+
+        def abort(self) -> None:
+            events.append("abort")
+
+    monkeypatch.setattr(runner, "_exchange_frame", failing_exchange)
+    monkeypatch.setattr(persistent_module, "SubprocessRssIntervalSampler", RecordingSampler)
+
+    result = runner.run(_steady_request())
+    audit = runner.close()
+
+    assert result["status"] == "error"
+    assert "injected execute exchange failure" in result["reason"]
+    assert events == ["prepare", "start", "abort"]
+    assert audit["status"] == "error"
+    assert audit["shutdown"] == "terminated-after-error"
+    assert runner._process.poll() is not None
+
+
+def test_persistent_runner_aborts_prepared_rss_monitor_when_request_exchange_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pin, executable = _pinned_runner(tmp_path)
+    _set_launcher(monkeypatch, pin, executable)
+    runner = PersistentExternalRunner.open(
+        pin,
+        handshake_timeout_seconds=_TEST_HANDSHAKE_TIMEOUT_SECONDS,
+        timeout_seconds=0.5,
+        shutdown_timeout_seconds=0.1,
+    )
+    events: list[str] = []
+
+    def failing_exchange(
+        _value: dict[str, object],
+        **_kwargs: Any,
+    ) -> tuple[bytes, int, int]:
+        raise PersistentRunnerError("injected request exchange failure")
+
+    class RecordingSampler:
+        def __init__(self, pid: int) -> None:
+            assert pid == runner._process.pid
+
+        def prepare(self) -> None:
+            events.append("prepare")
+
+        def start(self) -> None:
+            raise AssertionError("sampling must not start before the prepared boundary")
+
+        def stop(self) -> RssIntervalEvidence:
+            raise AssertionError("failed request exchange cannot produce RSS evidence")
+
+        def abort(self) -> None:
+            events.append("abort")
+
+    monkeypatch.setattr(runner, "_exchange_frame", failing_exchange)
+    monkeypatch.setattr(persistent_module, "SubprocessRssIntervalSampler", RecordingSampler)
+
+    result = runner.run(_steady_request())
+    audit = runner.close()
+
+    assert result["status"] == "error"
+    assert "injected request exchange failure" in result["reason"]
+    assert events == ["prepare", "abort"]
+    assert audit["status"] == "error"
+    assert audit["shutdown"] == "terminated-after-error"
+    assert runner._process.poll() is not None
+
+
+def test_persistent_runner_aborts_rss_monitor_when_prepared_validation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pin, executable = _pinned_runner(tmp_path, mode="prepared-wrong-schema")
+    _set_launcher(monkeypatch, pin, executable)
+    events: list[str] = []
+
+    class RecordingSampler:
+        def __init__(self, pid: int) -> None:
+            assert pid > 0
+
+        def prepare(self) -> None:
+            events.append("prepare")
+
+        def start(self) -> None:
+            raise AssertionError("sampling must not start after an invalid prepared response")
+
+        def stop(self) -> RssIntervalEvidence:
+            raise AssertionError("invalid prepared response cannot produce RSS evidence")
+
+        def abort(self) -> None:
+            events.append("abort")
+
+    monkeypatch.setattr(persistent_module, "SubprocessRssIntervalSampler", RecordingSampler)
+    runner = PersistentExternalRunner.open(
+        pin,
+        handshake_timeout_seconds=_TEST_HANDSHAKE_TIMEOUT_SECONDS,
+        timeout_seconds=0.5,
+        shutdown_timeout_seconds=0.1,
+    )
+
+    result = runner.run(_steady_request())
+    audit = runner.close()
+
+    assert result["status"] == "error"
+    assert "prepared schema differs" in result["reason"]
+    assert events == ["prepare", "abort"]
+    assert audit["status"] == "error"
+    assert audit["shutdown"] == "terminated-after-error"
+    assert runner._process.poll() is not None
+
+
 def test_persistent_runner_fails_closed_when_rss_sampling_cannot_start(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     pin, executable = _pinned_runner(tmp_path)
     _set_launcher(monkeypatch, pin, executable)
+    events: list[str] = []
 
     class BrokenSampler:
         def __init__(self, pid: int) -> None:
             assert pid > 0
 
+        def prepare(self) -> None:
+            events.append("prepare")
+
         def start(self) -> None:
             raise RssIntervalError("injected RSS sampling failure")
 
-    monkeypatch.setattr(persistent_module, "CurrentRssIntervalSampler", BrokenSampler)
+        def abort(self) -> None:
+            events.append("abort")
+
+    monkeypatch.setattr(persistent_module, "SubprocessRssIntervalSampler", BrokenSampler)
     runner = PersistentExternalRunner.open(
         pin,
         handshake_timeout_seconds=_TEST_HANDSHAKE_TIMEOUT_SECONDS,
@@ -142,6 +399,7 @@ def test_persistent_runner_fails_closed_when_rss_sampling_cannot_start(
     assert audit["status"] == "error"
     assert audit["shutdown"] == "terminated-after-error"
     assert runner._process.poll() is not None
+    assert events == ["prepare", "abort"]
 
 
 def test_persistent_runner_fails_closed_when_rss_sampling_cannot_stop(
@@ -150,10 +408,14 @@ def test_persistent_runner_fails_closed_when_rss_sampling_cannot_stop(
 ) -> None:
     pin, executable = _pinned_runner(tmp_path)
     _set_launcher(monkeypatch, pin, executable)
+    events: list[str] = []
 
     class BrokenSampler:
         def __init__(self, pid: int) -> None:
             assert pid > 0
+
+        def prepare(self) -> None:
+            pass
 
         def start(self) -> None:
             pass
@@ -161,7 +423,10 @@ def test_persistent_runner_fails_closed_when_rss_sampling_cannot_stop(
         def stop(self) -> None:
             raise RssIntervalError("injected RSS sampling completion failure")
 
-    monkeypatch.setattr(persistent_module, "CurrentRssIntervalSampler", BrokenSampler)
+        def abort(self) -> None:
+            events.append("abort")
+
+    monkeypatch.setattr(persistent_module, "SubprocessRssIntervalSampler", BrokenSampler)
     runner = PersistentExternalRunner.open(
         pin,
         handshake_timeout_seconds=_TEST_HANDSHAKE_TIMEOUT_SECONDS,
@@ -177,6 +442,7 @@ def test_persistent_runner_fails_closed_when_rss_sampling_cannot_stop(
     assert audit["status"] == "error"
     assert audit["shutdown"] == "terminated-after-error"
     assert runner._process.poll() is not None
+    assert events == ["abort"]
 
 
 @pytest.mark.parametrize(

@@ -39,6 +39,9 @@ def test_subprocess_sampler_observes_and_reaps_current_process_monitor() -> None
 def test_subprocess_sampler_lifecycle_is_single_use() -> None:
     sampler = SubprocessRssIntervalSampler(os.getpid(), timeout_seconds=5.0)
     try:
+        sampler.prepare()
+        with pytest.raises(RssIntervalError, match="prepared twice"):
+            sampler.prepare()
         sampler.start()
         with pytest.raises(RssIntervalError, match="started twice"):
             sampler.start()
@@ -55,6 +58,8 @@ def test_subprocess_sampler_abort_before_start_is_idempotent_and_terminal() -> N
     sampler.abort()
     sampler.abort()
 
+    with pytest.raises(RssIntervalError, match="cannot prepare after it was aborted"):
+        sampler.prepare()
     with pytest.raises(RssIntervalError, match="cannot start after it was aborted"):
         sampler.start()
 
@@ -101,7 +106,10 @@ def test_subprocess_sampler_kills_and_closes_an_unresponsive_helper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     parent = _FakeConnection(
-        incoming=[{"protocol": rss_monitor_module._MONITOR_PROTOCOL, "state": "ready"}]
+        incoming=[
+            {"protocol": rss_monitor_module._MONITOR_PROTOCOL, "state": "prepared"},
+            {"protocol": rss_monitor_module._MONITOR_PROTOCOL, "state": "ready"},
+        ]
     )
     child = _FakeConnection()
     process = _FakeProcess(terminate_stops=False)
@@ -124,6 +132,34 @@ def test_subprocess_sampler_kills_and_closes_an_unresponsive_helper(
     assert child.closed is True
 
 
+def test_subprocess_sampler_prepare_keeps_helper_idle_until_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = _FakeConnection(
+        incoming=[{"protocol": rss_monitor_module._MONITOR_PROTOCOL, "state": "prepared"}]
+    )
+    child = _FakeConnection()
+    process = _FakeProcess()
+    _install_fake_context(monkeypatch, parent=parent, child=child, process=process)
+    sampler = SubprocessRssIntervalSampler(os.getpid())
+
+    sampler.prepare()
+
+    assert process.alive is True
+    assert parent.sent == []
+
+    parent.incoming.append({"protocol": rss_monitor_module._MONITOR_PROTOCOL, "state": "ready"})
+    sampler.start()
+
+    assert parent.sent == [
+        {
+            "protocol": rss_monitor_module._MONITOR_PROTOCOL,
+            "command": "start",
+        }
+    ]
+    sampler.abort()
+
+
 def test_subprocess_sampler_poll_failure_closes_and_reaps_helper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -133,7 +169,7 @@ def test_subprocess_sampler_poll_failure_closes_and_reaps_helper(
     _install_fake_context(monkeypatch, parent=parent, child=child, process=process)
     sampler = SubprocessRssIntervalSampler(os.getpid())
 
-    with pytest.raises(RssIntervalError, match="startup response failed"):
+    with pytest.raises(RssIntervalError, match="prepare response failed"):
         sampler.start()
     sampler.abort()
 
@@ -154,6 +190,12 @@ def test_monitor_error_after_completion_does_not_stop_sampler_twice(
         *,
         sample_interval_seconds: float,
     ) -> _FakeIntervalSampler:
+        assert connection.sent == [
+            {
+                "protocol": rss_monitor_module._MONITOR_PROTOCOL,
+                "state": "prepared",
+            }
+        ]
         sampler = _FakeIntervalSampler(pid, sample_interval_seconds=sample_interval_seconds)
         samplers.append(sampler)
         return sampler
@@ -335,8 +377,12 @@ class _CompleteSendFailureConnection(_FakeConnection):
             incoming=[
                 {
                     "protocol": rss_monitor_module._MONITOR_PROTOCOL,
+                    "command": "start",
+                },
+                {
+                    "protocol": rss_monitor_module._MONITOR_PROTOCOL,
                     "command": "stop",
-                }
+                },
             ]
         )
 

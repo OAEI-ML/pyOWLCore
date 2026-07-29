@@ -30,7 +30,8 @@ from .adapters import (
     sanitize_failure,
 )
 from .manifest import ComparatorPin
-from .rss_interval import CurrentRssIntervalSampler, RssIntervalError
+from .rss_interval import RssIntervalError
+from .rss_monitor import SubprocessRssIntervalSampler
 
 PERSISTENT_PROTOCOL_SCHEMA = "pyowl-core/comparator-persistent-runner/v2"
 PERSISTENT_HANDSHAKE_SCHEMA = "pyowl-core/comparator-persistent-handshake/v2"
@@ -232,19 +233,20 @@ class PersistentExternalRunner:
                 "sequence": self._sequence,
                 "request": request.protocol_dict(self.pin),
             }
-            parent_cpu_start = time.process_time_ns()
-            parent_wall_start = time.perf_counter_ns()
-            prepared_payload, request_frame_bytes, prepared_stderr_bytes = self._exchange_frame(
-                request_object,
-                timeout=self._timeout_seconds,
-                max_response_bytes=MAX_PERSISTENT_HANDSHAKE_BYTES,
-            )
-            self._validate_prepared(
-                _json_object(prepared_payload, "persistent prepared acknowledgement")
-            )
-            sampler = CurrentRssIntervalSampler(self._process.pid)
-            sampler.start()
+            sampler = SubprocessRssIntervalSampler(self._process.pid)
             try:
+                sampler.prepare()
+                parent_cpu_start = time.process_time_ns()
+                parent_wall_start = time.perf_counter_ns()
+                prepared_payload, request_frame_bytes, prepared_stderr_bytes = self._exchange_frame(
+                    request_object,
+                    timeout=self._timeout_seconds,
+                    max_response_bytes=MAX_PERSISTENT_HANDSHAKE_BYTES,
+                )
+                self._validate_prepared(
+                    _json_object(prepared_payload, "persistent prepared acknowledgement")
+                )
+                sampler.start()
                 payload, execute_frame_bytes, execute_stderr_bytes = self._exchange_frame(
                     {
                         "schema": PERSISTENT_EXECUTE_SCHEMA,
@@ -255,38 +257,38 @@ class PersistentExternalRunner:
                     timeout=self._timeout_seconds,
                     max_response_bytes=self._max_stdout_bytes,
                 )
-            except (OSError, TypeError, ValueError, PersistentRunnerError):
+                rss_interval = sampler.stop()
+                parent_wall_ns = time.perf_counter_ns() - parent_wall_start
+                parent_cpu_ns = time.process_time_ns() - parent_cpu_start
+                response = _json_object(payload, "persistent response")
+                result, ontology_instance_id = self._validate_response(request, response)
+                self._seen_ontology_instances.add(ontology_instance_id)
+                self._sequence += 1
+                self._response_count += 1
+                transport = result.setdefault("transport_metrics", {})
+                if not isinstance(transport, dict):
+                    raise PersistentRunnerError("transport_metrics must be an object")
+                transport.update(
+                    {
+                        "parent_wall_ns": parent_wall_ns,
+                        "parent_cpu_ns": parent_cpu_ns,
+                        "request_bytes": request_frame_bytes + execute_frame_bytes,
+                        "stdout_bytes": (
+                            _frame_wire_size(prepared_payload) + _frame_wire_size(payload)
+                        ),
+                        "stderr_bytes": prepared_stderr_bytes + execute_stderr_bytes,
+                        "persistent_protocol": PERSISTENT_PROTOCOL_SCHEMA,
+                        "persistent_sequence": self._sequence - 1,
+                        "persistent_runner_pid": self._process.pid,
+                        "ontology_instance_id": ontology_instance_id,
+                        "rss_interval": rss_interval.to_dict(),
+                    }
+                )
+                return result
+            except (OSError, TypeError, ValueError, PersistentRunnerError, RssIntervalError):
                 with suppress(RssIntervalError):
-                    sampler.stop()
+                    sampler.abort()
                 raise
-            rss_interval = sampler.stop()
-            parent_wall_ns = time.perf_counter_ns() - parent_wall_start
-            parent_cpu_ns = time.process_time_ns() - parent_cpu_start
-            response = _json_object(payload, "persistent response")
-            result, ontology_instance_id = self._validate_response(request, response)
-            self._seen_ontology_instances.add(ontology_instance_id)
-            self._sequence += 1
-            self._response_count += 1
-            transport = result.setdefault("transport_metrics", {})
-            if not isinstance(transport, dict):
-                raise PersistentRunnerError("transport_metrics must be an object")
-            transport.update(
-                {
-                    "parent_wall_ns": parent_wall_ns,
-                    "parent_cpu_ns": parent_cpu_ns,
-                    "request_bytes": request_frame_bytes + execute_frame_bytes,
-                    "stdout_bytes": (
-                        _frame_wire_size(prepared_payload) + _frame_wire_size(payload)
-                    ),
-                    "stderr_bytes": prepared_stderr_bytes + execute_stderr_bytes,
-                    "persistent_protocol": PERSISTENT_PROTOCOL_SCHEMA,
-                    "persistent_sequence": self._sequence - 1,
-                    "persistent_runner_pid": self._process.pid,
-                    "ontology_instance_id": ontology_instance_id,
-                    "rss_interval": rss_interval.to_dict(),
-                }
-            )
-            return result
         except (OSError, TypeError, ValueError, PersistentRunnerError, RssIntervalError) as error:
             self._mark_failed(error)
             return _error(self.pin, request, PersistentRunnerError(str(error)))
