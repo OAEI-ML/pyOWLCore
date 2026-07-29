@@ -25,7 +25,8 @@ use crate::model::{EncodedStructuralColumnsV1, PreparedEncodedStructuralColumnsV
 use super::records::Digest;
 use super::{
     TypedFacadeCollectionV2, TypedFacadeCoordinateV2, TypedFacadePageRequestV2, TypedFacadeScopeV2,
-    TypedFacadeSignatureKindV2, TypedFacadeStorageV2,
+    TypedFacadeSignatureKindV2, TypedFacadeStorageV2, TypedRdfReportRowsV2, TypedSourceMapRowsV2,
+    AUXILIARY_CODEC_SCHEMA_SHA256_V2,
 };
 
 pub(super) const PUBLICATION_VERSION_V2: u32 = 2;
@@ -37,11 +38,6 @@ const FACADE_ACCESS_SCHEMA_SHA256_V2: Digest = [
     0xc4, 0x5b, 0x65, 0x8c, 0x43, 0x57, 0x13, 0x1b, 0x09, 0xcc, 0x75, 0x09, 0x33, 0x0a, 0x70, 0xf2,
     0x46, 0xa7, 0x1a, 0x2c, 0x37, 0x21, 0xb8, 0x9c, 0x34, 0x0c, 0xcf, 0x70, 0xad, 0x91, 0xd7, 0x0b,
 ];
-pub(crate) const AUXILIARY_CODEC_SCHEMA_SHA256_V2: Digest = [
-    0x60, 0x72, 0x8e, 0xf2, 0x00, 0x6e, 0x0b, 0x9c, 0x46, 0x7e, 0x4e, 0x7d, 0xd1, 0xb4, 0x38, 0xb9,
-    0x13, 0x34, 0x48, 0xfd, 0x3d, 0x2b, 0x6b, 0xe6, 0x7d, 0x7e, 0xd4, 0x01, 0x93, 0x7e, 0x8a, 0xab,
-];
-
 const HANDOFF_MODULE: &str = "pyowl_core.backends.native_handoff_v2";
 const MAX_FIXTURE_TABLES: usize = 100_000;
 const MAX_FACADE_PAGE_ROWS_V2: u32 = 64;
@@ -803,20 +799,6 @@ pub(crate) struct RetainedOntologyIdentityContractV1<'a> {
     pub(crate) import_edge_count: u64,
     pub(crate) diagnostic_count: u64,
     pub(crate) retained_owner_bytes: u64,
-}
-
-#[derive(Debug)]
-pub(crate) struct TypedRdfReportRowsV2 {
-    pub(crate) header: Vec<u8>,
-    pub(crate) unconsumed_triples: Vec<Vec<u8>>,
-    pub(crate) rule_ids: Vec<Vec<u8>>,
-    pub(crate) diagnostics: Vec<Vec<u8>>,
-}
-
-#[derive(Debug)]
-pub(crate) struct TypedSourceMapRowsV2 {
-    pub(crate) entries: Vec<Vec<u8>>,
-    pub(crate) prefixes: Vec<Vec<u8>>,
 }
 
 impl PublicationStorageV2 {

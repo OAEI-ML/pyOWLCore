@@ -15,6 +15,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use base64::Engine as _;
@@ -38,8 +39,8 @@ const ENGINE_ARTIFACT: &str = "crates.io horned-owl-1.4.0.crate";
 const ENGINE_SHA256: &str = "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e";
 const ALLOCATOR: &str = "Rust system allocator";
 const THREAD_CEILING: u64 = 1;
-const RAW_RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v3";
-const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v4";
+const RAW_RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v5";
+const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v6";
 const RUNNER_FEATURES: &[&str] = &["default", "independent-common-contract-v1"];
 
 const ADAPTER_REQUEST_SCHEMA: &str = "pyowl-core/comparator-adapter-request/v2";
@@ -47,16 +48,25 @@ const ADAPTER_RESULT_SCHEMA: &str = "pyowl-core/comparator-adapter-result/v1";
 const TIMED_VALIDATION_SCHEMA: &str = "pyowl-core/comparator-timed-validation/v1";
 const RAW_INVENTORY_SCHEMA: &str = "pyowl-core/comparator-raw-inventory/v1";
 const RAW_INVENTORY_DOMAIN: &[u8] = b"pyowl-core:comparator-raw-inventory:v1\0";
-const PERSISTENT_PROTOCOL_SCHEMA: &str = "pyowl-core/comparator-persistent-runner/v2";
-const PERSISTENT_HANDSHAKE_SCHEMA: &str = "pyowl-core/comparator-persistent-handshake/v2";
-const PERSISTENT_REQUEST_SCHEMA: &str = "pyowl-core/comparator-persistent-request/v2";
+const FRESH_PROTOCOL_SCHEMA: &str = "pyowl-core/comparator-fresh-runner/v1";
+const FRESH_REQUEST_SCHEMA: &str = "pyowl-core/comparator-fresh-request/v1";
+const FRESH_COMPLETED_SCHEMA: &str = "pyowl-core/comparator-fresh-completed/v1";
+const FRESH_PUBLISH_SCHEMA: &str = "pyowl-core/comparator-fresh-publish/v1";
+const FRESH_RESPONSE_SCHEMA: &str = "pyowl-core/comparator-fresh-response/v1";
+const PERSISTENT_PROTOCOL_SCHEMA: &str = "pyowl-core/comparator-persistent-runner/v3";
+const PERSISTENT_HANDSHAKE_SCHEMA: &str = "pyowl-core/comparator-persistent-handshake/v3";
+const PERSISTENT_REQUEST_SCHEMA: &str = "pyowl-core/comparator-persistent-request/v3";
 const PERSISTENT_PREPARED_SCHEMA: &str = "pyowl-core/comparator-persistent-prepared/v1";
 const PERSISTENT_EXECUTE_SCHEMA: &str = "pyowl-core/comparator-persistent-execute/v1";
-const PERSISTENT_RESPONSE_SCHEMA: &str = "pyowl-core/comparator-persistent-response/v2";
-const PERSISTENT_SHUTDOWN_SCHEMA: &str = "pyowl-core/comparator-persistent-shutdown/v2";
-const PERSISTENT_SHUTDOWN_ACK_SCHEMA: &str = "pyowl-core/comparator-persistent-shutdown-ack/v2";
+const PERSISTENT_COMPLETED_SCHEMA: &str = "pyowl-core/comparator-persistent-completed/v1";
+const PERSISTENT_PUBLISH_SCHEMA: &str = "pyowl-core/comparator-persistent-publish/v1";
+const PERSISTENT_RESPONSE_SCHEMA: &str = "pyowl-core/comparator-persistent-response/v3";
+const PERSISTENT_SHUTDOWN_SCHEMA: &str = "pyowl-core/comparator-persistent-shutdown/v3";
+const PERSISTENT_SHUTDOWN_ACK_SCHEMA: &str = "pyowl-core/comparator-persistent-shutdown-ack/v3";
 
 const MAX_REQUEST_BYTES: usize = 512 * 1024 * 1024;
+const MAX_REQUEST_FRAME_BYTES: usize = MAX_REQUEST_BYTES + 64 * 1024;
+const MAX_CONTROL_FRAME_BYTES: usize = 64 * 1024;
 const MAX_FRAME_HEADER_BYTES: usize = 32;
 const MAX_REASON_CHARS: usize = 1_000;
 const DOCUMENT_IRI_PREFIX: &str = "urn:pyowl-core:comparator-source:sha256:";
@@ -69,6 +79,7 @@ const HORNED_LOCK_STANZA: &str = concat!(
 );
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+static RUNNER_SHA256: OnceLock<String> = OnceLock::new();
 
 struct FunctionalEdit {
     start: usize,
@@ -336,6 +347,25 @@ impl Visit<RcStr> for SignatureInventory {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct FreshRequest {
+    schema: String,
+    protocol: String,
+    sequence: u64,
+    request: AdapterRequest,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FreshPublish {
+    schema: String,
+    protocol: String,
+    sequence: u64,
+    pid: u64,
+    ontology_instance_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PersistentRequest {
     schema: String,
     protocol: String,
@@ -358,6 +388,16 @@ struct PersistentExecute {
     protocol: String,
     sequence: u64,
     pid: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistentPublish {
+    schema: String,
+    protocol: String,
+    sequence: u64,
+    pid: u64,
+    ontology_instance_id: String,
 }
 
 enum PreparedExecution {
@@ -1552,16 +1592,6 @@ fn request_identity(request: &AdapterRequest) -> Value {
     })
 }
 
-fn fallback_identity() -> Value {
-    json!({
-        "corpus_id": "invalid-request",
-        "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-        "options_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-        "input_mode": "resident-bytes",
-        "process_mode": "fresh-process",
-    })
-}
-
 fn status_result(request: &ValidatedRequest, lane: Lane, status: &str, reason: &str) -> Value {
     let identity = json!({
         "corpus_id": request.corpus_id,
@@ -1622,6 +1652,9 @@ fn artifact(lane: Lane) -> Result<Value, RunnerError> {
 }
 
 fn runner_sha256() -> Result<String, RunnerError> {
+    if let Some(value) = RUNNER_SHA256.get() {
+        return Ok(value.clone());
+    }
     let executable = std::env::current_exe()
         .map_err(|_| RunnerError::new("could not resolve comparator executable"))?;
     let mut stream = File::open(executable)
@@ -1637,7 +1670,9 @@ fn runner_sha256() -> Result<String, RunnerError> {
         }
         hasher.update(&buffer[..count]);
     }
-    Ok(hex_digest(hasher.finalize().as_slice()))
+    let digest = hex_digest(hasher.finalize().as_slice());
+    let _ = RUNNER_SHA256.set(digest.clone());
+    Ok(digest)
 }
 
 fn verify_environment() -> Result<(String, Lane), RunnerError> {
@@ -1671,33 +1706,91 @@ fn verify_environment() -> Result<(String, Lane), RunnerError> {
 }
 
 fn fresh_main(lane: Lane) -> Result<(), RunnerError> {
-    let mut body = Vec::new();
-    io::stdin()
-        .lock()
-        .take((MAX_REQUEST_BYTES + 1) as u64)
-        .read_to_end(&mut body)?;
-    let result = if body.len() > MAX_REQUEST_BYTES {
-        fallback_status_result(
-            &fallback_identity(),
-            lane,
-            "error",
-            "adapter request exceeds size limit",
-        )
-    } else {
-        match serde_json::from_slice::<AdapterRequest>(&body) {
-            Ok(request) => run_request(request, "fresh", lane),
-            Err(_) => fallback_status_result(
-                &fallback_identity(),
-                lane,
-                "error",
-                "adapter request is not valid strict schema-v2 JSON",
-            ),
-        }
-    };
-    let payload = serde_json::to_vec(&result)
-        .map_err(|_| RunnerError::new("could not serialize adapter result"))?;
-    io::stdout().lock().write_all(&payload)?;
-    io::stdout().lock().flush()?;
+    let pid = u64::from(process::id());
+    let mut input = BufReader::new(io::stdin().lock());
+    let payload = read_frame(&mut input, MAX_REQUEST_FRAME_BYTES)?;
+    let envelope: FreshRequest = serde_json::from_slice(&payload)
+        .map_err(|_| RunnerError::new("fresh request fields differ"))?;
+    if envelope.schema != FRESH_REQUEST_SCHEMA
+        || envelope.protocol != FRESH_PROTOCOL_SCHEMA
+        || envelope.sequence != 0
+    {
+        return Err(RunnerError::new("fresh request protocol differs"));
+    }
+    let mut result = run_request(envelope.request, "fresh", lane);
+    refresh_completion_metrics(&mut result)?;
+    let ontology_instance_id = sha256_hex(format!("{pid}:0:0").as_bytes());
+    write_frame(&json!({
+        "schema": FRESH_COMPLETED_SCHEMA,
+        "protocol": FRESH_PROTOCOL_SCHEMA,
+        "sequence": 0,
+        "pid": pid,
+        "ontology_instance_id": ontology_instance_id,
+    }))?;
+    let publish_payload = read_frame(&mut input, MAX_CONTROL_FRAME_BYTES)?;
+    let publish: FreshPublish = serde_json::from_slice(&publish_payload)
+        .map_err(|_| RunnerError::new("fresh publish fields differ"))?;
+    validate_fresh_publish(&publish, pid, &ontology_instance_id)?;
+    require_fresh_stdin_eof(&mut input)?;
+    write_frame(&json!({
+        "schema": FRESH_RESPONSE_SCHEMA,
+        "protocol": FRESH_PROTOCOL_SCHEMA,
+        "sequence": 0,
+        "ontology_instance_id": ontology_instance_id,
+        "result": result,
+    }))?;
+    Ok(())
+}
+
+fn require_fresh_stdin_eof<R: Read>(input: &mut R) -> Result<(), RunnerError> {
+    let mut trailing = [0_u8; 1];
+    match input.read(&mut trailing) {
+        Ok(0) => Ok(()),
+        Ok(_) => Err(RunnerError::new("fresh runner received trailing input")),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn refresh_completion_metrics(result: &mut Value) -> Result<(), RunnerError> {
+    if result.get("status").and_then(Value::as_str) != Some("ok") {
+        return Ok(());
+    }
+    let metrics = result
+        .get_mut("metrics")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| RunnerError::new("successful result metrics are missing"))?;
+    let before = metrics
+        .get("rss_peak_before_bytes")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| RunnerError::new("successful result RSS baseline is missing"))?;
+    metrics.insert("startup_to_ready_cpu_ns".to_owned(), json!(0));
+    let after = rss_peak_bytes()?;
+    metrics.insert("rss_peak_after_bytes".to_owned(), json!(after));
+    metrics.insert(
+        "rss_peak_increment_bytes".to_owned(),
+        json!(after.saturating_sub(before)),
+    );
+    let startup_to_ready_cpu_ns = cpu_time_ns()?;
+    metrics.insert(
+        "startup_to_ready_cpu_ns".to_owned(),
+        json!(startup_to_ready_cpu_ns),
+    );
+    Ok(())
+}
+
+fn validate_fresh_publish(
+    publish: &FreshPublish,
+    pid: u64,
+    ontology_instance_id: &str,
+) -> Result<(), RunnerError> {
+    if publish.schema != FRESH_PUBLISH_SCHEMA
+        || publish.protocol != FRESH_PROTOCOL_SCHEMA
+        || publish.sequence != 0
+        || publish.pid != pid
+        || publish.ontology_instance_id != ontology_instance_id
+    {
+        return Err(RunnerError::new("fresh publish protocol differs"));
+    }
     Ok(())
 }
 
@@ -1713,6 +1806,8 @@ fn persistent_main(lane: Lane) -> Result<(), RunnerError> {
         "request_schema": ADAPTER_REQUEST_SCHEMA,
         "prepared_schema": PERSISTENT_PREPARED_SCHEMA,
         "execute_schema": PERSISTENT_EXECUTE_SCHEMA,
+        "completed_schema": PERSISTENT_COMPLETED_SCHEMA,
+        "publish_schema": PERSISTENT_PUBLISH_SCHEMA,
         "result_schema": ADAPTER_RESULT_SCHEMA,
         "fresh_ontology_per_request": true,
         "artifact": artifact(lane)?,
@@ -1721,7 +1816,7 @@ fn persistent_main(lane: Lane) -> Result<(), RunnerError> {
     let mut instance_counter = 0_u64;
     let mut expected_sequence = 0_u64;
     loop {
-        let payload = read_frame(&mut input)?;
+        let payload = read_frame(&mut input, MAX_REQUEST_FRAME_BYTES)?;
         if let Ok(shutdown) = serde_json::from_slice::<PersistentShutdown>(&payload) {
             if shutdown.schema != PERSISTENT_SHUTDOWN_SCHEMA
                 || shutdown.protocol != PERSISTENT_PROTOCOL_SCHEMA
@@ -1764,17 +1859,29 @@ fn persistent_main(lane: Lane) -> Result<(), RunnerError> {
             "sequence": sequence,
             "pid": pid,
         }))?;
-        let execute_payload = read_frame(&mut input)?;
+        let execute_payload = read_frame(&mut input, MAX_CONTROL_FRAME_BYTES)?;
         let execute: PersistentExecute = serde_json::from_slice(&execute_payload)
             .map_err(|_| RunnerError::new("persistent execute fields differ"))?;
         validate_persistent_execute(&execute, sequence, pid)?;
         let result = execute_prepared(prepared, lane);
         let instance_preimage = format!("{pid}:{instance_counter}:{sequence}");
+        let ontology_instance_id = sha256_hex(instance_preimage.as_bytes());
+        write_frame(&json!({
+            "schema": PERSISTENT_COMPLETED_SCHEMA,
+            "protocol": PERSISTENT_PROTOCOL_SCHEMA,
+            "sequence": sequence,
+            "pid": pid,
+            "ontology_instance_id": ontology_instance_id,
+        }))?;
+        let publish_payload = read_frame(&mut input, MAX_CONTROL_FRAME_BYTES)?;
+        let publish: PersistentPublish = serde_json::from_slice(&publish_payload)
+            .map_err(|_| RunnerError::new("persistent publish fields differ"))?;
+        validate_persistent_publish(&publish, sequence, pid, &ontology_instance_id)?;
         write_frame(&json!({
             "schema": PERSISTENT_RESPONSE_SCHEMA,
             "protocol": PERSISTENT_PROTOCOL_SCHEMA,
             "sequence": sequence,
-            "ontology_instance_id": sha256_hex(instance_preimage.as_bytes()),
+            "ontology_instance_id": ontology_instance_id,
             "result": result,
         }))?;
         instance_counter = instance_counter
@@ -1801,7 +1908,24 @@ fn validate_persistent_execute(
     Ok(())
 }
 
-fn read_frame<R: Read>(input: &mut R) -> Result<Vec<u8>, RunnerError> {
+fn validate_persistent_publish(
+    publish: &PersistentPublish,
+    sequence: u64,
+    pid: u64,
+    ontology_instance_id: &str,
+) -> Result<(), RunnerError> {
+    if publish.schema != PERSISTENT_PUBLISH_SCHEMA
+        || publish.protocol != PERSISTENT_PROTOCOL_SCHEMA
+        || publish.sequence != sequence
+        || publish.pid != pid
+        || publish.ontology_instance_id != ontology_instance_id
+    {
+        return Err(RunnerError::new("persistent publish protocol differs"));
+    }
+    Ok(())
+}
+
+fn read_frame<R: Read>(input: &mut R, max_payload_bytes: usize) -> Result<Vec<u8>, RunnerError> {
     let mut header = Vec::with_capacity(MAX_FRAME_HEADER_BYTES);
     loop {
         let mut byte = [0_u8; 1];
@@ -1832,8 +1956,8 @@ fn read_frame<R: Read>(input: &mut R) -> Result<Vec<u8>, RunnerError> {
     let length: usize = raw_length
         .parse()
         .map_err(|_| RunnerError::new("persistent frame length is invalid"))?;
-    if length == 0 || length > MAX_REQUEST_BYTES {
-        return Err(RunnerError::new("persistent frame length exceeds limit"));
+    if length == 0 || length > max_payload_bytes {
+        return Err(RunnerError::new("runner frame length exceeds limit"));
     }
     let mut payload = vec![0_u8; length];
     input
@@ -2010,6 +2134,13 @@ mod tests {
     }
 
     #[test]
+    fn runner_digest_is_cached_after_first_authentication() {
+        let first = runner_sha256().expect("runner digest");
+        assert_eq!(runner_sha256().expect("cached runner digest"), first);
+        assert_eq!(RUNNER_SHA256.get(), Some(&first));
+    }
+
+    #[test]
     fn strict_digest_validation_rejects_uppercase() {
         assert!(is_sha256(&"a".repeat(64)));
         assert!(!is_sha256(&"A".repeat(64)));
@@ -2087,5 +2218,124 @@ mod tests {
         assert!(validate_persistent_execute(&valid, 7, 11).is_ok());
         assert!(validate_persistent_execute(&valid, 8, 11).is_err());
         assert!(validate_persistent_execute(&valid, 7, 12).is_err());
+    }
+
+    #[test]
+    fn fresh_publish_is_bound_to_the_completed_request() {
+        let mut valid = FreshPublish {
+            schema: FRESH_PUBLISH_SCHEMA.to_owned(),
+            protocol: FRESH_PROTOCOL_SCHEMA.to_owned(),
+            sequence: 0,
+            pid: 11,
+            ontology_instance_id: "a".repeat(64),
+        };
+        assert!(validate_fresh_publish(&valid, 11, &"a".repeat(64)).is_ok());
+        assert!(validate_fresh_publish(&valid, 12, &"a".repeat(64)).is_err());
+        assert!(validate_fresh_publish(&valid, 11, &"b".repeat(64)).is_err());
+        valid.sequence = 1;
+        assert!(validate_fresh_publish(&valid, 11, &"a".repeat(64)).is_err());
+        valid.sequence = 0;
+        valid.schema = "wrong-schema".to_owned();
+        assert!(validate_fresh_publish(&valid, 11, &"a".repeat(64)).is_err());
+        assert!(serde_json::from_value::<FreshPublish>(json!({
+            "schema": FRESH_PUBLISH_SCHEMA,
+            "protocol": FRESH_PROTOCOL_SCHEMA,
+            "sequence": 0,
+            "pid": 11,
+            "ontology_instance_id": "a".repeat(64),
+            "extra": true,
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<FreshPublish>(json!({
+            "schema": FRESH_PUBLISH_SCHEMA,
+            "protocol": FRESH_PROTOCOL_SCHEMA,
+            "sequence": 0,
+            "ontology_instance_id": "a".repeat(64),
+        }))
+        .is_err());
+        for invalid_integer in [json!(true), json!(0.0), json!(-1), json!("0")] {
+            let mut invalid = json!({
+                "schema": FRESH_PUBLISH_SCHEMA,
+                "protocol": FRESH_PROTOCOL_SCHEMA,
+                "sequence": 0,
+                "pid": 11,
+                "ontology_instance_id": "a".repeat(64),
+            });
+            invalid["sequence"] = invalid_integer.clone();
+            assert!(serde_json::from_value::<FreshPublish>(invalid).is_err());
+            let mut invalid = json!({
+                "schema": FRESH_PUBLISH_SCHEMA,
+                "protocol": FRESH_PROTOCOL_SCHEMA,
+                "sequence": 0,
+                "pid": 11,
+                "ontology_instance_id": "a".repeat(64),
+            });
+            invalid["pid"] = invalid_integer;
+            assert!(serde_json::from_value::<FreshPublish>(invalid).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completion_metrics_extend_result_to_publication_boundary() {
+        let mut result = json!({
+            "status": "ok",
+            "metrics": {
+                "cpu_ns": 0,
+                "rss_peak_before_bytes": 0,
+                "rss_peak_after_bytes": 0,
+                "rss_peak_increment_bytes": 0,
+            },
+        });
+        refresh_completion_metrics(&mut result).expect("refresh completion metrics");
+        let after = result["metrics"]["rss_peak_after_bytes"]
+            .as_u64()
+            .expect("completion peak");
+        assert!(after > 0);
+        assert_eq!(
+            result["metrics"]["rss_peak_increment_bytes"].as_u64(),
+            Some(after)
+        );
+        assert!(
+            result["metrics"]["startup_to_ready_cpu_ns"]
+                .as_u64()
+                .expect("startup CPU")
+                >= result["metrics"]["cpu_ns"].as_u64().expect("call CPU")
+        );
+    }
+
+    #[test]
+    fn fresh_response_requires_eof_after_publish() {
+        assert!(require_fresh_stdin_eof(&mut Cursor::new([])).is_ok());
+        assert!(require_fresh_stdin_eof(&mut Cursor::new([0_u8])).is_err());
+    }
+
+    #[test]
+    fn persistent_publish_is_bound_to_the_completed_request() {
+        let mut valid = PersistentPublish {
+            schema: PERSISTENT_PUBLISH_SCHEMA.to_owned(),
+            protocol: PERSISTENT_PROTOCOL_SCHEMA.to_owned(),
+            sequence: 7,
+            pid: 11,
+            ontology_instance_id: "a".repeat(64),
+        };
+        assert!(validate_persistent_publish(&valid, 7, 11, &"a".repeat(64)).is_ok());
+        assert!(validate_persistent_publish(&valid, 8, 11, &"a".repeat(64)).is_err());
+        assert!(validate_persistent_publish(&valid, 7, 12, &"a".repeat(64)).is_err());
+        assert!(validate_persistent_publish(&valid, 7, 11, &"b".repeat(64)).is_err());
+        valid.schema = "wrong-schema".to_owned();
+        assert!(validate_persistent_publish(&valid, 7, 11, &"a".repeat(64)).is_err());
+        valid.schema = PERSISTENT_PUBLISH_SCHEMA.to_owned();
+        valid.protocol = "wrong-protocol".to_owned();
+        assert!(validate_persistent_publish(&valid, 7, 11, &"a".repeat(64)).is_err());
+        assert!(serde_json::from_value::<PersistentPublish>(json!({
+            "schema": PERSISTENT_PUBLISH_SCHEMA,
+            "protocol": PERSISTENT_PROTOCOL_SCHEMA,
+            "sequence": 7,
+            "pid": 11,
+            "ontology_instance_id": "a".repeat(64),
+            "extra": true,
+        }))
+        .is_err());
     }
 }

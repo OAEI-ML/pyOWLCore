@@ -1,9 +1,12 @@
 //! Versioned retained native snapshot publication and ownership.
 
+mod auxiliary;
 mod codec;
+#[cfg(feature = "extension-module")]
 mod facade_v2;
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(all(feature = "extension-module", any(test, feature = "test-hooks")))]
 mod fixture;
+#[cfg(feature = "extension-module")]
 mod handle;
 mod records;
 mod typed_builder_v2;
@@ -16,11 +19,15 @@ use std::sync::Arc;
 use crate::error::{NativeError, NativeResult};
 use crate::model::{validate_iri, Category};
 
+pub(crate) use auxiliary::{
+    TypedRdfReportRowsV2, TypedSourceMapRowsV2, AUXILIARY_CODEC_SCHEMA_SHA256_V2,
+};
+#[cfg(feature = "extension-module")]
 pub(crate) use facade_v2::{
     prepare_typed_auxiliary_documents_v2, NativeSnapshotAttestationV2, PreparedTypedAuxiliaryV2,
-    PublicationStorageV2, TypedRdfReportRowsV2, TypedSourceMapRowsV2,
-    ValidatedTypedAuxiliaryCommitV2, AUXILIARY_CODEC_SCHEMA_SHA256_V2,
+    PublicationStorageV2, ValidatedTypedAuxiliaryCommitV2,
 };
+#[cfg(feature = "extension-module")]
 #[allow(unused_imports)]
 pub(crate) use handle::{register_native_handle_types, NativeDocumentHandle, NativeSnapshotHandle};
 #[allow(unused_imports)]
@@ -54,6 +61,7 @@ pub(crate) fn encoded_fixture_handle_v2() -> NativeResult<NativeSnapshotHandle> 
     ))
 }
 
+#[cfg(feature = "extension-module")]
 pub(crate) fn typed_structural_handle_v2(
     attestation: &pyo3::Bound<'_, pyo3::types::PyAny>,
     storage: TypedFacadeStorageV2,
@@ -75,6 +83,7 @@ pub(crate) fn typed_structural_handle_v2(
     )
 }
 
+#[cfg(feature = "extension-module")]
 pub(crate) fn typed_structural_handle_from_attestation_v2(
     attestation: NativeSnapshotAttestationV2,
     storage: TypedFacadeStorageV2,
@@ -97,6 +106,7 @@ pub(crate) fn typed_structural_handle_from_attestation_v2(
     Ok(NativeSnapshotHandle::from_storage_v2(publication))
 }
 
+#[cfg(feature = "extension-module")]
 pub(crate) fn typed_structural_closure_handle_from_attestation_v2(
     attestation: NativeSnapshotAttestationV2,
     storage: TypedFacadeStorageV2,
@@ -120,6 +130,7 @@ pub(crate) fn typed_structural_closure_handle_from_attestation_v2(
     Ok(NativeSnapshotHandle::from_storage_v2(publication))
 }
 
+#[cfg(feature = "extension-module")]
 pub(crate) fn validate_typed_structural_auxiliary_commit_v2(
     attestation: &NativeSnapshotAttestationV2,
     storage: &TypedFacadeStorageV2,
@@ -134,6 +145,7 @@ pub(crate) fn validate_typed_structural_auxiliary_commit_v2(
     )
 }
 
+#[cfg(feature = "extension-module")]
 pub(crate) fn commit_typed_structural_auxiliary_handle_v2(
     attestation: NativeSnapshotAttestationV2,
     storage: TypedFacadeStorageV2,
@@ -306,6 +318,7 @@ impl PublicationStorageV1 {
 pub(crate) struct NativeSnapshotPublicationV1 {
     pub(crate) version: u8,
     pub(crate) ledger_sha256: Digest,
+    #[cfg(feature = "extension-module")]
     pub(crate) handle: NativeSnapshotHandle,
     pub(crate) documents: Arc<[DocumentPublicationV1]>,
     pub(crate) import_manifest: Arc<ImportManifestV1>,
@@ -326,10 +339,12 @@ impl NativeSnapshotPublicationV1 {
         &self.storage
     }
 
+    #[cfg(feature = "extension-module")]
     pub(crate) const fn handle(&self) -> &NativeSnapshotHandle {
         &self.handle
     }
 
+    #[cfg(feature = "extension-module")]
     pub(crate) fn into_handle(self) -> NativeSnapshotHandle {
         self.handle
     }
@@ -400,10 +415,12 @@ impl PublicationDraftV1 {
             attestation,
             counters,
         });
+        #[cfg(feature = "extension-module")]
         let handle = NativeSnapshotHandle::from_storage(Arc::clone(&storage));
         Ok(NativeSnapshotPublicationV1 {
             version: PUBLICATION_VERSION_V1,
             ledger_sha256: PUBLICATION_LEDGER_SHA256_V1,
+            #[cfg(feature = "extension-module")]
             handle,
             documents,
             import_manifest,
@@ -1122,5 +1139,5 @@ fn add_bytes(total: u64, value: usize) -> NativeResult<u64> {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extension-module"))]
 mod tests;

@@ -2,26 +2,26 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-#[cfg(not(fuzzing))]
+#[cfg(all(not(fuzzing), feature = "extension-module"))]
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-#[cfg(not(fuzzing))]
+#[cfg(all(not(fuzzing), feature = "extension-module"))]
 use pyo3::prelude::*;
 
 use crate::error::{NativeError, NativeResult};
 
-#[cfg(not(fuzzing))]
+#[cfg(all(not(fuzzing), feature = "extension-module"))]
 pub(crate) type InterruptSlot = Arc<Mutex<Option<PyErr>>>;
-#[cfg(fuzzing)]
+#[cfg(any(fuzzing, not(feature = "extension-module")))]
 pub(crate) type InterruptSlot = Arc<()>;
 
-#[cfg(not(fuzzing))]
+#[cfg(all(not(fuzzing), feature = "extension-module"))]
 pub(crate) fn interrupt_slot() -> InterruptSlot {
     Arc::new(Mutex::new(None))
 }
 
-#[cfg(not(fuzzing))]
+#[cfg(all(not(fuzzing), feature = "extension-module"))]
 pub(crate) fn take_interrupt(slot: &InterruptSlot) -> NativeResult<Option<PyErr>> {
     slot.lock()
         .map_err(|_| NativeError::panic())
@@ -35,7 +35,7 @@ struct SharedCancel {
 }
 
 #[cfg_attr(
-    not(fuzzing),
+    all(not(fuzzing), feature = "extension-module"),
     pyclass(
         module = "pyowl_core._native",
         frozen,
@@ -48,7 +48,7 @@ pub(crate) struct Cancellation {
     inner: Arc<SharedCancel>,
 }
 
-#[cfg(not(fuzzing))]
+#[cfg(all(not(fuzzing), feature = "extension-module"))]
 #[pymethods]
 impl Cancellation {
     #[new]
@@ -77,8 +77,9 @@ impl Cancellation {
         Ok(Self::with_duration(duration))
     }
 
-    fn cancel(&self) -> bool {
-        !self.inner.cancelled.swap(true, Ordering::AcqRel)
+    #[pyo3(name = "cancel")]
+    fn cancel_from_python(&self) -> bool {
+        self.cancel()
     }
 
     #[getter]
@@ -95,6 +96,10 @@ impl Cancellation {
                 deadline: duration.and_then(|value| Instant::now().checked_add(value)),
             }),
         }
+    }
+
+    fn cancel(&self) -> bool {
+        !self.inner.cancelled.swap(true, Ordering::AcqRel)
     }
 
     fn is_cancelled(&self) -> bool {
@@ -163,7 +168,7 @@ impl Guard {
                 .ok_or_else(|| NativeError::limit("native work counter overflow"))?;
         }
         self.cancellation.checkpoint()?;
-        #[cfg(not(fuzzing))]
+        #[cfg(all(not(fuzzing), feature = "extension-module"))]
         if let Some(interrupt) = &self.interrupt {
             if let Err(error) = Python::attach(|py| py.check_signals()) {
                 let mut retained = interrupt.lock().map_err(|_| NativeError::panic())?;

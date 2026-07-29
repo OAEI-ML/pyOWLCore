@@ -20,14 +20,19 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.StreamReadFeature;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.cfg.CoercionAction;
+import com.fasterxml.jackson.databind.cfg.CoercionInputShape;
+import com.fasterxml.jackson.databind.type.LogicalType;
 
 import org.semanticweb.owlapi.apibinding.OWLManager;
 import org.semanticweb.owlapi.formats.FunctionalSyntaxDocumentFormat;
@@ -56,7 +61,7 @@ public final class OwlApiRunner {
             "747b1a5269fee2992487dcde946f16dfbc14aa458d50854994a0485cf263ce07";
     private static final String ALLOCATOR = "HotSpot G1GC";
     private static final long THREAD_CEILING = 1;
-    private static final String RUNNER_REVISION = "pyowl-core-owlapi-common-runner-v3";
+    private static final String RUNNER_REVISION = "pyowl-core-owlapi-common-runner-v5";
     private static final List<String> FEATURES =
             List.of("isolated-java", "common-contract-v1");
 
@@ -64,37 +69,66 @@ public final class OwlApiRunner {
     private static final String RESULT_SCHEMA = "pyowl-core/comparator-adapter-result/v1";
     private static final String VALIDATION_SCHEMA =
             "pyowl-core/comparator-timed-validation/v1";
+    private static final String FRESH_PROTOCOL_SCHEMA =
+            "pyowl-core/comparator-fresh-runner/v1";
+    private static final String FRESH_REQUEST_SCHEMA =
+            "pyowl-core/comparator-fresh-request/v1";
+    private static final String FRESH_COMPLETED_SCHEMA =
+            "pyowl-core/comparator-fresh-completed/v1";
+    private static final String FRESH_PUBLISH_SCHEMA =
+            "pyowl-core/comparator-fresh-publish/v1";
+    private static final String FRESH_RESPONSE_SCHEMA =
+            "pyowl-core/comparator-fresh-response/v1";
     private static final String PROTOCOL_SCHEMA =
-            "pyowl-core/comparator-persistent-runner/v2";
+            "pyowl-core/comparator-persistent-runner/v3";
     private static final String HANDSHAKE_SCHEMA =
-            "pyowl-core/comparator-persistent-handshake/v2";
+            "pyowl-core/comparator-persistent-handshake/v3";
     private static final String PERSISTENT_REQUEST_SCHEMA =
-            "pyowl-core/comparator-persistent-request/v2";
+            "pyowl-core/comparator-persistent-request/v3";
     private static final String PREPARED_SCHEMA =
             "pyowl-core/comparator-persistent-prepared/v1";
     private static final String EXECUTE_SCHEMA =
             "pyowl-core/comparator-persistent-execute/v1";
+    private static final String COMPLETED_SCHEMA =
+            "pyowl-core/comparator-persistent-completed/v1";
+    private static final String PUBLISH_SCHEMA =
+            "pyowl-core/comparator-persistent-publish/v1";
     private static final String PERSISTENT_RESPONSE_SCHEMA =
-            "pyowl-core/comparator-persistent-response/v2";
+            "pyowl-core/comparator-persistent-response/v3";
     private static final String SHUTDOWN_SCHEMA =
-            "pyowl-core/comparator-persistent-shutdown/v2";
+            "pyowl-core/comparator-persistent-shutdown/v3";
     private static final String SHUTDOWN_ACK_SCHEMA =
-            "pyowl-core/comparator-persistent-shutdown-ack/v2";
+            "pyowl-core/comparator-persistent-shutdown-ack/v3";
     private static final String DOCUMENT_IRI_PREFIX =
             "urn:pyowl-core:comparator-source:sha256:";
     private static final int MAX_REQUEST_BYTES = 512 * 1024 * 1024;
+    private static final int MAX_REQUEST_FRAME_BYTES = MAX_REQUEST_BYTES + 64 * 1024;
+    private static final int MAX_CONTROL_FRAME_BYTES = 64 * 1024;
     private static final int MAX_FRAME_HEADER_BYTES = 32;
     private static final int MAX_REASON_CHARS = 1_000;
 
-    private static final ObjectMapper JSON = new ObjectMapper(
-            JsonFactory.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build())
-            .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
-            .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-            .enable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
-            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+    private static final ObjectMapper JSON = strictJsonMapper();
     private static final AtomicLong TEMP_COUNTER = new AtomicLong();
 
     private OwlApiRunner() {}
+
+    private static ObjectMapper strictJsonMapper() {
+        ObjectMapper mapper = new ObjectMapper(
+                JsonFactory.builder()
+                        .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+                        .build())
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .enable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
+                .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                .disable(DeserializationFeature.ACCEPT_FLOAT_AS_INT)
+                .disable(MapperFeature.ALLOW_COERCION_OF_SCALARS);
+        mapper.coercionConfigFor(LogicalType.Textual)
+                .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
+                .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
+                .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail);
+        return mapper;
+    }
 
     public static final class AdapterRequest {
         public String schema;
@@ -116,19 +150,6 @@ public final class OwlApiRunner {
         public long expectedThreadCeiling;
         public String expectedRunnerRevision;
         public String expectedRunnerSha256;
-    }
-
-    public static final class PersistentRequest {
-        public String schema;
-        public String protocol;
-        public long sequence;
-        public AdapterRequest request;
-    }
-
-    public static final class PersistentShutdown {
-        public String schema;
-        public String protocol;
-        public long sequence;
     }
 
     private static final class PreparedExecution {
@@ -386,8 +407,6 @@ public final class OwlApiRunner {
                             request.corpusId, request.source, request.sourceSha256,
                             request.documentIri, request.format.value, request.optionsSha256));
             long commonNs = elapsed(commonStarted);
-            NativeUsage.Snapshot after = NativeUsage.snapshot();
-            long wallNs = elapsed(wallStarted);
             long objectCount = Math.addExact(
                     ontology.getAxiomCount(),
                     Math.addExact(ontology.annotations().count(), mapped.signature.size()));
@@ -397,23 +416,25 @@ public final class OwlApiRunner {
                     "owlapi_engine_load", loadNs);
             Map<String, Object> metrics = object(
                     "common_adapter_ns", commonNs,
-                    "cpu_ns", Math.max(0L, after.cpuNs - before.cpuNs),
+                    "cpu_ns", 0L,
                     "load_ns", loadNs,
                     "object_count", objectCount,
                     "phase_ns", phase,
-                    "rss_peak_after_bytes", after.peakRssBytes,
+                    "rss_peak_after_bytes", before.peakRssBytes,
                     "rss_peak_before_bytes", before.peakRssBytes,
-                    "rss_peak_increment_bytes",
-                        Math.max(0L, after.peakRssBytes - before.peakRssBytes),
+                    "rss_peak_increment_bytes", 0L,
                     "temporary_bytes", temporaryBytes,
-                    "wall_ns", wallNs);
+                    "wall_ns", 0L);
+            if ("fresh-process".equals(request.processMode)) {
+                metrics.put("startup_to_ready_cpu_ns", 0L);
+            }
             Map<String, Object> validation = object(
                     "contract_sha256", built.contract.get("contract_sha256"),
                     "full_contract_validation", true,
                     "inside_timed_envelope", true,
                     "schema", VALIDATION_SCHEMA,
                     "validation_ns", built.validationNs);
-            return object(
+            Map<String, Object> result = object(
                     "artifact", artifact(),
                     "boundary", BOUNDARY,
                     "contract", built.contract,
@@ -430,11 +451,56 @@ public final class OwlApiRunner {
                     "source_sha256", request.sourceSha256,
                     "status", "ok",
                     "timed_validation", validation);
+            return finishReadyResultMetrics(
+                    result, metrics, before, wallStarted, NativeUsage::snapshot);
         } finally {
             if (prepared != null) {
                 Files.deleteIfExists(prepared);
             }
         }
+    }
+
+    static Map<String, Object> finishReadyResultMetrics(
+            Map<String, Object> result,
+            Map<String, Object> metrics,
+            NativeUsage.Snapshot before,
+            long wallStarted,
+            Supplier<NativeUsage.Snapshot> snapshot) {
+        if (result == null
+                || metrics == null
+                || result.get("metrics") != metrics
+                || !(result.get("artifact") instanceof Map)
+                || !(result.get("contract") instanceof Map)
+                || before == null
+                || snapshot == null) {
+            throw new IllegalArgumentException(
+                    "ready result must be fully constructed before usage capture");
+        }
+        boolean freshProcess = "fresh-process".equals(result.get("process_mode"));
+        if (freshProcess != metrics.containsKey("startup_to_ready_cpu_ns")) {
+            throw new IllegalArgumentException(
+                    "startup-to-ready CPU slot must be reserved before usage capture");
+        }
+        NativeUsage.Snapshot after = snapshot.get();
+        if (after == null) {
+            throw new IllegalArgumentException("ready result usage capture is missing");
+        }
+        long cpuNs = Math.max(0L, after.cpuNs - before.cpuNs);
+        metrics.put("cpu_ns", cpuNs);
+        if (freshProcess) {
+            if (after.cpuNs < 0 || after.cpuNs < cpuNs) {
+                throw new IllegalArgumentException(
+                        "fresh startup-to-ready CPU evidence differs");
+            }
+            metrics.put("startup_to_ready_cpu_ns", after.cpuNs);
+        }
+        metrics.put("rss_peak_after_bytes", after.peakRssBytes);
+        metrics.put("rss_peak_before_bytes", before.peakRssBytes);
+        metrics.put(
+                "rss_peak_increment_bytes",
+                Math.max(0L, after.peakRssBytes - before.peakRssBytes));
+        metrics.put("wall_ns", elapsed(wallStarted));
+        return result;
     }
 
     private static OWLOntology load(ValidatedRequest request, Path prepared) throws IOException {
@@ -555,21 +621,17 @@ public final class OwlApiRunner {
     }
 
     private static void freshMain() throws IOException {
-        byte[] body = readLimited(System.in, MAX_REQUEST_BYTES);
-        Map<String, Object> result;
-        if (body == null) {
-            result = fallbackStatus(fallbackIdentity(), "error",
-                    "adapter request exceeds size limit");
-        } else {
-            try {
-                result = runRequest(JSON.readValue(body, AdapterRequest.class), "fresh");
-            } catch (Exception error) {
-                result = fallbackStatus(fallbackIdentity(), "error",
-                        "adapter request is not valid strict schema-v2 JSON");
-            }
-        }
-        JSON.writeValue(System.out, result);
-        System.out.flush();
+        long pid = ProcessHandle.current().pid();
+        JsonNode request = JSON.readTree(readFrame(System.in, MAX_REQUEST_FRAME_BYTES));
+        validateFreshRequest(request);
+        Map<String, Object> result =
+                runRequest(decodeAdapterRequest(request.get("request")), "fresh");
+        String ontologyInstanceId = freshOntologyInstanceId(pid);
+        writeFrame(freshCompletedFrame(0, pid, ontologyInstanceId));
+        JsonNode publish = JSON.readTree(readFrame(System.in, MAX_CONTROL_FRAME_BYTES));
+        validateFreshPublish(publish, pid, ontologyInstanceId);
+        requireFreshEndOfInput(System.in);
+        writeFrame(freshResponseFrame(0, ontologyInstanceId, result));
     }
 
     private static void persistentMain() throws IOException {
@@ -585,48 +647,44 @@ public final class OwlApiRunner {
                 "request_schema", REQUEST_SCHEMA,
                 "prepared_schema", PREPARED_SCHEMA,
                 "execute_schema", EXECUTE_SCHEMA,
+                "completed_schema", COMPLETED_SCHEMA,
+                "publish_schema", PUBLISH_SCHEMA,
                 "result_schema", RESULT_SCHEMA,
                 "schema", HANDSHAKE_SCHEMA));
         long expectedSequence = 0;
         long instanceCounter = 0;
         while (true) {
-            byte[] payload = readFrame(System.in);
+            byte[] payload = readFrame(System.in, MAX_REQUEST_FRAME_BYTES);
             JsonNode node = JSON.readTree(payload);
             if (SHUTDOWN_SCHEMA.equals(text(node, "schema"))) {
-                PersistentShutdown shutdown = JSON.treeToValue(node, PersistentShutdown.class);
-                requireEqual("shutdown protocol", shutdown.protocol, PROTOCOL_SCHEMA);
-                if (shutdown.sequence != expectedSequence) {
-                    throw new IllegalArgumentException(
-                            "persistent shutdown sequence is nonmonotonic");
-                }
+                validatePersistentShutdown(node, expectedSequence);
                 writeFrame(object(
                         "pid", pid,
                         "protocol", PROTOCOL_SCHEMA,
                         "schema", SHUTDOWN_ACK_SCHEMA,
-                        "sequence", shutdown.sequence));
+                        "sequence", expectedSequence));
                 return;
             }
-            PersistentRequest envelope = JSON.treeToValue(node, PersistentRequest.class);
-            requireEqual("persistent request schema", envelope.schema, PERSISTENT_REQUEST_SCHEMA);
-            requireEqual("persistent request protocol", envelope.protocol, PROTOCOL_SCHEMA);
-            if (envelope.sequence != expectedSequence) {
-                throw new IllegalArgumentException(
-                        "persistent request sequence is nonmonotonic");
-            }
-            long sequence = envelope.sequence;
-            PreparedExecution prepared = prepareRequest(envelope.request, "persistent");
+            validatePersistentRequestEnvelope(node, expectedSequence);
+            long sequence = node.get("sequence").longValue();
+            PreparedExecution prepared = prepareRequest(
+                    decodeAdapterRequest(node.get("request")), "persistent");
             writeFrame(object(
                     "pid", pid,
                     "protocol", PROTOCOL_SCHEMA,
                     "schema", PREPARED_SCHEMA,
                     "sequence", sequence));
-            JsonNode execute = JSON.readTree(readFrame(System.in));
+            JsonNode execute = JSON.readTree(readFrame(System.in, MAX_CONTROL_FRAME_BYTES));
             validatePersistentExecute(execute, sequence, pid);
             Map<String, Object> result = executePrepared(prepared);
             String instance = pid + ":" + instanceCounter + ":" + sequence;
+            String ontologyInstanceId = Canonical.hex(Canonical.sha256(
+                    instance.getBytes(StandardCharsets.UTF_8)));
+            writeFrame(persistentCompletedFrame(sequence, pid, ontologyInstanceId));
+            JsonNode publish = JSON.readTree(readFrame(System.in, MAX_CONTROL_FRAME_BYTES));
+            validatePersistentPublish(publish, sequence, pid, ontologyInstanceId);
             writeFrame(object(
-                    "ontology_instance_id", Canonical.hex(Canonical.sha256(
-                            instance.getBytes(StandardCharsets.UTF_8))),
+                    "ontology_instance_id", ontologyInstanceId,
                     "protocol", PROTOCOL_SCHEMA,
                     "result", result,
                     "schema", PERSISTENT_RESPONSE_SCHEMA,
@@ -634,6 +692,138 @@ public final class OwlApiRunner {
             instanceCounter = Math.addExact(instanceCounter, 1);
             expectedSequence = Math.addExact(expectedSequence, 1);
         }
+    }
+
+    static AdapterRequest decodeAdapterRequest(JsonNode node) throws IOException {
+        return JSON.treeToValue(node, AdapterRequest.class);
+    }
+
+    static String freshOntologyInstanceId(long pid) {
+        if (pid < 0) {
+            throw new IllegalArgumentException("fresh ontology PID differs");
+        }
+        String instance = pid + ":0:0";
+        return Canonical.hex(Canonical.sha256(instance.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    static void validateFreshRequest(JsonNode node) {
+        if (node == null
+                || !node.isObject()
+                || node.size() != 4
+                || !node.has("schema")
+                || !node.has("protocol")
+                || !node.has("sequence")
+                || !node.has("request")
+                || !node.get("request").isObject()) {
+            throw new IllegalArgumentException(
+                    "fresh request fields differ from schema v1");
+        }
+        requireEqual("fresh request schema", text(node, "schema"), FRESH_REQUEST_SCHEMA);
+        requireEqual("fresh request protocol", text(node, "protocol"), FRESH_PROTOCOL_SCHEMA);
+        requireUnsignedLong("fresh request sequence", node.get("sequence"), 0);
+    }
+
+    static Map<String, Object> freshCompletedFrame(
+            long sequence, long pid, String ontologyInstanceId) {
+        if (sequence != 0 || pid < 0 || !isSha256(ontologyInstanceId)) {
+            throw new IllegalArgumentException("fresh completion identity differs");
+        }
+        return object(
+                "ontology_instance_id", ontologyInstanceId,
+                "pid", pid,
+                "protocol", FRESH_PROTOCOL_SCHEMA,
+                "schema", FRESH_COMPLETED_SCHEMA,
+                "sequence", sequence);
+    }
+
+    static void validateFreshPublish(
+            JsonNode node, long pid, String ontologyInstanceId) {
+        if (node == null
+                || !node.isObject()
+                || node.size() != 5
+                || !node.has("schema")
+                || !node.has("protocol")
+                || !node.has("sequence")
+                || !node.has("pid")
+                || !node.has("ontology_instance_id")) {
+            throw new IllegalArgumentException(
+                    "fresh publish fields differ from schema v1");
+        }
+        if (!isSha256(ontologyInstanceId)) {
+            throw new IllegalArgumentException(
+                    "fresh publish expected ontology instance id differs");
+        }
+        requireEqual("fresh publish schema", text(node, "schema"), FRESH_PUBLISH_SCHEMA);
+        requireEqual("fresh publish protocol", text(node, "protocol"), FRESH_PROTOCOL_SCHEMA);
+        requireUnsignedLong("fresh publish sequence", node.get("sequence"), 0);
+        requireUnsignedLong("fresh publish pid", node.get("pid"), pid);
+        requireEqual(
+                "fresh publish ontology instance id",
+                text(node, "ontology_instance_id"),
+                ontologyInstanceId);
+    }
+
+    static void requireFreshEndOfInput(InputStream input) throws IOException {
+        if (input == null || input.read() != -1) {
+            throw new IOException("fresh input has trailing bytes");
+        }
+    }
+
+    static Map<String, Object> freshResponseFrame(
+            long sequence, String ontologyInstanceId, Map<String, Object> result) {
+        if (sequence != 0 || !isSha256(ontologyInstanceId) || result == null) {
+            throw new IllegalArgumentException("fresh response identity differs");
+        }
+        return object(
+                "ontology_instance_id", ontologyInstanceId,
+                "protocol", FRESH_PROTOCOL_SCHEMA,
+                "result", result,
+                "schema", FRESH_RESPONSE_SCHEMA,
+                "sequence", sequence);
+    }
+
+    static void validatePersistentRequestEnvelope(JsonNode node, long sequence) {
+        if (node == null
+                || !node.isObject()
+                || node.size() != 4
+                || !node.has("schema")
+                || !node.has("protocol")
+                || !node.has("sequence")
+                || !node.has("request")
+                || !node.get("request").isObject()) {
+            throw new IllegalArgumentException(
+                    "persistent request fields differ from schema v3");
+        }
+        requireEqual(
+                "persistent request schema",
+                text(node, "schema"),
+                PERSISTENT_REQUEST_SCHEMA);
+        requireEqual(
+                "persistent request protocol",
+                text(node, "protocol"),
+                PROTOCOL_SCHEMA);
+        requireUnsignedLong("persistent request sequence", node.get("sequence"), sequence);
+    }
+
+    static void validatePersistentShutdown(JsonNode node, long sequence) {
+        if (node == null
+                || !node.isObject()
+                || node.size() != 3
+                || !node.has("schema")
+                || !node.has("protocol")
+                || !node.has("sequence")) {
+            throw new IllegalArgumentException(
+                    "persistent shutdown fields differ from schema v3");
+        }
+        requireEqual(
+                "persistent shutdown schema",
+                text(node, "schema"),
+                SHUTDOWN_SCHEMA);
+        requireEqual(
+                "persistent shutdown protocol",
+                text(node, "protocol"),
+                PROTOCOL_SCHEMA);
+        requireUnsignedLong("persistent shutdown sequence", node.get("sequence"), sequence);
     }
 
     static void validatePersistentExecute(JsonNode node, long sequence, long pid) {
@@ -653,6 +843,46 @@ public final class OwlApiRunner {
         requireUnsignedLong("persistent execute pid", node.get("pid"), pid);
     }
 
+    static Map<String, Object> persistentCompletedFrame(
+            long sequence, long pid, String ontologyInstanceId) {
+        if (sequence < 0 || pid < 0 || !isSha256(ontologyInstanceId)) {
+            throw new IllegalArgumentException("persistent completion identity differs");
+        }
+        return object(
+                "ontology_instance_id", ontologyInstanceId,
+                "pid", pid,
+                "protocol", PROTOCOL_SCHEMA,
+                "schema", COMPLETED_SCHEMA,
+                "sequence", sequence);
+    }
+
+    static void validatePersistentPublish(
+            JsonNode node, long sequence, long pid, String ontologyInstanceId) {
+        if (node == null
+                || !node.isObject()
+                || node.size() != 5
+                || !node.has("schema")
+                || !node.has("protocol")
+                || !node.has("sequence")
+                || !node.has("pid")
+                || !node.has("ontology_instance_id")) {
+            throw new IllegalArgumentException(
+                    "persistent publish fields differ from schema v1");
+        }
+        if (!isSha256(ontologyInstanceId)) {
+            throw new IllegalArgumentException(
+                    "persistent publish expected ontology instance id differs");
+        }
+        requireEqual("persistent publish schema", text(node, "schema"), PUBLISH_SCHEMA);
+        requireEqual("persistent publish protocol", text(node, "protocol"), PROTOCOL_SCHEMA);
+        requireUnsignedLong("persistent publish sequence", node.get("sequence"), sequence);
+        requireUnsignedLong("persistent publish pid", node.get("pid"), pid);
+        requireEqual(
+                "persistent publish ontology instance id",
+                text(node, "ontology_instance_id"),
+                ontologyInstanceId);
+    }
+
     private static void requireUnsignedLong(String name, JsonNode node, long expected) {
         if (expected < 0
                 || node == null
@@ -664,7 +894,10 @@ public final class OwlApiRunner {
         }
     }
 
-    private static byte[] readFrame(InputStream input) throws IOException {
+    private static byte[] readFrame(InputStream input, int maximum) throws IOException {
+        if (maximum < 1 || maximum > MAX_REQUEST_FRAME_BYTES) {
+            throw new IllegalArgumentException("comparator frame limit is invalid");
+        }
         ByteArrayOutputStream header = new ByteArrayOutputStream();
         while (true) {
             int value = input.read();
@@ -689,8 +922,8 @@ public final class OwlApiRunner {
         } catch (NumberFormatException error) {
             throw new IOException("persistent frame length is invalid", error);
         }
-        if (length < 1 || length > MAX_REQUEST_BYTES) {
-            throw new IOException("persistent frame length exceeds limit");
+        if (length < 1 || length > maximum) {
+            throw new IOException("comparator frame length exceeds limit");
         }
         byte[] payload = input.readNBytes(length);
         if (payload.length != length || input.read() != '\n') {
@@ -707,11 +940,6 @@ public final class OwlApiRunner {
         output.write(payload);
         output.write('\n');
         output.flush();
-    }
-
-    private static byte[] readLimited(InputStream input, int maximum) throws IOException {
-        byte[] value = input.readNBytes(maximum + 1);
-        return value.length > maximum ? null : value;
     }
 
     private static void verifyEnvironment(String protocolMode) {

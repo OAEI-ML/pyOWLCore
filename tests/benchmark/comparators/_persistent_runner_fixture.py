@@ -12,26 +12,33 @@ _RUNNER_BODY = r"""
 import hashlib
 import json
 import os
+import select
 import signal
 import sys
 import time
 
 CONFIG = json.loads(__CONFIG__)
 MODE = __MODE__
-PROTOCOL = "pyowl-core/comparator-persistent-runner/v2"
-HANDSHAKE = "pyowl-core/comparator-persistent-handshake/v2"
-REQUEST = "pyowl-core/comparator-persistent-request/v2"
+PROTOCOL = "pyowl-core/comparator-persistent-runner/v3"
+HANDSHAKE = "pyowl-core/comparator-persistent-handshake/v3"
+REQUEST = "pyowl-core/comparator-persistent-request/v3"
 PREPARED = "pyowl-core/comparator-persistent-prepared/v1"
 EXECUTE = "pyowl-core/comparator-persistent-execute/v1"
-RESPONSE = "pyowl-core/comparator-persistent-response/v2"
-SHUTDOWN = "pyowl-core/comparator-persistent-shutdown/v2"
-SHUTDOWN_ACK = "pyowl-core/comparator-persistent-shutdown-ack/v2"
+COMPLETED = "pyowl-core/comparator-persistent-completed/v1"
+PUBLISH = "pyowl-core/comparator-persistent-publish/v1"
+RESPONSE = "pyowl-core/comparator-persistent-response/v3"
+SHUTDOWN = "pyowl-core/comparator-persistent-shutdown/v3"
+SHUTDOWN_ACK = "pyowl-core/comparator-persistent-shutdown-ack/v3"
 RAW_SCHEMA = "pyowl-core/comparator-raw-inventory/v1"
 RAW_DOMAIN = b"pyowl-core:comparator-raw-inventory:v1\x00"
 
 
+def framed_payload(payload):
+    return str(len(payload)).encode("ascii") + b"\n" + payload + b"\n"
+
+
 def write_payload(payload):
-    sys.stdout.buffer.write(str(len(payload)).encode("ascii") + b"\n" + payload + b"\n")
+    sys.stdout.buffer.write(framed_payload(payload))
     sys.stdout.buffer.flush()
 
 
@@ -64,6 +71,8 @@ handshake = {
     "request_schema": "pyowl-core/comparator-adapter-request/v2",
     "prepared_schema": PREPARED,
     "execute_schema": EXECUTE,
+    "completed_schema": COMPLETED,
+    "publish_schema": PUBLISH,
     "result_schema": "pyowl-core/comparator-adapter-result/v1",
     "fresh_ontology_per_request": True,
     "artifact": artifact,
@@ -84,6 +93,10 @@ if MODE == "handshake-stderr-oversize":
     time.sleep(10)
 if MODE == "wrong-handshake":
     handshake["lane"] = "wrong-lane"
+if MODE == "wrong-completed-handshake":
+    handshake["completed_schema"] = "wrong-completed-schema"
+if MODE == "wrong-publish-handshake":
+    handshake["publish_schema"] = "wrong-publish-schema"
 if MODE == "forged-pid":
     handshake["pid"] += 1
 if MODE == "float-pid":
@@ -106,16 +119,47 @@ write_frame(handshake)
 
 instance_counter = 0
 while True:
+    if MODE == "prepared-before-request-write-completes":
+        select.select([sys.stdin.buffer], [], [], 5.0)
+        write_frame(
+            {
+                "schema": PREPARED,
+                "protocol": PROTOCOL,
+                "sequence": instance_counter,
+                "pid": os.getpid(),
+            }
+        )
     try:
         frame = read_frame()
     except EOFError:
         raise SystemExit(3)
     if frame.get("schema") == SHUTDOWN:
+        if (
+            set(frame) != {"schema", "protocol", "sequence"}
+            or frame.get("protocol") != PROTOCOL
+            or isinstance(frame.get("sequence"), bool)
+            or not isinstance(frame.get("sequence"), int)
+            or frame.get("sequence") != instance_counter
+        ):
+            raise SystemExit(7)
         if MODE == "shutdown-hang":
             time.sleep(10)
         if MODE == "shutdown-ignore-term":
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             time.sleep(10)
+        if MODE == "shutdown-clean-exit-descendant":
+            ready_read, ready_write = os.pipe()
+            descendant_pid = os.fork()
+            if descendant_pid == 0:
+                os.close(ready_read)
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                os.write(ready_write, b"x")
+                os.close(ready_write)
+                time.sleep(10)
+                os._exit(0)
+            os.close(ready_write)
+            os.read(ready_read, 1)
+            os.close(ready_read)
         shutdown_sequence = frame["sequence"]
         shutdown_pid = os.getpid()
         if MODE == "shutdown-float-sequence":
@@ -131,7 +175,15 @@ while True:
             }
         )
         raise SystemExit(0)
-    if frame.get("schema") != REQUEST or frame.get("protocol") != PROTOCOL:
+    if (
+        set(frame) != {"schema", "protocol", "sequence", "request"}
+        or frame.get("schema") != REQUEST
+        or frame.get("protocol") != PROTOCOL
+        or isinstance(frame.get("sequence"), bool)
+        or not isinstance(frame.get("sequence"), int)
+        or frame.get("sequence") != instance_counter
+        or not isinstance(frame.get("request"), dict)
+    ):
         raise SystemExit(4)
     if MODE == "crash":
         os._exit(17)
@@ -184,12 +236,30 @@ while True:
         prepared["extra"] = True
     write_frame(prepared)
 
+    if MODE == "completed-before-execute-write-completes":
+        select.select([sys.stdin.buffer], [], [], 5.0)
+        early_instance = hashlib.sha256(
+            f"{os.getpid()}:{instance_counter}:{frame['sequence']}".encode("ascii")
+        ).hexdigest()
+        write_frame(
+            {
+                "schema": COMPLETED,
+                "protocol": PROTOCOL,
+                "sequence": frame["sequence"],
+                "pid": os.getpid(),
+                "ontology_instance_id": early_instance,
+            }
+        )
     execute = read_frame()
     if (
         set(execute) != {"schema", "protocol", "sequence", "pid"}
         or execute.get("schema") != EXECUTE
         or execute.get("protocol") != PROTOCOL
+        or isinstance(execute.get("sequence"), bool)
+        or not isinstance(execute.get("sequence"), int)
         or execute.get("sequence") != frame["sequence"]
+        or isinstance(execute.get("pid"), bool)
+        or not isinstance(execute.get("pid"), int)
         or execute.get("pid") != os.getpid()
     ):
         raise SystemExit(5)
@@ -242,6 +312,9 @@ while True:
     if MODE == "result-float-thread-ceiling":
         result["artifact"] = dict(artifact)
         result["artifact"]["thread_ceiling"] = float(artifact["thread_ceiling"])
+    serialization_burst_bytes = 64 * 1024 * 1024
+    if MODE == "post-publish-serialization-burst":
+        result["metrics"]["object_count"] = serialization_burst_bytes
     response_sequence = execute["sequence"] + (1 if MODE == "cross-request" else 0)
     if MODE == "boolean-sequence":
         response_sequence = False
@@ -252,22 +325,124 @@ while True:
     instance_seed = (
         "reused" if MODE == "reuse-instance" else f"{os.getpid()}:{instance_counter}"
     )
+    ontology_instance_id = hashlib.sha256(instance_seed.encode("ascii")).hexdigest()
+    completed = {
+        "schema": COMPLETED,
+        "protocol": PROTOCOL,
+        "sequence": execute["sequence"],
+        "pid": os.getpid(),
+        "ontology_instance_id": ontology_instance_id,
+    }
+    if MODE == "completed-wrong-schema":
+        completed["schema"] = "wrong-completed-schema"
+    if MODE == "completed-wrong-protocol":
+        completed["protocol"] = "wrong-completed-protocol"
+    if MODE == "completed-wrong-sequence":
+        completed["sequence"] += 1
+    if MODE == "completed-bool-sequence":
+        completed["sequence"] = True
+    if MODE == "completed-float-sequence":
+        completed["sequence"] = float(completed["sequence"])
+    if MODE == "completed-negative-sequence":
+        completed["sequence"] = -1
+    if MODE == "completed-wrong-pid":
+        completed["pid"] += 1
+    if MODE == "completed-bool-pid":
+        completed["pid"] = True
+    if MODE == "completed-float-pid":
+        completed["pid"] = float(completed["pid"])
+    if MODE == "completed-negative-pid":
+        completed["pid"] = -1
+    if MODE == "completed-invalid-instance":
+        completed["ontology_instance_id"] = "invalid"
+    if MODE == "completed-extra-field":
+        completed["extra"] = True
+    if MODE == "completed-missing-pid":
+        del completed["pid"]
+
+    if MODE == "response-before-publish":
+        completed_payload = json.dumps(
+            completed, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        early_response_payload = json.dumps(
+            {
+                "schema": RESPONSE,
+                "protocol": PROTOCOL,
+                "sequence": response_sequence,
+                "ontology_instance_id": ontology_instance_id,
+                "result": result,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        sys.stdout.buffer.write(
+            framed_payload(completed_payload) + framed_payload(early_response_payload)
+        )
+        sys.stdout.buffer.flush()
+    else:
+        write_frame(completed)
+    if MODE == "response-before-publish-write-completes":
+        select.select([sys.stdin.buffer], [], [], 5.0)
+        write_frame(
+            {
+                "schema": RESPONSE,
+                "protocol": PROTOCOL,
+                "sequence": response_sequence,
+                "ontology_instance_id": ontology_instance_id,
+                "result": result,
+            }
+        )
+    publish = read_frame()
+    if (
+        set(publish)
+        != {"schema", "protocol", "sequence", "pid", "ontology_instance_id"}
+        or publish.get("schema") != PUBLISH
+        or publish.get("protocol") != PROTOCOL
+        or isinstance(publish.get("sequence"), bool)
+        or not isinstance(publish.get("sequence"), int)
+        or publish.get("sequence") != execute["sequence"]
+        or isinstance(publish.get("pid"), bool)
+        or not isinstance(publish.get("pid"), int)
+        or publish.get("pid") != os.getpid()
+        or publish.get("ontology_instance_id") != ontology_instance_id
+    ):
+        raise SystemExit(6)
+
+    response_instance_id = ontology_instance_id
+    if MODE == "response-instance-mismatch":
+        response_instance_id = hashlib.sha256(b"response-mismatch").hexdigest()
     response = {
         "schema": RESPONSE,
         "protocol": PROTOCOL,
         "sequence": response_sequence,
-        "ontology_instance_id": hashlib.sha256(instance_seed.encode("ascii")).hexdigest(),
+        "ontology_instance_id": response_instance_id,
         "result": result,
     }
-    instance_counter += 1
-    if MODE == "duplicate-json-field":
-        encoded_response = json.dumps(
-            response, sort_keys=True, separators=(",", ":")
+    if MODE == "response-wrong-schema":
+        response["schema"] = "wrong-response-schema"
+    if MODE == "response-wrong-protocol":
+        response["protocol"] = "wrong-response-protocol"
+    if MODE == "response-invalid-instance":
+        response["ontology_instance_id"] = "invalid"
+    if MODE == "response-extra-field":
+        response["extra"] = True
+    if MODE == "response-missing-instance":
+        del response["ontology_instance_id"]
+    encoded_response = json.dumps(
+        response, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    serialization_shadow = None
+    if MODE == "post-publish-serialization-burst":
+        serialization_shadow = json.dumps(
+            {"shadow": "x" * serialization_burst_bytes},
+            separators=(",", ":"),
         ).encode("utf-8")
+        time.sleep(0.03)
+    if MODE == "duplicate-json-field":
         marker = f'"sequence":{response_sequence}'.encode("ascii")
-        write_payload(encoded_response.replace(marker, marker + b"," + marker, 1))
-        continue
-    write_frame(response)
+        encoded_response = encoded_response.replace(marker, marker + b"," + marker, 1)
+    write_payload(encoded_response)
+    instance_counter += 1
     if MODE == "extra-output":
         write_frame(response)
     if MODE == "late-output":
@@ -277,6 +452,7 @@ while True:
         time.sleep(0.05)
         sys.stdout.buffer.write(b"x")
         sys.stdout.buffer.flush()
+    del serialization_shadow
     del rss_burst
 """
 

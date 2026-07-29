@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # pragma: no cover - exercised by Python 3.10
+    import tomli as tomllib
 
 from tools.benchmark.comparators.manifest import (
     COMMON_BOUNDARY,
@@ -84,29 +90,34 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     py_horned = manifest.by_id("py-horned-common")
     runner = Path("benchmarks/comparators/runners/py_horned_common.py")
     assert py_horned.runner_pin_state == "complete"
-    assert py_horned.runner_revision == "pyowl-core-py-horned-common-runner-v6"
+    assert py_horned.runner_revision == "pyowl-core-py-horned-common-runner-v8"
     assert py_horned.runner_sha256 == hashlib.sha256(runner.read_bytes()).hexdigest()
     assert py_horned.artifact_is_runnable is True
 
     raw_horned = manifest.by_id("horned-owl-raw")
     assert raw_horned.runner_pin_state == "complete"
-    assert raw_horned.runner_revision == "pyowl-core-horned-raw-runner-v3"
+    assert raw_horned.runner_revision == "pyowl-core-horned-raw-runner-v5"
     assert raw_horned.runner_sha256 == (
-        "2b1f6bbd940174e864fca0b7e740779095c3534b7b58f6da8ae48b87cfc8ebd2"
+        "622c0655f8c66d8fca4024c2a050d13a56b9236f591959942c34e786baad840c"
     )
     assert raw_horned.artifact_is_runnable is True
 
     common_horned = manifest.by_id("horned-owl-common")
     assert common_horned.runner_pin_state == "complete"
-    assert common_horned.runner_revision == "pyowl-core-horned-common-runner-v4"
+    assert common_horned.runner_revision == "pyowl-core-horned-common-runner-v6"
     assert common_horned.runner_sha256 == raw_horned.runner_sha256
     assert common_horned.artifact_is_runnable is True
 
     direct = manifest.by_id("pyowl-direct-rust-common")
     assert direct.runner_pin_state == "complete"
-    assert direct.runner_revision == "pyowl-core-direct-rust-common-runner-v3"
+    assert direct.runner_revision == "pyowl-core-direct-rust-common-runner-v7"
+    assert direct.features == (
+        "direct-rust-engine",
+        "common-contract-v1",
+        "python-runtime-unlinked",
+    )
     assert direct.runner_sha256 == (
-        "a2ba45f6a42a1f4630e44dba77ad0f3d030e45a00c92277198b5696d1dd84fae"
+        "0d901712131cd64c1e51970383f0c79591bc1d6fa28348f9edd303ddd2ad23fb"
     )
     assert direct.artifact_is_runnable is True
 
@@ -114,7 +125,7 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     owlapi_runner = Path("benchmarks/comparators/runners/owlapi/launcher.sh")
     assert owlapi.artifact_sha256 == OWLAPI_5_5_1_SHA256
     assert owlapi.runner_pin_state == "complete"
-    assert owlapi.runner_revision == "pyowl-core-owlapi-common-runner-v3"
+    assert owlapi.runner_revision == "pyowl-core-owlapi-common-runner-v5"
     assert owlapi.runner_sha256 == hashlib.sha256(owlapi_runner.read_bytes()).hexdigest()
     assert owlapi.artifact_is_runnable is True
 
@@ -127,6 +138,41 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
         assert pin.artifact_is_runnable is False
 
 
+def test_direct_runner_uses_the_python_free_native_feature_seam() -> None:
+    with Path("native/Cargo.toml").open("rb") as stream:
+        native_manifest = tomllib.load(stream)
+    with Path("benchmarks/comparators/runners/direct/Cargo.lock").open("rb") as stream:
+        direct_lock = tomllib.load(stream)
+    direct_manifest = Path(
+        "benchmarks/comparators/runners/direct/Cargo.toml"
+    ).read_text(encoding="utf-8")
+    native_build = Path("native/build.rs").read_text(encoding="utf-8")
+
+    assert native_manifest["features"]["comparator"] == []
+    assert native_manifest["features"]["extension-module"] == [
+        "dep:pyo3",
+        "dep:pyo3-build-config",
+        "pyo3/extension-module",
+    ]
+    assert native_manifest["dependencies"]["pyo3"]["optional"] is True
+    assert (
+        native_manifest["build-dependencies"]["pyo3-build-config"]["optional"]
+        is True
+    )
+    assert (
+        'default-features = false, features = ["comparator"]' in direct_manifest
+    )
+    direct_packages = {
+        package["name"]
+        for package in direct_lock["package"]
+        if isinstance(package, dict) and isinstance(package.get("name"), str)
+    }
+    assert "pyo3" not in direct_packages
+    assert "pyo3-build-config" not in direct_packages
+    assert '#[cfg(feature = "extension-module")]' in native_build
+    assert "pyo3_build_config::add_extension_module_link_args();" in native_build
+
+
 def test_external_runner_requires_its_own_complete_hash_before_runnable(
     tmp_path: Path,
 ) -> None:
@@ -134,7 +180,7 @@ def test_external_runner_requires_its_own_complete_hash_before_runnable(
     missing_hash_source = _replace_in_lane(
         source,
         "horned-owl-raw",
-        'runner_sha256 = "2b1f6bbd940174e864fca0b7e740779095c3534b7b58f6da8ae48b87cfc8ebd2"',
+        'runner_sha256 = "622c0655f8c66d8fca4024c2a050d13a56b9236f591959942c34e786baad840c"',
         "",
     )
     missing_hash = _write_manifest(tmp_path, "missing-runner-hash.toml", missing_hash_source)
@@ -145,8 +191,8 @@ def test_external_runner_requires_its_own_complete_hash_before_runnable(
     complete_path = _write_manifest(tmp_path, "complete-runner.toml", source)
     raw = load_comparator_manifest(complete_path).by_id("horned-owl-raw")
 
-    assert raw.runner_revision == "pyowl-core-horned-raw-runner-v3"
-    assert raw.runner_sha256 == ("2b1f6bbd940174e864fca0b7e740779095c3534b7b58f6da8ae48b87cfc8ebd2")
+    assert raw.runner_revision == "pyowl-core-horned-raw-runner-v5"
+    assert raw.runner_sha256 == ("622c0655f8c66d8fca4024c2a050d13a56b9236f591959942c34e786baad840c")
     assert raw.artifact_is_runnable is True
 
 

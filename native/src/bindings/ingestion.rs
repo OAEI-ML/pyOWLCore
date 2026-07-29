@@ -6,8 +6,7 @@
 #[path = "ingestion_closure.rs"]
 mod closure;
 #[allow(dead_code)]
-#[path = "../ingestion/mod.rs"]
-pub(crate) mod engine;
+use crate::ingestion as engine;
 
 use pyo3::buffer::PyBuffer;
 use pyo3::prelude::*;

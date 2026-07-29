@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
+import resource
 import sys
+import time
 from collections.abc import Mapping
 from dataclasses import fields
 from typing import Any, cast
@@ -21,11 +22,13 @@ from pyowl_core import (
 from .adapters import (
     ADAPTER_REQUEST_SCHEMA,
     MAX_SUBPROCESS_REQUEST_BYTES,
+    MAX_SUBPROCESS_STDOUT_BYTES,
     AdapterRequest,
     comparator_document_iri,
     run_core_adapter,
     sanitize_failure,
 )
+from .fresh import publish_fresh_result, read_fresh_request
 from .manifest import load_comparator_manifest
 
 _REQUEST_FIELDS = frozenset(
@@ -67,13 +70,10 @@ _OPTION_FIELDS = frozenset(
 
 def main() -> int:
     try:
-        encoded = sys.stdin.buffer.read(MAX_SUBPROCESS_REQUEST_BYTES + 1)
-        if len(encoded) > MAX_SUBPROCESS_REQUEST_BYTES:
-            raise ValueError("request exceeds the configured byte limit")
-        raw = json.loads(encoded)
-        if not isinstance(raw, Mapping):
-            raise TypeError("request must be a JSON object")
-        value = cast(Mapping[str, Any], raw)
+        value = cast(
+            Mapping[str, Any],
+            read_fresh_request(max_request_bytes=MAX_SUBPROCESS_REQUEST_BYTES),
+        )
         if set(value) != _REQUEST_FIELDS:
             raise ValueError("request fields differ from adapter protocol v2")
         if value.get("schema") != ADAPTER_REQUEST_SCHEMA:
@@ -110,11 +110,39 @@ def main() -> int:
             process_mode=_string(value.get("process_mode"), "process_mode"),
         )
         result = run_core_adapter(pin, request, isolated_process=True)
+        _finalize_completion_metrics(result)
     except Exception as error:
         sys.stderr.write(sanitize_failure(f"{type(error).__name__}: {error}") + "\n")
         return 2
-    json.dump(result, sys.stdout, sort_keys=True, separators=(",", ":"))
+    try:
+        publish_fresh_result(
+            result,
+            max_request_bytes=MAX_SUBPROCESS_REQUEST_BYTES,
+            max_response_bytes=MAX_SUBPROCESS_STDOUT_BYTES,
+        )
+    except Exception as error:
+        sys.stderr.write(sanitize_failure(f"{type(error).__name__}: {error}") + "\n")
+        return 2
     return 0
+
+
+def _finalize_completion_metrics(result: Mapping[str, Any]) -> None:
+    """Publish RSS and child CPU evidence at the assembled completion boundary."""
+
+    if result.get("status") != "ok":
+        return
+    metrics = result.get("metrics")
+    if not isinstance(metrics, dict):
+        return
+    before = metrics.get("rss_peak_before_bytes")
+    if isinstance(before, bool) or not isinstance(before, int) or before < 0:
+        return
+    metrics["startup_to_ready_cpu_ns"] = 0
+    usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    after = int(usage) if sys.platform == "darwin" else int(usage) * 1024
+    metrics["rss_peak_after_bytes"] = after
+    metrics["rss_peak_increment_bytes"] = max(0, after - before)
+    metrics["startup_to_ready_cpu_ns"] = time.process_time_ns()
 
 
 def _options(value: object) -> LoadOptions:

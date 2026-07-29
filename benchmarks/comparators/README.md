@@ -78,21 +78,42 @@ native crate as an `rlib`; it neither imports Python nor crosses PyO3 objects.
 Reproduce and authenticate the pinned Darwin x86_64 executable with:
 
 ```console
-cd benchmarks/comparators/runners/direct
-cargo +1.97.1 build --locked --release
+PYTHONPATH=. python -m tools.benchmark.comparators.build_direct_runner --print-sha256
 printf '%s  %s\n' \
-  a890618c136ef0712c8f09d7963241dacb51a811b96a803da18c7b2774515be0 \
-  target/release/pyowl-core-direct-comparator | shasum -a 256 -c -
-export PYOWL_CORE_DIRECT_RUNNER="$PWD/target/release/pyowl-core-direct-comparator"
+  0d901712131cd64c1e51970383f0c79591bc1d6fa28348f9edd303ddd2ad23fb \
+  benchmarks/comparators/runners/direct/target/release/pyowl-core-direct-comparator \
+  | shasum -a 256 -c -
+export PYOWL_CORE_DIRECT_RUNNER="$PWD/benchmarks/comparators/runners/direct/target/release/pyowl-core-direct-comparator"
+PYTHONPATH=src:. python -m tools.benchmark.comparators.linkage_audit \
+  --binary benchmarks/comparators/runners/direct/target/release/pyowl-core-direct-comparator \
+  --expected-runner-sha256 \
+  0d901712131cd64c1e51970383f0c79591bc1d6fa28348f9edd303ddd2ad23fb \
+  --output \
+  reports/performance/redesign-baseline/dependency-audit-direct-linkage-darwin-x86_64.json
 ```
 
-Runner v2 verifies its embedded native `Cargo.lock`, executable hash, exact
+The build helper rejects inherited compiler seams, remaps the checkout, target,
+and Cargo source paths, and replaces Cargo's checkout-dependent metadata for
+the two local Rust crates without changing Cargo's artifact names. On Darwin
+it also suppresses `LC_UUID`; the resulting pinned executable is byte-identical
+across distinct checkout and target paths. Windows linkage CI keeps the path
+remaps but deliberately omits the POSIX Python wrapper, so it publishes linkage
+evidence rather than a cross-checkout reproducibility claim.
+
+Runner v7 verifies its embedded native `Cargo.lock`, executable hash, exact
 semantic options, source/document identity, allocator, thread ceiling, lane,
 and boundary. Functional Syntax uses the retained parser arena and RDF/XML uses
 the streaming mapper's retained arena. Both construct and fully validate the
 common contract inside the timer for resident/file and fresh/persistent modes.
 OWL/XML and Turtle are explicit `ineligible` results because no native retained
 parser is advertised for those syntaxes.
+
+The linkage audit independently checks both dynamic dependencies and imported
+symbols. It fails closed when the platform inspector is absent, its output is
+unrecognized, the executable changes during inspection, or any Python runtime
+dependency or `Py*` import remains. Native-safety CI repeats the audit on
+Darwin, Linux, and Windows builds; release evidence requires a passing artifact
+from every claimed target platform.
 
 The Horned runner is an excluded development binary, built from its own exact
 Cargo lock and Rust 1.97.1 toolchain. Reproduce the recorded Darwin x86_64
@@ -102,12 +123,12 @@ runner and authenticate it before selecting either lane:
 cd benchmarks/comparators/runners/horned
 cargo +1.97.1 build --locked --release
 printf '%s  %s\n' \
-  ffd20194b7c3715d6d07ec8ba9167d590ed484c278305754148711c44ae8887b \
+  622c0655f8c66d8fca4024c2a050d13a56b9236f591959942c34e786baad840c \
   target/release/pyowl-core-horned-comparator | shasum -a 256 -c -
 export PYOWL_CORE_HORNED_RUNNER="$PWD/target/release/pyowl-core-horned-comparator"
 ```
 
-Raw runner v2 and common runner v1 verify the embedded Horned 1.4.0 crates.io
+Raw runner v5 and common runner v6 verify the embedded Horned 1.4.0 crates.io
 checksum, their shared executable SHA-256, exact semantic options,
 source/document identity, allocator, thread ceiling, lane, and boundary before
 parsing. The raw boundary builds Horned's set, IRI, component-kind, and
@@ -155,13 +176,13 @@ freeze, fingerprint, inventory, and validation cost inside the timer. Version
 1.4.0 exposes Functional Syntax, OWL/XML, and RDF/XML readers but no Turtle
 reader selection. Turtle requests therefore return explicit `ineligible`
 evidence; they are never sent to the RDF/XML reader or counted as passes.
-Before either a fresh request or persistent handshake, runner v2 also requires
+Before either a fresh request or persistent handshake, runner v8 also requires
 distribution version 1.4.0, exact `direct_url.json` provenance for the pinned
 sdist SHA-256, and a byte-for-byte match for every SHA-256 entry in the
 installed distribution's RECORD. A renamed, editable, differently sourced, or
 post-install modified engine fails before producing samples.
 
-The OWLAPI runner is likewise excluded from package artifacts and dependencies.
+The OWLAPI v5 runner is likewise excluded from package artifacts and dependencies.
 It pins OWLAPI distribution 5.5.1, an exact 521-file Temurin 21.0.7+6 runtime,
 the deterministic runner JAR, launcher, 8 GiB fixed heap, G1GC with
 `AlwaysPreTouch`, and one active processor. Its complete reproduction and
@@ -172,11 +193,14 @@ Syntax, OWL/XML, RDF/XML, and Turtle use explicit readers; anonymous-individual
 identity and any RDF occurrence ordering that cannot be recovered from OWLAPI
 semantics return `ineligible` instead of a reduced result.
 
-Each external command reads one
-`pyowl-core/comparator-adapter-request/v2` JSON object on standard input and
-writes one `pyowl-core/comparator-adapter-result/v1` object to standard output.
-Request v2 adds the source-digest-derived document IRI required to make
-resident-byte and prepared-file semantic identities exact.
+Every fresh external command uses
+`pyowl-core/comparator-fresh-runner/v1`. Canonical length-prefixed
+`pyowl-core/comparator-fresh-request/v1` wraps one unchanged
+`pyowl-core/comparator-adapter-request/v2`; the final
+`pyowl-core/comparator-fresh-response/v1` likewise wraps one unchanged
+`pyowl-core/comparator-adapter-result/v1`. Request v2 adds the
+source-digest-derived document IRI required to make resident-byte and
+prepared-file semantic identities exact.
 Common-ready results must include a validated
 `pyowl-core/comparator-common-contract/v1` object. The runner performs only
 already-published digest/count equality after timing. Raw Horned results instead
@@ -184,32 +208,64 @@ publish a bounded integer `raw_inventory` whose SHA-256 is recomputed from the
 canonical v1 scalar preimage, and are never eligible as an equivalence
 denominator.
 
-Fresh-process lanes use that one-request/one-result command directly. A
-steady-process lane instead starts one exact SHA-256-verified executable before
-warm-ups and samples, and keeps that single process for the lane lifecycle.
+For a fresh-process lane the child first builds and fully validates the adapter
+result, refreshes peak RSS after the complete result/artifact shape exists, and
+sends only `pyowl-core/comparator-fresh-completed/v1`. The acknowledgement has
+exact fields for protocol, unsigned sequence zero, actual child PID, and the
+lowercase SHA-256 of ASCII `"{pid}:0:0"`. The parent authenticates all of them
+and immediately captures startup-to-ready wall time and supervisor CPU before
+constructing or sending `pyowl-core/comparator-fresh-publish/v1`. It then writes
+that exact release frame and closes child stdin. The child requires immediate
+EOF after the publish frame; any trailing byte fails without a response. Only
+after the valid publish and EOF may it construct, serialize, and flush the
+response. The parent requires the same ontology identifier, no early or trailing
+output, a bounded stderr stream, and a clean zero exit.
+
+Successful fresh results also report `metrics.startup_to_ready_cpu_ns`, the
+absolute child process CPU sampled at that same fully assembled pre-completed
+boundary. It must be at least the call/load delta in `metrics.cpu_ns` and is
+absent from steady and non-success results. `transport_metrics.parent_cpu_ns`
+is deliberately different: it measures only supervisor/harness CPU through
+authenticated completion. Response serialization and transport occur after all
+fresh wall, child CPU, and RSS endpoints.
+
+A steady-process lane instead starts one exact SHA-256-verified executable
+before warm-ups and samples, and keeps that single process for the lane lifecycle.
 The child must first send an exact
-`pyowl-core/comparator-persistent-handshake/v2` attestation for protocol
-`pyowl-core/comparator-persistent-runner/v2`: lane and boundary identity, its
-actual child PID, request/prepared/execute/result schemas,
+`pyowl-core/comparator-persistent-handshake/v3` attestation for protocol
+`pyowl-core/comparator-persistent-runner/v3`: lane and boundary identity, its
+actual child PID, request/prepared/execute/completed/publish/result schemas,
 fresh-ontology-per-request support, and the complete artifact and runner pins
 must all match before any request is eligible to run. Startup and handshake time
 are lifecycle evidence and are outside call-to-ready samples.
 
-Persistent handshake, request, response, and shutdown messages use a canonical
-decimal byte length, newline, JSON payload, and terminal newline. Protocol v2 is
-an authenticated two-phase request. The parent first sends
-`pyowl-core/comparator-persistent-request/v2`; the child validates its strict
+Persistent handshake, request, acknowledgement, publication, response, and
+shutdown messages use a canonical decimal byte length, newline, JSON payload,
+and terminal newline. Protocol v3 is an authenticated, publication-gated
+request. The parent first sends
+`pyowl-core/comparator-persistent-request/v3`; the child validates its strict
 envelope and decodes and verifies the adapter request before replying with
 `pyowl-core/comparator-persistent-prepared/v1`. That acknowledgement repeats the
 protocol, exact monotonic sequence, and authenticated child PID and establishes
 the quiescent RSS boundary. The parent captures current RSS, starts interval
 sampling, and sends a strict `pyowl-core/comparator-persistent-execute/v1` frame
 containing that same sequence and PID. Timed ontology work cannot begin before
-this execute frame. The child then returns
-`pyowl-core/comparator-persistent-response/v2`; every successful response also
-carries a new lowercase SHA-256 ontology-instance identifier. Call-to-ready wall
-time still starts before the request frame and includes request preparation;
-the prepared boundary narrows only the steady-process RSS interval.
+this execute frame.
+
+After building and fully validating the result, the child derives a fresh
+lowercase SHA-256 ontology-instance identifier and sends only a strict
+`pyowl-core/comparator-persistent-completed/v1` frame containing the protocol,
+sequence, PID, and identifier. It then blocks without serializing the response.
+The parent authenticates that completion, captures the call-to-ready wall and
+supervisor CPU endpoints, stops and joins the RSS sampler, and only then sends the matching
+`pyowl-core/comparator-persistent-publish/v1` frame. The child rejects any field,
+type, sequence, PID, or identifier mismatch before serializing
+`pyowl-core/comparator-persistent-response/v3`; the parent also requires that
+response to repeat the completed identifier. This two-way barrier makes response
+serialization provably post-measurement; a one-way completion signal would race
+the sampler's terminal observation. Call-to-ready wall time starts before the
+request frame and includes request preparation but ends at authenticated
+completion, before sampler teardown, publication, and response transport.
 
 Every steady sample nests
 `pyowl-core/comparator-rss-interval/v1` under
@@ -217,20 +273,27 @@ Every steady sample nests
 `quiescent_current_bytes`, `interval_peak_bytes`,
 `incremental_peak_bytes`, `sample_count`, and `maximum_sample_gap_ns`, plus the
 schema. The increment must equal interval peak minus quiescent current RSS and
-the interval must contain at least two samples. External runners are sampled by
-a parent thread against the authenticated child PID from prepared
-acknowledgement through response. In-process Python and delivered-wheel core
-lanes instead use a spawned helper process to sample the core process
-independently of its GIL from the corresponding quiescent boundary through
-query readiness. Both paths request a 1 ms interval. A maximum observed gap
-above 10 ms is rejected as insufficient-quality steady RSS gate evidence;
+the interval must contain at least two samples. External runners use a
+pre-spawned sampler helper prepared before the parent call clock, then baselined
+and armed against the authenticated child PID after the prepared
+acknowledgement. It runs
+through authenticated completion, before publication and response serialization.
+In-process Python and delivered-wheel core lanes likewise use a spawned helper
+process to sample the core process independently of its GIL from the corresponding
+quiescent boundary through full contract validation. The helper is stopped before
+legacy RSS, garbage-collector object, allocated-block, and result-wrapper
+instrumentation. Both paths request a 1 ms interval. A
+maximum observed gap above 10 ms is rejected as insufficient-quality steady RSS
+gate evidence;
 lifetime `ru_maxrss` is not substituted for the interval measurement.
 
-Nonblocking selector I/O enforces request, prepared acknowledgement, response,
-cumulative stderr, handshake, and per-response time limits. Partial, malformed,
-oversized, replayed, unsolicited, extra, or late frames fail the entire lane
-closed. Shutdown uses `pyowl-core/comparator-persistent-shutdown/v2`, requires
-the matching v2 acknowledgement and clean exit, and retains process-group
+Nonblocking selector I/O enforces request, prepared and completed
+acknowledgements, publish, response, cumulative stderr, handshake, and
+per-response time limits. Partial, malformed, oversized, replayed, unsolicited,
+extra, late, or out-of-order frames fail the entire lane closed. Fresh runners
+also require publish-side EOF and a clean zero exit. Shutdown uses
+`pyowl-core/comparator-persistent-shutdown/v3`, requires the matching v3
+acknowledgement and clean exit, and retains process-group
 termination plus a kill fallback on error or timeout. A forked client cannot
 use or signal the parent-owned runner. The lifecycle audit records the
 authenticated handshake, PID, startup, request/response and unique-instance
@@ -251,9 +314,10 @@ Bootstrap indexes come from the reported v1 SHA-256 counter stream with
 rejection sampling, not a runtime-dependent standard-library PRNG. Fresh-process
 wall gates use startup-to-ready measurements: `metrics.startup_to_ready_ns` for
 the isolated native-wheel worker and `transport_metrics.parent_wall_ns` for
-external runners. Steady-process wall gates use call-to-ready `metrics.wall_ns`;
-the separately specified installed-wheel/direct overhead remains call-to-ready
-in both modes.
+external runners. Steady-process wall gates use call-to-ready
+`metrics.wall_ns` for in-process core lanes and authenticated
+`transport_metrics.parent_wall_ns` for external persistent lanes. The separately
+specified installed-wheel/direct overhead remains call-to-ready in both modes.
 The upper endpoint of the 95% interval must be `<= 1.10` for wall time and
 `<= 1.15` for incremental peak RSS; every required large-corpus median must be
 `<= 1.25`. Direct Rust is paired only with Horned common readiness, the installed
@@ -264,7 +328,16 @@ invalid, nonpositive, unpaired, contract-mismatched, or unavailable evidence
 leaves the gate configured but failed with scenario-specific reasons.
 
 The shared Darwin entry remains explicitly `pending`; release evidence must use
-an approved versioned machine. Resident-byte and file lanes and the audited
+an approved versioned machine. An approved run supplies the exact operator
+observations with `--reference-storage` and `--reference-power-mode`; when the
+platform CPU probe is unavailable it also supplies `--reference-cpu-model`.
+These bounded, control-free values and their provenance are retained in the
+environment evidence. Storage and power must be operator-supplied, the CPU
+value must agree with a successful platform probe, and every observed field
+must exactly match the approved manifest row, so omitted or conflicting
+observations fail closed.
+
+Resident-byte and file lanes and the audited
 persistent lifecycle are implemented and contract-tested. File inputs are
 hash-checked and prepared before timing, use the same stable source-bound
 document IRI as resident bytes, and include the implementation's file open/read

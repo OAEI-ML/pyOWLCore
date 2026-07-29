@@ -614,6 +614,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "extension-module")]
     fn generated_fixture_matches_the_published_python_v1_vectors() {
         let publication = super::super::fixture::publication().expect("generated fixture");
         let storage = publication.storage();

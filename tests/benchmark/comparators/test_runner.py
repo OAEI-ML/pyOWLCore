@@ -13,6 +13,7 @@ from tools.benchmark.comparators.manifest import DEFAULT_COMPARATOR_MANIFEST, RO
 from tools.benchmark.comparators.ratio_statistics import MAX_U64
 from tools.benchmark.comparators.runner import (
     ComparatorRunError,
+    comparator_source_identity,
     main,
     run_comparator_baseline,
 )
@@ -40,6 +41,11 @@ def test_python_reference_reports_separate_fresh_and_steady_raw_samples() -> Non
     fresh = next(row for row in rows if row["process_mode"] == "fresh-process")
     steady = next(row for row in rows if row["process_mode"] == "steady-process")
     assert fresh["samples"][0]["metrics"]["startup_to_ready_ns"] > 0
+    assert (
+        fresh["samples"][0]["metrics"]["startup_to_ready_cpu_ns"]
+        >= fresh["samples"][0]["metrics"]["cpu_ns"]
+    )
+    assert "startup_to_ready_cpu_ns" not in steady["samples"][0]["metrics"]
     rss_interval = steady["samples"][0]["transport_metrics"]["rss_interval"]
     assert rss_interval["schema"] == "pyowl-core/comparator-rss-interval/v1"
     assert rss_interval["sample_count"] >= 2
@@ -65,6 +71,11 @@ def test_python_reference_reports_separate_fresh_and_steady_raw_samples() -> Non
     assert steady_rss["schema"] == "pyowl-core/comparator-rss-interval/v1"
     assert steady_rss["maximum_accepted_sample_gap_ns"] == 10_000_000
     assert steady_rss["lifetime_ru_maxrss_is_not_used_for_steady_ratio_gates"] is True
+    assert (
+        report["methodology"]["fresh_external_protocol"] == "pyowl-core/comparator-fresh-runner/v1"
+    )
+    assert "startup_to_ready_cpu_ns" in report["methodology"]["fresh_completion"]["child_cpu"]
+    assert "supervisor" in report["methodology"]["fresh_completion"]["parent_cpu"]
     sample = rows[0]["samples"][0]
     assert sample["schedule_seed"] == 0
     assert sample["paired_block"] == 0
@@ -324,6 +335,28 @@ def test_cli_records_maximum_u64_seed(tmp_path: Path) -> None:
     report = cast(dict[str, Any], json.loads(output.read_text(encoding="utf-8")))
     assert report["methodology"]["schedule"]["seed"] == MAX_U64
     assert report["lanes"][0]["samples"][0]["schedule_seed"] == MAX_U64
+
+
+def test_runtime_source_identity_binds_all_new_evidence_and_native_schema_inputs() -> None:
+    identity = comparator_source_identity()
+    inputs = {
+        cast(str, value["path"]): value for value in cast(list[dict[str, Any]], identity["inputs"])
+    }
+    expected_paths = {
+        "tools/benchmark/comparators/fresh.py",
+        "tools/benchmark/comparators/process_group.py",
+        "tools/benchmark/comparators/rss_interval.py",
+        "tools/benchmark/comparators/rss_monitor.py",
+        "tools/benchmark/report.py",
+        "schemas/encoded-view-v1.json",
+        "schemas/encoded-view-v1.toml",
+    }
+
+    assert expected_paths <= set(inputs)
+    for relative in expected_paths:
+        path = ROOT / relative
+        assert inputs[relative]["bytes"] == path.stat().st_size
+        assert inputs[relative]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_committed_shared_host_smoke_is_self_bound_historical_evidence() -> None:

@@ -5,11 +5,11 @@
 
 use std::time::Instant;
 
-use crate::bindings::ingestion::engine::parse_rdfxml_retained_v2;
 use crate::cancel::{Cancellation, Guard};
 use crate::canonical::iri;
 use crate::error::NativeError;
 use crate::hash::{sha256, Sha256};
+use crate::ingestion::parse_rdfxml_retained_v2;
 use crate::limits::Limits;
 use crate::parse::{
     parse_retained, prepare_retained_publication_v2, RetainedParseMetadataV2, RetainedParsePhases,
@@ -205,6 +205,13 @@ fn finish_common(
             kind: ComparatorFailureKind::Ineligible,
             code: "NATIVE_COMPARATOR_IMPORTS_UNSUPPORTED",
             message: "direct retained comparator does not bypass import resolution",
+        });
+    }
+    if metadata.closure_has_scoped_roots() {
+        return Err(ComparatorFailure {
+            kind: ComparatorFailureKind::Ineligible,
+            code: "NATIVE_COMPARATOR_ANONYMOUS_UNSUPPORTED",
+            message: "direct retained comparator does not compare anonymous identities",
         });
     }
     if seed.document_fingerprint != metadata.document_fingerprint.digest

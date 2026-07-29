@@ -11,6 +11,9 @@ RELEASE = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
 CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 NATIVE_SAFETY = (WORKFLOWS / "native-safety.yml").read_text(encoding="utf-8")
 PLATFORM_AUDIT = (ROOT / "tools" / "packaging" / "platform_audit.py").read_text(encoding="utf-8")
+DIRECT_RUNNER_BUILD = (
+    ROOT / "tools" / "benchmark" / "comparators" / "build_direct_runner.py"
+).read_text(encoding="utf-8")
 ACTION = re.compile(r"(?m)^\s*-?\s*uses:\s+([^\s#]+)")
 CONTAINER_IMAGE = re.compile(r"(?m)^\s*container:\s+([^\s#]+)")
 
@@ -51,8 +54,8 @@ def test_ci_container_images_are_pinned_to_exact_manifests() -> None:
 
 
 def test_inline_workflow_python_is_syntactically_valid() -> None:
-    snippets = _inline_python(WHEELS) + _inline_python(RELEASE)
-    assert len(snippets) >= 8
+    snippets = _inline_python(WHEELS) + _inline_python(RELEASE) + _inline_python(NATIVE_SAFETY)
+    assert len(snippets) >= 9
     for index, snippet in enumerate(snippets):
         compile(snippet, f"workflow-inline-{index}.py", "exec")
 
@@ -106,8 +109,37 @@ def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
         "tests/fuzz/native/artifacts/",
     ):
         assert requirement in NATIVE_SAFETY
-    assert NATIVE_SAFETY.count("timeout-minutes:") == 5
+    assert NATIVE_SAFETY.count("timeout-minutes:") == 6
     assert "continue-on-error" not in NATIVE_SAFETY
+    linkage_start = NATIVE_SAFETY.index("\n  direct-runner-linkage:")
+    linkage_end = NATIVE_SAFETY.index("\n  fuzz:", linkage_start)
+    linkage = NATIVE_SAFETY[linkage_start:linkage_end]
+    for requirement in (
+        "ubuntu-24.04",
+        "macos-15-intel",
+        "windows-latest",
+        'python-version: "3.12.3"',
+        "rustup toolchain install 1.97.1",
+        "python -m tools.benchmark.comparators.build_direct_runner",
+        "tools.benchmark.comparators.linkage_audit",
+        "--expected-runner-sha256",
+        "dumpbin.exe",
+        "if: always()",
+        "if-no-files-found: error",
+    ):
+        assert requirement in linkage
+    assert linkage.count("timeout-minutes:") == 1
+    assert "cargo +1.97.1 build --locked --release" not in linkage
+    assert "PYO3_PYTHON" not in linkage
+    assert "--allow-partial" not in linkage
+    for requirement in (
+        "CARGO_ENCODED_RUSTFLAGS",
+        "--remap-path-prefix=",
+        "link-arg=-Wl,-no_uuid",
+        "RUSTC_WRAPPER",
+        "reproducible_rustc.py",
+    ):
+        assert requirement in DIRECT_RUNNER_BUILD
 
 
 def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:

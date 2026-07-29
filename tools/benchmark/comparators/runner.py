@@ -7,7 +7,6 @@ import gc
 import hashlib
 import json
 import sys
-import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -19,23 +18,29 @@ from tools.benchmark.manifest import (
     load_manifest,
     verify_prepared,
 )
-from tools.benchmark.report import collect_environment, write_json
+from tools.benchmark.report import (
+    ReportError,
+    collect_environment,
+    validate_reference_observation,
+    write_json,
+)
 
 from .adapters import (
     ADAPTER_RESULT_SCHEMA,
     DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
+    MAX_SUBPROCESS_REQUEST_BYTES,
     MAX_SUBPROCESS_STDERR_BYTES,
     MAX_SUBPROCESS_STDOUT_BYTES,
     AdapterRequest,
     adapter_status_result,
     default_options,
     options_digest,
-    run_bounded_subprocess,
     run_core_adapter,
     run_external_adapter,
     sanitize_failure,
 )
 from .common_contract import common_contract_equality_key
+from .fresh import FRESH_PROTOCOL_SCHEMA, FreshRunnerError, run_fresh_subprocess
 from .manifest import (
     COMMON_BOUNDARY,
     DEFAULT_COMPARATOR_MANIFEST,
@@ -92,14 +97,67 @@ _FRESH_STARTUP_METRIC_SOURCES = {
     "horned-owl-common": ("transport_metrics", "parent_wall_ns"),
     "py-horned-common": ("transport_metrics", "parent_wall_ns"),
 }
+_CALL_TO_READY_METRIC_SOURCES = {
+    "pyowl-python-common": ("metrics", "wall_ns"),
+    "pyowl-native-wheel-common": ("metrics", "wall_ns"),
+    "pyowl-direct-rust-common": ("transport_metrics", "parent_wall_ns"),
+    "horned-owl-raw": ("transport_metrics", "parent_wall_ns"),
+    "horned-owl-common": ("transport_metrics", "parent_wall_ns"),
+    "py-horned-common": ("transport_metrics", "parent_wall_ns"),
+    "owlapi-common": ("transport_metrics", "parent_wall_ns"),
+}
 _FRESH_CORE_METRICS = (
     "wall_ns",
     "cpu_ns",
+    "startup_to_ready_cpu_ns",
     "load_ns",
     "common_adapter_ns",
     "rss_peak_before_bytes",
     "rss_peak_after_bytes",
     "rss_peak_increment_bytes",
+)
+_FRESH_CORE_RESULT_FIELDS = frozenset(
+    {
+        "schema",
+        "lane",
+        "implementation",
+        "boundary",
+        "status",
+        "reason",
+        "corpus_id",
+        "source_sha256",
+        "options_sha256",
+        "input_mode",
+        "process_mode",
+        "contract",
+        "raw_inventory",
+        "metrics",
+        "timed_validation",
+        "artifact",
+    }
+)
+_FRESH_CORE_ARTIFACT_FIELDS = frozenset(
+    {
+        "pin_state",
+        "version",
+        "revision",
+        "artifact",
+        "artifact_sha256",
+        "features",
+        "allocator",
+        "thread_ceiling",
+        "runner_revision",
+        "runner_sha256",
+    }
+)
+_FRESH_CORE_TIMED_VALIDATION_FIELDS = frozenset(
+    {
+        "schema",
+        "inside_timed_envelope",
+        "full_contract_validation",
+        "contract_sha256",
+        "validation_ns",
+    }
 )
 _SOURCE_FILES = (
     "pyproject.toml",
@@ -108,6 +166,8 @@ _SOURCE_FILES = (
     "native/Cargo.toml",
     "native/Cargo.lock",
     "native/build.rs",
+    "schemas/encoded-view-v1.json",
+    "schemas/encoded-view-v1.toml",
 )
 _SOURCE_TREES = (
     ("src/pyowl_core", frozenset({".py", ".pyi", ".typed"})),
@@ -148,6 +208,9 @@ def run_comparator_baseline(
     warmups: int = 1,
     repetitions: int = 5,
     seed: int = DEFAULT_SCHEDULE_SEED,
+    reference_cpu_model: str | None = None,
+    reference_storage: str | None = None,
+    reference_power_mode: str | None = None,
 ) -> dict[str, Any]:
     """Run a correctness-qualified raw-sample baseline without network access."""
 
@@ -157,6 +220,17 @@ def run_comparator_baseline(
         _require_u64(seed, "seed")
     except (TypeError, ValueError) as error:
         raise ComparatorRunError(str(error)) from error
+    for api_name, label, value in (
+        ("reference_cpu_model", "reference CPU model", reference_cpu_model),
+        ("reference_storage", "reference storage", reference_storage),
+        ("reference_power_mode", "reference power mode", reference_power_mode),
+    ):
+        if value is None:
+            continue
+        try:
+            validate_reference_observation(value, label)
+        except ReportError as error:
+            raise ComparatorRunError(f"{api_name}: {error}") from error
     _require_unique_nonempty(corpus_ids, "corpus_ids")
     _require_unique_nonempty(comparator_ids, "comparator_ids")
     _require_unique_nonempty(process_modes, "process_modes")
@@ -263,7 +337,12 @@ def run_comparator_baseline(
         for value in rows
         if value["status"] == "ok" and value["lane"] in required_lanes
     }
-    environment = collect_environment(ROOT)
+    environment = collect_environment(
+        ROOT,
+        reference_cpu_model=reference_cpu_model,
+        reference_storage=reference_storage,
+        reference_power_mode=reference_power_mode,
+    )
     if (
         comparator_source_identity(
             comparator_manifest_path=comparator_manifest_path,
@@ -333,17 +412,34 @@ def run_comparator_baseline(
                 "core lanes are offline; fresh external lanes are isolated one-shot "
                 "processes and steady external lanes use one audited process per lane"
             ),
+            "fresh_external_protocol": FRESH_PROTOCOL_SCHEMA,
+            "fresh_completion": {
+                "boundary": (
+                    "authenticated completed PID/sequence/ontology token after full result "
+                    "construction and validation, before publish or response serialization"
+                ),
+                "publish": "parent writes one authenticated release frame then closes stdin",
+                "child_cpu": (
+                    "successful fresh results report absolute child process CPU as "
+                    "metrics.startup_to_ready_cpu_ns at the completion boundary"
+                ),
+                "parent_cpu": (
+                    "transport_metrics.parent_cpu_ns is supervisor/harness CPU through "
+                    "authenticated completion"
+                ),
+            },
             "persistent_external_protocol": PERSISTENT_PROTOCOL_SCHEMA,
             "persistent_external_startup": "outside every call-to-ready sample",
             "steady_rss": {
                 "schema": RSS_INTERVAL_SCHEMA,
                 "boundary": (
                     "current RSS at authenticated prepared/quiescent boundary through "
-                    "query-ready response"
+                    "authenticated query-ready completion, before publish and response "
+                    "serialization"
                 ),
                 "sampler": (
-                    "outside the target process; parent thread for external runners and "
-                    "a spawned helper process for in-process core lanes"
+                    "outside the target process in a pre-spawned helper process; external "
+                    "sampling is armed only after the authenticated prepared acknowledgement"
                 ),
                 "sample_interval_ns": 1_000_000,
                 "maximum_accepted_sample_gap_ns": _MAX_STEADY_RSS_SAMPLE_GAP_NS,
@@ -520,64 +616,24 @@ def _cleanup_barrier() -> None:
 
 
 def _run_fresh_core(pin: ComparatorPin, request: AdapterRequest) -> dict[str, Any]:
-    body = _canonical_json(request.protocol_dict(pin))
-    start = time.perf_counter_ns()
     try:
-        completed = run_bounded_subprocess(
+        completed = run_fresh_subprocess(
             (sys.executable, "-m", "tools.benchmark.comparators.worker"),
-            body,
+            request.protocol_dict(pin),
             timeout=DEFAULT_SUBPROCESS_TIMEOUT_SECONDS,
+            max_request_bytes=MAX_SUBPROCESS_REQUEST_BYTES,
             max_stdout_bytes=MAX_SUBPROCESS_STDOUT_BYTES,
             max_stderr_bytes=MAX_SUBPROCESS_STDERR_BYTES,
             cwd=ROOT,
         )
-    except (OSError, TypeError, ValueError) as error:
+    except (OSError, TypeError, ValueError, FreshRunnerError) as error:
         return adapter_status_result(
             pin,
             request,
             "error",
             f"isolated worker could not start: {type(error).__name__}: {error}",
         )
-    startup_to_ready_ns = time.perf_counter_ns() - start
-    if completed.timed_out:
-        return adapter_status_result(
-            pin,
-            request,
-            "error",
-            "isolated worker exceeded its explicit wall-time limit",
-        )
-    if completed.output_limit is not None:
-        return adapter_status_result(
-            pin,
-            request,
-            "error",
-            f"isolated worker exceeded its {completed.output_limit} output limit",
-        )
-    if completed.returncode != 0:
-        reason = sanitize_failure(completed.stderr.decode("utf-8", "replace"))
-        return adapter_status_result(
-            pin,
-            request,
-            "error",
-            f"isolated worker exited {completed.returncode}: {reason}",
-        )
-    try:
-        decoded = json.loads(completed.stdout)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        return adapter_status_result(
-            pin,
-            request,
-            "error",
-            f"isolated worker output is invalid: {type(error).__name__}: {error}",
-        )
-    if not isinstance(decoded, dict):
-        return adapter_status_result(
-            pin,
-            request,
-            "error",
-            "isolated worker output must be a JSON object",
-        )
-    result = cast(dict[str, Any], decoded)
+    result = completed.result
     try:
         _validate_fresh_core_result(pin, request, result)
     except (TypeError, ValueError) as error:
@@ -591,11 +647,17 @@ def _run_fresh_core(pin: ComparatorPin, request: AdapterRequest) -> dict[str, An
         result["reason"] = sanitize_failure(result.get("reason"))
     metrics = result.get("metrics")
     if isinstance(metrics, dict):
-        metrics["startup_to_ready_ns"] = startup_to_ready_ns
+        metrics["startup_to_ready_ns"] = completed.parent_wall_ns
     result["transport_metrics"] = {
-        "request_bytes": len(body),
-        "stdout_bytes": len(completed.stdout),
-        "stderr_bytes": len(completed.stderr),
+        "parent_wall_ns": completed.parent_wall_ns,
+        "parent_cpu_ns": completed.parent_cpu_ns,
+        "request_bytes": completed.request_bytes,
+        "stdout_bytes": completed.stdout_bytes,
+        "stderr_bytes": completed.stderr_bytes,
+        "fresh_protocol": FRESH_PROTOCOL_SCHEMA,
+        "fresh_sequence": 0,
+        "fresh_runner_pid": completed.runner_pid,
+        "ontology_instance_id": completed.ontology_instance_id,
     }
     return result
 
@@ -621,9 +683,13 @@ def _validate_fresh_core_result(
     status = value.get("status")
     if status not in {"ok", "not-run", "ineligible", "error"}:
         raise ValueError("fresh-process result has invalid status")
+    if set(value) != _FRESH_CORE_RESULT_FIELDS:
+        raise ValueError("fresh-process result fields differ from adapter schema v1")
     artifact = value.get("artifact")
     if not isinstance(artifact, Mapping):
         raise TypeError("fresh-process result lacks artifact evidence")
+    if set(artifact) != _FRESH_CORE_ARTIFACT_FIELDS:
+        raise ValueError("fresh-process artifact fields differ from adapter schema v1")
     expected_artifact: tuple[tuple[str, object], ...] = (
         ("pin_state", pin.pin_state),
         ("version", pin.version),
@@ -647,6 +713,13 @@ def _validate_fresh_core_result(
     if status != "ok":
         if not isinstance(value.get("reason"), str) or not value.get("reason"):
             raise ValueError("non-success fresh-process result requires a reason")
+        metrics = value.get("metrics")
+        if not isinstance(metrics, Mapping) or metrics:
+            raise ValueError("non-success fresh-process result must report empty metrics")
+        if value.get("contract") is not None or value.get("raw_inventory") is not None:
+            raise ValueError("non-success fresh-process result must not report ontology evidence")
+        if value.get("timed_validation") is not None:
+            raise ValueError("non-success fresh-process result must not report timed validation")
         return
     if value.get("reason") is not None:
         raise ValueError("successful fresh-process result must not contain a reason")
@@ -659,6 +732,8 @@ def _validate_fresh_core_result(
     }
     if numeric["load_ns"] + numeric["common_adapter_ns"] > numeric["wall_ns"]:
         raise ValueError("fresh-process phases exceed the timed wall envelope")
+    if numeric["startup_to_ready_cpu_ns"] < numeric["cpu_ns"]:
+        raise ValueError("startup-to-ready CPU is below call-to-ready CPU")
     before = numeric["rss_peak_before_bytes"]
     after = numeric["rss_peak_after_bytes"]
     increment = numeric["rss_peak_increment_bytes"]
@@ -667,9 +742,13 @@ def _validate_fresh_core_result(
     contract = value.get("contract")
     if not isinstance(contract, Mapping):
         raise TypeError("successful fresh-process result lacks a common contract")
+    if value.get("raw_inventory") is not None:
+        raise ValueError("successful common fresh-process result must not report raw inventory")
     attestation = value.get("timed_validation")
     if not isinstance(attestation, Mapping):
         raise TypeError("fresh-process result lacks timed validation attestation")
+    if set(attestation) != _FRESH_CORE_TIMED_VALIDATION_FIELDS:
+        raise ValueError("fresh-process timed validation fields differ from schema v1")
     if attestation.get("schema") != "pyowl-core/comparator-timed-validation/v1":
         raise ValueError("fresh-process timed validation schema differs")
     if (
@@ -678,14 +757,23 @@ def _validate_fresh_core_result(
         or attestation.get("contract_sha256") != contract.get("contract_sha256")
     ):
         raise ValueError("fresh-process contract was not fully validated inside its timer")
-    _nonnegative_integer(
+    validation_ns = _nonnegative_integer(
         attestation.get("validation_ns"),
         "timed_validation.validation_ns",
     )
+    if validation_ns > numeric["common_adapter_ns"]:
+        raise ValueError("fresh-process validation exceeds common adapter timing")
     common_contract_equality_key(cast(Mapping[str, Any], contract))
     artifact_sha256 = artifact.get("artifact_sha256")
-    if pin.adapter == "core-native" and not _is_sha256(artifact_sha256):
-        raise ValueError("installed native-wheel result lacks its artifact SHA-256")
+    if pin.adapter == "core-native":
+        if not _is_sha256(artifact_sha256):
+            raise ValueError("installed native-wheel result lacks its artifact SHA-256")
+        if pin.artifact_sha256 is not None and artifact_sha256 != pin.artifact_sha256:
+            raise ValueError("installed native-wheel artifact SHA-256 differs from its pin")
+    elif artifact_sha256 is not None:
+        raise ValueError(
+            "pure-Python fresh-process result unexpectedly reports an artifact SHA-256"
+        )
 
 
 def _aggregate_samples(
@@ -1076,8 +1164,16 @@ def _evaluate_ratio_metric(
         "metric": _metric_output_label(metric_selector),
         "metric_selector": metric_selector,
         "sample_sources": {
-            "numerator": _metric_source_path(metric_selector, numerator_lane),
-            "denominator": _metric_source_path(metric_selector, denominator_lane),
+            "numerator": _metric_source_path(
+                metric_selector,
+                numerator_lane,
+                process_mode=process_mode,
+            ),
+            "denominator": _metric_source_path(
+                metric_selector,
+                denominator_lane,
+                process_mode=process_mode,
+            ),
         },
         "passed": passed,
         "gate_statistic": (
@@ -1178,6 +1274,7 @@ def _paired_metric_samples(
         numerator_samples, numerator_reason = _samples_by_paired_block(
             numerator_row,
             lane=numerator_lane,
+            process_mode=process_mode,
             metric_selector=metric_selector,
             repetitions=repetitions,
             schedule_seed=schedule_seed,
@@ -1186,6 +1283,7 @@ def _paired_metric_samples(
         denominator_samples, denominator_reason = _samples_by_paired_block(
             denominator_row,
             lane=denominator_lane,
+            process_mode=process_mode,
             metric_selector=metric_selector,
             repetitions=repetitions,
             schedule_seed=schedule_seed,
@@ -1237,6 +1335,7 @@ def _samples_by_paired_block(
     row: Mapping[str, Any],
     *,
     lane: str,
+    process_mode: str,
     metric_selector: str,
     repetitions: int,
     schedule_seed: int,
@@ -1268,6 +1367,7 @@ def _samples_by_paired_block(
             metric_value = _selected_metric_value(
                 sample,
                 lane=lane,
+                process_mode=process_mode,
                 metric_selector=metric_selector,
                 allow_zero=allow_zero_metric,
             )
@@ -1287,12 +1387,17 @@ def _selected_metric_value(
     sample: Mapping[str, Any],
     *,
     lane: str,
+    process_mode: str,
     metric_selector: str,
     allow_zero: bool,
 ) -> int:
     if metric_selector == _STEADY_INTERVAL_PEAK_RSS:
         return _steady_interval_rss_value(sample, allow_zero=allow_zero)
-    source = _metric_source(metric_selector, lane)
+    source = _metric_source(
+        metric_selector,
+        lane,
+        process_mode=process_mode,
+    )
     container: object = sample
     for name in source[:-1]:
         if not isinstance(container, Mapping):
@@ -1349,9 +1454,21 @@ def _steady_interval_rss_value(sample: Mapping[str, Any], *, allow_zero: bool) -
     return increment
 
 
-def _metric_source(metric_selector: str, lane: str) -> tuple[str, ...]:
+def _metric_source(
+    metric_selector: str,
+    lane: str,
+    *,
+    process_mode: str | None = None,
+) -> tuple[str, ...]:
     if metric_selector == _CALL_TO_READY_WALL:
-        return "metrics", "wall_ns"
+        if process_mode == "fresh-process":
+            return "metrics", "wall_ns"
+        if process_mode not in {None, "steady-process"}:
+            raise ValueError(f"unsupported call-to-ready process mode: {process_mode}")
+        try:
+            return _CALL_TO_READY_METRIC_SOURCES[lane]
+        except KeyError:
+            raise ValueError(f"{lane}: no call-to-ready metric source is defined") from None
     if metric_selector == _INCREMENTAL_PEAK_RSS:
         return "metrics", "rss_peak_increment_bytes"
     if metric_selector == _STEADY_INTERVAL_PEAK_RSS:
@@ -1366,8 +1483,19 @@ def _metric_source(metric_selector: str, lane: str) -> tuple[str, ...]:
     raise ValueError(f"unsupported ratio metric selector: {metric_selector}")
 
 
-def _metric_source_path(metric_selector: str, lane: str) -> str:
-    return ".".join(_metric_source(metric_selector, lane))
+def _metric_source_path(
+    metric_selector: str,
+    lane: str,
+    *,
+    process_mode: str | None = None,
+) -> str:
+    return ".".join(
+        _metric_source(
+            metric_selector,
+            lane,
+            process_mode=process_mode,
+        )
+    )
 
 
 def _metric_output_label(metric_selector: str) -> str:
@@ -1598,6 +1726,10 @@ def _reference_machine_evidence(
     platform = cast(Mapping[str, Any], environment.get("platform", {}))
     cpu = cast(Mapping[str, Any], environment.get("cpu", {}))
     memory = cast(Mapping[str, Any], environment.get("memory", {}))
+    observation_sources = cast(
+        Mapping[str, Any],
+        environment.get("machine_observation_sources", {}),
+    )
     observed = {
         "os": " ".join(
             str(platform.get(name, "")) for name in ("system", "release", "machine")
@@ -1615,10 +1747,17 @@ def _reference_machine_evidence(
         "power_mode": manifest.reference_machine.power_mode,
     }
     fields = {name: observed[name] == value for name, value in expected.items()}
+    fields["cpu"] = fields["cpu"] and observation_sources.get("cpu_model") in {
+        "platform-probe",
+        "operator-supplied",
+    }
+    for name in ("storage", "power_mode"):
+        fields[name] = fields[name] and observation_sources.get(name) == "operator-supplied"
     return {
         "matches": all(fields.values()),
         "expected": expected,
         "observed": observed,
+        "observation_sources": dict(observation_sources),
         "field_matches": fields,
     }
 
@@ -1762,6 +1901,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument(
+        "--reference-cpu-model",
+        type=_parse_reference_observation,
+        help="exact operator-observed CPU model when the platform probe is unavailable",
+    )
+    parser.add_argument(
+        "--reference-storage",
+        type=_parse_reference_observation,
+        help="exact approved storage device and cache-state procedure",
+    )
+    parser.add_argument(
+        "--reference-power-mode",
+        type=_parse_reference_observation,
+        help="exact approved fixed power/performance configuration",
+    )
+    parser.add_argument(
         "--allow-partial",
         action="store_true",
         help=(
@@ -1779,6 +1933,15 @@ def _parse_cli_u64(value: str) -> int:
     if parsed > MAX_U64:
         raise argparse.ArgumentTypeError("seed must fit unsigned 64-bit range")
     return parsed
+
+
+def _parse_reference_observation(value: object) -> str:
+    try:
+        validated = validate_reference_observation(value, "reference observation")
+    except ReportError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+    assert validated is not None
+    return validated
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1803,6 +1966,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         warmups=args.warmups,
         repetitions=args.repetitions,
         seed=args.seed,
+        reference_cpu_model=args.reference_cpu_model,
+        reference_storage=args.reference_storage,
+        reference_power_mode=args.reference_power_mode,
     )
     if args.output is None:
         print(json.dumps(report, indent=2, sort_keys=True))

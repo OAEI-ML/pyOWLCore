@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
+import signal
 import sys
+import time
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -25,6 +29,7 @@ from tools.benchmark.comparators.adapters import (
     AdapterRequest,
     _external_environment,
     _validate_external_result,
+    adapter_status_result,
     default_options,
     options_digest,
     raw_inventory_digest,
@@ -93,6 +98,105 @@ def test_bounded_subprocess_enforces_time_and_output_ceilings() -> None:
     assert len(oversized.stdout) == 64
 
 
+@pytest.mark.skipif(
+    os.name != "posix" or not hasattr(os, "fork"),
+    reason="requires POSIX process groups",
+)
+def test_bounded_subprocess_kills_and_reports_a_clean_exit_descendant(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "clean-exit-descendant.pid"
+    script = _forking_runner_script(marker, leader_hangs=False)
+    descendant_pid: int | None = None
+
+    try:
+        with pytest.raises(RuntimeError, match="left descendant processes"):
+            run_bounded_subprocess(
+                (sys.executable, "-c", script),
+                b"",
+                timeout=3.0,
+                max_stdout_bytes=64,
+                max_stderr_bytes=64,
+            )
+
+        _leader_pid, descendant_pid = _read_process_marker(marker)
+        _wait_until_process_is_not_live(descendant_pid)
+    finally:
+        if descendant_pid is not None:
+            _kill_test_process(descendant_pid)
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not hasattr(os, "fork"),
+    reason="requires POSIX process groups",
+)
+def test_bounded_subprocess_capture_error_reaps_tree_and_closes_fallback_observer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "capture-error-descendant.pid"
+    script = _forking_runner_script(marker, leader_hangs=True)
+    started: list[Any] = []
+    observers: list[Any] = []
+    original_provisional = cast(Any, adapters_module).provisional_process_group
+
+    class RecordingObserver:
+        def __init__(self, inner: Any) -> None:
+            self.inner = inner
+            self.closed = False
+
+        def observe(self, process: Any) -> bool:
+            return bool(self.inner.observe(process))
+
+        def close(self) -> None:
+            self.closed = True
+            self.inner.close()
+
+    def fail_capture(process: Any) -> Any:
+        started.append(process)
+        _wait_for_marker(marker)
+        raise RuntimeError("injected capture failure")
+
+    def recording_provisional(process: Any) -> Any:
+        process_group = original_provisional(process)
+        assert process_group.observer is not None
+        observer = RecordingObserver(process_group.observer)
+        process_group.observer = cast(Any, observer)
+        observers.append(observer)
+        return process_group
+
+    monkeypatch.setattr(adapters_module, "capture_process_group", fail_capture)
+    monkeypatch.setattr(
+        adapters_module,
+        "provisional_process_group",
+        recording_provisional,
+    )
+    descendant_pid: int | None = None
+
+    try:
+        with pytest.raises(RuntimeError, match="injected capture failure"):
+            run_bounded_subprocess(
+                (sys.executable, "-c", script),
+                b"",
+                timeout=3.0,
+                max_stdout_bytes=64,
+                max_stderr_bytes=64,
+            )
+
+        assert len(started) == 1
+        process = started[0]
+        leader_pid, descendant_pid = _read_process_marker(marker)
+        assert leader_pid == process.pid
+        assert process.returncode is not None
+        assert len(observers) == 1
+        assert observers[0].closed is True
+        _wait_until_process_is_not_live(leader_pid)
+        _wait_until_process_is_not_live(descendant_pid)
+    finally:
+        if descendant_pid is not None:
+            _kill_test_process(descendant_pid)
+
+
 def test_external_adapter_timeout_is_an_error_not_an_unbounded_hang(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -129,7 +233,7 @@ def test_external_adapter_timeout_is_an_error_not_an_unbounded_hang(
     result = run_external_adapter(pin, request, timeout_seconds=0.05)
 
     assert result["status"] == "error"
-    assert "exceeded" in result["reason"]
+    assert "timed out" in result["reason"]
     assert len(result["reason"]) <= 1_000
 
 
@@ -222,6 +326,7 @@ def test_failure_diagnostics_are_redacted_flattened_and_bounded() -> None:
 @pytest.mark.parametrize(
     ("mutation", "message"),
     (
+        (lambda value: value.pop("timed_validation"), "fields differ"),
         (lambda value: value["metrics"].pop("object_count"), "object_count"),
         (
             lambda value: value["metrics"].__setitem__("wall_ns", 1.5),
@@ -259,6 +364,50 @@ def test_external_success_accepts_pinned_artifacts_and_timed_contract_attestatio
     _validate_external_result(pin, request, result)
 
 
+def test_non_success_adapter_result_uses_the_exact_cross_language_v1_field_set() -> None:
+    corpus, source, options = _tiny_input()
+    pin = load_comparator_manifest().by_id("pyowl-python-common")
+    request = AdapterRequest(
+        corpus_id=corpus.id,
+        source=source,
+        source_sha256=corpus.sha256,
+        format=corpus.format,
+        options=options,
+        options_sha256=options_digest(options),
+        input_mode="resident-bytes",
+        process_mode="fresh-process",
+    )
+
+    result = adapter_status_result(pin, request, "error", "fixture failure")
+
+    assert set(result) == adapters_module._RESULT_FIELDS
+    assert result["timed_validation"] is None
+
+
+def test_external_startup_cpu_is_required_only_for_successful_fresh_results() -> None:
+    pin, request, result = _valid_external_result()
+    fresh_request = replace(request, process_mode="fresh-process")
+    result["process_mode"] = "fresh-process"
+    result["metrics"]["startup_to_ready_cpu_ns"] = 900
+
+    _validate_external_result(pin, fresh_request, result)
+
+    missing = copy.deepcopy(result)
+    missing["metrics"].pop("startup_to_ready_cpu_ns")
+    with pytest.raises((TypeError, ValueError), match="startup_to_ready_cpu_ns"):
+        _validate_external_result(pin, fresh_request, missing)
+
+    below_call = copy.deepcopy(result)
+    below_call["metrics"]["startup_to_ready_cpu_ns"] = 89
+    with pytest.raises(ValueError, match="below call-to-ready"):
+        _validate_external_result(pin, fresh_request, below_call)
+
+    steady = copy.deepcopy(result)
+    steady["process_mode"] = "steady-process"
+    with pytest.raises(ValueError, match="unknown fields"):
+        _validate_external_result(pin, request, steady)
+
+
 def test_raw_inventory_requires_integer_counts_and_its_canonical_digest() -> None:
     pin, request, result = _valid_raw_external_result()
     _validate_external_result(pin, request, result)
@@ -272,6 +421,77 @@ def test_raw_inventory_requires_integer_counts_and_its_canonical_digest() -> Non
     unauthenticated["raw_inventory"]["inventory_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="canonical scalar preimage"):
         _validate_external_result(pin, request, unauthenticated)
+
+
+def test_core_rss_interval_stops_before_post_ready_instrumentation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    corpus, source, options = _tiny_input()
+    request = AdapterRequest(
+        corpus_id=corpus.id,
+        source=source,
+        source_sha256=corpus.sha256,
+        format=corpus.format,
+        options=options,
+        options_sha256=options_digest(options),
+        input_mode="resident-bytes",
+        process_mode="steady-process",
+    )
+    pin = load_comparator_manifest().by_id("pyowl-python-common")
+    events: list[str] = []
+
+    class RecordingMonitor:
+        def __init__(self, pid: int) -> None:
+            assert pid == os.getpid()
+
+        def start(self) -> None:
+            events.append("monitor-start")
+
+        def stop(self) -> RecordingMonitor:
+            events.append("monitor-stop")
+            return self
+
+        def to_dict(self) -> dict[str, int | str]:
+            return {
+                "schema": "pyowl-core/comparator-rss-interval/v1",
+                "source": "test-reader",
+                "pid": os.getpid(),
+                "quiescent_current_bytes": 100,
+                "interval_peak_bytes": 110,
+                "incremental_peak_bytes": 10,
+                "sample_count": 2,
+                "maximum_sample_gap_ns": 1,
+            }
+
+        def abort(self) -> None:
+            raise AssertionError("completed monitor must not be aborted")
+
+    def rss_peak() -> int:
+        events.append("legacy-rss")
+        return 100
+
+    def allocated_blocks() -> int:
+        events.append("allocated-blocks")
+        return 10
+
+    def gc_objects() -> list[object]:
+        events.append("gc-objects")
+        return []
+
+    monkeypatch.setattr(adapters_module, "SubprocessRssIntervalSampler", RecordingMonitor)
+    monkeypatch.setattr(adapters_module, "_rss_peak_bytes", rss_peak)
+    monkeypatch.setattr(adapters_module, "_allocated_blocks", allocated_blocks)
+    monkeypatch.setattr(cast(Any, adapters_module).gc, "get_objects", gc_objects)
+
+    result = run_core_adapter(pin, request)
+
+    assert result["status"] == "ok"
+    assert events[-4:] == [
+        "monitor-stop",
+        "legacy-rss",
+        "gc-objects",
+        "allocated-blocks",
+    ]
 
 
 def test_native_core_adapter_uses_bulk_contract_and_publishes_fence_metrics(
@@ -443,3 +663,71 @@ def _valid_raw_external_result() -> tuple[Any, AdapterRequest, dict[str, Any]]:
 
 def _file_sha256(path: str) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _forking_runner_script(marker: Path, *, leader_hangs: bool) -> str:
+    leader_tail = "time.sleep(30)" if leader_hangs else "raise SystemExit(0)"
+    return (
+        "import os,signal,time\n"
+        "ready_read,ready_write=os.pipe()\n"
+        "descendant_pid=os.fork()\n"
+        "if descendant_pid == 0:\n"
+        " os.close(ready_read)\n"
+        " signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f" with open({str(marker)!r},'w',encoding='utf-8') as stream:\n"
+        "  stream.write(f'{os.getppid()} {os.getpid()}')\n"
+        " os.write(ready_write,b'x')\n"
+        " os.close(ready_write)\n"
+        " time.sleep(30)\n"
+        " os._exit(0)\n"
+        "os.close(ready_write)\n"
+        "os.read(ready_read,1)\n"
+        "os.close(ready_read)\n"
+        f"{leader_tail}\n"
+    )
+
+
+def _wait_for_marker(marker: Path, *, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not marker.is_file():
+        if time.monotonic() >= deadline:
+            raise AssertionError("subprocess marker was not published")
+        time.sleep(0.005)
+
+
+def _read_process_marker(marker: Path) -> tuple[int, int]:
+    _wait_for_marker(marker)
+    leader, descendant = marker.read_text(encoding="utf-8").split()
+    return int(leader), int(descendant)
+
+
+def _wait_until_process_is_not_live(pid: int, *, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while _process_is_live(pid):
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"subprocess {pid} remained live")
+        time.sleep(0.005)
+
+
+def _process_is_live(pid: int) -> bool:
+    if sys.platform.startswith("linux"):
+        stat_path = Path("/proc") / str(pid) / "stat"
+        try:
+            stat = stat_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return False
+        closing_parenthesis = stat.rfind(")")
+        if closing_parenthesis >= 0:
+            fields = stat[closing_parenthesis + 2 :].split()
+            if fields:
+                return fields[0] != "Z"
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _kill_test_process(pid: int) -> None:
+    with suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGKILL)

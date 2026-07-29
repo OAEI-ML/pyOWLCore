@@ -17,7 +17,10 @@ fn main() {
     if let Err(error) = generate_encoded_view_schema() {
         panic!("cannot generate native encoded-view schema: {error}");
     }
-    pyo3_build_config::add_extension_module_link_args();
+    #[cfg(feature = "extension-module")]
+    {
+        pyo3_build_config::add_extension_module_link_args();
+    }
 }
 
 fn generate_encoded_view_schema() -> Result<(), String> {

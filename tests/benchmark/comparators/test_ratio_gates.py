@@ -66,11 +66,42 @@ def test_required_ratio_gates_pass_constant_paired_evidence(
         for value in gates["comparisons"]
         if value["id"] == "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes"
     )
+    fresh_overhead = next(
+        value
+        for value in gates["installed_wheel_call_to_ready_overhead"]
+        if value["process_mode"] == "fresh-process"
+    )
     assert cast(dict[str, Any], fresh_wheel["metrics"])["wall"]["sample_sources"] == {
         "numerator": "metrics.startup_to_ready_ns",
         "denominator": "transport_metrics.parent_wall_ns",
     }
     assert wall["metric"] == "call-to-ready wall_ns"
+    assert wall["sample_sources"] == {
+        "numerator": "metrics.wall_ns",
+        "denominator": "transport_metrics.parent_wall_ns",
+    }
+    steady_direct = next(
+        value
+        for value in gates["comparisons"]
+        if value["id"] == "direct-rust-vs-horned-common/steady-process/resident-bytes"
+    )
+    assert cast(dict[str, Any], steady_direct["metrics"])["wall"]["sample_sources"] == {
+        "numerator": "transport_metrics.parent_wall_ns",
+        "denominator": "transport_metrics.parent_wall_ns",
+    }
+    assert fresh_overhead["result"]["sample_sources"] == {
+        "numerator": "metrics.wall_ns",
+        "denominator": "metrics.wall_ns",
+    }
+    steady_overhead = next(
+        value
+        for value in gates["installed_wheel_call_to_ready_overhead"]
+        if value["process_mode"] == "steady-process"
+    )
+    assert steady_overhead["result"]["sample_sources"] == {
+        "numerator": "metrics.wall_ns",
+        "denominator": "transport_metrics.parent_wall_ns",
+    }
 
 
 def test_large_corpus_guardrail_cannot_be_averaged_away(
@@ -85,7 +116,8 @@ def test_large_corpus_guardrail_cannot_be_averaged_away(
             continue
         replacement = 50 if row["corpus_id"] == medium_id else 130
         for sample in row["samples"]:
-            sample["metrics"]["wall_ns"] = replacement
+            if row["process_mode"] == "steady-process":
+                sample["transport_metrics"]["parent_wall_ns"] = replacement
 
     gates = runner_module._evaluate_ratio_gates(
         corpora=corpora,
@@ -161,6 +193,11 @@ def test_fresh_gate_cannot_pass_from_fast_child_wall_when_parent_startup_is_slow
         for value in gates["comparisons"]
         if value["id"] == "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes"
     )
+    fresh_overhead = next(
+        value
+        for value in gates["installed_wheel_call_to_ready_overhead"]
+        if value["process_mode"] == "fresh-process"
+    )
     fresh_wall = cast(dict[str, Any], fresh["metrics"])["wall"]
     steady_wall = cast(dict[str, Any], steady["metrics"])["wall"]
     fresh_wheel_wall = cast(dict[str, Any], fresh_wheel["metrics"])["wall"]
@@ -170,6 +207,11 @@ def test_fresh_gate_cannot_pass_from_fast_child_wall_when_parent_startup_is_slow
     assert fresh_wall["passed"] is False
     assert fresh_wheel_wall["aggregate_value"] == pytest.approx(2.0)
     assert fresh_wheel_wall["passed"] is False
+    assert fresh_overhead["result"]["aggregate_value"] == pytest.approx(1.0)
+    assert fresh_overhead["result"]["sample_sources"] == {
+        "numerator": "metrics.wall_ns",
+        "denominator": "metrics.wall_ns",
+    }
     assert steady_wall["metric_selector"] == "call-to-ready-wall"
     assert steady_wall["aggregate_value"] == pytest.approx(1.0)
     assert steady_wall["passed"] is True
@@ -367,6 +409,7 @@ def _sample(
             sample["transport_metrics"] = {"parent_wall_ns": wall_ns}
     else:
         sample["transport_metrics"] = {
+            "parent_wall_ns": wall_ns,
             "rss_interval": {
                 "schema": "pyowl-core/comparator-rss-interval/v1",
                 "source": "test-current-rss",
@@ -376,6 +419,6 @@ def _sample(
                 "incremental_peak_bytes": wall_ns,
                 "sample_count": 3,
                 "maximum_sample_gap_ns": 1_000_000,
-            }
+            },
         }
     return sample

@@ -60,11 +60,17 @@ from tools.benchmark.comparators.common_contract import (  # noqa: E402
     build_core_common_contract,
     validate_common_contract,
 )
+from tools.benchmark.comparators.fresh import (  # noqa: E402
+    publish_fresh_result,
+    read_fresh_request,
+)
 from tools.benchmark.comparators.persistent import (  # noqa: E402
+    PERSISTENT_COMPLETED_SCHEMA,
     PERSISTENT_EXECUTE_SCHEMA,
     PERSISTENT_HANDSHAKE_SCHEMA,
     PERSISTENT_PREPARED_SCHEMA,
     PERSISTENT_PROTOCOL_SCHEMA,
+    PERSISTENT_PUBLISH_SCHEMA,
     PERSISTENT_REQUEST_SCHEMA,
     PERSISTENT_RESPONSE_SCHEMA,
     PERSISTENT_SHUTDOWN_ACK_SCHEMA,
@@ -85,9 +91,10 @@ FEATURES = (
 )
 ALLOCATOR = "Rust system allocator and CPython platform allocator"
 THREAD_CEILING = 1
-RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v6"
+RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v8"
 
 MAX_REQUEST_BYTES = 512 * 1024**2
+MAX_RESPONSE_BYTES = 256 * 1024**2
 MAX_FRAME_HEADER_BYTES = 32
 MAX_REASON_CHARS = 1_000
 _SHA256_CHARS = frozenset("0123456789abcdef")
@@ -100,6 +107,7 @@ _FORMAT_SERIALIZATION = {
     DocumentFormat.RDF_XML: "rdf",
 }
 _RDF_GRAPH_FORMATS = frozenset((DocumentFormat.RDF_XML, DocumentFormat.TURTLE))
+_RUNNER_SHA256: str | None = None
 _FACET_IRIS = {
     "Length": _XSD + "length",
     "MinLength": _XSD + "minLength",
@@ -135,11 +143,15 @@ def _artifact() -> dict[str, object]:
 
 
 def _runner_sha256() -> str:
+    global _RUNNER_SHA256
+    if _RUNNER_SHA256 is not None:
+        return _RUNNER_SHA256
     digest = hashlib.sha256()
     with Path(__file__).resolve().open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024**2), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    _RUNNER_SHA256 = digest.hexdigest()
+    return _RUNNER_SHA256
 
 
 def _verify_engine_install() -> None:
@@ -1032,18 +1044,17 @@ def _safe_reason(error: BaseException) -> str:
 
 
 def _fresh_main() -> None:
-    body = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
-    if len(body) > MAX_REQUEST_BYTES:
-        result = _error_result({}, RunnerContractError("adapter request exceeds size limit"))
-    else:
-        request: object = {}
-        try:
-            request = _json_object(body, "adapter request")
-            result = _run_request(cast(Mapping[str, Any], request), protocol_mode="fresh")
-        except Exception as error:
-            result = _error_result(request, error)
-    sys.stdout.buffer.write(_json_bytes(result))
-    sys.stdout.buffer.flush()
+    request = read_fresh_request(max_request_bytes=MAX_REQUEST_BYTES)
+    try:
+        result = _run_request(request, protocol_mode="fresh")
+    except Exception as error:
+        result = _error_result(request, error)
+    _finalize_completion_metrics(result, fresh=True)
+    publish_fresh_result(
+        result,
+        max_request_bytes=MAX_REQUEST_BYTES,
+        max_response_bytes=MAX_RESPONSE_BYTES,
+    )
 
 
 def _persistent_main() -> None:
@@ -1058,6 +1069,8 @@ def _persistent_main() -> None:
             "request_schema": ADAPTER_REQUEST_SCHEMA,
             "prepared_schema": PERSISTENT_PREPARED_SCHEMA,
             "execute_schema": PERSISTENT_EXECUTE_SCHEMA,
+            "completed_schema": PERSISTENT_COMPLETED_SCHEMA,
+            "publish_schema": PERSISTENT_PUBLISH_SCHEMA,
             "result_schema": ADAPTER_RESULT_SCHEMA,
             "fresh_ontology_per_request": True,
             "artifact": _artifact(),
@@ -1150,17 +1163,67 @@ def _serve_persistent_request(*, expected_sequence: int, instance_counter: int) 
             result = _error_result(prepared_request, error)
     else:
         result = prepared
-    instance_preimage = f"{os.getpid()}:{instance_counter}:{sequence}".encode("ascii")
+    _finalize_completion_metrics(result, fresh=False)
+    pid = os.getpid()
+    instance_preimage = f"{pid}:{instance_counter}:{sequence}".encode("ascii")
+    ontology_instance_id = hashlib.sha256(instance_preimage).hexdigest()
+    _write_frame(
+        {
+            "schema": PERSISTENT_COMPLETED_SCHEMA,
+            "protocol": PERSISTENT_PROTOCOL_SCHEMA,
+            "sequence": sequence,
+            "pid": pid,
+            "ontology_instance_id": ontology_instance_id,
+        }
+    )
+    _validate_persistent_publish(
+        _json_object(_read_frame(), "persistent publish"),
+        sequence=sequence,
+        pid=pid,
+        ontology_instance_id=ontology_instance_id,
+    )
     _write_frame(
         {
             "schema": PERSISTENT_RESPONSE_SCHEMA,
             "protocol": PERSISTENT_PROTOCOL_SCHEMA,
             "sequence": sequence,
-            "ontology_instance_id": hashlib.sha256(instance_preimage).hexdigest(),
+            "ontology_instance_id": ontology_instance_id,
             "result": result,
         }
     )
     return True
+
+
+def _validate_persistent_publish(
+    publish: Mapping[str, Any],
+    *,
+    sequence: int,
+    pid: int,
+    ontology_instance_id: str,
+) -> None:
+    if set(publish) != {
+        "schema",
+        "protocol",
+        "sequence",
+        "pid",
+        "ontology_instance_id",
+    }:
+        raise RunnerContractError("persistent publish fields differ")
+    if publish.get("schema") != PERSISTENT_PUBLISH_SCHEMA:
+        raise RunnerContractError("persistent publish schema differs")
+    if publish.get("protocol") != PERSISTENT_PROTOCOL_SCHEMA:
+        raise RunnerContractError("persistent publish protocol differs")
+    if _u64(publish.get("sequence"), "persistent publish sequence") != sequence:
+        raise RunnerContractError("persistent publish sequence differs")
+    if _u64(publish.get("pid"), "persistent publish pid") != pid:
+        raise RunnerContractError("persistent publish pid differs")
+    observed_instance_id = publish.get("ontology_instance_id")
+    if not _is_sha256(observed_instance_id):
+        raise RunnerContractError(
+            "persistent publish ontology_instance_id must be lowercase SHA-256"
+        )
+    if observed_instance_id != ontology_instance_id:
+        raise RunnerContractError("persistent publish ontology_instance_id differs")
 
 
 def _read_frame() -> bytes:
@@ -1203,8 +1266,15 @@ def _json_object(payload: bytes, name: str) -> dict[str, Any]:
             result[key] = value
         return result
 
+    def reject_constant(value: str) -> NoReturn:
+        raise RunnerContractError(f"{name} contains non-finite JSON constant {value}")
+
     try:
-        value = json.loads(payload, object_pairs_hook=reject_duplicates)
+        value = json.loads(
+            payload,
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_constant,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise RunnerContractError(f"{name} is not valid JSON") from error
     if not isinstance(value, dict):
@@ -1229,6 +1299,30 @@ def _u64(value: object, name: str) -> int:
 def _rss_peak_bytes() -> int:
     value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(value) if sys.platform == "darwin" else int(value) * 1024
+
+
+def _finalize_completion_metrics(
+    result: Mapping[str, object],
+    *,
+    fresh: bool,
+) -> None:
+    """Publish RSS and child CPU evidence at the assembled completion boundary."""
+
+    if result.get("status") != "ok":
+        return
+    metrics = result.get("metrics")
+    if not isinstance(metrics, dict):
+        return
+    before = metrics.get("rss_peak_before_bytes")
+    if isinstance(before, bool) or not isinstance(before, int) or before < 0:
+        return
+    if fresh:
+        metrics["startup_to_ready_cpu_ns"] = 0
+    after = _rss_peak_bytes()
+    metrics["rss_peak_after_bytes"] = after
+    metrics["rss_peak_increment_bytes"] = max(0, after - before)
+    if fresh:
+        metrics["startup_to_ready_cpu_ns"] = time.process_time_ns()
 
 
 def _fatal(error: BaseException) -> NoReturn:

@@ -25,16 +25,27 @@ export PYOWL_CORE_OWLAPI_RUNNER="$PWD/launcher.sh"
 ```
 
 The deterministic runner JAR SHA-256 is
-`45d8708817ad425e37d993c029ec39c214e83e5516faa87a046a24a04bf18219`.
+`71477a1af4708a8aa8a6df45b4ce12164f25ea858d717c94b8090a7207f886a9`.
 `runtime.sha256` authenticates all 521 JDK/JAR files and `runtime.files`
 rejects additions or omissions before Java starts. The launcher itself is
 SHA-256 pinned by `comparators.toml` and passes its observed digest into the
-runner handshake.
+runner's persistent handshake and adapter-result artifact attestation.
 
 The launcher fixes `-Xms8g -Xmx8g`, G1GC, `AlwaysPreTouch`, UTF-8, headless
-mode, and one active processor. Each fresh request creates a new ontology; a
-persistent process creates a new ontology for every framed request and proves
-distinct instance identities and deterministic shutdown. Functional Syntax,
-OWL/XML, RDF/XML, and Turtle use explicit OWLAPI reader formats. Semantics or
-RDF provenance order that OWLAPI cannot preserve independently fail closed as
-`ineligible`; they are never reduced to a smaller comparison contract.
+mode, and one active processor. Runner v5 uses framed
+`pyowl-core/comparator-fresh-runner/v1` and persistent runner v3. A fresh
+process reads one exact v1 request, creates and fully validates one ontology
+result, emits a PID- and token-bound v1 completion, and blocks until the
+matching v1 publish frame before serializing its v1 response and exiting
+cleanly. The parent closes fresh stdin after publish, and the runner requires
+EOF so a trailing byte or replay cannot be hidden behind an otherwise valid
+publication. Successful fresh results record
+`metrics.startup_to_ready_cpu_ns` as absolute child-process CPU at that final
+pre-completion endpoint; it is never smaller than the unchanged call-delta
+`metrics.cpu_ns`. Persistent and non-success results omit that fresh-only
+field. A persistent process applies the same completion/publish fence to every
+request, creates a new ontology each time, proves distinct instance identities,
+and performs deterministic shutdown. Functional Syntax, OWL/XML, RDF/XML, and
+Turtle use explicit OWLAPI reader formats. Semantics or RDF provenance order
+that OWLAPI cannot preserve independently fail closed as `ineligible`; they
+are never reduced to a smaller comparison contract.

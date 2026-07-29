@@ -10,7 +10,7 @@ mod rdf_class_expressions;
 mod rdf_lists;
 mod rdfxml;
 mod turtle;
-#[cfg(any(test, feature = "test-hooks"))]
+#[cfg(all(feature = "extension-module", any(test, feature = "test-hooks")))]
 mod v1_adapter;
 mod v2_adapter;
 
@@ -1432,6 +1432,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "extension-module")]
     fn v1_adapter_is_a_real_freeze_seam_not_a_parallel_owner() {
         let source = br#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
             xmlns:owl="http://www.w3.org/2002/07/owl#">

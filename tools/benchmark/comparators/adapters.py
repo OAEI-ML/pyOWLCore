@@ -12,13 +12,12 @@ import os
 import re
 import resource
 import shlex
-import signal
 import subprocess
 import sys
 import tempfile
 import time
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, cast
@@ -40,7 +39,16 @@ from .common_contract import (
     common_contract_equality_key,
     validate_common_contract,
 )
+from .fresh import FRESH_PROTOCOL_SCHEMA, FreshRunnerError, run_fresh_subprocess
 from .manifest import COMMON_BOUNDARY, ROOT, ComparatorPin
+from .process_group import (
+    OwnedProcessGroup,
+    capture_process_group,
+    cleanup_exited_process_group,
+    observe_process_exit,
+    provisional_process_group,
+    terminate_process,
+)
 from .rss_monitor import SubprocessRssIntervalSampler
 
 ADAPTER_RESULT_SCHEMA = "pyowl-core/comparator-adapter-result/v1"
@@ -294,12 +302,12 @@ def run_core_adapter(
             contract_end = time.perf_counter_ns()
             wall_end = time.perf_counter_ns()
             cpu_end = time.process_time_ns()
-            objects_after = len(gc.get_objects())
-            blocks_after = _allocated_blocks()
-            rss_after = _rss_peak_bytes()
             if rss_monitor is not None:
                 rss_interval = rss_monitor.stop().to_dict()
                 rss_monitor = None
+            rss_after = _rss_peak_bytes()
+            objects_after = len(gc.get_objects())
+            blocks_after = _allocated_blocks()
     except BackendUnavailableError as error:
         return _not_run(pin, request, f"native backend unavailable: {error}")
     except EncodedContractUnavailable as error:
@@ -410,52 +418,19 @@ def run_external_adapter(
         command = _verified_runner_command(pin, command)
     except (OSError, ValueError) as error:
         return _error(pin, request, error)
-    body = json.dumps(
-        request.protocol_dict(pin),
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    wall_start = time.perf_counter_ns()
-    cpu_start = time.process_time_ns()
     try:
-        completed = run_bounded_subprocess(
+        completed = run_fresh_subprocess(
             command,
-            body,
+            request.protocol_dict(pin),
             timeout=timeout_seconds,
+            max_request_bytes=MAX_SUBPROCESS_REQUEST_BYTES,
             max_stdout_bytes=max_stdout_bytes,
             max_stderr_bytes=max_stderr_bytes,
             env=_external_environment(pin, protocol_mode="fresh"),
         )
-    except (OSError, TypeError, ValueError) as error:
+    except (OSError, TypeError, ValueError, FreshRunnerError) as error:
         return _error(pin, request, error)
-    parent_wall_ns = time.perf_counter_ns() - wall_start
-    parent_cpu_ns = time.process_time_ns() - cpu_start
-    if completed.timed_out:
-        return _error(
-            pin,
-            request,
-            TimeoutError(f"external adapter exceeded {timeout_seconds:g} seconds"),
-        )
-    if completed.output_limit is not None:
-        return _error(
-            pin,
-            request,
-            RuntimeError(f"external adapter exceeded {completed.output_limit} output limit"),
-        )
-    if completed.returncode != 0:
-        detail = sanitize_failure(completed.stderr.decode("utf-8", "replace"))
-        return _error(
-            pin,
-            request,
-            RuntimeError(f"runner exited {completed.returncode}: {detail}"),
-        )
-    try:
-        decoded = json.loads(completed.stdout)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        return _error(pin, request, error)
-    if not isinstance(decoded, dict):
-        return _error(pin, request, TypeError("runner output must be a JSON object"))
-    result = cast(dict[str, Any], decoded)
+    result = completed.result
     try:
         _validate_external_result(
             pin,
@@ -472,11 +447,15 @@ def run_external_adapter(
         return _error(pin, request, TypeError("transport_metrics must be an object"))
     transport.update(
         {
-            "parent_wall_ns": parent_wall_ns,
-            "parent_cpu_ns": parent_cpu_ns,
-            "request_bytes": len(body),
-            "stdout_bytes": len(completed.stdout),
-            "stderr_bytes": len(completed.stderr),
+            "parent_wall_ns": completed.parent_wall_ns,
+            "parent_cpu_ns": completed.parent_cpu_ns,
+            "request_bytes": completed.request_bytes,
+            "stdout_bytes": completed.stdout_bytes,
+            "stderr_bytes": completed.stderr_bytes,
+            "fresh_protocol": FRESH_PROTOCOL_SCHEMA,
+            "fresh_sequence": 0,
+            "fresh_runner_pid": completed.runner_pid,
+            "ontology_instance_id": completed.ontology_instance_id,
         }
     )
     return result
@@ -547,9 +526,10 @@ def _validate_external_result(
     request: AdapterRequest,
     value: Mapping[str, Any],
 ) -> None:
-    unknown = set(value) - _RESULT_FIELDS
-    if unknown:
+    if set(value) - _RESULT_FIELDS:
         raise ValueError("external result contains unknown fields")
+    if set(value) != _RESULT_FIELDS:
+        raise ValueError("external result fields differ from adapter schema v1")
     for name, expected in (
         ("schema", ADAPTER_RESULT_SCHEMA),
         ("lane", pin.id),
@@ -570,7 +550,11 @@ def _validate_external_result(
         if value.get("reason") is not None:
             raise ValueError("successful external result must not contain a failure reason")
         metrics = _mapping(value.get("metrics"), "external result metrics")
-        _validate_external_metrics(metrics, common=pin.boundary == COMMON_BOUNDARY)
+        _validate_external_metrics(
+            metrics,
+            common=pin.boundary == COMMON_BOUNDARY,
+            fresh=request.process_mode == "fresh-process",
+        )
         if pin.boundary == COMMON_BOUNDARY:
             contract = value.get("contract")
             if not isinstance(contract, Mapping):
@@ -586,8 +570,12 @@ def _validate_external_result(
             if not isinstance(inventory, Mapping):
                 raise TypeError("raw external result lacks raw_inventory")
             _validate_raw_inventory(cast(Mapping[str, Any], inventory))
-    elif not isinstance(value.get("reason"), str) or not value.get("reason"):
-        raise ValueError("non-success external result requires a bounded reason")
+    else:
+        if not isinstance(value.get("reason"), str) or not value.get("reason"):
+            raise ValueError("non-success external result requires a bounded reason")
+        failure_metrics = value.get("metrics")
+        if isinstance(failure_metrics, Mapping) and "startup_to_ready_cpu_ns" in failure_metrics:
+            raise ValueError("non-success result must not report startup-to-ready CPU")
     artifact = value.get("artifact")
     if not isinstance(artifact, Mapping):
         raise TypeError("external result lacks artifact evidence")
@@ -627,11 +615,22 @@ def _validate_external_result(
                 raise ValueError(f"external runner {name} differs from expected pin")
 
 
-def _validate_external_metrics(metrics: Mapping[str, Any], *, common: bool) -> None:
+def _validate_external_metrics(
+    metrics: Mapping[str, Any],
+    *,
+    common: bool,
+    fresh: bool,
+) -> None:
     allowed = set(_EXTERNAL_METRICS) | {"common_adapter_ns", "phase_ns"}
+    if fresh:
+        allowed.add("startup_to_ready_cpu_ns")
     if set(metrics) - allowed:
         raise ValueError("external metrics contain unknown fields")
-    required = _EXTERNAL_METRICS + (("common_adapter_ns",) if common else ())
+    required = (
+        _EXTERNAL_METRICS
+        + (("common_adapter_ns",) if common else ())
+        + (("startup_to_ready_cpu_ns",) if fresh else ())
+    )
     for name in required:
         _nonnegative_integer(metrics.get(name), f"metrics.{name}")
     phase_ns = metrics.get("phase_ns")
@@ -651,6 +650,8 @@ def _validate_external_metrics(metrics: Mapping[str, Any], *, common: bool) -> N
         common_adapter_ns = cast(int, metrics["common_adapter_ns"])
         if load_ns + common_adapter_ns > wall_ns:
             raise ValueError("external phases exceed the timed wall envelope")
+    if fresh and cast(int, metrics["startup_to_ready_cpu_ns"]) < cast(int, metrics["cpu_ns"]):
+        raise ValueError("startup-to-ready CPU is below call-to-ready CPU")
     before = cast(int, metrics["rss_peak_before_bytes"])
     after = cast(int, metrics["rss_peak_after_bytes"])
     increment = cast(int, metrics["rss_peak_increment_bytes"])
@@ -826,46 +827,90 @@ def run_bounded_subprocess(
             env=None if env is None else dict(env),
             start_new_session=os.name == "posix",
         )
-        deadline = time.monotonic() + float(timeout)
-        timed_out = False
-        output_limit: str | None = None
-        while process.poll() is None:
+        try:
+            process_group = capture_process_group(process)
+        except Exception as error:
+            cleanup_error: Exception | None = None
+            fallback_group: OwnedProcessGroup | None = None
+            try:
+                fallback_group = provisional_process_group(process)
+            except Exception as fallback_error:
+                cleanup_error = fallback_error
+            try:
+                terminate_process(
+                    process,
+                    process_group=fallback_group,
+                    grace_seconds=0.2,
+                )
+            except Exception as teardown_error:
+                cleanup_error = teardown_error
+            finally:
+                if fallback_group is not None:
+                    fallback_group.close()
+            if cleanup_error is not None:
+                raise RuntimeError(
+                    f"{error}; subprocess cleanup failed: {cleanup_error}"
+                ) from error
+            raise
+        try:
+            deadline = time.monotonic() + float(timeout)
+            timed_out = False
+            output_limit: str | None = None
+            while not observe_process_exit(
+                process,
+                process_group=process_group,
+            ):
+                stdout_size = os.fstat(stdout_file.fileno()).st_size
+                stderr_size = os.fstat(stderr_file.fileno()).st_size
+                if stdout_size > max_stdout_bytes:
+                    output_limit = "stdout"
+                    _terminate_process(process, process_group=process_group)
+                    break
+                if stderr_size > max_stderr_bytes:
+                    output_limit = "stderr"
+                    _terminate_process(process, process_group=process_group)
+                    break
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    _terminate_process(process, process_group=process_group)
+                    break
+                time.sleep(0.01)
+            if process.returncode is None and not cleanup_exited_process_group(
+                process,
+                process_group=process_group,
+                grace_seconds=0.2,
+            ):
+                raise RuntimeError("subprocess left descendant processes after clean exit")
+            returncode = process.returncode
+            if returncode is None:
+                raise RuntimeError("subprocess leader was not reaped")
+
             stdout_size = os.fstat(stdout_file.fileno()).st_size
             stderr_size = os.fstat(stderr_file.fileno()).st_size
-            if stdout_size > max_stdout_bytes:
+            if output_limit is None and stdout_size > max_stdout_bytes:
                 output_limit = "stdout"
-                _terminate_process(process)
-                break
-            if stderr_size > max_stderr_bytes:
+            if output_limit is None and stderr_size > max_stderr_bytes:
                 output_limit = "stderr"
-                _terminate_process(process)
-                break
-            if time.monotonic() >= deadline:
-                timed_out = True
-                _terminate_process(process)
-                break
-            time.sleep(0.01)
-        try:
-            returncode = process.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            _terminate_process(process)
-            returncode = process.wait()
-
-        stdout_size = os.fstat(stdout_file.fileno()).st_size
-        stderr_size = os.fstat(stderr_file.fileno()).st_size
-        if output_limit is None and stdout_size > max_stdout_bytes:
-            output_limit = "stdout"
-        if output_limit is None and stderr_size > max_stderr_bytes:
-            output_limit = "stderr"
-        stdout_file.seek(0)
-        stderr_file.seek(0)
-        return BoundedProcessResult(
-            returncode=returncode,
-            stdout=stdout_file.read(max_stdout_bytes),
-            stderr=stderr_file.read(max_stderr_bytes),
-            timed_out=timed_out,
-            output_limit=output_limit,
-        )
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            return BoundedProcessResult(
+                returncode=returncode,
+                stdout=stdout_file.read(max_stdout_bytes),
+                stderr=stderr_file.read(max_stderr_bytes),
+                timed_out=timed_out,
+                output_limit=output_limit,
+            )
+        except Exception as error:
+            if process.returncode is None:
+                try:
+                    _terminate_process(process, process_group=process_group)
+                except Exception as cleanup_error:
+                    raise RuntimeError(
+                        f"{error}; subprocess cleanup failed: {cleanup_error}"
+                    ) from error
+            raise
+        finally:
+            process_group.close()
 
 
 def sanitize_failure(value: object, *, limit: int = MAX_FAILURE_CHARS) -> str:
@@ -928,6 +973,7 @@ def _status_result(
         "contract": None,
         "raw_inventory": None,
         "metrics": {},
+        "timed_validation": None,
         "artifact": {
             "pin_state": pin.pin_state,
             "version": pin.version,
@@ -1011,41 +1057,19 @@ def _external_environment(
 def _terminate_process(
     process: subprocess.Popen[bytes],
     *,
+    process_group: OwnedProcessGroup | None = None,
     grace_seconds: float = 0.2,
 ) -> None:
     """Terminate a process group, then kill it if the grace period expires."""
 
-    if process.poll() is not None:
-        return
-    if os.name == "posix":
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        except PermissionError:
-            process.terminate()
-    else:
-        process.terminate()
-    try:
-        process.wait(timeout=grace_seconds)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    if os.name == "posix":
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
-        except PermissionError:
-            process.kill()
-    else:
-        process.kill()
-    try:
-        process.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:  # pragma: no cover - kernel-level process failure
-        process.kill()
-        with suppress(subprocess.TimeoutExpired):
-            process.wait(timeout=grace_seconds)
+    owned_group = process_group
+    if owned_group is None and process.returncode is None:
+        owned_group = capture_process_group(process)
+    terminate_process(
+        process,
+        process_group=owned_group,
+        grace_seconds=grace_seconds,
+    )
 
 
 def _rss_peak_bytes() -> int:

@@ -30,17 +30,30 @@ from .adapters import (
     sanitize_failure,
 )
 from .manifest import ComparatorPin
+from .process_group import (
+    OwnedProcessGroup,
+    ProcessGroupCleanupError,
+    capture_process_group,
+    cleanup_exited_process_group,
+    observe_process_exit,
+    provisional_process_group,
+)
+from .process_group import (
+    terminate_process as terminate_owned_process,
+)
 from .rss_interval import RssIntervalError
 from .rss_monitor import SubprocessRssIntervalSampler
 
-PERSISTENT_PROTOCOL_SCHEMA = "pyowl-core/comparator-persistent-runner/v2"
-PERSISTENT_HANDSHAKE_SCHEMA = "pyowl-core/comparator-persistent-handshake/v2"
-PERSISTENT_REQUEST_SCHEMA = "pyowl-core/comparator-persistent-request/v2"
+PERSISTENT_PROTOCOL_SCHEMA = "pyowl-core/comparator-persistent-runner/v3"
+PERSISTENT_HANDSHAKE_SCHEMA = "pyowl-core/comparator-persistent-handshake/v3"
+PERSISTENT_REQUEST_SCHEMA = "pyowl-core/comparator-persistent-request/v3"
 PERSISTENT_PREPARED_SCHEMA = "pyowl-core/comparator-persistent-prepared/v1"
 PERSISTENT_EXECUTE_SCHEMA = "pyowl-core/comparator-persistent-execute/v1"
-PERSISTENT_RESPONSE_SCHEMA = "pyowl-core/comparator-persistent-response/v2"
-PERSISTENT_SHUTDOWN_SCHEMA = "pyowl-core/comparator-persistent-shutdown/v2"
-PERSISTENT_SHUTDOWN_ACK_SCHEMA = "pyowl-core/comparator-persistent-shutdown-ack/v2"
+PERSISTENT_COMPLETED_SCHEMA = "pyowl-core/comparator-persistent-completed/v1"
+PERSISTENT_PUBLISH_SCHEMA = "pyowl-core/comparator-persistent-publish/v1"
+PERSISTENT_RESPONSE_SCHEMA = "pyowl-core/comparator-persistent-response/v3"
+PERSISTENT_SHUTDOWN_SCHEMA = "pyowl-core/comparator-persistent-shutdown/v3"
+PERSISTENT_SHUTDOWN_ACK_SCHEMA = "pyowl-core/comparator-persistent-shutdown-ack/v3"
 PERSISTENT_AUDIT_SCHEMA = "pyowl-core/comparator-persistent-lifecycle/v1"
 
 MAX_PERSISTENT_HANDSHAKE_BYTES = 64 * 1024
@@ -58,12 +71,15 @@ _HANDSHAKE_FIELDS = frozenset(
         "request_schema",
         "prepared_schema",
         "execute_schema",
+        "completed_schema",
+        "publish_schema",
         "result_schema",
         "fresh_ontology_per_request",
         "artifact",
     }
 )
 _PREPARED_FIELDS = frozenset({"schema", "protocol", "sequence", "pid"})
+_COMPLETED_FIELDS = frozenset({"schema", "protocol", "sequence", "pid", "ontology_instance_id"})
 _RESPONSE_FIELDS = frozenset({"schema", "protocol", "sequence", "ontology_instance_id", "result"})
 _SHUTDOWN_ACK_FIELDS = frozenset({"schema", "protocol", "sequence", "pid"})
 _ARTIFACT_FIELDS = frozenset(
@@ -98,6 +114,7 @@ class PersistentExternalRunner:
         pin: ComparatorPin,
         process: subprocess.Popen[bytes],
         *,
+        process_group: OwnedProcessGroup | None,
         handshake_timeout_seconds: float,
         timeout_seconds: float,
         shutdown_timeout_seconds: float,
@@ -108,6 +125,7 @@ class PersistentExternalRunner:
     ) -> None:
         self.pin = pin
         self._process = process
+        self._process_group = process_group
         self._owner_pid = os.getpid()
         self._timeout_seconds = _positive_timeout(timeout_seconds, "response timeout")
         self._shutdown_timeout_seconds = _positive_timeout(
@@ -126,19 +144,25 @@ class PersistentExternalRunner:
         self._shutdown_state = "not-started"
         self._handshake: dict[str, Any] | None = None
         self._startup_ns = 0
-        self._set_nonblocking_pipes()
         try:
+            self._set_nonblocking_pipes()
             payload, _frame_bytes, _stderr_delta = self._receive_frame(
                 timeout=_positive_timeout(handshake_timeout_seconds, "handshake timeout"),
                 max_payload_bytes=MAX_PERSISTENT_HANDSHAKE_BYTES,
             )
             handshake = _json_object(payload, "persistent handshake")
             _validate_handshake(pin, process.pid, handshake)
-            if process.poll() is not None:
+            if observe_process_exit(process, process_group=process_group):
                 raise PersistentRunnerError("runner exited immediately after its handshake")
             self._handshake = handshake
             self._startup_ns = time.perf_counter_ns() - startup_started_ns
-        except (OSError, TypeError, ValueError, PersistentRunnerError) as error:
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            PersistentRunnerError,
+            ProcessGroupCleanupError,
+        ) as error:
             self._mark_failed(error)
             self._close_pipes()
             raise PersistentRunnerError(sanitize_failure(error)) from error
@@ -199,9 +223,37 @@ class PersistentExternalRunner:
             )
         except OSError as error:
             raise PersistentRunnerError(f"persistent runner could not start: {error}") from error
+        try:
+            process_group = capture_process_group(process)
+        except Exception as error:
+            cleanup_error: Exception | None = None
+            fallback_group: OwnedProcessGroup | None = None
+            try:
+                fallback_group = provisional_process_group(process)
+            except Exception as fallback_error:
+                cleanup_error = fallback_error
+            try:
+                try:
+                    terminate_owned_process(
+                        process,
+                        process_group=fallback_group,
+                        grace_seconds=0.2,
+                    )
+                except Exception as teardown_error:
+                    cleanup_error = teardown_error
+            finally:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None and not stream.closed:
+                        with suppress(OSError):
+                            stream.close()
+            detail = f"persistent runner process-group setup failed: {error}"
+            if cleanup_error is not None:
+                detail = f"{detail}; cleanup failed: {cleanup_error}"
+            raise PersistentRunnerError(detail) from error
         return cls(
             pin,
             process,
+            process_group=process_group,
             handshake_timeout_seconds=resolved_handshake_timeout,
             timeout_seconds=timeout_seconds,
             shutdown_timeout_seconds=shutdown_timeout_seconds,
@@ -247,7 +299,7 @@ class PersistentExternalRunner:
                     _json_object(prepared_payload, "persistent prepared acknowledgement")
                 )
                 sampler.start()
-                payload, execute_frame_bytes, execute_stderr_bytes = self._exchange_frame(
+                completed_payload, execute_frame_bytes, execute_stderr_bytes = self._exchange_frame(
                     {
                         "schema": PERSISTENT_EXECUTE_SCHEMA,
                         "protocol": PERSISTENT_PROTOCOL_SCHEMA,
@@ -255,13 +307,31 @@ class PersistentExternalRunner:
                         "pid": self._process.pid,
                     },
                     timeout=self._timeout_seconds,
-                    max_response_bytes=self._max_stdout_bytes,
+                    max_response_bytes=MAX_PERSISTENT_HANDSHAKE_BYTES,
+                )
+                ontology_instance_id = self._validate_completed(
+                    _json_object(completed_payload, "persistent completed acknowledgement")
                 )
                 parent_wall_ns = time.perf_counter_ns() - parent_wall_start
                 parent_cpu_ns = time.process_time_ns() - parent_cpu_start
                 rss_interval = sampler.stop()
+                payload, publish_frame_bytes, publish_stderr_bytes = self._exchange_frame(
+                    {
+                        "schema": PERSISTENT_PUBLISH_SCHEMA,
+                        "protocol": PERSISTENT_PROTOCOL_SCHEMA,
+                        "sequence": self._sequence,
+                        "pid": self._process.pid,
+                        "ontology_instance_id": ontology_instance_id,
+                    },
+                    timeout=self._timeout_seconds,
+                    max_response_bytes=self._max_stdout_bytes,
+                )
                 response = _json_object(payload, "persistent response")
-                result, ontology_instance_id = self._validate_response(request, response)
+                result = self._validate_response(
+                    request,
+                    response,
+                    expected_instance_id=ontology_instance_id,
+                )
                 self._seen_ontology_instances.add(ontology_instance_id)
                 self._sequence += 1
                 self._response_count += 1
@@ -272,11 +342,17 @@ class PersistentExternalRunner:
                     {
                         "parent_wall_ns": parent_wall_ns,
                         "parent_cpu_ns": parent_cpu_ns,
-                        "request_bytes": request_frame_bytes + execute_frame_bytes,
-                        "stdout_bytes": (
-                            _frame_wire_size(prepared_payload) + _frame_wire_size(payload)
+                        "request_bytes": (
+                            request_frame_bytes + execute_frame_bytes + publish_frame_bytes
                         ),
-                        "stderr_bytes": prepared_stderr_bytes + execute_stderr_bytes,
+                        "stdout_bytes": (
+                            _frame_wire_size(prepared_payload)
+                            + _frame_wire_size(completed_payload)
+                            + _frame_wire_size(payload)
+                        ),
+                        "stderr_bytes": (
+                            prepared_stderr_bytes + execute_stderr_bytes + publish_stderr_bytes
+                        ),
                         "persistent_protocol": PERSISTENT_PROTOCOL_SCHEMA,
                         "persistent_sequence": self._sequence - 1,
                         "persistent_runner_pid": self._process.pid,
@@ -285,11 +361,25 @@ class PersistentExternalRunner:
                     }
                 )
                 return result
-            except (OSError, TypeError, ValueError, PersistentRunnerError, RssIntervalError):
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                PersistentRunnerError,
+                ProcessGroupCleanupError,
+                RssIntervalError,
+            ):
                 with suppress(RssIntervalError):
                     sampler.abort()
                 raise
-        except (OSError, TypeError, ValueError, PersistentRunnerError, RssIntervalError) as error:
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            PersistentRunnerError,
+            ProcessGroupCleanupError,
+            RssIntervalError,
+        ) as error:
             self._mark_failed(error)
             return _error(self.pin, request, PersistentRunnerError(str(error)))
 
@@ -302,10 +392,15 @@ class PersistentExternalRunner:
             self._failure_reason = "persistent runner used from a non-owner PID"
             self._shutdown_state = "fork-detached"
             self._closed = True
+            if self._process_group is not None:
+                self._process_group.close()
             self._close_pipes()
             return self.audit()
         try:
-            if self._failure_reason is None and self._process.poll() is None:
+            if self._failure_reason is None and not observe_process_exit(
+                self._process,
+                process_group=self._process_group,
+            ):
                 shutdown_sequence = self._sequence
                 payload, _frame_bytes, _stderr_delta = self._exchange_frame(
                     {
@@ -327,16 +422,28 @@ class PersistentExternalRunner:
                 self._wait_for_clean_exit(self._shutdown_timeout_seconds)
                 self._shutdown_state = "clean-exit"
             elif self._failure_reason is None:
-                raise PersistentRunnerError(
-                    f"runner exited before shutdown with code {self._process.returncode}"
-                )
-        except (OSError, TypeError, ValueError, PersistentRunnerError) as error:
+                raise PersistentRunnerError("runner exited before shutdown")
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            PersistentRunnerError,
+            ProcessGroupCleanupError,
+        ) as error:
             self._mark_failed(error)
         finally:
-            if self._process.poll() is None:
-                _terminate_process(self._process)
-                if self._failure_reason is None:
-                    self._failure_reason = "runner required termination after shutdown"
+            required_termination = self._process.returncode is None
+            if os.getpid() == self._owner_pid:
+                try:
+                    _terminate_process(
+                        self._process,
+                        process_group=self._process_group,
+                    )
+                except Exception as error:
+                    if self._failure_reason is None:
+                        self._failure_reason = sanitize_failure(f"{type(error).__name__}: {error}")
+            if required_termination and self._failure_reason is None:
+                self._failure_reason = "runner required termination after shutdown"
             self._closed = True
             self._close_pipes()
         return self.audit()
@@ -364,9 +471,11 @@ class PersistentExternalRunner:
         self,
         request: AdapterRequest,
         response: Mapping[str, Any],
-    ) -> tuple[dict[str, Any], str]:
+        *,
+        expected_instance_id: str,
+    ) -> dict[str, Any]:
         if set(response) != _RESPONSE_FIELDS:
-            raise PersistentRunnerError("persistent response fields differ from schema v2")
+            raise PersistentRunnerError("persistent response fields differ from schema v3")
         if response.get("schema") != PERSISTENT_RESPONSE_SCHEMA:
             raise PersistentRunnerError("persistent response schema differs")
         if response.get("protocol") != PERSISTENT_PROTOCOL_SCHEMA:
@@ -378,6 +487,10 @@ class PersistentExternalRunner:
         if not _is_sha256(ontology_instance_id):
             raise PersistentRunnerError("ontology_instance_id must be lowercase SHA-256")
         instance_id = cast(str, ontology_instance_id)
+        if instance_id != expected_instance_id:
+            raise PersistentRunnerError(
+                "persistent response ontology instance differs from completed acknowledgement"
+            )
         if instance_id in self._seen_ontology_instances:
             raise PersistentRunnerError("persistent runner reused an ontology instance")
         result_value = response.get("result")
@@ -389,7 +502,32 @@ class PersistentExternalRunner:
             result["reason"] = sanitize_failure(
                 result.get("reason", "persistent external adapter failed")
             )
-        return result, instance_id
+        return result
+
+    def _validate_completed(self, completed: Mapping[str, Any]) -> str:
+        if set(completed) != _COMPLETED_FIELDS:
+            raise PersistentRunnerError("persistent completed fields differ from schema v1")
+        for name, expected in (
+            ("schema", PERSISTENT_COMPLETED_SCHEMA),
+            ("protocol", PERSISTENT_PROTOCOL_SCHEMA),
+        ):
+            if completed.get(name) != expected:
+                raise PersistentRunnerError(f"persistent completed {name} differs")
+        observed_sequence = completed.get("sequence")
+        if not _is_u64(observed_sequence) or observed_sequence != self._sequence:
+            raise PersistentRunnerError("persistent completed sequence differs")
+        observed_pid = completed.get("pid")
+        if not _is_u64(observed_pid) or observed_pid != self._process.pid:
+            raise PersistentRunnerError("persistent completed pid differs")
+        ontology_instance_id = completed.get("ontology_instance_id")
+        if not _is_sha256(ontology_instance_id):
+            raise PersistentRunnerError(
+                "persistent completed ontology_instance_id must be lowercase SHA-256"
+            )
+        instance_id = cast(str, ontology_instance_id)
+        if instance_id in self._seen_ontology_instances:
+            raise PersistentRunnerError("persistent runner reused an ontology instance")
+        return instance_id
 
     def _validate_prepared(self, prepared: Mapping[str, Any]) -> None:
         if set(prepared) != _PREPARED_FIELDS:
@@ -424,10 +562,11 @@ class PersistentExternalRunner:
             max_payload_bytes=max_response_bytes,
         )
         self._reject_immediate_extra_stdout()
-        if not allow_process_exit and self._process.poll() is not None:
-            raise PersistentRunnerError(
-                f"persistent runner exited after response with code {self._process.returncode}"
-            )
+        if not allow_process_exit and observe_process_exit(
+            self._process,
+            process_group=self._process_group,
+        ):
+            raise PersistentRunnerError("persistent runner exited after response")
         return payload, len(outgoing), len(self._stderr) - stderr_before
 
     def _receive_frame(
@@ -472,10 +611,11 @@ class PersistentExternalRunner:
                     raise PersistentRunnerError("persistent runner response timed out")
                 events = selector.select(min(remaining, 0.1))
                 if not events:
-                    if self._process.poll() is not None:
-                        raise PersistentRunnerError(
-                            f"persistent runner crashed with code {self._process.returncode}"
-                        )
+                    if observe_process_exit(
+                        self._process,
+                        process_group=self._process_group,
+                    ):
+                        raise PersistentRunnerError("persistent runner crashed")
                     continue
                 for key, _events in events:
                     if key.data == "stdin":
@@ -499,6 +639,11 @@ class PersistentExternalRunner:
                             if response is not None:
                                 raise PersistentRunnerError(
                                     "persistent runner emitted extra response output"
+                                )
+                            if outgoing is not None and write_offset < len(outgoing):
+                                raise PersistentRunnerError(
+                                    "persistent runner response arrived before its "
+                                    "request frame was fully written"
                                 )
                             self._stdout_buffer.extend(chunk)
                             response = self._extract_frame(max_payload_bytes)
@@ -555,10 +700,11 @@ class PersistentExternalRunner:
                 raise PersistentRunnerError("persistent runner closed stdout between requests")
             raise PersistentRunnerError("persistent runner emitted late or unsolicited output")
         self._drain_stderr(stderr.fileno())
-        if self._process.poll() is not None:
-            raise PersistentRunnerError(
-                f"persistent runner exited between requests with code {self._process.returncode}"
-            )
+        if observe_process_exit(
+            self._process,
+            process_group=self._process_group,
+        ):
+            raise PersistentRunnerError("persistent runner exited between requests")
 
     def _reject_immediate_extra_stdout(self) -> None:
         stdout = self._required_pipe(self._process.stdout, "stdout")
@@ -589,7 +735,10 @@ class PersistentExternalRunner:
         deadline = time.monotonic() + timeout
         stdout = self._required_pipe(self._process.stdout, "stdout")
         stderr = self._required_pipe(self._process.stderr, "stderr")
-        while self._process.poll() is None:
+        while not observe_process_exit(
+            self._process,
+            process_group=self._process_group,
+        ):
             if time.monotonic() >= deadline:
                 raise PersistentRunnerError("persistent runner shutdown timed out")
             chunk = _read_nonblocking(stdout.fileno())
@@ -601,6 +750,14 @@ class PersistentExternalRunner:
         chunk = _read_nonblocking(stdout.fileno())
         if chunk not in {None, b""}:
             raise PersistentRunnerError("persistent runner emitted output after shutdown ack")
+        if not cleanup_exited_process_group(
+            self._process,
+            process_group=self._process_group,
+            grace_seconds=self._shutdown_timeout_seconds,
+        ):
+            raise PersistentRunnerError(
+                "persistent runner left descendant processes after clean exit"
+            )
         if self._process.returncode != 0:
             raise PersistentRunnerError(
                 f"persistent runner shutdown exited {self._process.returncode}"
@@ -615,8 +772,17 @@ class PersistentExternalRunner:
                 )
             self._failure_reason = detail
         self._shutdown_state = "terminated-after-error"
-        if os.getpid() == self._owner_pid and self._process.poll() is None:
-            _terminate_process(self._process)
+        if os.getpid() == self._owner_pid:
+            try:
+                _terminate_process(
+                    self._process,
+                    process_group=self._process_group,
+                )
+            except Exception as cleanup_error:
+                self._failure_reason = sanitize_failure(
+                    f"{self._failure_reason}; cleanup failed: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
 
     def _set_nonblocking_pipes(self) -> None:
         for name, stream in (
@@ -636,10 +802,11 @@ class PersistentExternalRunner:
             raise PersistentRunnerError("persistent runner lifecycle is closed")
         if self._failure_reason is not None:
             raise PersistentRunnerError(self._failure_reason)
-        if self._process.poll() is not None:
-            raise PersistentRunnerError(
-                f"persistent runner is not active (code {self._process.returncode})"
-            )
+        if observe_process_exit(
+            self._process,
+            process_group=self._process_group,
+        ):
+            raise PersistentRunnerError("persistent runner is not active")
 
     @staticmethod
     def _required_pipe(
@@ -693,7 +860,7 @@ def _validate_handshake(
     value: Mapping[str, Any],
 ) -> None:
     if set(value) != _HANDSHAKE_FIELDS:
-        raise PersistentRunnerError("persistent handshake fields differ from schema v2")
+        raise PersistentRunnerError("persistent handshake fields differ from schema v3")
     expected_handshake: tuple[tuple[str, object], ...] = (
         ("schema", PERSISTENT_HANDSHAKE_SCHEMA),
         ("protocol", PERSISTENT_PROTOCOL_SCHEMA),
@@ -703,6 +870,8 @@ def _validate_handshake(
         ("request_schema", ADAPTER_REQUEST_SCHEMA),
         ("prepared_schema", PERSISTENT_PREPARED_SCHEMA),
         ("execute_schema", PERSISTENT_EXECUTE_SCHEMA),
+        ("completed_schema", PERSISTENT_COMPLETED_SCHEMA),
+        ("publish_schema", PERSISTENT_PUBLISH_SCHEMA),
         ("result_schema", ADAPTER_RESULT_SCHEMA),
     )
     for name, expected in expected_handshake:
@@ -842,10 +1011,12 @@ __all__ = [
     "MAX_FRAME_HEADER_BYTES",
     "MAX_PERSISTENT_HANDSHAKE_BYTES",
     "PERSISTENT_AUDIT_SCHEMA",
+    "PERSISTENT_COMPLETED_SCHEMA",
     "PERSISTENT_EXECUTE_SCHEMA",
     "PERSISTENT_HANDSHAKE_SCHEMA",
     "PERSISTENT_PREPARED_SCHEMA",
     "PERSISTENT_PROTOCOL_SCHEMA",
+    "PERSISTENT_PUBLISH_SCHEMA",
     "PERSISTENT_REQUEST_SCHEMA",
     "PERSISTENT_RESPONSE_SCHEMA",
     "PERSISTENT_SHUTDOWN_ACK_SCHEMA",

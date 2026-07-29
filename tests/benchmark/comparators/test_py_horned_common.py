@@ -12,7 +12,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -31,6 +31,33 @@ class _WeakMapping(dict[str, object]):
 
 class _WeakSource:
     pass
+
+
+def _ontology_instance_id(
+    *,
+    instance_counter: int,
+    sequence: int,
+) -> str:
+    preimage = f"{os.getpid()}:{instance_counter}:{sequence}".encode("ascii")
+    return hashlib.sha256(preimage).hexdigest()
+
+
+def _publish_frame(
+    runner_module: ModuleType,
+    *,
+    instance_counter: int,
+    sequence: int,
+) -> dict[str, object]:
+    return {
+        "schema": runner_module.PERSISTENT_PUBLISH_SCHEMA,
+        "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+        "sequence": sequence,
+        "pid": os.getpid(),
+        "ontology_instance_id": _ontology_instance_id(
+            instance_counter=instance_counter,
+            sequence=sequence,
+        ),
+    }
 
 
 def _retention_test_frames(
@@ -65,6 +92,7 @@ def _retention_test_frames(
         (
             request_frame,
             execute,
+            _publish_frame(runner_module, instance_counter=0, sequence=0),
             {
                 "schema": runner_module.PERSISTENT_REQUEST_SCHEMA,
                 "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
@@ -77,6 +105,7 @@ def _retention_test_frames(
                 "sequence": 1,
                 "pid": os.getpid(),
             },
+            _publish_frame(runner_module, instance_counter=1, sequence=1),
             {
                 "schema": runner_module.PERSISTENT_SHUTDOWN_SCHEMA,
                 "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
@@ -108,6 +137,120 @@ def runner_module() -> Iterator[ModuleType]:
             sys.modules["pyhornedowl"] = previous_pyhorned
 
 
+def test_completion_metrics_include_full_result_rss_and_fresh_child_cpu_only(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fresh: dict[str, object] = {
+        "status": "ok",
+        "completion_allocation": bytearray(1024),
+        "metrics": {
+            "cpu_ns": 40,
+            "rss_peak_before_bytes": 100,
+            "rss_peak_after_bytes": 110,
+            "rss_peak_increment_bytes": 10,
+        },
+    }
+    steady: dict[str, object] = {
+        "status": "ok",
+        "metrics": {
+            "cpu_ns": 40,
+            "rss_peak_before_bytes": 100,
+            "rss_peak_after_bytes": 110,
+            "rss_peak_increment_bytes": 10,
+        },
+    }
+    monkeypatch.setattr(runner_module, "_rss_peak_bytes", lambda: 180)
+    monkeypatch.setattr(runner_module.time, "process_time_ns", lambda: 900)
+
+    runner_module._finalize_completion_metrics(fresh, fresh=True)
+    runner_module._finalize_completion_metrics(steady, fresh=False)
+
+    fresh_metrics = cast(dict[str, int], fresh["metrics"])
+    steady_metrics = cast(dict[str, int], steady["metrics"])
+    assert fresh_metrics["rss_peak_after_bytes"] == 180
+    assert fresh_metrics["rss_peak_increment_bytes"] == 80
+    assert fresh_metrics["startup_to_ready_cpu_ns"] == 900
+    assert steady_metrics["rss_peak_after_bytes"] == 180
+    assert "startup_to_ready_cpu_ns" not in steady_metrics
+    assert fresh["completion_allocation"]
+
+
+def test_fresh_main_finalizes_result_before_completion_publication(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = {"request": "value"}
+    result: dict[str, object] = {
+        "status": "ok",
+        "metrics": {
+            "cpu_ns": 10,
+            "rss_peak_before_bytes": 100,
+            "rss_peak_after_bytes": 100,
+            "rss_peak_increment_bytes": 0,
+        },
+    }
+    events: list[str] = []
+    monkeypatch.setattr(
+        runner_module,
+        "read_fresh_request",
+        lambda **_kwargs: request,
+    )
+
+    def run(
+        observed: Mapping[str, object],
+        *,
+        protocol_mode: str,
+    ) -> dict[str, object]:
+        assert observed is request
+        assert protocol_mode == "fresh"
+        events.append("result-built")
+        return result
+
+    def finalize(observed: Mapping[str, object], *, fresh: bool) -> None:
+        assert observed is result
+        assert fresh is True
+        events.append("completion-metrics")
+
+    def publish(observed: Mapping[str, object], **_kwargs: object) -> None:
+        assert observed is result
+        events.append("publish-helper")
+
+    monkeypatch.setattr(runner_module, "_run_request", run)
+    monkeypatch.setattr(runner_module, "_finalize_completion_metrics", finalize)
+    monkeypatch.setattr(runner_module, "publish_fresh_result", publish)
+
+    runner_module._fresh_main()
+
+    assert events == ["result-built", "completion-metrics", "publish-helper"]
+
+
+def test_py_horned_runner_hash_is_cached_before_persistent_samples(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    digest = runner_module._runner_sha256()
+    monkeypatch.setattr(
+        runner_module.Path,
+        "open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("runner hash was recomputed")
+        ),
+    )
+
+    assert runner_module._runner_sha256() == digest
+    assert runner_module._artifact()["runner_sha256"] == digest
+
+
+def test_py_horned_frame_json_rejects_duplicates_and_nonfinite_constants(
+    runner_module: ModuleType,
+) -> None:
+    with pytest.raises(runner_module.RunnerContractError, match="duplicate"):
+        runner_module._json_object(b'{"sequence":0,"sequence":0}', "test frame")
+    with pytest.raises(runner_module.RunnerContractError, match="non-finite"):
+        runner_module._json_object(b'{"sequence":NaN}', "test frame")
+
+
 def test_persistent_runner_waits_for_authenticated_execute_after_preparation(
     runner_module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
@@ -131,6 +274,13 @@ def test_persistent_runner_waits_for_authenticated_execute_after_preparation(
                     "sequence": sequence,
                     "pid": os.getpid(),
                 }
+            ).encode(),
+            json.dumps(
+                _publish_frame(
+                    runner_module,
+                    instance_counter=0,
+                    sequence=sequence,
+                )
             ).encode(),
             json.dumps(
                 {
@@ -160,18 +310,104 @@ def test_persistent_runner_waits_for_authenticated_execute_after_preparation(
     assert [value["schema"] for value in written] == [
         runner_module.PERSISTENT_HANDSHAKE_SCHEMA,
         runner_module.PERSISTENT_PREPARED_SCHEMA,
+        runner_module.PERSISTENT_COMPLETED_SCHEMA,
         runner_module.PERSISTENT_RESPONSE_SCHEMA,
         runner_module.PERSISTENT_SHUTDOWN_ACK_SCHEMA,
     ]
     assert written[0]["prepared_schema"] == runner_module.PERSISTENT_PREPARED_SCHEMA
     assert written[0]["execute_schema"] == runner_module.PERSISTENT_EXECUTE_SCHEMA
+    assert written[0]["completed_schema"] == runner_module.PERSISTENT_COMPLETED_SCHEMA
+    assert written[0]["publish_schema"] == runner_module.PERSISTENT_PUBLISH_SCHEMA
     assert written[1] == {
         "schema": runner_module.PERSISTENT_PREPARED_SCHEMA,
         "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
         "sequence": sequence,
         "pid": os.getpid(),
     }
-    assert written[2]["result"] == {"status": "ok"}
+    instance_id = _ontology_instance_id(instance_counter=0, sequence=sequence)
+    assert written[2] == {
+        "schema": runner_module.PERSISTENT_COMPLETED_SCHEMA,
+        "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+        "sequence": sequence,
+        "pid": os.getpid(),
+        "ontology_instance_id": instance_id,
+    }
+    assert written[3]["ontology_instance_id"] == instance_id
+    assert written[3]["result"] == {"status": "ok"}
+
+
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    (
+        ("missing", "fields differ"),
+        ("extra", "fields differ"),
+        ("schema", "schema differs"),
+        ("protocol", "protocol differs"),
+        ("bool-sequence", "unsigned 64-bit integer"),
+        ("float-sequence", "unsigned 64-bit integer"),
+        ("negative-sequence", "unsigned 64-bit integer"),
+        ("mismatched-sequence", "sequence differs"),
+        ("bool-pid", "unsigned 64-bit integer"),
+        ("float-pid", "unsigned 64-bit integer"),
+        ("negative-pid", "unsigned 64-bit integer"),
+        ("mismatched-pid", "pid differs"),
+        ("invalid-instance", "must be lowercase SHA-256"),
+        ("mismatched-instance", "ontology_instance_id differs"),
+    ),
+)
+def test_persistent_runner_rejects_invalid_publish(
+    runner_module: ModuleType,
+    mode: str,
+    message: str,
+) -> None:
+    sequence = 7
+    pid = os.getpid()
+    instance_id = hashlib.sha256(b"expected-instance").hexdigest()
+    publish: dict[str, object] = {
+        "schema": runner_module.PERSISTENT_PUBLISH_SCHEMA,
+        "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+        "sequence": sequence,
+        "pid": pid,
+        "ontology_instance_id": instance_id,
+    }
+    if mode == "missing":
+        publish.pop("pid")
+    elif mode == "extra":
+        publish["extra"] = True
+    elif mode == "schema":
+        publish["schema"] = "wrong-schema"
+    elif mode == "protocol":
+        publish["protocol"] = "wrong-protocol"
+    elif mode == "bool-sequence":
+        publish["sequence"] = True
+    elif mode == "float-sequence":
+        publish["sequence"] = float(sequence)
+    elif mode == "negative-sequence":
+        publish["sequence"] = -1
+    elif mode == "mismatched-sequence":
+        publish["sequence"] = sequence + 1
+    elif mode == "bool-pid":
+        publish["pid"] = True
+    elif mode == "float-pid":
+        publish["pid"] = float(pid)
+    elif mode == "negative-pid":
+        publish["pid"] = -1
+    elif mode == "mismatched-pid":
+        publish["pid"] = pid + 1
+    elif mode == "invalid-instance":
+        publish["ontology_instance_id"] = "invalid"
+    elif mode == "mismatched-instance":
+        publish["ontology_instance_id"] = hashlib.sha256(b"other-instance").hexdigest()
+    else:  # pragma: no cover - parametrization is exhaustive
+        raise AssertionError(mode)
+
+    with pytest.raises(runner_module.RunnerContractError, match=message):
+        runner_module._validate_persistent_publish(
+            publish,
+            sequence=sequence,
+            pid=pid,
+            ontology_instance_id=instance_id,
+        )
 
 
 def test_persistent_runner_rejects_a_skipped_request_sequence(
@@ -221,6 +457,13 @@ def test_persistent_runner_rejects_a_replayed_request_sequence(
                 }
             ).encode(),
             json.dumps(
+                _publish_frame(
+                    runner_module,
+                    instance_counter=0,
+                    sequence=0,
+                )
+            ).encode(),
+            json.dumps(
                 {
                     "schema": runner_module.PERSISTENT_REQUEST_SCHEMA,
                     "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
@@ -250,6 +493,7 @@ def test_persistent_runner_rejects_a_replayed_request_sequence(
     assert [value["schema"] for value in written] == [
         runner_module.PERSISTENT_HANDSHAKE_SCHEMA,
         runner_module.PERSISTENT_PREPARED_SCHEMA,
+        runner_module.PERSISTENT_COMPLETED_SCHEMA,
         runner_module.PERSISTENT_RESPONSE_SCHEMA,
     ]
 
@@ -284,11 +528,16 @@ def test_persistent_runner_releases_request_state_before_the_next_request(
     frames = _retention_test_frames(runner_module, references)
     validate_calls = 0
     result_calls = 0
+    publish_wait_checked = False
     release_checked = False
 
     def read_frame() -> object:
-        nonlocal release_checked
-        if len(frames) == 3:
+        nonlocal publish_wait_checked, release_checked
+        if len(frames) == 5:
+            gc.collect()
+            assert references["result"]() is not None
+            publish_wait_checked = True
+        if len(frames) == 4:
             gc.collect()
             assert set(references) == {"execute", "frame", "request", "result", "source"}
             assert {
@@ -340,6 +589,7 @@ def test_persistent_runner_releases_request_state_before_the_next_request(
 
     runner_module._persistent_main()
 
+    assert publish_wait_checked is True
     assert release_checked is True
     assert validate_calls == result_calls == 2
 

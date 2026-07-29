@@ -96,7 +96,7 @@ pub(crate) struct RetainedParseMetadataV2 {
 struct RetainedRdfMappingEvidenceV2 {
     consumed_triples: u64,
     total_triples: u64,
-    unconsumed: Vec<crate::bindings::ingestion::engine::RdfTripleEvidence>,
+    unconsumed: Vec<crate::ingestion::RdfTripleEvidence>,
 }
 
 type StructuralRowsV2 = [Vec<Vec<u8>>; 3];
@@ -600,9 +600,7 @@ impl RetainedParseMetadataV2 {
                     mapping
                         .unconsumed
                         .capacity()
-                        .checked_mul(size_of::<
-                            crate::bindings::ingestion::engine::RdfTripleEvidence,
-                        >())
+                        .checked_mul(size_of::<crate::ingestion::RdfTripleEvidence>())
                         .ok_or_else(|| {
                             NativeError::limit("native retained RDF metadata overflow")
                         })?,
@@ -639,9 +637,9 @@ pub(crate) fn build_rdfxml_seed(
     decoded_codepoints: u64,
     total_triples: u64,
     consumed_triples: u64,
-    unconsumed: Vec<crate::bindings::ingestion::engine::RdfTripleEvidence>,
+    unconsumed: Vec<crate::ingestion::RdfTripleEvidence>,
     occurrence_count: u64,
-    occurrence_rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
+    occurrence_rows: &[crate::ingestion::CanonicalOccurrence],
     language_spellings: Vec<String>,
     source_blank_labels: Vec<String>,
     source_prefixes: Vec<(String, String)>,
@@ -781,7 +779,7 @@ pub(crate) fn build_structural_rows_seed(
     rows: [&[Vec<u8>]; 3],
     decoded_codepoints: u64,
     occurrence_count: u64,
-    occurrence_rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
+    occurrence_rows: &[crate::ingestion::CanonicalOccurrence],
     language_spellings: Vec<String>,
     source_blank_labels: Vec<String>,
     source_prefixes: Vec<(String, String)>,
@@ -2039,7 +2037,7 @@ struct RdfXmlOccurrenceCaptureV2<'a> {
 }
 
 fn rdfxml_retained_occurrences(
-    rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
+    rows: &[crate::ingestion::CanonicalOccurrence],
     capture: RdfXmlOccurrenceCaptureV2<'_>,
 ) -> NativeResult<Vec<RetainedOccurrenceV2>> {
     let RdfXmlOccurrenceCaptureV2 {
@@ -2115,7 +2113,7 @@ fn rdfxml_retained_occurrences(
 }
 
 fn attach_rdfxml_lexical_details(
-    rows: &[crate::bindings::ingestion::engine::CanonicalOccurrence],
+    rows: &[crate::ingestion::CanonicalOccurrence],
     occurrences: &mut [RetainedOccurrenceV2],
     language_spellings: Vec<String>,
     source_blank_labels: Vec<String>,
@@ -3260,7 +3258,7 @@ fn prepare_rdf_report_bounded(
 }
 
 fn encode_rdf_triple_evidence(
-    triple: &crate::bindings::ingestion::engine::RdfTripleEvidence,
+    triple: &crate::ingestion::RdfTripleEvidence,
     limits: &Limits,
 ) -> NativeResult<Vec<u8>> {
     let size = rdf_triple_evidence_size(triple, limits)?;
@@ -3274,7 +3272,7 @@ fn encode_rdf_triple_evidence(
 }
 
 fn rdf_triple_evidence_size(
-    triple: &crate::bindings::ingestion::engine::RdfTripleEvidence,
+    triple: &crate::ingestion::RdfTripleEvidence,
     limits: &Limits,
 ) -> NativeResult<usize> {
     if triple.object_requires_repr {

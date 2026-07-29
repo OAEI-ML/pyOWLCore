@@ -2,7 +2,12 @@
 
 #![forbid(unsafe_code)]
 #![deny(clippy::all)]
+#![cfg_attr(
+    all(feature = "comparator", not(feature = "extension-module")),
+    allow(dead_code, unused_imports)
+)]
 
+#[cfg(feature = "extension-module")]
 mod bindings;
 mod cancel;
 mod canonical;
@@ -11,6 +16,8 @@ pub mod comparator;
 mod error;
 mod hash;
 mod index;
+#[allow(dead_code)]
+mod ingestion;
 mod limits;
 mod model;
 mod parse;
@@ -23,26 +30,40 @@ mod session;
 mod source;
 mod wire;
 
+#[cfg(feature = "extension-module")]
 use std::panic::{catch_unwind, AssertUnwindSafe};
+#[cfg(feature = "extension-module")]
 use std::sync::Arc;
 
+#[cfg(feature = "extension-module")]
 use cancel::{interrupt_slot, take_interrupt, Cancellation, Guard, InterruptSlot};
+#[cfg(feature = "extension-module")]
 use error::{NativeError, NativeResult};
+#[cfg(feature = "extension-module")]
 use limits::Limits;
-#[cfg(feature = "test-hooks")]
+#[cfg(all(feature = "extension-module", feature = "test-hooks"))]
 use model::NativeComponentBuilder;
+#[cfg(feature = "extension-module")]
 use model::{scan_canonical, CanonicalRow, ModelArena, ScanBudget};
+#[cfg(feature = "extension-module")]
 use pyo3::create_exception;
+#[cfg(feature = "extension-module")]
 use pyo3::exceptions::{PyException, PyTypeError};
-#[cfg(feature = "test-hooks")]
+#[cfg(all(feature = "extension-module", feature = "test-hooks"))]
 use pyo3::exceptions::{PyMemoryError, PyValueError};
+#[cfg(feature = "extension-module")]
 use pyo3::prelude::*;
+#[cfg(feature = "extension-module")]
 use pyo3::types::{PyAny, PyBytes, PyModule, PyTuple};
+#[cfg(feature = "extension-module")]
 use wire::WireArena;
 
 pub(crate) const ABI_VERSION: u32 = 3;
+#[cfg(feature = "extension-module")]
 const MODEL_SCHEMA_VERSION: u32 = 1;
+#[cfg(feature = "extension-module")]
 const WIRE_FORMAT_VERSION: (u16, u16) = (1, 1);
+#[cfg(feature = "extension-module")]
 const FOUNDATION_FEATURES: [&str; 9] = [
     "cancellation",
     "canonical-model-v1",
@@ -55,8 +76,10 @@ const FOUNDATION_FEATURES: [&str; 9] = [
     "wire-v1",
 ];
 
+#[cfg(feature = "extension-module")]
 create_exception!(_native, _NativeError, PyException);
 
+#[cfg(feature = "extension-module")]
 #[derive(Debug)]
 struct BridgeAllocationProbe {
     #[cfg(feature = "test-hooks")]
@@ -67,6 +90,7 @@ struct BridgeAllocationProbe {
     failure_message: &'static str,
 }
 
+#[cfg(feature = "extension-module")]
 impl BridgeAllocationProbe {
     const fn disabled() -> Self {
         Self {
@@ -110,10 +134,12 @@ impl BridgeAllocationProbe {
     }
 }
 
+#[cfg(feature = "extension-module")]
 fn contain<T>(operation: impl FnOnce() -> NativeResult<T>) -> NativeResult<T> {
     catch_unwind(AssertUnwindSafe(operation)).unwrap_or_else(|_| Err(NativeError::panic()))
 }
 
+#[cfg(feature = "extension-module")]
 fn run_detached<T: Send>(
     py: Python<'_>,
     operation: impl FnOnce(InterruptSlot) -> NativeResult<T> + Send,
@@ -127,15 +153,18 @@ fn run_detached<T: Send>(
     result.map_err(python_error)
 }
 
+#[cfg(feature = "extension-module")]
 fn python_error(error: NativeError) -> PyErr {
     PyErr::new::<_NativeError, _>((error.code, error.message))
 }
 
+#[cfg(feature = "extension-module")]
 fn limits_from_python(config: &Bound<'_, PyAny>) -> PyResult<Limits> {
     let mut allocations = BridgeAllocationProbe::disabled();
     limits_from_python_with_allocations(config, &mut allocations)
 }
 
+#[cfg(feature = "extension-module")]
 fn limits_from_python_with_allocations(
     config: &Bound<'_, PyAny>,
     allocations: &mut BridgeAllocationProbe,
@@ -144,10 +173,12 @@ fn limits_from_python_with_allocations(
     contain(|| Limits::decode(&bytes)).map_err(python_error)
 }
 
+#[cfg(feature = "extension-module")]
 fn cancellation_or_default(value: Option<PyRef<'_, Cancellation>>) -> Cancellation {
     value.map_or_else(|| Cancellation::with_duration(None), |item| item.clone())
 }
 
+#[cfg(feature = "extension-module")]
 fn owned_buffer(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -158,6 +189,7 @@ fn owned_buffer(
     owned_buffer_with_allocations(py, value, limits, configuration, &mut allocations)
 }
 
+#[cfg(feature = "extension-module")]
 fn owned_buffer_with_allocations(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -205,6 +237,7 @@ fn owned_buffer_with_allocations(
     Ok(result)
 }
 
+#[cfg(feature = "extension-module")]
 fn owned_source_request(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -214,6 +247,7 @@ fn owned_source_request(
     owned_source_request_with_allocations(py, value, limits, &mut allocations)
 }
 
+#[cfg(feature = "extension-module")]
 fn owned_source_request_with_allocations(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -260,11 +294,13 @@ fn owned_source_request_with_allocations(
     Ok(result)
 }
 
+#[cfg(feature = "extension-module")]
 fn owned_index_request(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     let mut allocations = BridgeAllocationProbe::disabled();
     owned_index_request_with_allocations(py, value, &mut allocations)
 }
 
+#[cfg(feature = "extension-module")]
 fn owned_index_request_with_allocations(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -303,6 +339,7 @@ fn owned_index_request_with_allocations(
     Ok(result)
 }
 
+#[cfg(feature = "extension-module")]
 fn owned_index_source(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -312,6 +349,7 @@ fn owned_index_source(
     owned_index_source_with_allocations(py, value, limits, &mut allocations)
 }
 
+#[cfg(feature = "extension-module")]
 fn owned_index_source_with_allocations(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -356,11 +394,13 @@ fn owned_index_source_with_allocations(
     Ok(result)
 }
 
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 fn version() -> (&'static str, u32) {
     (env!("CARGO_PKG_VERSION"), ABI_VERSION)
 }
 
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 fn self_test() -> PyResult<()> {
     contain(|| {
@@ -393,6 +433,7 @@ fn self_test() -> PyResult<()> {
     .map_err(python_error)
 }
 
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 #[pyo3(signature = (canonical, config, cancel=None))]
 fn validate_canonical<'py>(
@@ -424,6 +465,7 @@ fn validate_canonical<'py>(
     })
 }
 
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 #[pyo3(signature = (snapshot_wire, config, cancel=None))]
 fn validate_wire<'py>(
@@ -454,6 +496,7 @@ fn validate_wire<'py>(
     })
 }
 
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 #[pyo3(signature = (snapshot_wire, config, cancel=None))]
 fn roundtrip_wire<'py>(
@@ -482,6 +525,7 @@ fn roundtrip_wire<'py>(
     })
 }
 
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 #[pyo3(signature = (iterations, config, cancel=None))]
 fn _work_probe(
@@ -514,6 +558,7 @@ fn _work_probe(
     })
 }
 
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 fn _panic_probe() -> PyResult<()> {
     // The unit gate injects an actual unwind through `contain`.  The installed
@@ -523,6 +568,7 @@ fn _panic_probe() -> PyResult<()> {
 }
 
 #[cfg(feature = "test-hooks")]
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 fn _publication_fixture_v1() -> PyResult<publication::NativeSnapshotHandle> {
     contain(publication::fixture_handle_v1).map_err(python_error)
@@ -1081,6 +1127,7 @@ fn _foundation_bridge_allocation_probe_v1<'py>(
     Ok((output, allocations.count()))
 }
 
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 #[pyo3(signature = (source, config, cancel=None))]
 fn parse_document<'py>(
@@ -1111,6 +1158,7 @@ fn parse_document<'py>(
     })
 }
 
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 fn build_snapshot(
     _documents: &Bound<'_, PyAny>,
@@ -1123,6 +1171,7 @@ fn build_snapshot(
     )))
 }
 
+#[cfg(feature = "extension-module")]
 #[pyfunction]
 #[pyo3(signature = (snapshot_wire, request, cancel=None))]
 fn build_index<'py>(
@@ -1152,6 +1201,7 @@ fn build_index<'py>(
     })
 }
 
+#[cfg(feature = "extension-module")]
 #[pymodule]
 fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     let binding_features = bindings::register(py, module)?;
@@ -1219,7 +1269,7 @@ fn _native(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "extension-module"))]
 mod tests {
     use super::*;
 

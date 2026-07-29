@@ -1,4 +1,4 @@
-"""Parent-side current-RSS sampling for one persistent comparator request."""
+"""Parent-side current-RSS sampling through authenticated query readiness."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class RssIntervalError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class RssIntervalEvidence:
-    """Observed current-RSS envelope for one prepared/execute interval."""
+    """Observed current-RSS envelope from prepared state through completion."""
 
     source: str
     pid: int
