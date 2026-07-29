@@ -91,12 +91,10 @@ def paired_bootstrap_ratio_summary(
                 raise RatioStatisticsError(
                     f"{corpus_id}: pair {index} must be a numerator/denominator tuple"
                 )
-            numerator = _require_positive_u64(pair[0], f"{corpus_id}: pair {index} numerator")
-            denominator = _require_positive_u64(
-                pair[1], f"{corpus_id}: pair {index} denominator"
-            )
+            numerator = _require_u64(pair[0], f"{corpus_id}: pair {index} numerator")
+            denominator = _require_positive_u64(pair[1], f"{corpus_id}: pair {index} denominator")
             ratio = numerator / denominator
-            if not math.isfinite(ratio) or ratio <= 0.0:  # defensive if numeric types evolve
+            if not math.isfinite(ratio) or ratio < 0.0:  # defensive if numeric types evolve
                 raise RatioStatisticsError(f"{corpus_id}: pair {index} ratio is invalid")
             ratios.append(ratio)
         ratios_by_corpus[corpus_id] = tuple(ratios)
@@ -106,18 +104,14 @@ def paired_bootstrap_ratio_summary(
         for corpus_id, ratios in ratios_by_corpus.items()
     }
     point_aggregate = _geometric_mean(tuple(point_medians.values()))
-    bootstrap_by_corpus: dict[str, list[float]] = {
-        corpus_id: [] for corpus_id in ratios_by_corpus
-    }
+    bootstrap_by_corpus: dict[str, list[float]] = {corpus_id: [] for corpus_id in ratios_by_corpus}
     bootstrap_aggregate: list[float] = []
     generator = _Sha256BoundedIndexStream(seed)
     for _ in range(resamples):
         replicate_medians: list[float] = []
         for corpus_id, corpus_ratios in ratios_by_corpus.items():
             count = len(corpus_ratios)
-            replicate = tuple(
-                corpus_ratios[generator.randbelow(count)] for _ in range(count)
-            )
+            replicate = tuple(corpus_ratios[generator.randbelow(count)] for _ in range(count))
             replicate_median = float(statistics.median(replicate))
             bootstrap_by_corpus[corpus_id].append(replicate_median)
             replicate_medians.append(replicate_median)
@@ -162,8 +156,10 @@ def paired_bootstrap_ratio_summary(
 
 
 def _geometric_mean(values: Sequence[float]) -> float:
-    if not values or any(not math.isfinite(value) or value <= 0.0 for value in values):
-        raise RatioStatisticsError("geometric mean requires positive finite values")
+    if not values or any(not math.isfinite(value) or value < 0.0 for value in values):
+        raise RatioStatisticsError("geometric mean requires nonnegative finite values")
+    if any(value == 0.0 for value in values):
+        return 0.0
     return math.exp(math.fsum(math.log(value) for value in values) / len(values))
 
 

@@ -41,6 +41,7 @@ from .common_contract import (
     validate_common_contract,
 )
 from .manifest import COMMON_BOUNDARY, ROOT, ComparatorPin
+from .rss_monitor import SubprocessRssIntervalSampler
 
 ADAPTER_RESULT_SCHEMA = "pyowl-core/comparator-adapter-result/v1"
 ADAPTER_REQUEST_SCHEMA = "pyowl-core/comparator-adapter-request/v2"
@@ -248,9 +249,14 @@ def run_core_adapter(
     backend = BackendPreference.PYTHON if pin.adapter == "core-python" else BackendPreference.NATIVE
     options = _replace_backend(request.options, backend)
     encoded_metrics: dict[str, int] = {}
+    rss_monitor: SubprocessRssIntervalSampler | None = None
+    rss_interval: dict[str, int | str] | None = None
     try:
         with _core_input_source(request) as input_source:
             gc.collect()
+            if request.process_mode == "steady-process":
+                rss_monitor = SubprocessRssIntervalSampler(os.getpid())
+                rss_monitor.start()
             rss_before = _rss_peak_bytes()
             blocks_before = _allocated_blocks()
             objects_before = len(gc.get_objects())
@@ -291,13 +297,19 @@ def run_core_adapter(
             objects_after = len(gc.get_objects())
             blocks_after = _allocated_blocks()
             rss_after = _rss_peak_bytes()
+            if rss_monitor is not None:
+                rss_interval = rss_monitor.stop().to_dict()
+                rss_monitor = None
     except BackendUnavailableError as error:
         return _not_run(pin, request, f"native backend unavailable: {error}")
     except EncodedContractUnavailable as error:
         return _not_run(pin, request, str(error))
     except Exception as error:  # comparator failures are evidence, not harness crashes
         return _error(pin, request, error)
-    return {
+    finally:
+        if rss_monitor is not None:
+            rss_monitor.abort()
+    result: dict[str, Any] = {
         "schema": ADAPTER_RESULT_SCHEMA,
         "lane": pin.id,
         "implementation": pin.implementation,
@@ -345,6 +357,9 @@ def run_core_adapter(
             "runner_sha256": pin.runner_sha256,
         },
     }
+    if rss_interval is not None:
+        result["transport_metrics"] = {"rss_interval": rss_interval}
+    return result
 
 
 @contextmanager

@@ -188,25 +188,53 @@ Fresh-process lanes use that one-request/one-result command directly. A
 steady-process lane instead starts one exact SHA-256-verified executable before
 warm-ups and samples, and keeps that single process for the lane lifecycle.
 The child must first send an exact
-`pyowl-core/comparator-persistent-handshake/v1` attestation for protocol
-`pyowl-core/comparator-persistent-runner/v1`: lane and boundary identity, its
-actual child PID, request/result schemas, fresh-ontology-per-request support,
-and the complete artifact and runner pins must all match before any request is
-eligible to run. Startup and handshake time are lifecycle evidence and are
-outside call-to-ready samples.
+`pyowl-core/comparator-persistent-handshake/v2` attestation for protocol
+`pyowl-core/comparator-persistent-runner/v2`: lane and boundary identity, its
+actual child PID, request/prepared/execute/result schemas,
+fresh-ontology-per-request support, and the complete artifact and runner pins
+must all match before any request is eligible to run. Startup and handshake time
+are lifecycle evidence and are outside call-to-ready samples.
 
 Persistent handshake, request, response, and shutdown messages use a canonical
-decimal byte length, newline, JSON payload, and terminal newline. Requests and
-responses carry an exact monotonic sequence; every successful response also
-carries a new lowercase SHA-256 ontology-instance identifier. Nonblocking
-selector I/O enforces request, response, cumulative stderr, handshake, and
-per-response time limits. Partial, malformed, oversized, replayed, unsolicited,
-extra, or late frames fail the entire lane closed. Shutdown requires a
-versioned acknowledgement and clean exit, with process-group termination and a
-kill fallback on error or timeout. A forked client cannot use or signal the
-parent-owned runner. The lifecycle audit records the authenticated handshake,
-PID, startup, request/response and unique-instance counts, bounded stderr, and
-shutdown result.
+decimal byte length, newline, JSON payload, and terminal newline. Protocol v2 is
+an authenticated two-phase request. The parent first sends
+`pyowl-core/comparator-persistent-request/v2`; the child validates its strict
+envelope and decodes and verifies the adapter request before replying with
+`pyowl-core/comparator-persistent-prepared/v1`. That acknowledgement repeats the
+protocol, exact monotonic sequence, and authenticated child PID and establishes
+the quiescent RSS boundary. The parent captures current RSS, starts interval
+sampling, and sends a strict `pyowl-core/comparator-persistent-execute/v1` frame
+containing that same sequence and PID. Timed ontology work cannot begin before
+this execute frame. The child then returns
+`pyowl-core/comparator-persistent-response/v2`; every successful response also
+carries a new lowercase SHA-256 ontology-instance identifier. Call-to-ready wall
+time still starts before the request frame and includes request preparation;
+the prepared boundary narrows only the steady-process RSS interval.
+
+Every steady sample nests
+`pyowl-core/comparator-rss-interval/v1` under
+`transport_metrics.rss_interval`. Its exact fields are `source`, `pid`,
+`quiescent_current_bytes`, `interval_peak_bytes`,
+`incremental_peak_bytes`, `sample_count`, and `maximum_sample_gap_ns`, plus the
+schema. The increment must equal interval peak minus quiescent current RSS and
+the interval must contain at least two samples. External runners are sampled by
+a parent thread against the authenticated child PID from prepared
+acknowledgement through response. In-process Python and delivered-wheel core
+lanes instead use a spawned helper process to sample the core process
+independently of its GIL from the corresponding quiescent boundary through
+query readiness. Both paths request a 1 ms interval. A maximum observed gap
+above 10 ms is rejected as insufficient-quality steady RSS gate evidence;
+lifetime `ru_maxrss` is not substituted for the interval measurement.
+
+Nonblocking selector I/O enforces request, prepared acknowledgement, response,
+cumulative stderr, handshake, and per-response time limits. Partial, malformed,
+oversized, replayed, unsolicited, extra, or late frames fail the entire lane
+closed. Shutdown uses `pyowl-core/comparator-persistent-shutdown/v2`, requires
+the matching v2 acknowledgement and clean exit, and retains process-group
+termination plus a kill fallback on error or timeout. A forked client cannot
+use or signal the parent-owned runner. The lifecycle audit records the
+authenticated handshake, PID, startup, request/response and unique-instance
+counts, bounded stderr, and shutdown result.
 
 The runner accepts an exact unsigned 64-bit `--seed` and records it with the
 schedule and every measured raw sample. Each measured repetition is one paired

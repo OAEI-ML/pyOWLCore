@@ -57,6 +57,7 @@ from .ratio_statistics import (
     RatioStatisticsError,
     paired_bootstrap_ratio_summary,
 )
+from .rss_interval import RSS_INTERVAL_SCHEMA
 
 REPORT_SCHEMA = "pyowl-core/comparator-baseline/v1"
 SOURCE_IDENTITY_SCHEMA = "pyowl-core/comparator-runtime-source/v1"
@@ -70,6 +71,20 @@ _REQUIRED_CORPUS_TIERS = ("medium", "large")
 _STARTUP_TO_READY_WALL = "startup-to-ready-wall"
 _CALL_TO_READY_WALL = "call-to-ready-wall"
 _INCREMENTAL_PEAK_RSS = "incremental-peak-rss"
+_STEADY_INTERVAL_PEAK_RSS = "steady-interval-peak-rss"
+_MAX_STEADY_RSS_SAMPLE_GAP_NS = 10_000_000
+_RSS_INTERVAL_FIELDS = frozenset(
+    {
+        "schema",
+        "source",
+        "pid",
+        "quiescent_current_bytes",
+        "interval_peak_bytes",
+        "incremental_peak_bytes",
+        "sample_count",
+        "maximum_sample_gap_ns",
+    }
+)
 _FRESH_STARTUP_METRIC_SOURCES = {
     "pyowl-python-common": ("metrics", "startup_to_ready_ns"),
     "pyowl-native-wheel-common": ("metrics", "startup_to_ready_ns"),
@@ -166,8 +181,8 @@ def run_comparator_baseline(
     resolved_cache = cache_dir or ROOT / "benchmarks" / "results" / "corpora"
     sources = {value.id: _source(value, resolved_cache) for value in corpora}
 
-    persistent_runners, persistent_failures, persistent_audits = (
-        _start_persistent_lifecycles(pins, process_modes)
+    persistent_runners, persistent_failures, persistent_audits = _start_persistent_lifecycles(
+        pins, process_modes
     )
     rows: list[dict[str, Any]] = []
     try:
@@ -187,9 +202,7 @@ def run_comparator_baseline(
                         input_mode=input_mode,
                         process_mode=process_mode,
                     )
-                    samples_by_pin: dict[str, list[dict[str, Any]]] = {
-                        pin.id: [] for pin in pins
-                    }
+                    samples_by_pin: dict[str, list[dict[str, Any]]] = {pin.id: [] for pin in pins}
                     if process_mode == "steady-process":
                         for block_index in range(warmups):
                             ordered_pins = _paired_implementation_order(
@@ -237,9 +250,7 @@ def run_comparator_baseline(
                                 )
                             )
                     for pin in pins:
-                        rows.append(
-                            _aggregate_samples(pin, request, samples_by_pin[pin.id])
-                        )
+                        rows.append(_aggregate_samples(pin, request, samples_by_pin[pin.id]))
     finally:
         persistent_audits.extend(_close_persistent_lifecycles(persistent_runners))
     persistent_audits.sort(key=lambda value: cast(str, value["lane"]))
@@ -324,6 +335,20 @@ def run_comparator_baseline(
             ),
             "persistent_external_protocol": PERSISTENT_PROTOCOL_SCHEMA,
             "persistent_external_startup": "outside every call-to-ready sample",
+            "steady_rss": {
+                "schema": RSS_INTERVAL_SCHEMA,
+                "boundary": (
+                    "current RSS at authenticated prepared/quiescent boundary through "
+                    "query-ready response"
+                ),
+                "sampler": (
+                    "outside the target process; parent thread for external runners and "
+                    "a spawned helper process for in-process core lanes"
+                ),
+                "sample_interval_ns": 1_000_000,
+                "maximum_accepted_sample_gap_ns": _MAX_STEADY_RSS_SAMPLE_GAP_NS,
+                "lifetime_ru_maxrss_is_not_used_for_steady_ratio_gates": True,
+            },
             "comparison_order": (
                 "seeded implementation-order shuffle within every paired warmup/measured block"
             ),
@@ -386,9 +411,7 @@ def _start_persistent_lifecycles(
         except PersistentRunnerUnavailable as error:
             reason = sanitize_failure(error)
             failures[pin.id] = ("not-run", reason)
-            audits.append(
-                unavailable_lifecycle_audit(pin, status="not-run", reason=reason)
-            )
+            audits.append(unavailable_lifecycle_audit(pin, status="not-run", reason=reason))
         except (OSError, TypeError, ValueError, PersistentRunnerError) as error:
             reason = sanitize_failure(error)
             failures[pin.id] = ("error", reason)
@@ -824,8 +847,7 @@ def _evaluate_ratio_gates(
         qualification_reasons.append(
             {
                 "reason": (
-                    "no annotation/list-heavy representative medium-or-larger corpus "
-                    "was selected"
+                    "no annotation/list-heavy representative medium-or-larger corpus was selected"
                 )
             }
         )
@@ -855,9 +877,12 @@ def _evaluate_ratio_gates(
     ):
         for process_mode in _REQUIRED_PROCESS_MODES:
             wall_selector = (
-                _STARTUP_TO_READY_WALL
+                _STARTUP_TO_READY_WALL if process_mode == "fresh-process" else _CALL_TO_READY_WALL
+            )
+            rss_selector = (
+                _INCREMENTAL_PEAK_RSS
                 if process_mode == "fresh-process"
-                else _CALL_TO_READY_WALL
+                else _STEADY_INTERVAL_PEAK_RSS
             )
             metric_results = {
                 "wall": _evaluate_ratio_metric(
@@ -884,7 +909,7 @@ def _evaluate_ratio_gates(
                     numerator_lane=numerator_lane,
                     denominator_lane=denominator_lane,
                     process_mode=process_mode,
-                    metric_selector=_INCREMENTAL_PEAK_RSS,
+                    metric_selector=rss_selector,
                     repetitions=repetitions,
                     schedule_seed=seed,
                     bootstrap_seed=_derived_statistics_seed(
@@ -947,9 +972,7 @@ def _evaluate_ratio_gates(
         metrics = cast(Mapping[str, Mapping[str, Any]], comparison["metrics"])
         for metric_label, metric_result in metrics.items():
             for reason in cast(Sequence[Mapping[str, object]], metric_result["reasons"]):
-                reasons.append(
-                    {"comparison": comparison_id, "metric": metric_label, **reason}
-                )
+                reasons.append({"comparison": comparison_id, "metric": metric_label, **reason})
     for comparison in overhead:
         overhead_result = cast(Mapping[str, Any], comparison["result"])
         for reason in cast(Sequence[Mapping[str, object]], overhead_result["reasons"]):
@@ -989,9 +1012,7 @@ def _evaluate_ratio_gates(
 
 def _evaluate_ratio_metric(
     *,
-    rows_by_scenario: Mapping[
-        tuple[str, str, str, str], Sequence[Mapping[str, Any]]
-    ],
+    rows_by_scenario: Mapping[tuple[str, str, str, str], Sequence[Mapping[str, Any]]],
     corpus_ids: Sequence[str],
     large_corpus_ids: Sequence[str],
     numerator_lane: str,
@@ -1077,9 +1098,7 @@ def _evaluate_ratio_metric(
 
 def _paired_metric_samples(
     *,
-    rows_by_scenario: Mapping[
-        tuple[str, str, str, str], Sequence[Mapping[str, Any]]
-    ],
+    rows_by_scenario: Mapping[tuple[str, str, str, str], Sequence[Mapping[str, Any]]],
     corpus_ids: Sequence[str],
     numerator_lane: str,
     denominator_lane: str,
@@ -1143,9 +1162,9 @@ def _paired_metric_samples(
         try:
             numerator_contract = cast(Mapping[str, Any], numerator_row["contract"])
             denominator_contract = cast(Mapping[str, Any], denominator_row["contract"])
-            if common_contract_equality_key(
-                numerator_contract
-            ) != common_contract_equality_key(denominator_contract):
+            if common_contract_equality_key(numerator_contract) != common_contract_equality_key(
+                denominator_contract
+            ):
                 reasons.append(
                     {
                         **scenario,
@@ -1154,9 +1173,7 @@ def _paired_metric_samples(
                 )
                 continue
         except (KeyError, TypeError, ValueError):
-            reasons.append(
-                {**scenario, "reason": "common-contract equality evidence is invalid"}
-            )
+            reasons.append({**scenario, "reason": "common-contract equality evidence is invalid"})
             continue
         numerator_samples, numerator_reason = _samples_by_paired_block(
             numerator_row,
@@ -1164,6 +1181,7 @@ def _paired_metric_samples(
             metric_selector=metric_selector,
             repetitions=repetitions,
             schedule_seed=schedule_seed,
+            allow_zero_metric=metric_selector in {_INCREMENTAL_PEAK_RSS, _STEADY_INTERVAL_PEAK_RSS},
         )
         denominator_samples, denominator_reason = _samples_by_paired_block(
             denominator_row,
@@ -1171,14 +1189,13 @@ def _paired_metric_samples(
             metric_selector=metric_selector,
             repetitions=repetitions,
             schedule_seed=schedule_seed,
+            allow_zero_metric=False,
         )
         if numerator_reason is not None:
             reasons.append({**scenario, "lane": numerator_lane, "reason": numerator_reason})
             continue
         if denominator_reason is not None:
-            reasons.append(
-                {**scenario, "lane": denominator_lane, "reason": denominator_reason}
-            )
+            reasons.append({**scenario, "lane": denominator_lane, "reason": denominator_reason})
             continue
         pairs: list[tuple[int, int]] = []
         pairing_invalid = False
@@ -1186,8 +1203,7 @@ def _paired_metric_samples(
             numerator_sample = numerator_samples[block_index]
             denominator_sample = denominator_samples[block_index]
             if (
-                numerator_sample["paired_block_size"]
-                != denominator_sample["paired_block_size"]
+                numerator_sample["paired_block_size"] != denominator_sample["paired_block_size"]
                 or numerator_sample["implementation_order"]
                 == denominator_sample["implementation_order"]
             ):
@@ -1200,9 +1216,7 @@ def _paired_metric_samples(
                 )
                 pairing_invalid = True
                 break
-            pairs.append(
-                (numerator_sample["metric_value"], denominator_sample["metric_value"])
-            )
+            pairs.append((numerator_sample["metric_value"], denominator_sample["metric_value"]))
         if not pairing_invalid:
             pairs_by_corpus[corpus_id] = tuple(pairs)
     return pairs_by_corpus, reasons
@@ -1226,6 +1240,7 @@ def _samples_by_paired_block(
     metric_selector: str,
     repetitions: int,
     schedule_seed: int,
+    allow_zero_metric: bool,
 ) -> tuple[dict[int, dict[str, int]], str | None]:
     samples = row.get("samples")
     if not isinstance(samples, list) or len(samples) != repetitions:
@@ -1240,9 +1255,7 @@ def _samples_by_paired_block(
             order_index = _nonnegative_integer(
                 sample.get("implementation_order"), "implementation_order"
             )
-            block_size = _nonnegative_integer(
-                sample.get("paired_block_size"), "paired_block_size"
-            )
+            block_size = _nonnegative_integer(sample.get("paired_block_size"), "paired_block_size")
         except (TypeError, ValueError) as error:
             return {}, f"{lane}: raw sample {sample_index} schedule is invalid: {error}"
         if observed_seed != schedule_seed:
@@ -1256,6 +1269,7 @@ def _samples_by_paired_block(
                 sample,
                 lane=lane,
                 metric_selector=metric_selector,
+                allow_zero=allow_zero_metric,
             )
         except (TypeError, ValueError) as error:
             return {}, f"{lane}: paired block {block_index} has invalid metric: {error}"
@@ -1274,22 +1288,74 @@ def _selected_metric_value(
     *,
     lane: str,
     metric_selector: str,
+    allow_zero: bool,
 ) -> int:
-    container_name, metric_name = _metric_source(metric_selector, lane)
-    container = sample.get(container_name)
+    if metric_selector == _STEADY_INTERVAL_PEAK_RSS:
+        return _steady_interval_rss_value(sample, allow_zero=allow_zero)
+    source = _metric_source(metric_selector, lane)
+    container: object = sample
+    for name in source[:-1]:
+        if not isinstance(container, Mapping):
+            raise TypeError(f"{'.'.join(source[:-1])} must be an object")
+        container = container.get(name)
     if not isinstance(container, Mapping):
-        raise TypeError(f"{container_name} must be an object")
-    return _positive_u64_metric(
-        container.get(metric_name),
-        f"{container_name}.{metric_name}",
+        raise TypeError(f"{'.'.join(source[:-1])} must be an object")
+    metric = container.get(source[-1])
+    name = ".".join(source)
+    return _require_u64(metric, name) if allow_zero else _positive_u64_metric(metric, name)
+
+
+def _steady_interval_rss_value(sample: Mapping[str, Any], *, allow_zero: bool) -> int:
+    transport = sample.get("transport_metrics")
+    if not isinstance(transport, Mapping):
+        raise TypeError("transport_metrics must be an object")
+    interval = transport.get("rss_interval")
+    if not isinstance(interval, Mapping):
+        raise TypeError("transport_metrics.rss_interval must be an object")
+    if set(interval) != _RSS_INTERVAL_FIELDS or interval.get("schema") != RSS_INTERVAL_SCHEMA:
+        raise ValueError("transport_metrics.rss_interval fields differ")
+    source = interval.get("source")
+    if not isinstance(source, str) or not source:
+        raise ValueError("transport_metrics.rss_interval.source must be nonempty")
+    pid = _positive_u64_metric(interval.get("pid"), "transport_metrics.rss_interval.pid")
+    baseline = _require_u64(
+        interval.get("quiescent_current_bytes"),
+        "transport_metrics.rss_interval.quiescent_current_bytes",
     )
+    peak = _require_u64(
+        interval.get("interval_peak_bytes"),
+        "transport_metrics.rss_interval.interval_peak_bytes",
+    )
+    increment = _require_u64(
+        interval.get("incremental_peak_bytes"),
+        "transport_metrics.rss_interval.incremental_peak_bytes",
+    )
+    sample_count = _positive_u64_metric(
+        interval.get("sample_count"),
+        "transport_metrics.rss_interval.sample_count",
+    )
+    maximum_gap = _require_u64(
+        interval.get("maximum_sample_gap_ns"),
+        "transport_metrics.rss_interval.maximum_sample_gap_ns",
+    )
+    if pid < 1 or sample_count < 2:
+        raise ValueError("transport_metrics.rss_interval counters are invalid")
+    if peak < baseline or increment != peak - baseline:
+        raise ValueError("transport_metrics.rss_interval is internally inconsistent")
+    if maximum_gap > _MAX_STEADY_RSS_SAMPLE_GAP_NS:
+        raise ValueError("transport_metrics.rss_interval sampling gap exceeds 10 ms")
+    if not allow_zero and increment == 0:
+        raise ValueError("transport_metrics.rss_interval.incremental_peak_bytes must be positive")
+    return increment
 
 
-def _metric_source(metric_selector: str, lane: str) -> tuple[str, str]:
+def _metric_source(metric_selector: str, lane: str) -> tuple[str, ...]:
     if metric_selector == _CALL_TO_READY_WALL:
         return "metrics", "wall_ns"
     if metric_selector == _INCREMENTAL_PEAK_RSS:
         return "metrics", "rss_peak_increment_bytes"
+    if metric_selector == _STEADY_INTERVAL_PEAK_RSS:
+        return "transport_metrics", "rss_interval", "incremental_peak_bytes"
     if metric_selector == _STARTUP_TO_READY_WALL:
         try:
             return _FRESH_STARTUP_METRIC_SOURCES[lane]
@@ -1309,6 +1375,7 @@ def _metric_output_label(metric_selector: str) -> str:
         _STARTUP_TO_READY_WALL: "startup-to-ready wall_ns",
         _CALL_TO_READY_WALL: "call-to-ready wall_ns",
         _INCREMENTAL_PEAK_RSS: "incremental peak RSS bytes",
+        _STEADY_INTERVAL_PEAK_RSS: "incremental peak RSS bytes",
     }
     try:
         return labels[metric_selector]
@@ -1330,9 +1397,7 @@ def _representative_corpus_ids(
         if value.tier == "medium" and "synthetic" not in value.families
     )
     large = tuple(
-        value.id
-        for value in corpora
-        if value.tier == "large" and "synthetic" not in value.families
+        value.id for value in corpora if value.tier == "large" and "synthetic" not in value.families
     )
     representative = set(medium + large)
     annotation = tuple(
@@ -1343,9 +1408,7 @@ def _representative_corpus_ids(
     large_rdfxml = tuple(
         value.id
         for value in corpora
-        if value.id in large
-        and value.format.value == "rdfxml"
-        and "biomedical" in value.families
+        if value.id in large and value.format.value == "rdfxml" and "biomedical" in value.families
     )
     return medium, large, annotation, large_rdfxml
 

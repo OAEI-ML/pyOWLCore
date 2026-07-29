@@ -38,8 +38,8 @@ const ENGINE_ARTIFACT: &str = "crates.io horned-owl-1.4.0.crate";
 const ENGINE_SHA256: &str = "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e";
 const ALLOCATOR: &str = "Rust system allocator";
 const THREAD_CEILING: u64 = 1;
-const RAW_RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v2";
-const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v3";
+const RAW_RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v3";
+const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v4";
 const RUNNER_FEATURES: &[&str] = &["default", "independent-common-contract-v1"];
 
 const ADAPTER_REQUEST_SCHEMA: &str = "pyowl-core/comparator-adapter-request/v2";
@@ -47,12 +47,14 @@ const ADAPTER_RESULT_SCHEMA: &str = "pyowl-core/comparator-adapter-result/v1";
 const TIMED_VALIDATION_SCHEMA: &str = "pyowl-core/comparator-timed-validation/v1";
 const RAW_INVENTORY_SCHEMA: &str = "pyowl-core/comparator-raw-inventory/v1";
 const RAW_INVENTORY_DOMAIN: &[u8] = b"pyowl-core:comparator-raw-inventory:v1\0";
-const PERSISTENT_PROTOCOL_SCHEMA: &str = "pyowl-core/comparator-persistent-runner/v1";
-const PERSISTENT_HANDSHAKE_SCHEMA: &str = "pyowl-core/comparator-persistent-handshake/v1";
-const PERSISTENT_REQUEST_SCHEMA: &str = "pyowl-core/comparator-persistent-request/v1";
-const PERSISTENT_RESPONSE_SCHEMA: &str = "pyowl-core/comparator-persistent-response/v1";
-const PERSISTENT_SHUTDOWN_SCHEMA: &str = "pyowl-core/comparator-persistent-shutdown/v1";
-const PERSISTENT_SHUTDOWN_ACK_SCHEMA: &str = "pyowl-core/comparator-persistent-shutdown-ack/v1";
+const PERSISTENT_PROTOCOL_SCHEMA: &str = "pyowl-core/comparator-persistent-runner/v2";
+const PERSISTENT_HANDSHAKE_SCHEMA: &str = "pyowl-core/comparator-persistent-handshake/v2";
+const PERSISTENT_REQUEST_SCHEMA: &str = "pyowl-core/comparator-persistent-request/v2";
+const PERSISTENT_PREPARED_SCHEMA: &str = "pyowl-core/comparator-persistent-prepared/v1";
+const PERSISTENT_EXECUTE_SCHEMA: &str = "pyowl-core/comparator-persistent-execute/v1";
+const PERSISTENT_RESPONSE_SCHEMA: &str = "pyowl-core/comparator-persistent-response/v2";
+const PERSISTENT_SHUTDOWN_SCHEMA: &str = "pyowl-core/comparator-persistent-shutdown/v2";
+const PERSISTENT_SHUTDOWN_ACK_SCHEMA: &str = "pyowl-core/comparator-persistent-shutdown-ack/v2";
 
 const MAX_REQUEST_BYTES: usize = 512 * 1024 * 1024;
 const MAX_FRAME_HEADER_BYTES: usize = 32;
@@ -349,6 +351,23 @@ struct PersistentShutdown {
     sequence: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistentExecute {
+    schema: String,
+    protocol: String,
+    sequence: u64,
+    pid: u64,
+}
+
+enum PreparedExecution {
+    Ready {
+        fallback: Value,
+        request: ValidatedRequest,
+    },
+    Complete(Value),
+}
+
 struct TempInput {
     path: PathBuf,
 }
@@ -546,44 +565,36 @@ fn validate_request(
 }
 
 fn run_request(request: AdapterRequest, protocol_mode: &str, lane: Lane) -> Value {
+    execute_prepared(prepare_request(request, protocol_mode, lane), lane)
+}
+
+fn prepare_request(request: AdapterRequest, protocol_mode: &str, lane: Lane) -> PreparedExecution {
     let fallback = request_identity(&request);
     match panic::catch_unwind(AssertUnwindSafe(|| {
-        let validated = validate_request(request, protocol_mode, lane)?;
-        if matches!(validated.format, Format::Turtle) {
-            return Ok(status_result(
-                &validated,
-                lane,
-                "ineligible",
-                "horned-owl 1.4.0 exposes no Turtle reader in the pinned API",
-            ));
-        }
-        if lane == Lane::Common
-            && matches!(validated.format, Format::Functional)
-            && functional_has_nested_annotations(&validated.source)
-        {
-            return Ok(status_result(
-                &validated,
-                lane,
-                "ineligible",
-                "horned-owl 1.4.0 discards nested Functional Syntax annotations",
-            ));
-        }
-        if lane == Lane::Common
-            && matches!(validated.format, Format::OwlXml)
-            && owlxml_has_nested_annotations(&validated.source)
-        {
-            return Ok(status_result(
-                &validated,
-                lane,
-                "ineligible",
-                "horned-owl 1.4.0 cannot retain every nested OWL/XML annotation",
-            ));
-        }
-        match lane {
-            Lane::Raw => execute_raw(validated, lane),
-            Lane::Common => execute_common(validated, lane),
-        }
+        validate_request(request, protocol_mode, lane)
     })) {
+        Ok(Ok(request)) => PreparedExecution::Ready { fallback, request },
+        Ok(Err(error)) => PreparedExecution::Complete(fallback_status_result(
+            &fallback,
+            lane,
+            "error",
+            &safe_reason(&error),
+        )),
+        Err(_) => PreparedExecution::Complete(fallback_status_result(
+            &fallback,
+            lane,
+            "error",
+            "Horned parser panicked while preparing the bounded request",
+        )),
+    }
+}
+
+fn execute_prepared(prepared: PreparedExecution, lane: Lane) -> Value {
+    let (fallback, request) = match prepared {
+        PreparedExecution::Ready { fallback, request } => (fallback, request),
+        PreparedExecution::Complete(result) => return result,
+    };
+    match panic::catch_unwind(AssertUnwindSafe(|| execute_validated(request, lane))) {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => fallback_status_result(&fallback, lane, "error", &safe_reason(&error)),
         Err(_) => fallback_status_result(
@@ -592,6 +603,43 @@ fn run_request(request: AdapterRequest, protocol_mode: &str, lane: Lane) -> Valu
             "error",
             "Horned parser panicked while processing the bounded request",
         ),
+    }
+}
+
+fn execute_validated(request: ValidatedRequest, lane: Lane) -> Result<Value, RunnerError> {
+    if matches!(request.format, Format::Turtle) {
+        return Ok(status_result(
+            &request,
+            lane,
+            "ineligible",
+            "horned-owl 1.4.0 exposes no Turtle reader in the pinned API",
+        ));
+    }
+    if lane == Lane::Common
+        && matches!(request.format, Format::Functional)
+        && functional_has_nested_annotations(&request.source)
+    {
+        return Ok(status_result(
+            &request,
+            lane,
+            "ineligible",
+            "horned-owl 1.4.0 discards nested Functional Syntax annotations",
+        ));
+    }
+    if lane == Lane::Common
+        && matches!(request.format, Format::OwlXml)
+        && owlxml_has_nested_annotations(&request.source)
+    {
+        return Ok(status_result(
+            &request,
+            lane,
+            "ineligible",
+            "horned-owl 1.4.0 cannot retain every nested OWL/XML annotation",
+        ));
+    }
+    match lane {
+        Lane::Raw => execute_raw(request, lane),
+        Lane::Common => execute_common(request, lane),
     }
 }
 
@@ -1663,6 +1711,8 @@ fn persistent_main(lane: Lane) -> Result<(), RunnerError> {
         "boundary": lane.boundary(),
         "pid": pid,
         "request_schema": ADAPTER_REQUEST_SCHEMA,
+        "prepared_schema": PERSISTENT_PREPARED_SCHEMA,
+        "execute_schema": PERSISTENT_EXECUTE_SCHEMA,
         "result_schema": ADAPTER_RESULT_SCHEMA,
         "fresh_ontology_per_request": true,
         "artifact": artifact(lane)?,
@@ -1706,12 +1756,24 @@ fn persistent_main(lane: Lane) -> Result<(), RunnerError> {
                 "persistent request sequence is nonmonotonic",
             ));
         }
-        let result = run_request(envelope.request, "persistent", lane);
-        let instance_preimage = format!("{pid}:{instance_counter}:{}", envelope.sequence);
+        let sequence = envelope.sequence;
+        let prepared = prepare_request(envelope.request, "persistent", lane);
+        write_frame(&json!({
+            "schema": PERSISTENT_PREPARED_SCHEMA,
+            "protocol": PERSISTENT_PROTOCOL_SCHEMA,
+            "sequence": sequence,
+            "pid": pid,
+        }))?;
+        let execute_payload = read_frame(&mut input)?;
+        let execute: PersistentExecute = serde_json::from_slice(&execute_payload)
+            .map_err(|_| RunnerError::new("persistent execute fields differ"))?;
+        validate_persistent_execute(&execute, sequence, pid)?;
+        let result = execute_prepared(prepared, lane);
+        let instance_preimage = format!("{pid}:{instance_counter}:{sequence}");
         write_frame(&json!({
             "schema": PERSISTENT_RESPONSE_SCHEMA,
             "protocol": PERSISTENT_PROTOCOL_SCHEMA,
-            "sequence": envelope.sequence,
+            "sequence": sequence,
             "ontology_instance_id": sha256_hex(instance_preimage.as_bytes()),
             "result": result,
         }))?;
@@ -1722,6 +1784,21 @@ fn persistent_main(lane: Lane) -> Result<(), RunnerError> {
             .checked_add(1)
             .ok_or_else(|| RunnerError::new("persistent request sequence is exhausted"))?;
     }
+}
+
+fn validate_persistent_execute(
+    execute: &PersistentExecute,
+    sequence: u64,
+    pid: u64,
+) -> Result<(), RunnerError> {
+    if execute.schema != PERSISTENT_EXECUTE_SCHEMA
+        || execute.protocol != PERSISTENT_PROTOCOL_SCHEMA
+        || execute.sequence != sequence
+        || execute.pid != pid
+    {
+        return Err(RunnerError::new("persistent execute protocol differs"));
+    }
+    Ok(())
 }
 
 fn read_frame<R: Read>(input: &mut R) -> Result<Vec<u8>, RunnerError> {
@@ -1997,5 +2074,18 @@ mod tests {
         assert!(!owlxml_has_nested_annotations(
             br#"<Ontology><AnnotationProperty IRI="urn:Annotation"/><Annotation data="&lt;Annotation&gt;"/></Ontology>"#,
         ));
+    }
+
+    #[test]
+    fn persistent_execute_is_bound_to_the_prepared_sequence_and_pid() {
+        let valid = PersistentExecute {
+            schema: PERSISTENT_EXECUTE_SCHEMA.to_owned(),
+            protocol: PERSISTENT_PROTOCOL_SCHEMA.to_owned(),
+            sequence: 7,
+            pid: 11,
+        };
+        assert!(validate_persistent_execute(&valid, 7, 11).is_ok());
+        assert!(validate_persistent_execute(&valid, 8, 11).is_err());
+        assert!(validate_persistent_execute(&valid, 7, 12).is_err());
     }
 }

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
+import os
 import sys
 from collections.abc import Iterator
 from dataclasses import replace
@@ -40,6 +42,174 @@ def runner_module() -> Iterator[ModuleType]:
             sys.modules.pop("pyhornedowl", None)
         else:
             sys.modules["pyhornedowl"] = previous_pyhorned
+
+
+def test_persistent_runner_waits_for_authenticated_execute_after_preparation(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sequence = 0
+    request = {"test": "request"}
+    frames = iter(
+        (
+            json.dumps(
+                {
+                    "schema": runner_module.PERSISTENT_REQUEST_SCHEMA,
+                    "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                    "sequence": sequence,
+                    "request": request,
+                }
+            ).encode(),
+            json.dumps(
+                {
+                    "schema": runner_module.PERSISTENT_EXECUTE_SCHEMA,
+                    "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                    "sequence": sequence,
+                    "pid": os.getpid(),
+                }
+            ).encode(),
+            json.dumps(
+                {
+                    "schema": runner_module.PERSISTENT_SHUTDOWN_SCHEMA,
+                    "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                    "sequence": sequence + 1,
+                }
+            ).encode(),
+        )
+    )
+    written: list[dict[str, object]] = []
+    monkeypatch.setattr(runner_module, "_read_frame", lambda: next(frames))
+    monkeypatch.setattr(runner_module, "_write_frame", lambda value: written.append(value))
+    monkeypatch.setattr(
+        runner_module,
+        "_validate_request",
+        lambda *_args, **_kwargs: (b"Ontology()", DocumentFormat.FUNCTIONAL),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_run_validated_request",
+        lambda *_args, **_kwargs: {"status": "ok"},
+    )
+
+    runner_module._persistent_main()
+
+    assert [value["schema"] for value in written] == [
+        runner_module.PERSISTENT_HANDSHAKE_SCHEMA,
+        runner_module.PERSISTENT_PREPARED_SCHEMA,
+        runner_module.PERSISTENT_RESPONSE_SCHEMA,
+        runner_module.PERSISTENT_SHUTDOWN_ACK_SCHEMA,
+    ]
+    assert written[0]["prepared_schema"] == runner_module.PERSISTENT_PREPARED_SCHEMA
+    assert written[0]["execute_schema"] == runner_module.PERSISTENT_EXECUTE_SCHEMA
+    assert written[1] == {
+        "schema": runner_module.PERSISTENT_PREPARED_SCHEMA,
+        "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+        "sequence": sequence,
+        "pid": os.getpid(),
+    }
+    assert written[2]["result"] == {"status": "ok"}
+
+
+def test_persistent_runner_rejects_a_skipped_request_sequence(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frames = iter(
+        (
+            json.dumps(
+                {
+                    "schema": runner_module.PERSISTENT_REQUEST_SCHEMA,
+                    "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                    "sequence": 1,
+                    "request": {},
+                }
+            ).encode(),
+        )
+    )
+    monkeypatch.setattr(runner_module, "_read_frame", lambda: next(frames))
+    monkeypatch.setattr(runner_module, "_write_frame", lambda _value: None)
+
+    with pytest.raises(runner_module.RunnerContractError, match="sequence is nonmonotonic"):
+        runner_module._persistent_main()
+
+
+def test_persistent_runner_rejects_a_replayed_request_sequence(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = {"test": "request"}
+    frames = iter(
+        (
+            json.dumps(
+                {
+                    "schema": runner_module.PERSISTENT_REQUEST_SCHEMA,
+                    "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                    "sequence": 0,
+                    "request": request,
+                }
+            ).encode(),
+            json.dumps(
+                {
+                    "schema": runner_module.PERSISTENT_EXECUTE_SCHEMA,
+                    "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                    "sequence": 0,
+                    "pid": os.getpid(),
+                }
+            ).encode(),
+            json.dumps(
+                {
+                    "schema": runner_module.PERSISTENT_REQUEST_SCHEMA,
+                    "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                    "sequence": 0,
+                    "request": request,
+                }
+            ).encode(),
+        )
+    )
+    written: list[dict[str, object]] = []
+    monkeypatch.setattr(runner_module, "_read_frame", lambda: next(frames))
+    monkeypatch.setattr(runner_module, "_write_frame", lambda value: written.append(value))
+    monkeypatch.setattr(
+        runner_module,
+        "_validate_request",
+        lambda *_args, **_kwargs: (b"Ontology()", DocumentFormat.FUNCTIONAL),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_run_validated_request",
+        lambda *_args, **_kwargs: {"status": "ok"},
+    )
+
+    with pytest.raises(runner_module.RunnerContractError, match="sequence is nonmonotonic"):
+        runner_module._persistent_main()
+
+    assert [value["schema"] for value in written] == [
+        runner_module.PERSISTENT_HANDSHAKE_SCHEMA,
+        runner_module.PERSISTENT_PREPARED_SCHEMA,
+        runner_module.PERSISTENT_RESPONSE_SCHEMA,
+    ]
+
+
+def test_persistent_runner_rejects_a_wrong_shutdown_sequence(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frames = iter(
+        (
+            json.dumps(
+                {
+                    "schema": runner_module.PERSISTENT_SHUTDOWN_SCHEMA,
+                    "protocol": runner_module.PERSISTENT_PROTOCOL_SCHEMA,
+                    "sequence": 1,
+                }
+            ).encode(),
+        )
+    )
+    monkeypatch.setattr(runner_module, "_read_frame", lambda: next(frames))
+    monkeypatch.setattr(runner_module, "_write_frame", lambda _value: None)
+
+    with pytest.raises(runner_module.RunnerContractError, match="sequence is nonmonotonic"):
+        runner_module._persistent_main()
 
 
 @pytest.mark.parametrize(

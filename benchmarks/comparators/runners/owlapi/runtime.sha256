@@ -515,7 +515,7 @@ fcd8ee30ae466ad44843308bce39173af1a71a3c8523bcd4678a696e3a4b64b2  runtime/lib/rd
 1958859b71979e5e3e09ee82821a1bc7d41bb2725ac873e115e279f89fd7c208  runtime/lib/rdf4j-rio-trig-5.0.2.jar
 ee4b4337a80a86d226398750952d2352ba19fcf9f6074d1a2cfc99038ab8e716  runtime/lib/rdf4j-rio-trix-5.0.2.jar
 68b5f3b70ebbcf6505bda7f10a0febf45e2da17daa98b0ae0ec5730894ea97d4  runtime/lib/rdf4j-rio-turtle-5.0.2.jar
-992f7b7384091217b0c606712e047420287f2763b9129c169f934020681f3aee  runtime/lib/runner.jar
+f2435d0d921e31c67eb37aaf12850a94be26ffab459bfba722970a6e6ecbdefa  runtime/lib/runner.jar
 ce0e71d673acb9036bb55d0244b261cf033f8e4c1245f14f931dfb1937dd4c95  runtime/lib/slf4j-api-2.0.11.jar
 fcf8131955e401c384bce6f129ef5aafb51ebc225309df05860dc9fd6723c58b  runtime/lib/slf4j-nop-2.0.11.jar
 211b306cfc44f8f96df3a0a3ddaf75ba8c5289eed77d60d72f889bb855f535e5  runtime/lib/xz-1.9.jar

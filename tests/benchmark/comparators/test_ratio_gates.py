@@ -40,15 +40,11 @@ def test_required_ratio_gates_pass_constant_paired_evidence(
         "py-horned-common",
     }
     assert all(value["passed"] is True for value in gates["comparisons"])
-    assert all(
-        value["passed"] is True
-        for value in gates["installed_wheel_call_to_ready_overhead"]
-    )
+    assert all(value["passed"] is True for value in gates["installed_wheel_call_to_ready_overhead"])
     wheel_comparison = next(
         value
         for value in gates["comparisons"]
-        if value["id"]
-        == "installed-wheel-vs-py-horned-common/steady-process/resident-bytes"
+        if value["id"] == "installed-wheel-vs-py-horned-common/steady-process/resident-bytes"
     )
     wall = cast(dict[str, Any], wheel_comparison["metrics"])["wall"]
     assert wall["aggregate_value"] == pytest.approx(1.09)
@@ -68,8 +64,7 @@ def test_required_ratio_gates_pass_constant_paired_evidence(
     fresh_wheel = next(
         value
         for value in gates["comparisons"]
-        if value["id"]
-        == "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes"
+        if value["id"] == "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes"
     )
     assert cast(dict[str, Any], fresh_wheel["metrics"])["wall"]["sample_sources"] == {
         "numerator": "metrics.startup_to_ready_ns",
@@ -164,8 +159,7 @@ def test_fresh_gate_cannot_pass_from_fast_child_wall_when_parent_startup_is_slow
     fresh_wheel = next(
         value
         for value in gates["comparisons"]
-        if value["id"]
-        == "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes"
+        if value["id"] == "installed-wheel-vs-py-horned-common/fresh-process/resident-bytes"
     )
     fresh_wall = cast(dict[str, Any], fresh["metrics"])["wall"]
     steady_wall = cast(dict[str, Any], steady["metrics"])["wall"]
@@ -190,20 +184,18 @@ def test_nonpositive_metric_and_missing_common_denominator_fail_with_scenario_re
     rows = [
         row
         for row in rows
-        if not (
-            row["lane"] == "horned-owl-common"
-            and row["process_mode"] == "fresh-process"
-        )
+        if not (row["lane"] == "horned-owl-common" and row["process_mode"] == "fresh-process")
     ]
     raw_rows = _ratio_rows(corpora, repetitions=2, lanes=("horned-owl-raw",))
     rows.extend(raw_rows)
     invalid_row = next(
         row
         for row in rows
-        if row["lane"] == "py-horned-common"
-        and row["process_mode"] == "steady-process"
+        if row["lane"] == "py-horned-common" and row["process_mode"] == "steady-process"
     )
-    invalid_row["samples"][0]["metrics"]["rss_peak_increment_bytes"] = 0
+    invalid_interval = invalid_row["samples"][0]["transport_metrics"]["rss_interval"]
+    invalid_interval["interval_peak_bytes"] = invalid_interval["quiescent_current_bytes"]
+    invalid_interval["incremental_peak_bytes"] = 0
 
     gates = runner_module._evaluate_ratio_gates(
         corpora=corpora,
@@ -227,6 +219,67 @@ def test_nonpositive_metric_and_missing_common_denominator_fail_with_scenario_re
         for reason in reasons
     )
     assert all(value["denominator_lane"] != "horned-owl-raw" for value in gates["comparisons"])
+
+
+def test_zero_numerator_incremental_rss_is_a_valid_passing_measurement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_contract_key_and_resamples(monkeypatch)
+    corpora = _required_corpora()
+    rows = _ratio_rows(corpora, repetitions=2)
+    for row in rows:
+        if row["lane"] == "pyowl-direct-rust-common" and row["process_mode"] == "steady-process":
+            for sample in row["samples"]:
+                interval = sample["transport_metrics"]["rss_interval"]
+                interval["interval_peak_bytes"] = interval["quiescent_current_bytes"]
+                interval["incremental_peak_bytes"] = 0
+
+    gates = runner_module._evaluate_ratio_gates(
+        corpora=corpora,
+        rows=rows,
+        repetitions=2,
+        seed=7,
+    )
+
+    comparison = next(
+        value
+        for value in gates["comparisons"]
+        if value["id"] == "direct-rust-vs-horned-common/steady-process/resident-bytes"
+    )
+    rss = cast(dict[str, Any], comparison["metrics"])["rss"]
+    assert gates["passed"] is True
+    assert rss["passed"] is True
+    assert rss["aggregate_value"] == 0.0
+
+
+def test_steady_rss_gate_rejects_a_sampling_gap_above_ten_milliseconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_contract_key_and_resamples(monkeypatch)
+    corpora = _required_corpora()
+    rows = _ratio_rows(corpora, repetitions=2)
+    row = next(
+        value
+        for value in rows
+        if value["lane"] == "pyowl-direct-rust-common" and value["process_mode"] == "steady-process"
+    )
+    row["samples"][0]["transport_metrics"]["rss_interval"]["maximum_sample_gap_ns"] = 10_000_001
+
+    gates = runner_module._evaluate_ratio_gates(
+        corpora=corpora,
+        rows=rows,
+        repetitions=2,
+        seed=7,
+    )
+
+    comparison = next(
+        value
+        for value in gates["comparisons"]
+        if value["id"] == "direct-rust-vs-horned-common/steady-process/resident-bytes"
+    )
+    rss = cast(dict[str, Any], comparison["metrics"])["rss"]
+    assert rss["passed"] is False
+    assert any("sampling gap exceeds 10 ms" in reason["reason"] for reason in rss["reasons"])
 
 
 def _patch_contract_key_and_resamples(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,9 +317,7 @@ def _ratio_rows(
                     {
                         "lane": lane,
                         "boundary": (
-                            "horned-model-ready"
-                            if lane == "horned-owl-raw"
-                            else COMMON_BOUNDARY
+                            "horned-model-ready" if lane == "horned-owl-raw" else COMMON_BOUNDARY
                         ),
                         "status": "ok",
                         "reason": None,
@@ -314,4 +365,17 @@ def _sample(
             sample["metrics"]["startup_to_ready_ns"] = wall_ns
         else:
             sample["transport_metrics"] = {"parent_wall_ns": wall_ns}
+    else:
+        sample["transport_metrics"] = {
+            "rss_interval": {
+                "schema": "pyowl-core/comparator-rss-interval/v1",
+                "source": "test-current-rss",
+                "pid": 123,
+                "quiescent_current_bytes": 1_000,
+                "interval_peak_bytes": 1_000 + wall_ns,
+                "incremental_peak_bytes": wall_ns,
+                "sample_count": 3,
+                "maximum_sample_gap_ns": 1_000_000,
+            }
+        }
     return sample

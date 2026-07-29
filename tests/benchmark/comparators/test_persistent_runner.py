@@ -21,10 +21,13 @@ from tools.benchmark.comparators.manifest import (
     load_comparator_manifest,
 )
 from tools.benchmark.comparators.persistent import (
+    PERSISTENT_EXECUTE_SCHEMA,
+    PERSISTENT_PREPARED_SCHEMA,
     PERSISTENT_PROTOCOL_SCHEMA,
     PersistentExternalRunner,
     PersistentRunnerError,
 )
+from tools.benchmark.comparators.rss_interval import RSS_INTERVAL_SCHEMA, RssIntervalError
 from tools.benchmark.manifest import generated_bytes, load_manifest
 
 _TEST_HANDSHAKE_TIMEOUT_SECONDS = 2.0
@@ -52,20 +55,128 @@ def test_persistent_runner_reuses_one_verified_process_with_fresh_instances(
     first_transport = cast(dict[str, Any], first["transport_metrics"])
     second_transport = cast(dict[str, Any], second["transport_metrics"])
     assert first_transport["persistent_protocol"] == PERSISTENT_PROTOCOL_SCHEMA
-    assert first_transport["persistent_runner_pid"] == second_transport[
-        "persistent_runner_pid"
-    ]
+    assert first_transport["persistent_runner_pid"] == second_transport["persistent_runner_pid"]
     assert first_transport["persistent_sequence"] == 0
     assert second_transport["persistent_sequence"] == 1
-    assert first_transport["ontology_instance_id"] != second_transport[
-        "ontology_instance_id"
-    ]
+    assert first_transport["ontology_instance_id"] != second_transport["ontology_instance_id"]
+    for transport in (first_transport, second_transport):
+        rss_interval = cast(dict[str, Any], transport["rss_interval"])
+        assert set(rss_interval) == {
+            "schema",
+            "source",
+            "pid",
+            "quiescent_current_bytes",
+            "interval_peak_bytes",
+            "incremental_peak_bytes",
+            "sample_count",
+            "maximum_sample_gap_ns",
+        }
+        assert rss_interval["schema"] == RSS_INTERVAL_SCHEMA
+        assert rss_interval["pid"] == transport["persistent_runner_pid"]
+        assert rss_interval["interval_peak_bytes"] >= rss_interval["quiescent_current_bytes"]
+        assert rss_interval["incremental_peak_bytes"] == (
+            rss_interval["interval_peak_bytes"] - rss_interval["quiescent_current_bytes"]
+        )
+        assert rss_interval["sample_count"] >= 2
+        assert rss_interval["maximum_sample_gap_ns"] >= 0
     assert audit["status"] == "pass"
     assert audit["startup_ns"] > 0
     assert audit["request_count"] == audit["response_count"] == 2
     assert audit["unique_ontology_instance_count"] == 2
     assert audit["shutdown"] == "clean-exit"
     assert audit["handshake"]["artifact"]["runner_sha256"] == pin.runner_sha256
+    assert audit["handshake"]["prepared_schema"] == PERSISTENT_PREPARED_SCHEMA
+    assert audit["handshake"]["execute_schema"] == PERSISTENT_EXECUTE_SCHEMA
+
+
+def test_persistent_runner_samples_only_after_the_prepared_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pin, executable = _pinned_runner(tmp_path, mode="rss-burst")
+    _set_launcher(monkeypatch, pin, executable)
+    runner = PersistentExternalRunner.open(
+        pin,
+        handshake_timeout_seconds=_TEST_HANDSHAKE_TIMEOUT_SECONDS,
+        timeout_seconds=1.0,
+        shutdown_timeout_seconds=1.0,
+    )
+
+    result = runner.run(_steady_request())
+    audit = runner.close()
+    interval = cast(dict[str, Any], result["transport_metrics"])["rss_interval"]
+
+    assert result["status"] == "ok"
+    assert interval["incremental_peak_bytes"] > 0
+    assert interval["sample_count"] > 2
+    assert audit["status"] == "pass"
+
+
+def test_persistent_runner_fails_closed_when_rss_sampling_cannot_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pin, executable = _pinned_runner(tmp_path)
+    _set_launcher(monkeypatch, pin, executable)
+
+    class BrokenSampler:
+        def __init__(self, pid: int) -> None:
+            assert pid > 0
+
+        def start(self) -> None:
+            raise RssIntervalError("injected RSS sampling failure")
+
+    monkeypatch.setattr(persistent_module, "CurrentRssIntervalSampler", BrokenSampler)
+    runner = PersistentExternalRunner.open(
+        pin,
+        handshake_timeout_seconds=_TEST_HANDSHAKE_TIMEOUT_SECONDS,
+        timeout_seconds=0.5,
+        shutdown_timeout_seconds=0.1,
+    )
+
+    result = runner.run(_steady_request())
+    audit = runner.close()
+
+    assert result["status"] == "error"
+    assert "injected RSS sampling failure" in result["reason"]
+    assert audit["status"] == "error"
+    assert audit["shutdown"] == "terminated-after-error"
+    assert runner._process.poll() is not None
+
+
+def test_persistent_runner_fails_closed_when_rss_sampling_cannot_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pin, executable = _pinned_runner(tmp_path)
+    _set_launcher(monkeypatch, pin, executable)
+
+    class BrokenSampler:
+        def __init__(self, pid: int) -> None:
+            assert pid > 0
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            raise RssIntervalError("injected RSS sampling completion failure")
+
+    monkeypatch.setattr(persistent_module, "CurrentRssIntervalSampler", BrokenSampler)
+    runner = PersistentExternalRunner.open(
+        pin,
+        handshake_timeout_seconds=_TEST_HANDSHAKE_TIMEOUT_SECONDS,
+        timeout_seconds=0.5,
+        shutdown_timeout_seconds=0.1,
+    )
+
+    result = runner.run(_steady_request())
+    audit = runner.close()
+
+    assert result["status"] == "error"
+    assert "injected RSS sampling completion failure" in result["reason"]
+    assert audit["status"] == "error"
+    assert audit["shutdown"] == "terminated-after-error"
+    assert runner._process.poll() is not None
 
 
 @pytest.mark.parametrize(
@@ -148,6 +259,43 @@ def test_persistent_runner_rejects_bad_or_missing_handshake_before_samples(
             shutdown_timeout_seconds=0.05,
             max_stderr_bytes=64,
         )
+
+
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    (
+        ("prepared-wrong-schema", "prepared schema differs"),
+        ("prepared-wrong-protocol", "prepared protocol differs"),
+        ("prepared-wrong-sequence", "prepared sequence differs"),
+        ("prepared-float-sequence", "prepared sequence differs"),
+        ("prepared-wrong-pid", "prepared pid differs"),
+        ("prepared-float-pid", "prepared pid differs"),
+        ("prepared-extra-field", "prepared fields differ"),
+    ),
+)
+def test_persistent_runner_rejects_invalid_prepared_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mode: str,
+    message: str,
+) -> None:
+    pin, executable = _pinned_runner(tmp_path, mode=mode)
+    _set_launcher(monkeypatch, pin, executable)
+    runner = PersistentExternalRunner.open(
+        pin,
+        handshake_timeout_seconds=_TEST_HANDSHAKE_TIMEOUT_SECONDS,
+        timeout_seconds=0.5,
+        shutdown_timeout_seconds=0.1,
+    )
+
+    result = runner.run(_steady_request())
+    audit = runner.close()
+
+    assert result["status"] == "error"
+    assert message in result["reason"]
+    assert audit["status"] == "error"
+    assert audit["request_count"] == 0
+    assert audit["response_count"] == 0
 
 
 @pytest.mark.parametrize("mode", ["extra-output", "late-output"])
@@ -442,9 +590,9 @@ def test_baseline_uses_complete_pinned_persistent_runner_for_steady_lane(
     assert report["not_run_required"] == []
     assert lifecycle["status"] == "pass"
     assert lifecycle["request_count"] == 3
-    assert lifecycle["runner_pid"] == row["samples"][0]["transport_metrics"][
-        "persistent_runner_pid"
-    ]
+    assert (
+        lifecycle["runner_pid"] == row["samples"][0]["transport_metrics"]["persistent_runner_pid"]
+    )
 
 
 def _pinned_runner(

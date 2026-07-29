@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tools.benchmark.comparators.manifest import ComparatorPin
 
-_RUNNER_BODY = r'''
+_RUNNER_BODY = r"""
 import hashlib
 import json
 import os
@@ -18,12 +18,14 @@ import time
 
 CONFIG = json.loads(__CONFIG__)
 MODE = __MODE__
-PROTOCOL = "pyowl-core/comparator-persistent-runner/v1"
-HANDSHAKE = "pyowl-core/comparator-persistent-handshake/v1"
-REQUEST = "pyowl-core/comparator-persistent-request/v1"
-RESPONSE = "pyowl-core/comparator-persistent-response/v1"
-SHUTDOWN = "pyowl-core/comparator-persistent-shutdown/v1"
-SHUTDOWN_ACK = "pyowl-core/comparator-persistent-shutdown-ack/v1"
+PROTOCOL = "pyowl-core/comparator-persistent-runner/v2"
+HANDSHAKE = "pyowl-core/comparator-persistent-handshake/v2"
+REQUEST = "pyowl-core/comparator-persistent-request/v2"
+PREPARED = "pyowl-core/comparator-persistent-prepared/v1"
+EXECUTE = "pyowl-core/comparator-persistent-execute/v1"
+RESPONSE = "pyowl-core/comparator-persistent-response/v2"
+SHUTDOWN = "pyowl-core/comparator-persistent-shutdown/v2"
+SHUTDOWN_ACK = "pyowl-core/comparator-persistent-shutdown-ack/v2"
 RAW_SCHEMA = "pyowl-core/comparator-raw-inventory/v1"
 RAW_DOMAIN = b"pyowl-core:comparator-raw-inventory:v1\x00"
 
@@ -60,6 +62,8 @@ handshake = {
     "boundary": CONFIG["boundary"],
     "pid": os.getpid(),
     "request_schema": "pyowl-core/comparator-adapter-request/v2",
+    "prepared_schema": PREPARED,
+    "execute_schema": EXECUTE,
     "result_schema": "pyowl-core/comparator-adapter-result/v1",
     "fresh_ontology_per_request": True,
     "artifact": artifact,
@@ -158,7 +162,44 @@ while True:
         write_payload(b"{")
         continue
 
+    prepared = {
+        "schema": PREPARED,
+        "protocol": PROTOCOL,
+        "sequence": frame["sequence"],
+        "pid": os.getpid(),
+    }
+    if MODE == "prepared-wrong-schema":
+        prepared["schema"] = "wrong-prepared-schema"
+    if MODE == "prepared-wrong-protocol":
+        prepared["protocol"] = "wrong-prepared-protocol"
+    if MODE == "prepared-wrong-sequence":
+        prepared["sequence"] += 1
+    if MODE == "prepared-float-sequence":
+        prepared["sequence"] = float(prepared["sequence"])
+    if MODE == "prepared-wrong-pid":
+        prepared["pid"] += 1
+    if MODE == "prepared-float-pid":
+        prepared["pid"] = float(prepared["pid"])
+    if MODE == "prepared-extra-field":
+        prepared["extra"] = True
+    write_frame(prepared)
+
+    execute = read_frame()
+    if (
+        set(execute) != {"schema", "protocol", "sequence", "pid"}
+        or execute.get("schema") != EXECUTE
+        or execute.get("protocol") != PROTOCOL
+        or execute.get("sequence") != frame["sequence"]
+        or execute.get("pid") != os.getpid()
+    ):
+        raise SystemExit(5)
+
     request = frame["request"]
+    rss_burst = bytearray(8 * 1024 * 1024) if MODE == "rss-burst" else None
+    if rss_burst is not None:
+        for offset in range(0, len(rss_burst), 4096):
+            rss_burst[offset] = 1
+        time.sleep(0.02)
     counts = {
         "axiom_count": 4,
         "annotation_count": 0,
@@ -201,7 +242,7 @@ while True:
     if MODE == "result-float-thread-ceiling":
         result["artifact"] = dict(artifact)
         result["artifact"]["thread_ceiling"] = float(artifact["thread_ceiling"])
-    response_sequence = frame["sequence"] + (1 if MODE == "cross-request" else 0)
+    response_sequence = execute["sequence"] + (1 if MODE == "cross-request" else 0)
     if MODE == "boolean-sequence":
         response_sequence = False
     if MODE == "float-sequence":
@@ -236,7 +277,8 @@ while True:
         time.sleep(0.05)
         sys.stdout.buffer.write(b"x")
         sys.stdout.buffer.flush()
-'''
+    del rss_burst
+"""
 
 
 def write_persistent_runner(

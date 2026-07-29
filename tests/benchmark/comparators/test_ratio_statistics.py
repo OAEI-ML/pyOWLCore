@@ -26,18 +26,11 @@ def test_paired_bootstrap_is_seeded_and_aggregates_corpus_medians_geometrically(
     assert first == second
     aggregate = cast(dict[str, Any], first["aggregate"])
     assert aggregate["estimate"] == pytest.approx(math.sqrt(2.0))
-    corpora = {
-        value["corpus_id"]: value
-        for value in cast(list[dict[str, Any]], first["corpora"])
-    }
+    corpora = {value["corpus_id"]: value for value in cast(list[dict[str, Any]], first["corpora"])}
     assert corpora["medium"]["median_ratio"] == 1.0
     assert corpora["large"]["median_ratio"] == 2.0
-    assert first["aggregate_statistic"] == (
-        "geometric mean of required-corpus median ratios"
-    )
-    assert cast(dict[str, Any], first["index_stream"])["schema"] == (
-        BOOTSTRAP_INDEX_STREAM_SCHEMA
-    )
+    assert first["aggregate_statistic"] == ("geometric mean of required-corpus median ratios")
+    assert cast(dict[str, Any], first["index_stream"])["schema"] == (BOOTSTRAP_INDEX_STREAM_SCHEMA)
 
 
 def test_sha256_bounded_index_stream_has_a_frozen_vector() -> None:
@@ -59,12 +52,29 @@ def test_sha256_bounded_index_stream_has_a_frozen_vector() -> None:
     ]
 
 
+def test_zero_numerator_is_valid_for_incremental_resource_ratios() -> None:
+    result = paired_bootstrap_ratio_summary(
+        {
+            "medium": ((0, 100), (0, 100), (0, 100)),
+            "large": ((50, 100), (50, 100), (50, 100)),
+        },
+        seed=42,
+        resamples=100,
+    )
+
+    aggregate = cast(dict[str, float], result["aggregate"])
+    assert aggregate == {
+        "estimate": 0.0,
+        "lower_confidence_bound": 0.0,
+        "upper_confidence_bound": 0.0,
+    }
+
+
 @pytest.mark.parametrize(
     "pairs, reason",
     [
         ({}, "at least one corpus"),
         ({"medium": ()}, "paired samples are empty"),
-        ({"medium": ((0, 1),)}, "numerator must be positive"),
         ({"medium": ((1, 0),)}, "denominator must be positive"),
         ({"medium": ((True, 1),)}, "numerator must be an integer"),
         ({"medium": ((MAX_U64 + 1, 1),)}, "unsigned 64-bit"),

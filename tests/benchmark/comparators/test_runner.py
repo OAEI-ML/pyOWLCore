@@ -38,7 +38,14 @@ def test_python_reference_reports_separate_fresh_and_steady_raw_samples() -> Non
     assert all("contract" not in row["samples"][0] for row in rows)
     assert all(row["samples"][0]["contract_sha256"] for row in rows)
     fresh = next(row for row in rows if row["process_mode"] == "fresh-process")
+    steady = next(row for row in rows if row["process_mode"] == "steady-process")
     assert fresh["samples"][0]["metrics"]["startup_to_ready_ns"] > 0
+    rss_interval = steady["samples"][0]["transport_metrics"]["rss_interval"]
+    assert rss_interval["schema"] == "pyowl-core/comparator-rss-interval/v1"
+    assert rss_interval["sample_count"] >= 2
+    assert rss_interval["incremental_peak_bytes"] == (
+        rss_interval["interval_peak_bytes"] - rss_interval["quiescent_current_bytes"]
+    )
     assert all(item["passed"] is True for item in report["equality_assertions"])
     completion = cast(dict[str, Any], report["completion_requirements"])
     assert completion["passed"] is False
@@ -54,6 +61,10 @@ def test_python_reference_reports_separate_fresh_and_steady_raw_samples() -> Non
     assert completion["ratio_gates"]["passed"] is False
     assert report["methodology"]["schedule"]["seed"] == 0
     assert "seeded" in report["methodology"]["comparison_order"]
+    steady_rss = report["methodology"]["steady_rss"]
+    assert steady_rss["schema"] == "pyowl-core/comparator-rss-interval/v1"
+    assert steady_rss["maximum_accepted_sample_gap_ns"] == 10_000_000
+    assert steady_rss["lifetime_ru_maxrss_is_not_used_for_steady_ratio_gates"] is True
     sample = rows[0]["samples"][0]
     assert sample["schedule_seed"] == 0
     assert sample["paired_block"] == 0

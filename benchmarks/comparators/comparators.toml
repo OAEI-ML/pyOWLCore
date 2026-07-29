@@ -64,8 +64,8 @@ allocator = "Rust system allocator"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_DIRECT_RUNNER"
 runner_pin_state = "complete"
-runner_revision = "pyowl-core-direct-rust-common-runner-v2"
-runner_sha256 = "4ffb33b5aa51bda989b114da902060e153d5daf2df6d423bb5fe68bc49be5cf1"
+runner_revision = "pyowl-core-direct-rust-common-runner-v3"
+runner_sha256 = "a2ba45f6a42a1f4630e44dba77ad0f3d030e45a00c92277198b5696d1dd84fae"
 gating = true
 required = true
 
@@ -85,8 +85,8 @@ allocator = "Rust system allocator"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_HORNED_RUNNER"
 runner_pin_state = "complete"
-runner_revision = "pyowl-core-horned-raw-runner-v2"
-runner_sha256 = "37b64e372a4f31a19040f8620cdcf1288c3049d0c00e614192d1861429c15bce"
+runner_revision = "pyowl-core-horned-raw-runner-v3"
+runner_sha256 = "2b1f6bbd940174e864fca0b7e740779095c3534b7b58f6da8ae48b87cfc8ebd2"
 gating = false
 required = true
 
@@ -106,8 +106,8 @@ allocator = "Rust system allocator"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_HORNED_RUNNER"
 runner_pin_state = "complete"
-runner_revision = "pyowl-core-horned-common-runner-v3"
-runner_sha256 = "37b64e372a4f31a19040f8620cdcf1288c3049d0c00e614192d1861429c15bce"
+runner_revision = "pyowl-core-horned-common-runner-v4"
+runner_sha256 = "2b1f6bbd940174e864fca0b7e740779095c3534b7b58f6da8ae48b87cfc8ebd2"
 gating = true
 required = true
 
@@ -127,8 +127,8 @@ allocator = "Rust system allocator and CPython platform allocator"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_PY_HORNED_RUNNER"
 runner_pin_state = "complete"
-runner_revision = "pyowl-core-py-horned-common-runner-v3"
-runner_sha256 = "1f4fbde60956993072b8ce6d0b28a019c872fae65c686b0b8aa3405a1a142189"
+runner_revision = "pyowl-core-py-horned-common-runner-v5"
+runner_sha256 = "0c7800603911eb6813fcdf2b753cd447590a6894707ae4d8b827452c54513057"
 gating = true
 required = true
 
@@ -148,8 +148,8 @@ allocator = "HotSpot G1GC"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_OWLAPI_RUNNER"
 runner_pin_state = "complete"
-runner_revision = "pyowl-core-owlapi-common-runner-v2"
-runner_sha256 = "770346a06e711c5dcd104629e4b6676eeef2ae3ccd3052b44c163c26f0bacef7"
+runner_revision = "pyowl-core-owlapi-common-runner-v3"
+runner_sha256 = "30e8cedafaf4a627f949118d73a889d648abb5ba972ede19332f7e9125b7e52f"
 gating = true
 required = true
 

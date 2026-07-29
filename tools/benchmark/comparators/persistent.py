@@ -30,13 +30,16 @@ from .adapters import (
     sanitize_failure,
 )
 from .manifest import ComparatorPin
+from .rss_interval import CurrentRssIntervalSampler, RssIntervalError
 
-PERSISTENT_PROTOCOL_SCHEMA = "pyowl-core/comparator-persistent-runner/v1"
-PERSISTENT_HANDSHAKE_SCHEMA = "pyowl-core/comparator-persistent-handshake/v1"
-PERSISTENT_REQUEST_SCHEMA = "pyowl-core/comparator-persistent-request/v1"
-PERSISTENT_RESPONSE_SCHEMA = "pyowl-core/comparator-persistent-response/v1"
-PERSISTENT_SHUTDOWN_SCHEMA = "pyowl-core/comparator-persistent-shutdown/v1"
-PERSISTENT_SHUTDOWN_ACK_SCHEMA = "pyowl-core/comparator-persistent-shutdown-ack/v1"
+PERSISTENT_PROTOCOL_SCHEMA = "pyowl-core/comparator-persistent-runner/v2"
+PERSISTENT_HANDSHAKE_SCHEMA = "pyowl-core/comparator-persistent-handshake/v2"
+PERSISTENT_REQUEST_SCHEMA = "pyowl-core/comparator-persistent-request/v2"
+PERSISTENT_PREPARED_SCHEMA = "pyowl-core/comparator-persistent-prepared/v1"
+PERSISTENT_EXECUTE_SCHEMA = "pyowl-core/comparator-persistent-execute/v1"
+PERSISTENT_RESPONSE_SCHEMA = "pyowl-core/comparator-persistent-response/v2"
+PERSISTENT_SHUTDOWN_SCHEMA = "pyowl-core/comparator-persistent-shutdown/v2"
+PERSISTENT_SHUTDOWN_ACK_SCHEMA = "pyowl-core/comparator-persistent-shutdown-ack/v2"
 PERSISTENT_AUDIT_SCHEMA = "pyowl-core/comparator-persistent-lifecycle/v1"
 
 MAX_PERSISTENT_HANDSHAKE_BYTES = 64 * 1024
@@ -52,14 +55,15 @@ _HANDSHAKE_FIELDS = frozenset(
         "boundary",
         "pid",
         "request_schema",
+        "prepared_schema",
+        "execute_schema",
         "result_schema",
         "fresh_ontology_per_request",
         "artifact",
     }
 )
-_RESPONSE_FIELDS = frozenset(
-    {"schema", "protocol", "sequence", "ontology_instance_id", "result"}
-)
+_PREPARED_FIELDS = frozenset({"schema", "protocol", "sequence", "pid"})
+_RESPONSE_FIELDS = frozenset({"schema", "protocol", "sequence", "ontology_instance_id", "result"})
 _SHUTDOWN_ACK_FIELDS = frozenset({"schema", "protocol", "sequence", "pid"})
 _ARTIFACT_FIELDS = frozenset(
     {
@@ -124,9 +128,7 @@ class PersistentExternalRunner:
         self._set_nonblocking_pipes()
         try:
             payload, _frame_bytes, _stderr_delta = self._receive_frame(
-                timeout=_positive_timeout(
-                    handshake_timeout_seconds, "handshake timeout"
-                ),
+                timeout=_positive_timeout(handshake_timeout_seconds, "handshake timeout"),
                 max_payload_bytes=MAX_PERSISTENT_HANDSHAKE_BYTES,
             )
             handshake = _json_object(payload, "persistent handshake")
@@ -161,26 +163,20 @@ class PersistentExternalRunner:
             raise PersistentRunnerUnavailable("artifact or external runner pin is pending")
         command_text = os.environ.get(pin.launcher_env)
         if not command_text:
-            raise PersistentRunnerUnavailable(
-                f"launcher environment {pin.launcher_env} is unset"
-            )
+            raise PersistentRunnerUnavailable(f"launcher environment {pin.launcher_env} is unset")
         try:
             command = tuple(shlex.split(command_text))
         except ValueError as error:
             raise PersistentRunnerError(f"runner command is invalid: {error}") from error
         if not command:
-            raise PersistentRunnerUnavailable(
-                f"launcher environment {pin.launcher_env} is empty"
-            )
+            raise PersistentRunnerUnavailable(f"launcher environment {pin.launcher_env} is empty")
         try:
             verified_command = _verified_runner_command(pin, command)
         except (OSError, ValueError) as error:
             raise PersistentRunnerError(str(error)) from error
         _positive_timeout(timeout_seconds, "response timeout")
         resolved_handshake_timeout = (
-            timeout_seconds
-            if handshake_timeout_seconds is None
-            else handshake_timeout_seconds
+            timeout_seconds if handshake_timeout_seconds is None else handshake_timeout_seconds
         )
         _positive_timeout(resolved_handshake_timeout, "handshake timeout")
         _positive_timeout(shutdown_timeout_seconds, "shutdown timeout")
@@ -238,11 +234,32 @@ class PersistentExternalRunner:
             }
             parent_cpu_start = time.process_time_ns()
             parent_wall_start = time.perf_counter_ns()
-            payload, request_frame_bytes, stderr_delta = self._exchange_frame(
+            prepared_payload, request_frame_bytes, prepared_stderr_bytes = self._exchange_frame(
                 request_object,
                 timeout=self._timeout_seconds,
-                max_response_bytes=self._max_stdout_bytes,
+                max_response_bytes=MAX_PERSISTENT_HANDSHAKE_BYTES,
             )
+            self._validate_prepared(
+                _json_object(prepared_payload, "persistent prepared acknowledgement")
+            )
+            sampler = CurrentRssIntervalSampler(self._process.pid)
+            sampler.start()
+            try:
+                payload, execute_frame_bytes, execute_stderr_bytes = self._exchange_frame(
+                    {
+                        "schema": PERSISTENT_EXECUTE_SCHEMA,
+                        "protocol": PERSISTENT_PROTOCOL_SCHEMA,
+                        "sequence": self._sequence,
+                        "pid": self._process.pid,
+                    },
+                    timeout=self._timeout_seconds,
+                    max_response_bytes=self._max_stdout_bytes,
+                )
+            except (OSError, TypeError, ValueError, PersistentRunnerError):
+                with suppress(RssIntervalError):
+                    sampler.stop()
+                raise
+            rss_interval = sampler.stop()
             parent_wall_ns = time.perf_counter_ns() - parent_wall_start
             parent_cpu_ns = time.process_time_ns() - parent_cpu_start
             response = _json_object(payload, "persistent response")
@@ -257,17 +274,20 @@ class PersistentExternalRunner:
                 {
                     "parent_wall_ns": parent_wall_ns,
                     "parent_cpu_ns": parent_cpu_ns,
-                    "request_bytes": request_frame_bytes,
-                    "stdout_bytes": _frame_wire_size(payload),
-                    "stderr_bytes": stderr_delta,
+                    "request_bytes": request_frame_bytes + execute_frame_bytes,
+                    "stdout_bytes": (
+                        _frame_wire_size(prepared_payload) + _frame_wire_size(payload)
+                    ),
+                    "stderr_bytes": prepared_stderr_bytes + execute_stderr_bytes,
                     "persistent_protocol": PERSISTENT_PROTOCOL_SCHEMA,
                     "persistent_sequence": self._sequence - 1,
                     "persistent_runner_pid": self._process.pid,
                     "ontology_instance_id": ontology_instance_id,
+                    "rss_interval": rss_interval.to_dict(),
                 }
             )
             return result
-        except (OSError, TypeError, ValueError, PersistentRunnerError) as error:
+        except (OSError, TypeError, ValueError, PersistentRunnerError, RssIntervalError) as error:
             self._mark_failed(error)
             return _error(self.pin, request, PersistentRunnerError(str(error)))
 
@@ -344,7 +364,7 @@ class PersistentExternalRunner:
         response: Mapping[str, Any],
     ) -> tuple[dict[str, Any], str]:
         if set(response) != _RESPONSE_FIELDS:
-            raise PersistentRunnerError("persistent response fields differ from schema v1")
+            raise PersistentRunnerError("persistent response fields differ from schema v2")
         if response.get("schema") != PERSISTENT_RESPONSE_SCHEMA:
             raise PersistentRunnerError("persistent response schema differs")
         if response.get("protocol") != PERSISTENT_PROTOCOL_SCHEMA:
@@ -368,6 +388,22 @@ class PersistentExternalRunner:
                 result.get("reason", "persistent external adapter failed")
             )
         return result, instance_id
+
+    def _validate_prepared(self, prepared: Mapping[str, Any]) -> None:
+        if set(prepared) != _PREPARED_FIELDS:
+            raise PersistentRunnerError("persistent prepared fields differ from schema v1")
+        for name, expected in (
+            ("schema", PERSISTENT_PREPARED_SCHEMA),
+            ("protocol", PERSISTENT_PROTOCOL_SCHEMA),
+        ):
+            if prepared.get(name) != expected:
+                raise PersistentRunnerError(f"persistent prepared {name} differs")
+        observed_sequence = prepared.get("sequence")
+        if not _is_u64(observed_sequence) or observed_sequence != self._sequence:
+            raise PersistentRunnerError("persistent prepared sequence differs")
+        observed_pid = prepared.get("pid")
+        if not _is_u64(observed_pid) or observed_pid != self._process.pid:
+            raise PersistentRunnerError("persistent prepared pid differs")
 
     def _exchange_frame(
         self,
@@ -655,7 +691,7 @@ def _validate_handshake(
     value: Mapping[str, Any],
 ) -> None:
     if set(value) != _HANDSHAKE_FIELDS:
-        raise PersistentRunnerError("persistent handshake fields differ from schema v1")
+        raise PersistentRunnerError("persistent handshake fields differ from schema v2")
     expected_handshake: tuple[tuple[str, object], ...] = (
         ("schema", PERSISTENT_HANDSHAKE_SCHEMA),
         ("protocol", PERSISTENT_PROTOCOL_SCHEMA),
@@ -663,6 +699,8 @@ def _validate_handshake(
         ("implementation", pin.implementation),
         ("boundary", pin.boundary),
         ("request_schema", ADAPTER_REQUEST_SCHEMA),
+        ("prepared_schema", PERSISTENT_PREPARED_SCHEMA),
+        ("execute_schema", PERSISTENT_EXECUTE_SCHEMA),
         ("result_schema", ADAPTER_RESULT_SCHEMA),
     )
     for name, expected in expected_handshake:
@@ -672,9 +710,7 @@ def _validate_handshake(
     if not _is_u64(observed_pid) or observed_pid != pid:
         raise PersistentRunnerError("persistent handshake pid differs")
     if value.get("fresh_ontology_per_request") is not True:
-        raise PersistentRunnerError(
-            "persistent handshake fresh_ontology_per_request differs"
-        )
+        raise PersistentRunnerError("persistent handshake fresh_ontology_per_request differs")
     artifact = value.get("artifact")
     if not isinstance(artifact, Mapping) or set(artifact) != _ARTIFACT_FIELDS:
         raise PersistentRunnerError("persistent handshake artifact fields differ")
@@ -692,13 +728,8 @@ def _validate_handshake(
         if artifact.get(name) != expected:
             raise PersistentRunnerError(f"persistent handshake artifact {name} differs")
     observed_thread_ceiling = artifact.get("thread_ceiling")
-    if (
-        not _is_u64(observed_thread_ceiling)
-        or observed_thread_ceiling != pin.thread_ceiling
-    ):
-        raise PersistentRunnerError(
-            "persistent handshake artifact thread_ceiling differs"
-        )
+    if not _is_u64(observed_thread_ceiling) or observed_thread_ceiling != pin.thread_ceiling:
+        raise PersistentRunnerError("persistent handshake artifact thread_ceiling differs")
     observed_artifact_sha256 = artifact.get("artifact_sha256")
     if not _is_sha256(observed_artifact_sha256):
         raise PersistentRunnerError("persistent handshake lacks artifact SHA-256")
@@ -722,9 +753,7 @@ def _validate_shutdown_ack(
             raise PersistentRunnerError(f"persistent shutdown acknowledgement {name} differs")
     observed_sequence = value.get("sequence")
     if not _is_u64(observed_sequence) or observed_sequence != sequence:
-        raise PersistentRunnerError(
-            "persistent shutdown acknowledgement sequence differs"
-        )
+        raise PersistentRunnerError("persistent shutdown acknowledgement sequence differs")
     observed_pid = value.get("pid")
     if not _is_u64(observed_pid) or observed_pid != pid:
         raise PersistentRunnerError("persistent shutdown acknowledgement pid differs")
@@ -804,18 +833,16 @@ def _is_sha256(value: object) -> bool:
 
 
 def _is_u64(value: object) -> bool:
-    return (
-        not isinstance(value, bool)
-        and isinstance(value, int)
-        and 0 <= value <= 2**64 - 1
-    )
+    return not isinstance(value, bool) and isinstance(value, int) and 0 <= value <= 2**64 - 1
 
 
 __all__ = [
     "MAX_FRAME_HEADER_BYTES",
     "MAX_PERSISTENT_HANDSHAKE_BYTES",
     "PERSISTENT_AUDIT_SCHEMA",
+    "PERSISTENT_EXECUTE_SCHEMA",
     "PERSISTENT_HANDSHAKE_SCHEMA",
+    "PERSISTENT_PREPARED_SCHEMA",
     "PERSISTENT_PROTOCOL_SCHEMA",
     "PERSISTENT_REQUEST_SCHEMA",
     "PERSISTENT_RESPONSE_SCHEMA",
