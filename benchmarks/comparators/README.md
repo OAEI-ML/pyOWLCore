@@ -176,7 +176,13 @@ freeze, fingerprint, inventory, and validation cost inside the timer. Version
 1.4.0 exposes Functional Syntax, OWL/XML, and RDF/XML readers but no Turtle
 reader selection. Turtle requests therefore return explicit `ineligible`
 evidence; they are never sent to the RDF/XML reader or counted as passes.
-Before either a fresh request or persistent handshake, runner v8 also requires
+For RDF/XML, runner v9 performs a bounded, timed preparse only when axiom
+reification is present. Equivalent anonymous or blank-node `owl:Axiom`
+occurrences are physically coalesced before py-horned sees them, so qualifier
+triples are unioned deterministically instead of depending on Horned's
+last-write traversal. Unsafe XML, ambiguous metadata, named axiom resources,
+and shapes that cannot be preserved exactly fail closed.
+Before either a fresh request or persistent handshake, runner v9 also requires
 distribution version 1.4.0, exact `direct_url.json` provenance for the pinned
 sdist SHA-256, and a byte-for-byte match for every SHA-256 entry in the
 installed distribution's RECORD. A renamed, editable, differently sourced, or

@@ -20,11 +20,14 @@ import resource
 import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from io import BytesIO
 from pathlib import Path
 from typing import Any, NoReturn, cast
+from urllib.parse import urljoin, urlsplit
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
@@ -91,15 +94,60 @@ FEATURES = (
 )
 ALLOCATOR = "Rust system allocator and CPython platform allocator"
 THREAD_CEILING = 1
-RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v8"
+RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v9"
 
 MAX_REQUEST_BYTES = 512 * 1024**2
 MAX_RESPONSE_BYTES = 256 * 1024**2
 MAX_FRAME_HEADER_BYTES = 32
 MAX_REASON_CHARS = 1_000
+MAX_RDFXML_ELEMENTS = 4_000_000
+MAX_RDFXML_ATTRIBUTES = 8_000_000
+MAX_RDFXML_DEPTH = 512
+MAX_RDFXML_ELEMENT_ATTRIBUTES = 1_024
 _SHA256_CHARS = frozenset("0123456789abcdef")
 _XSD = "http://www.w3.org/2001/XMLSchema#"
 _RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+_OWL = "http://www.w3.org/2002/07/owl#"
+_XML = "http://www.w3.org/XML/1998/namespace"
+
+_RDF_RDF = f"{{{_RDF}}}RDF"
+_RDF_DESCRIPTION = f"{{{_RDF}}}Description"
+_RDF_TYPE = f"{{{_RDF}}}type"
+_RDF_ABOUT = f"{{{_RDF}}}about"
+_RDF_ID = f"{{{_RDF}}}ID"
+_RDF_NODE_ID = f"{{{_RDF}}}nodeID"
+_RDF_RESOURCE = f"{{{_RDF}}}resource"
+_RDF_DATATYPE = f"{{{_RDF}}}datatype"
+_RDF_PARSE_TYPE = f"{{{_RDF}}}parseType"
+_XML_BASE = f"{{{_XML}}}base"
+_XML_LANG = f"{{{_XML}}}lang"
+_OWL_AXIOM = f"{{{_OWL}}}Axiom"
+_OWL_AXIOM_IRI = _OWL + "Axiom"
+_OWL_ANNOTATED_SOURCE = f"{{{_OWL}}}annotatedSource"
+_OWL_ANNOTATED_PROPERTY = f"{{{_OWL}}}annotatedProperty"
+_OWL_ANNOTATED_TARGET = f"{{{_OWL}}}annotatedTarget"
+
+_RdfXmlTerm = tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RdfXmlNode:
+    element: ET.Element
+    term: _RdfXmlTerm
+    base: str
+    language: str
+    parent: ET.Element | None
+    depth: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RdfXmlReification:
+    occurrence: int
+    node: _RdfXmlNode
+    source: _RdfXmlTerm
+    property: _RdfXmlTerm
+    target: _RdfXmlTerm
+
 
 _FORMAT_SERIALIZATION = {
     DocumentFormat.FUNCTIONAL: "ofn",
@@ -826,13 +874,584 @@ def _prepared_source(request: Mapping[str, Any], source: bytes) -> Iterator[Path
         yield path
 
 
+def _resolve_rdfxml_iri(value: str, base: str) -> str:
+    if not value:
+        return base
+    if urlsplit(value).scheme:
+        return value
+    resolved = urljoin(base, value)
+    if urlsplit(resolved).scheme:
+        return resolved
+    if value.startswith("#") and base:
+        return base.partition("#")[0] + value
+    if urlsplit(base).scheme:
+        raise RunnerContractError(
+            "RDF/XML relative IRI cannot be resolved against a non-hierarchical base"
+        )
+    return resolved
+
+
+def _parse_bounded_rdfxml(source: bytes) -> ET.Element:
+    element_count = 0
+    attribute_count = 0
+    depth = 0
+    try:
+        parser = ET.iterparse(BytesIO(source), events=("start", "end"))
+        for event, element in parser:
+            if event == "start":
+                element_count += 1
+                element_attributes = len(element.attrib)
+                attribute_count += element_attributes
+                depth += 1
+                if element_count > MAX_RDFXML_ELEMENTS:
+                    raise RunnerContractError("RDF/XML preprocessing element limit exceeded")
+                if attribute_count > MAX_RDFXML_ATTRIBUTES:
+                    raise RunnerContractError("RDF/XML preprocessing attribute limit exceeded")
+                if element_attributes > MAX_RDFXML_ELEMENT_ATTRIBUTES:
+                    raise RunnerContractError(
+                        "RDF/XML preprocessing per-element attribute limit exceeded"
+                    )
+                if depth > MAX_RDFXML_DEPTH:
+                    raise RunnerContractError("RDF/XML preprocessing depth limit exceeded")
+            else:
+                depth -= 1
+    except (ET.ParseError, RecursionError, UnicodeError) as error:
+        raise RunnerContractError(f"RDF/XML reification preparse failed: {error}") from error
+    if depth != 0:
+        raise RunnerContractError("RDF/XML preprocessing ended at an invalid depth")
+    return parser.root
+
+
+def _rdfxml_context(
+    element: ET.Element,
+    *,
+    parent_base: str,
+    parent_language: str,
+) -> tuple[str, str]:
+    raw_base = element.attrib.get(_XML_BASE)
+    base = parent_base if raw_base is None else _resolve_rdfxml_iri(raw_base, parent_base)
+    return base, element.attrib.get(_XML_LANG, parent_language)
+
+
+def _rdfxml_iri(value: str, base: str) -> _RdfXmlTerm:
+    return ("iri", _resolve_rdfxml_iri(value, base))
+
+
+def _rdfxml_subject_term(
+    element: ET.Element,
+    *,
+    base: str,
+    generated_index: int,
+) -> _RdfXmlTerm:
+    identifiers = tuple(
+        name for name in (_RDF_ABOUT, _RDF_ID, _RDF_NODE_ID) if name in element.attrib
+    )
+    if len(identifiers) > 1:
+        raise RunnerContractError("RDF/XML node has conflicting subject identifiers")
+    if not identifiers:
+        return ("generated", str(generated_index))
+    identifier = identifiers[0]
+    value = element.attrib[identifier]
+    if identifier == _RDF_NODE_ID:
+        if not value:
+            raise RunnerContractError("RDF/XML node has an empty rdf:nodeID")
+        return ("blank", value)
+    if identifier == _RDF_ID:
+        if not value:
+            raise RunnerContractError("RDF/XML node has an empty rdf:ID")
+        return _rdfxml_iri(f"#{value}", base)
+    return _rdfxml_iri(value, base)
+
+
+def _collect_rdfxml_nodes(
+    root: ET.Element,
+    *,
+    document_iri: str,
+) -> tuple[
+    tuple[_RdfXmlNode, ...],
+    dict[int, _RdfXmlTerm],
+]:
+    nodes: list[_RdfXmlNode] = []
+    node_terms: dict[int, _RdfXmlTerm] = {}
+    generated_index = 0
+
+    def visit_node(
+        element: ET.Element,
+        *,
+        parent_base: str,
+        parent_language: str,
+        parent_element: ET.Element | None,
+        depth: int,
+    ) -> None:
+        nonlocal generated_index
+        base, language = _rdfxml_context(
+            element,
+            parent_base=parent_base,
+            parent_language=parent_language,
+        )
+        term = _rdfxml_subject_term(
+            element,
+            base=base,
+            generated_index=generated_index,
+        )
+        generated_index += 1
+        node_terms[id(element)] = term
+        nodes.append(
+            _RdfXmlNode(
+                element,
+                term,
+                base,
+                language,
+                parent_element,
+                depth,
+            )
+        )
+        for property_element in element:
+            property_base, property_language = _rdfxml_context(
+                property_element,
+                parent_base=base,
+                parent_language=language,
+            )
+            parse_type = property_element.attrib.get(_RDF_PARSE_TYPE)
+            if parse_type in {"Literal", "Resource"}:
+                continue
+            for child in property_element:
+                visit_node(
+                    child,
+                    parent_base=property_base,
+                    parent_language=property_language,
+                    parent_element=property_element,
+                    depth=depth + 2,
+                )
+
+    if root.tag == _RDF_RDF:
+        root_base, root_language = _rdfxml_context(
+            root,
+            parent_base=document_iri,
+            parent_language="",
+        )
+        for child in root:
+            visit_node(
+                child,
+                parent_base=root_base,
+                parent_language=root_language,
+                parent_element=root,
+                depth=1,
+            )
+    else:
+        visit_node(
+            root,
+            parent_base=document_iri,
+            parent_language="",
+            parent_element=None,
+            depth=0,
+        )
+    return tuple(nodes), node_terms
+
+
+def _rdfxml_property_term(
+    element: ET.Element,
+    *,
+    base: str,
+    language: str,
+    node_terms: Mapping[int, _RdfXmlTerm],
+) -> _RdfXmlTerm:
+    object_identifiers = tuple(
+        name for name in (_RDF_RESOURCE, _RDF_NODE_ID) if name in element.attrib
+    )
+    if len(object_identifiers) > 1:
+        raise RunnerContractError("RDF/XML property has conflicting object identifiers")
+    if object_identifiers:
+        if tuple(element):
+            raise RunnerContractError("RDF/XML property mixes an object identifier and child node")
+        identifier = object_identifiers[0]
+        value = element.attrib[identifier]
+        if identifier == _RDF_NODE_ID:
+            if not value:
+                raise RunnerContractError("RDF/XML property has an empty rdf:nodeID")
+            return ("blank", value)
+        return _rdfxml_iri(value, base)
+    parse_type = element.attrib.get(_RDF_PARSE_TYPE)
+    if parse_type == "Literal":
+        return ("xml-literal", ET.tostring(element, encoding="unicode"))
+    if parse_type == "Resource":
+        return ("generated-property", str(id(element)))
+    children = tuple(element)
+    if len(children) > 1:
+        raise RunnerContractError("RDF/XML property has several object nodes")
+    if children:
+        try:
+            return node_terms[id(children[0])]
+        except KeyError as error:
+            raise RunnerContractError("RDF/XML property object was not indexed") from error
+    datatype = element.attrib.get(_RDF_DATATYPE)
+    datatype_iri = "" if datatype is None else _resolve_rdfxml_iri(datatype, base)
+    return ("literal", element.text or "", datatype_iri, language)
+
+
+def _resolve_rdfxml_replacement(
+    term: _RdfXmlTerm,
+    replacements: Mapping[_RdfXmlTerm, _RdfXmlTerm],
+) -> _RdfXmlTerm:
+    seen: set[_RdfXmlTerm] = set()
+    while term in replacements:
+        if term in seen:
+            raise RunnerContractError("RDF/XML reification replacement cycle")
+        seen.add(term)
+        term = replacements[term]
+    return term
+
+
+def _rdfxml_term_sort_key(term: _RdfXmlTerm) -> tuple[int, str]:
+    kind = term[0]
+    if kind == "iri":
+        return 0, term[1]
+    if kind == "blank":
+        return 1, term[1]
+    if kind == "generated":
+        return 2, f"{int(term[1]):020d}"
+    raise RunnerContractError("RDF/XML reification subject is not a resource")
+
+
+def _set_rdfxml_subject(element: ET.Element, term: _RdfXmlTerm) -> None:
+    for name in (_RDF_ABOUT, _RDF_ID, _RDF_NODE_ID):
+        element.attrib.pop(name, None)
+    if term[0] == "iri":
+        element.attrib[_RDF_ABOUT] = term[1]
+    elif term[0] == "blank":
+        element.attrib[_RDF_NODE_ID] = term[1]
+    else:
+        raise RunnerContractError("RDF/XML generated subjects cannot be materialized")
+
+
+def _set_rdfxml_object(element: ET.Element, term: _RdfXmlTerm) -> None:
+    for name in (_RDF_RESOURCE, _RDF_NODE_ID):
+        element.attrib.pop(name, None)
+    if term[0] == "iri":
+        element.attrib[_RDF_RESOURCE] = term[1]
+    elif term[0] == "blank":
+        element.attrib[_RDF_NODE_ID] = term[1]
+    else:
+        raise RunnerContractError("RDF/XML generated references cannot be materialized")
+
+
+def _coalesce_duplicate_rdf_reifications(
+    source: bytes,
+    *,
+    document_iri: str,
+) -> bytes:
+    """Merge duplicate owl:Axiom RDF resources before Horned's last-write map."""
+
+    if b"<!DOCTYPE" in source or b"<!ENTITY" in source:
+        raise RunnerContractError("RDF/XML reification preprocessing rejects DTDs and entities")
+    if b"annotatedSource" not in source:
+        return source
+    root = _parse_bounded_rdfxml(source)
+    nodes, node_terms = _collect_rdfxml_nodes(root, document_iri=document_iri)
+
+    structural_properties = {
+        _RDF_TYPE,
+        _OWL_ANNOTATED_SOURCE,
+        _OWL_ANNOTATED_PROPERTY,
+        _OWL_ANNOTATED_TARGET,
+    }
+    reifications: list[_RdfXmlReification] = []
+    for occurrence, node in enumerate(nodes):
+        kinds: set[str] = set()
+        structural_terms: dict[str, list[_RdfXmlTerm]] = {
+            _OWL_ANNOTATED_SOURCE: [],
+            _OWL_ANNOTATED_PROPERTY: [],
+            _OWL_ANNOTATED_TARGET: [],
+        }
+        structural_elements: dict[str, list[ET.Element]] = {
+            tag: [] for tag in structural_properties
+        }
+        rdf_type_terms: list[_RdfXmlTerm] = []
+        if node.element.tag != _RDF_DESCRIPTION and node.element.tag.startswith("{"):
+            namespace, separator, local_name = node.element.tag[1:].partition("}")
+            if separator:
+                kinds.add(namespace + local_name)
+        for property_element in node.element:
+            tag = property_element.tag
+            if tag not in structural_properties:
+                continue
+            structural_elements[tag].append(property_element)
+            property_base, property_language = _rdfxml_context(
+                property_element,
+                parent_base=node.base,
+                parent_language=node.language,
+            )
+            term = _rdfxml_property_term(
+                property_element,
+                base=property_base,
+                language=property_language,
+                node_terms=node_terms,
+            )
+            if tag == _RDF_TYPE:
+                rdf_type_terms.append(term)
+                if term[0] == "iri":
+                    kinds.add(term[1])
+            else:
+                structural_terms[tag].append(term)
+
+        if _OWL_AXIOM_IRI not in kinds:
+            continue
+        if node.term[0] == "iri":
+            raise RunnerContractError("py-horned cannot preserve named RDF/XML owl:Axiom resources")
+        if kinds != {_OWL_AXIOM_IRI}:
+            raise RunnerContractError("RDF/XML owl:Axiom has conflicting rdf:type values")
+        if any(term != ("iri", _OWL_AXIOM_IRI) for term in rdf_type_terms):
+            raise RunnerContractError("RDF/XML owl:Axiom has an invalid rdf:type value")
+        source_terms = structural_terms[_OWL_ANNOTATED_SOURCE]
+        property_terms = structural_terms[_OWL_ANNOTATED_PROPERTY]
+        target_terms = structural_terms[_OWL_ANNOTATED_TARGET]
+        if not all(len(terms) == 1 for terms in (source_terms, property_terms, target_terms)):
+            raise RunnerContractError(
+                "RDF/XML owl:Axiom must have one source, property, and target"
+            )
+        for tag, elements in structural_elements.items():
+            allowed_attributes = {
+                _RDF_RESOURCE,
+                _XML_BASE,
+                _XML_LANG,
+            }
+            if tag != _RDF_TYPE:
+                allowed_attributes.add(_RDF_NODE_ID)
+            if tag == _OWL_ANNOTATED_TARGET:
+                allowed_attributes.add(_RDF_DATATYPE)
+            for element in elements:
+                if tuple(element):
+                    raise RunnerContractError(
+                        "RDF/XML owl:Axiom metadata cannot contain child nodes"
+                    )
+                if set(element.attrib).difference(allowed_attributes):
+                    raise RunnerContractError(
+                        "RDF/XML owl:Axiom metadata uses unsupported attributes"
+                    )
+                if (
+                    tag == _OWL_ANNOTATED_TARGET
+                    and _RDF_DATATYPE in element.attrib
+                    and (_RDF_RESOURCE in element.attrib or _RDF_NODE_ID in element.attrib)
+                ):
+                    raise RunnerContractError(
+                        "RDF/XML owl:Axiom target mixes datatype and resource attributes"
+                    )
+                if (_RDF_RESOURCE in element.attrib or _RDF_NODE_ID in element.attrib) and (
+                    element.text or ""
+                ).strip():
+                    raise RunnerContractError(
+                        "RDF/XML owl:Axiom metadata mixes text and a resource"
+                    )
+        source_term = source_terms[0]
+        property_term = property_terms[0]
+        target_term = target_terms[0]
+        if source_term[0] not in {"iri", "blank"}:
+            raise RunnerContractError("RDF/XML owl:Axiom source must be a resource")
+        if property_term[0] != "iri":
+            raise RunnerContractError("RDF/XML owl:Axiom property must be an IRI")
+        if target_term[0] not in {"iri", "blank", "literal"}:
+            raise RunnerContractError("RDF/XML owl:Axiom target has an unsupported RDF term")
+        if target_term[0] == "literal" and target_term[2] and target_term[3]:
+            raise RunnerContractError("RDF/XML owl:Axiom target mixes datatype and language")
+        reifications.append(
+            _RdfXmlReification(
+                occurrence,
+                node,
+                source_term,
+                property_term,
+                target_term,
+            )
+        )
+
+    triples_by_subject: dict[
+        _RdfXmlTerm,
+        set[tuple[_RdfXmlTerm, _RdfXmlTerm, _RdfXmlTerm]],
+    ] = {}
+    for reification in reifications:
+        triples_by_subject.setdefault(reification.node.term, set()).add(
+            (reification.source, reification.property, reification.target)
+        )
+    if any(len(triples) != 1 for triples in triples_by_subject.values()):
+        raise RunnerContractError("RDF/XML owl:Axiom subject has ambiguous structural metadata")
+
+    replacements: dict[_RdfXmlTerm, _RdfXmlTerm] = {}
+
+    def grouped_reifications() -> dict[
+        tuple[_RdfXmlTerm, _RdfXmlTerm, _RdfXmlTerm],
+        list[_RdfXmlReification],
+    ]:
+        groups: dict[
+            tuple[_RdfXmlTerm, _RdfXmlTerm, _RdfXmlTerm],
+            list[_RdfXmlReification],
+        ] = {}
+        for reification in reifications:
+            key = (
+                _resolve_rdfxml_replacement(reification.source, replacements),
+                _resolve_rdfxml_replacement(reification.property, replacements),
+                _resolve_rdfxml_replacement(reification.target, replacements),
+            )
+            groups.setdefault(key, []).append(reification)
+        return groups
+
+    while True:
+        changed = False
+        for grouped in grouped_reifications().values():
+            if len(grouped) < 2:
+                continue
+            resolved_terms = {
+                _resolve_rdfxml_replacement(
+                    reification.node.term,
+                    replacements,
+                )
+                for reification in grouped
+            }
+            representative, *duplicates = sorted(
+                resolved_terms,
+                key=_rdfxml_term_sort_key,
+            )
+            for duplicate in duplicates:
+                replacements[duplicate] = representative
+                changed = True
+        if not changed:
+            break
+
+    occurrence_replacements: dict[int, int] = {}
+    reifications_by_occurrence = {
+        reification.occurrence: reification for reification in reifications
+    }
+    for grouped in grouped_reifications().values():
+        if len(grouped) < 2:
+            continue
+        representative_term = min(
+            (
+                _resolve_rdfxml_replacement(
+                    reification.node.term,
+                    replacements,
+                )
+                for reification in grouped
+            ),
+            key=_rdfxml_term_sort_key,
+        )
+        representative = min(
+            grouped,
+            key=lambda reification: (
+                reification.node.term != representative_term,
+                reification.occurrence,
+            ),
+        )
+        for duplicate in grouped:
+            if duplicate.occurrence != representative.occurrence:
+                occurrence_replacements[duplicate.occurrence] = representative.occurrence
+    if not occurrence_replacements:
+        return source
+    if any(element.attrib.get(_RDF_PARSE_TYPE) == "Literal" for element in root.iter()):
+        raise RunnerContractError(
+            "RDF/XML duplicate reifications with XML literals cannot be rewritten safely"
+        )
+
+    allowed_node_attributes = {
+        _RDF_ABOUT,
+        _RDF_ID,
+        _RDF_NODE_ID,
+        _XML_BASE,
+        _XML_LANG,
+    }
+    merge_plan: list[tuple[_RdfXmlNode, _RdfXmlNode, tuple[ET.Element, ...]]] = []
+    for duplicate_occurrence, representative_occurrence in sorted(
+        occurrence_replacements.items(),
+        reverse=True,
+    ):
+        node = reifications_by_occurrence[duplicate_occurrence].node
+        representative_node = reifications_by_occurrence[representative_occurrence].node
+        if node.parent is not root or representative_node.parent is not root:
+            raise RunnerContractError(
+                "RDF/XML duplicate reifications must be direct rdf:RDF children"
+            )
+        representative_element = representative_node.element
+        if set(node.element.attrib).difference(allowed_node_attributes) or set(
+            representative_element.attrib
+        ).difference(allowed_node_attributes):
+            raise RunnerContractError("RDF/XML duplicate reification uses property attributes")
+        qualifiers: list[ET.Element] = []
+        for property_element in tuple(node.element):
+            if property_element.tag in structural_properties:
+                continue
+            if property_element.tag == f"{{{_RDF}}}li":
+                raise RunnerContractError("RDF/XML rdf:li qualifiers cannot be merged safely")
+            property_base, property_language = _rdfxml_context(
+                property_element,
+                parent_base=node.base,
+                parent_language=node.language,
+            )
+            if property_base != representative_node.base and property_base:
+                property_element.attrib[_XML_BASE] = property_base
+            if property_language != representative_node.language:
+                if not property_language:
+                    raise RunnerContractError(
+                        "RDF/XML duplicate reification cannot preserve an empty language"
+                    )
+                property_element.attrib[_XML_LANG] = property_language
+            qualifiers.append(property_element)
+        merge_plan.append((node, representative_node, tuple(qualifiers)))
+
+    for node, representative_node, qualifiers in merge_plan:
+        representative_element = representative_node.element
+        for property_element in qualifiers:
+            node.element.remove(property_element)
+            representative_element.append(property_element)
+        root.remove(node.element)
+
+    def rewrite(
+        element: ET.Element,
+        *,
+        parent_base: str,
+        parent_language: str,
+    ) -> None:
+        base, language = _rdfxml_context(
+            element,
+            parent_base=parent_base,
+            parent_language=parent_language,
+        )
+        node_term = node_terms.get(id(element))
+        if node_term is not None:
+            replacement = _resolve_rdfxml_replacement(node_term, replacements)
+            if replacement != node_term:
+                _set_rdfxml_subject(element, replacement)
+        else:
+            if _RDF_RESOURCE in element.attrib:
+                object_term = _rdfxml_iri(element.attrib[_RDF_RESOURCE], base)
+                replacement = _resolve_rdfxml_replacement(object_term, replacements)
+                if replacement != object_term:
+                    _set_rdfxml_object(element, replacement)
+            elif _RDF_NODE_ID in element.attrib:
+                object_term = ("blank", element.attrib[_RDF_NODE_ID])
+                replacement = _resolve_rdfxml_replacement(object_term, replacements)
+                if replacement != object_term:
+                    _set_rdfxml_object(element, replacement)
+        for child in element:
+            rewrite(
+                child,
+                parent_base=base,
+                parent_language=language,
+            )
+
+    rewrite(root, parent_base=document_iri, parent_language="")
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
 def _parse_horned(
     source: bytes,
     *,
     prepared_path: Path | None,
     format: DocumentFormat,
+    document_iri: str,
 ) -> object:
     selected = source if prepared_path is None else prepared_path.read_bytes()
+    if format is DocumentFormat.RDF_XML:
+        selected = _coalesce_duplicate_rdf_reifications(
+            selected,
+            document_iri=document_iri,
+        )
     text = selected.decode("utf-8")
     return pyhornedowl.open_ontology_from_string(text, _FORMAT_SERIALIZATION[format])
 
@@ -862,7 +1481,12 @@ def _run_validated_request(
         cpu_start = time.process_time_ns()
         wall_start = time.perf_counter_ns()
         load_start = time.perf_counter_ns()
-        ontology = _parse_horned(source, prepared_path=prepared_path, format=format)
+        ontology = _parse_horned(
+            source,
+            prepared_path=prepared_path,
+            format=format,
+            document_iri=cast(str, request["document_iri"]),
+        )
         load_end = time.perf_counter_ns()
         common_start = load_end
         document = _map_document(

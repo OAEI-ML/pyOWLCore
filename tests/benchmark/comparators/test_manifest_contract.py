@@ -90,7 +90,7 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     py_horned = manifest.by_id("py-horned-common")
     runner = Path("benchmarks/comparators/runners/py_horned_common.py")
     assert py_horned.runner_pin_state == "complete"
-    assert py_horned.runner_revision == "pyowl-core-py-horned-common-runner-v8"
+    assert py_horned.runner_revision == "pyowl-core-py-horned-common-runner-v9"
     assert py_horned.runner_sha256 == hashlib.sha256(runner.read_bytes()).hexdigest()
     assert py_horned.artifact_is_runnable is True
 
@@ -143,9 +143,9 @@ def test_direct_runner_uses_the_python_free_native_feature_seam() -> None:
         native_manifest = tomllib.load(stream)
     with Path("benchmarks/comparators/runners/direct/Cargo.lock").open("rb") as stream:
         direct_lock = tomllib.load(stream)
-    direct_manifest = Path(
-        "benchmarks/comparators/runners/direct/Cargo.toml"
-    ).read_text(encoding="utf-8")
+    direct_manifest = Path("benchmarks/comparators/runners/direct/Cargo.toml").read_text(
+        encoding="utf-8"
+    )
     native_build = Path("native/build.rs").read_text(encoding="utf-8")
 
     assert native_manifest["features"]["comparator"] == []
@@ -155,13 +155,8 @@ def test_direct_runner_uses_the_python_free_native_feature_seam() -> None:
         "pyo3/extension-module",
     ]
     assert native_manifest["dependencies"]["pyo3"]["optional"] is True
-    assert (
-        native_manifest["build-dependencies"]["pyo3-build-config"]["optional"]
-        is True
-    )
-    assert (
-        'default-features = false, features = ["comparator"]' in direct_manifest
-    )
+    assert native_manifest["build-dependencies"]["pyo3-build-config"]["optional"] is True
+    assert 'default-features = false, features = ["comparator"]' in direct_manifest
     direct_packages = {
         package["name"]
         for package in direct_lock["package"]

@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import weakref
+import xml.etree.ElementTree as ET
 from collections import deque
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
@@ -23,6 +24,31 @@ from tools.benchmark.comparators.adapters import default_options
 from tools.benchmark.comparators.common_contract import build_core_common_contract
 
 RUNNER = Path("benchmarks/comparators/runners/py_horned_common.py")
+RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+OWL = "http://www.w3.org/2002/07/owl#"
+_DUPLICATE_REIFICATION_RDFXML = b"""\
+<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:e="urn:">
+  <owl:AnnotationProperty rdf:about="urn:p"/>
+  <rdf:Description rdf:about="urn:s">
+    <e:p rdf:resource="urn:o"/>
+  </rdf:Description>
+  <owl:Axiom rdf:nodeID="first">
+    <owl:annotatedSource rdf:resource="urn:s"/>
+    <owl:annotatedProperty rdf:resource="urn:p"/>
+    <owl:annotatedTarget rdf:resource="urn:o"/>
+    <e:first rdf:resource="urn:one"/>
+  </owl:Axiom>
+  <owl:Axiom rdf:nodeID="second">
+    <owl:annotatedSource rdf:resource="urn:s"/>
+    <owl:annotatedProperty rdf:resource="urn:p"/>
+    <owl:annotatedTarget rdf:resource="urn:o"/>
+    <e:second rdf:resource="urn:two"/>
+  </owl:Axiom>
+</rdf:RDF>
+"""
 
 
 class _WeakMapping(dict[str, object]):
@@ -135,6 +161,421 @@ def runner_module() -> Iterator[ModuleType]:
             sys.modules.pop("pyhornedowl", None)
         else:
             sys.modules["pyhornedowl"] = previous_pyhorned
+
+
+def test_duplicate_rdfxml_axiom_reifications_union_qualifiers_deterministically(
+    runner_module: ModuleType,
+) -> None:
+    rewritten = runner_module._coalesce_duplicate_rdf_reifications(
+        _DUPLICATE_REIFICATION_RDFXML,
+        document_iri="urn:test:document",
+    )
+
+    assert rewritten != _DUPLICATE_REIFICATION_RDFXML
+    assert all(
+        runner_module._coalesce_duplicate_rdf_reifications(
+            _DUPLICATE_REIFICATION_RDFXML,
+            document_iri="urn:test:document",
+        )
+        == rewritten
+        for _index in range(8)
+    )
+    root = ET.fromstring(rewritten)
+    axioms = root.findall(f".//{{{OWL}}}Axiom")
+    assert len(axioms) == 1
+    assert axioms[0].attrib[f"{{{RDF}}}nodeID"] == "first"
+    assert {child.tag for child in axioms[0]} >= {
+        "{urn:}first",
+        "{urn:}second",
+    }
+
+    options = default_options(DocumentFormat.RDF_XML)
+    reference = load_snapshot(_DUPLICATE_REIFICATION_RDFXML, options=options)
+    selected = load_snapshot(rewritten, options=options)
+    assert tuple(selected.iter_axioms()) == tuple(reference.iter_axioms())
+    assert selected.structural_fingerprint == reference.structural_fingerprint
+    assert selected.logical_fingerprint == reference.logical_fingerprint
+    assert selected.signature_fingerprint == reference.signature_fingerprint
+
+
+def test_repeated_same_subject_reifications_are_physically_merged(
+    runner_module: ModuleType,
+) -> None:
+    source = _DUPLICATE_REIFICATION_RDFXML.replace(
+        b'rdf:nodeID="second"',
+        b'rdf:nodeID="first"',
+    )
+    rewritten = runner_module._coalesce_duplicate_rdf_reifications(
+        source,
+        document_iri="urn:test:document",
+    )
+
+    root = ET.fromstring(rewritten)
+    axioms = root.findall(f".//{{{OWL}}}Axiom")
+    assert len(axioms) == 1
+    assert {child.tag for child in axioms[0]} >= {
+        "{urn:}first",
+        "{urn:}second",
+    }
+    options = default_options(DocumentFormat.RDF_XML)
+    assert tuple(load_snapshot(rewritten, options=options).iter_axioms()) == tuple(
+        load_snapshot(source, options=options).iter_axioms()
+    )
+
+
+def test_anonymous_reification_representative_stays_anonymous(
+    runner_module: ModuleType,
+) -> None:
+    source = _DUPLICATE_REIFICATION_RDFXML.replace(
+        b' rdf:nodeID="first"',
+        b"",
+    ).replace(
+        b' rdf:nodeID="second"',
+        b"",
+    )
+
+    rewritten = runner_module._coalesce_duplicate_rdf_reifications(
+        source,
+        document_iri="urn:test:document",
+    )
+
+    root = ET.fromstring(rewritten)
+    axioms = root.findall(f".//{{{OWL}}}Axiom")
+    assert len(axioms) == 1
+    assert not set(axioms[0].attrib).intersection(
+        {
+            f"{{{RDF}}}about",
+            f"{{{RDF}}}ID",
+            f"{{{RDF}}}nodeID",
+        }
+    )
+    options = default_options(DocumentFormat.RDF_XML)
+    assert tuple(load_snapshot(rewritten, options=options).iter_axioms()) == tuple(
+        load_snapshot(source, options=options).iter_axioms()
+    )
+
+
+def test_same_reification_subject_with_different_main_triples_fails_closed(
+    runner_module: ModuleType,
+) -> None:
+    source = _DUPLICATE_REIFICATION_RDFXML.replace(
+        b'rdf:nodeID="second"',
+        b'rdf:nodeID="first"',
+    ).replace(
+        b'<owl:annotatedTarget rdf:resource="urn:o"/>\n    <e:second',
+        b'<owl:annotatedTarget rdf:resource="urn:different"/>\n    <e:second',
+    )
+
+    with pytest.raises(
+        runner_module.RunnerContractError,
+        match="ambiguous structural metadata",
+    ):
+        runner_module._coalesce_duplicate_rdf_reifications(
+            source,
+            document_iri="urn:test:document",
+        )
+
+
+def test_parse_horned_supplies_one_physically_merged_reification(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    ontology = object()
+
+    def open_ontology_from_string(source: str, serialization: str) -> object:
+        captured["source"] = source
+        captured["serialization"] = serialization
+        return ontology
+
+    monkeypatch.setattr(
+        runner_module.pyhornedowl,
+        "open_ontology_from_string",
+        open_ontology_from_string,
+        raising=False,
+    )
+
+    selected = runner_module._parse_horned(
+        _DUPLICATE_REIFICATION_RDFXML,
+        prepared_path=None,
+        format=DocumentFormat.RDF_XML,
+        document_iri="urn:test:document",
+    )
+
+    assert selected is ontology
+    assert captured["serialization"] == "rdf"
+    root = ET.fromstring(cast(str, captured["source"]))
+    axioms = root.findall(f".//{{{OWL}}}Axiom")
+    assert len(axioms) == 1
+    assert {child.tag for child in axioms[0]} >= {
+        "{urn:}first",
+        "{urn:}second",
+    }
+
+
+def test_parse_horned_preprocesses_prepared_file_bytes(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    source_path = tmp_path / "ontology.rdf"
+    source_path.write_bytes(_DUPLICATE_REIFICATION_RDFXML)
+
+    def open_ontology_from_string(source: str, serialization: str) -> object:
+        captured["source"] = source
+        captured["serialization"] = serialization
+        return object()
+
+    monkeypatch.setattr(
+        runner_module.pyhornedowl,
+        "open_ontology_from_string",
+        open_ontology_from_string,
+        raising=False,
+    )
+
+    runner_module._parse_horned(
+        b"unused resident bytes",
+        prepared_path=source_path,
+        format=DocumentFormat.RDF_XML,
+        document_iri="urn:test:document",
+    )
+
+    root = ET.fromstring(cast(str, captured["source"]))
+    assert captured["serialization"] == "rdf"
+    assert len(root.findall(f".//{{{OWL}}}Axiom")) == 1
+
+
+def test_duplicate_rdfxml_reification_merge_preserves_base_and_language(
+    runner_module: ModuleType,
+) -> None:
+    source = _DUPLICATE_REIFICATION_RDFXML.replace(
+        b'<owl:Axiom rdf:nodeID="second">',
+        (b'<owl:Axiom rdf:nodeID="second" xml:base="https://example.test/base/" xml:lang="pt">'),
+    ).replace(
+        b'<e:second rdf:resource="urn:two"/>',
+        b'<e:second rdf:resource="two"/><e:label>valor</e:label>',
+    )
+
+    rewritten = runner_module._coalesce_duplicate_rdf_reifications(
+        source,
+        document_iri="urn:test:document",
+    )
+
+    options = default_options(DocumentFormat.RDF_XML)
+    reference = load_snapshot(source, options=options)
+    selected = load_snapshot(rewritten, options=options)
+    assert tuple(selected.iter_axioms()) == tuple(reference.iter_axioms())
+
+
+def test_duplicate_rdfxml_reification_replacements_reach_nested_groups(
+    runner_module: ModuleType,
+) -> None:
+    source = b"""\
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns:owl="http://www.w3.org/2002/07/owl#"
+         xmlns:e="urn:">
+  <owl:Axiom rdf:nodeID="inner-first">
+    <owl:annotatedSource rdf:resource="urn:s"/>
+    <owl:annotatedProperty rdf:resource="urn:p"/>
+    <owl:annotatedTarget rdf:resource="urn:o"/>
+    <e:first rdf:resource="urn:one"/>
+  </owl:Axiom>
+  <owl:Axiom rdf:nodeID="inner-second">
+    <owl:annotatedSource rdf:resource="urn:s"/>
+    <owl:annotatedProperty rdf:resource="urn:p"/>
+    <owl:annotatedTarget rdf:resource="urn:o"/>
+    <e:second rdf:resource="urn:two"/>
+  </owl:Axiom>
+  <owl:Axiom rdf:nodeID="outer-first">
+    <owl:annotatedSource rdf:nodeID="inner-first"/>
+    <owl:annotatedProperty rdf:resource="urn:q"/>
+    <owl:annotatedTarget rdf:resource="urn:value"/>
+    <e:outerFirst rdf:resource="urn:three"/>
+  </owl:Axiom>
+  <owl:Axiom rdf:nodeID="outer-second">
+    <owl:annotatedSource rdf:nodeID="inner-second"/>
+    <owl:annotatedProperty rdf:resource="urn:q"/>
+    <owl:annotatedTarget rdf:resource="urn:value"/>
+    <e:outerSecond rdf:resource="urn:four"/>
+  </owl:Axiom>
+  <rdf:Description rdf:about="urn:holder">
+    <e:ref rdf:nodeID="outer-second"/>
+  </rdf:Description>
+</rdf:RDF>
+"""
+
+    rewritten = runner_module._coalesce_duplicate_rdf_reifications(
+        source,
+        document_iri="urn:test:document",
+    )
+    root = ET.fromstring(rewritten)
+    node_ids = [axiom.attrib[f"{{{RDF}}}nodeID"] for axiom in root.findall(f".//{{{OWL}}}Axiom")]
+    assert node_ids == ["inner-first", "outer-first"]
+    qualifier_tags = {
+        axiom.attrib[f"{{{RDF}}}nodeID"]: {
+            child.tag for child in axiom if child.tag.startswith("{urn:}")
+        }
+        for axiom in root.findall(f".//{{{OWL}}}Axiom")
+    }
+    assert qualifier_tags == {
+        "inner-first": {"{urn:}first", "{urn:}second"},
+        "outer-first": {"{urn:}outerFirst", "{urn:}outerSecond"},
+    }
+    assert root.find(".//{urn:}ref").attrib[f"{{{RDF}}}nodeID"] == "outer-first"
+
+
+def test_named_rdfxml_reifications_fail_closed(
+    runner_module: ModuleType,
+) -> None:
+    source = (
+        _DUPLICATE_REIFICATION_RDFXML.replace(
+            b'rdf:nodeID="first"',
+            b'rdf:about="urn:axiom:first"',
+        )
+        .replace(
+            b'rdf:nodeID="second"',
+            b'rdf:about="urn:axiom:second"',
+        )
+        .replace(
+            b"</rdf:RDF>",
+            b"""\
+  <rdf:Description rdf:about="urn:holder">
+    <e:ref rdf:resource="urn:axiom:second"/>
+  </rdf:Description>
+</rdf:RDF>""",
+        )
+    )
+
+    with pytest.raises(
+        runner_module.RunnerContractError,
+        match="cannot preserve named RDF/XML owl:Axiom",
+    ):
+        runner_module._coalesce_duplicate_rdf_reifications(
+            source,
+            document_iri="urn:test:document",
+        )
+
+
+def test_rdfxml_reification_preprocessor_is_an_exact_noop_without_duplicates(
+    runner_module: ModuleType,
+) -> None:
+    source = _DUPLICATE_REIFICATION_RDFXML.replace(
+        b'<owl:annotatedTarget rdf:resource="urn:o"/>\n    <e:second',
+        b'<owl:annotatedTarget rdf:resource="urn:different"/>\n    <e:second',
+    )
+
+    selected = runner_module._coalesce_duplicate_rdf_reifications(
+        source,
+        document_iri="urn:test:document",
+    )
+
+    assert selected is source
+
+
+def test_rdfxml_reification_preprocessor_rejects_unsafe_xml(
+    runner_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(
+        runner_module.RunnerContractError,
+        match="rejects DTDs and entities",
+    ):
+        runner_module._coalesce_duplicate_rdf_reifications(
+            b'<!DOCTYPE rdf:RDF [<!ENTITY x "expanded">]>'
+            b'<rdf:RDF xmlns:rdf="' + RDF.encode("ascii") + b'"/>',
+            document_iri="urn:test:document",
+        )
+
+    with pytest.raises(
+        runner_module.RunnerContractError,
+        match="rejects DTDs and entities",
+    ):
+        runner_module._coalesce_duplicate_rdf_reifications(
+            b'<!DOCTYPE rdf:RDF [<!ENTITY x "expanded">]>' + _DUPLICATE_REIFICATION_RDFXML,
+            document_iri="urn:test:document",
+        )
+
+    xml_literal = _DUPLICATE_REIFICATION_RDFXML.replace(
+        b'<e:first rdf:resource="urn:one"/>',
+        b'<e:first rdf:parseType="Literal"><e:value/></e:first>',
+    )
+    with pytest.raises(
+        runner_module.RunnerContractError,
+        match="XML literals cannot be rewritten safely",
+    ):
+        runner_module._coalesce_duplicate_rdf_reifications(
+            xml_literal,
+            document_iri="urn:test:document",
+        )
+
+    invalid_type = _DUPLICATE_REIFICATION_RDFXML.replace(
+        b'<owl:Axiom rdf:nodeID="first">',
+        (b'<owl:Axiom rdf:nodeID="first"><rdf:type rdf:nodeID="not-an-iri"/>'),
+    )
+    with pytest.raises(
+        runner_module.RunnerContractError,
+        match="invalid rdf:type value",
+    ):
+        runner_module._coalesce_duplicate_rdf_reifications(
+            invalid_type,
+            document_iri="urn:test:document",
+        )
+
+    conflicting_target = _DUPLICATE_REIFICATION_RDFXML.replace(
+        b'<owl:annotatedTarget rdf:resource="urn:o"/>',
+        (
+            b'<owl:annotatedTarget rdf:resource="urn:o" '
+            b'rdf:datatype="http://www.w3.org/2001/XMLSchema#string"/>'
+        ),
+    )
+    with pytest.raises(
+        runner_module.RunnerContractError,
+        match="mixes datatype and resource attributes",
+    ):
+        runner_module._coalesce_duplicate_rdf_reifications(
+            conflicting_target,
+            document_iri="urn:test:document",
+        )
+
+    monkeypatch.setattr(runner_module, "MAX_RDFXML_ELEMENTS", 1)
+    with pytest.raises(
+        runner_module.RunnerContractError,
+        match="element limit exceeded",
+    ):
+        runner_module._coalesce_duplicate_rdf_reifications(
+            _DUPLICATE_REIFICATION_RDFXML,
+            document_iri="urn:test:document",
+        )
+
+
+def test_rdfxml_reification_preprocessor_accepts_empty_about(
+    runner_module: ModuleType,
+) -> None:
+    source = _DUPLICATE_REIFICATION_RDFXML.replace(
+        b"</rdf:RDF>",
+        b'<rdf:Description rdf:about=""/></rdf:RDF>',
+    )
+
+    rewritten = runner_module._coalesce_duplicate_rdf_reifications(
+        source,
+        document_iri="urn:test:document",
+    )
+
+    options = default_options(DocumentFormat.RDF_XML)
+    assert tuple(
+        load_snapshot(
+            rewritten,
+            document_iri="urn:test:document",
+            options=options,
+        ).iter_axioms()
+    ) == tuple(
+        load_snapshot(
+            source,
+            document_iri="urn:test:document",
+            options=options,
+        ).iter_axioms()
+    )
 
 
 def test_completion_metrics_include_full_result_rss_and_fresh_child_cpu_only(

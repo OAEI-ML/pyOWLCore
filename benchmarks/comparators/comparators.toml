@@ -127,8 +127,8 @@ allocator = "Rust system allocator and CPython platform allocator"
 thread_ceiling = 1
 launcher_env = "PYOWL_CORE_PY_HORNED_RUNNER"
 runner_pin_state = "complete"
-runner_revision = "pyowl-core-py-horned-common-runner-v8"
-runner_sha256 = "2009b9f77e0857e5e7bf3b07a120c222961e684b5196757fea0fb2908ce574d8"
+runner_revision = "pyowl-core-py-horned-common-runner-v9"
+runner_sha256 = "a0560ea886258c8f2291a2bf0565bbcb14a40feebe069ba6a757a9d821a60849"
 gating = true
 required = true
 
