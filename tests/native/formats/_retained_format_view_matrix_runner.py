@@ -286,6 +286,11 @@ def main() -> None:
             raise AssertionError(f"{format_value.value} did not publish a native snapshot")
         if type(right_selected).__name__ != "_NativeOntologySnapshot":
             raise AssertionError(f"{format_value.value} did not publish the right native snapshot")
+        writer_parity = all(
+            render_document(selected.root, format=output_format)
+            == render_document(reference.root, format=output_format)
+            for output_format in formats
+        )
         for candidate in (reference, right_reference, selected, right_selected):
             if dict(candidate.capabilities.encoded_view_schemas) != expected_view_schemas:
                 raise AssertionError(
@@ -505,6 +510,7 @@ def main() -> None:
             "right_direct_root_parity": right_direct_roots == expected_mapped_roots,
             "right_wire_parity": right_selected_wire == right_reference_wire,
             "wire_parity": selected_wire == reference_wire,
+            "writer_parity": writer_parity,
         }
 
         del (

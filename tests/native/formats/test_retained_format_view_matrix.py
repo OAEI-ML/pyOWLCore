@@ -162,4 +162,5 @@ def test_forced_native_formats_cross_every_encoded_owner_without_scalar_work() -
             "right_direct_root_parity": True,
             "right_wire_parity": True,
             "wire_parity": True,
+            "writer_parity": True,
         }, format_name
