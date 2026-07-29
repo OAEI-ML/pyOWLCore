@@ -45,6 +45,7 @@ def main() -> None:
         ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
         ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
     )
+    from pyowl_core.index import index_cache_report
     from pyowl_core.model import canonical_bytes
     from tests.conformance._support import every_constructor_document
     from tests.native.encoded_views import _independent as independent_decoder
@@ -306,6 +307,7 @@ def main() -> None:
         right_before_python = right_selected._native_python_counters()
         ingestion = selected._native_ingestion_counters_v2()
         overlay = apply_delta(selected, OntologyDelta())
+        direct_cache_before = index_cache_report(selected)
 
         scalar_error = AssertionError(
             f"{format_value.value} encoded publication crossed scalar traversal"
@@ -317,9 +319,43 @@ def main() -> None:
             patch.object(type(selected), "signature", side_effect=scalar_error),
         ):
             direct = selected.view(EncodedStructuralView)
+            direct_native_after_build = raw_owner._publication_counters_v2()
+            direct_cache_after_build = index_cache_report(selected)
+            direct_reused = selected.view(EncodedStructuralView)
+            direct_native_after_reuse = raw_owner._publication_counters_v2()
+            direct_cache_after_reuse = index_cache_report(selected)
             right_direct = right_selected.view(EncodedStructuralView)
             overlay_encoded = overlay.view(EncodedStructuralView)
 
+        if direct_reused is not direct:
+            raise AssertionError(
+                f"{format_value.value} repeated encoded request lost object identity"
+            )
+        if (
+            direct_native_after_build.encoded_view_requests
+            != before_native.encoded_view_requests + 1
+            or direct_native_after_reuse.encoded_view_requests
+            != direct_native_after_build.encoded_view_requests
+        ):
+            raise AssertionError(
+                f"{format_value.value} repeated encoded request rebuilt native columns"
+            )
+        if (
+            direct_cache_after_build.hits != direct_cache_before.hits
+            or direct_cache_after_build.misses != direct_cache_before.misses + 1
+            or direct_cache_after_build.builds != direct_cache_before.builds + 1
+            or direct_cache_after_reuse.hits != direct_cache_after_build.hits + 1
+            or direct_cache_after_reuse.misses != direct_cache_after_build.misses
+            or direct_cache_after_reuse.builds != direct_cache_after_build.builds
+            or direct_cache_after_reuse.live_identities != direct_cache_after_build.live_identities
+            or direct_cache_after_reuse.retained_entries
+            != direct_cache_after_build.retained_entries
+            or direct_cache_after_reuse.retained_bytes != direct_cache_after_build.retained_bytes
+            or direct_cache_after_reuse.reserved_bytes != 0
+        ):
+            raise AssertionError(
+                f"{format_value.value} repeated encoded request bypassed the owner cache"
+            )
         direct_roots = decode_root_canonical_bytes(direct.buffers)
         right_direct_roots = decode_root_canonical_bytes(right_direct.buffers)
         try:
@@ -480,6 +516,15 @@ def main() -> None:
             "composite_zero_copy": composite_zero_copy,
             "decoded_owner_identity": decoded_encoded.owner is decoded,
             "decoded_root_parity": decoded_roots == expected_roots,
+            "direct_cache_build_delta": (
+                direct_cache_after_reuse.builds - direct_cache_before.builds
+            ),
+            "direct_cache_hit_delta": (direct_cache_after_reuse.hits - direct_cache_before.hits),
+            "direct_cache_identity_reuse": direct_reused is direct,
+            "direct_native_export_delta": (
+                direct_native_after_reuse.encoded_view_requests
+                - before_native.encoded_view_requests
+            ),
             "direct_owner_identity": direct.owner is selected,
             "direct_root_parity": direct_roots == expected_roots,
             "document_limit_error_code": document_limit_error_code,
