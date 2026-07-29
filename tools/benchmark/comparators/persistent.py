@@ -257,9 +257,9 @@ class PersistentExternalRunner:
                     timeout=self._timeout_seconds,
                     max_response_bytes=self._max_stdout_bytes,
                 )
-                rss_interval = sampler.stop()
                 parent_wall_ns = time.perf_counter_ns() - parent_wall_start
                 parent_cpu_ns = time.process_time_ns() - parent_cpu_start
+                rss_interval = sampler.stop()
                 response = _json_object(payload, "persistent response")
                 result, ontology_instance_id = self._validate_response(request, response)
                 self._seen_ontology_instances.add(ontology_instance_id)

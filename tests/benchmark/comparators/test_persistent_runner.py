@@ -185,7 +185,7 @@ def test_persistent_runner_brackets_execute_with_subprocess_rss_sampling(
     audit = runner.close()
 
     assert result["status"] == "ok"
-    assert events[:9] == [
+    assert events[:10] == [
         "sampler:init",
         "sampler:prepare",
         "clock:cpu",
@@ -193,10 +193,10 @@ def test_persistent_runner_brackets_execute_with_subprocess_rss_sampling(
         f"exchange:{PERSISTENT_REQUEST_SCHEMA}",
         "sampler:start",
         f"exchange:{PERSISTENT_EXECUTE_SCHEMA}",
-        "sampler:stop",
         "clock:wall",
+        "clock:cpu",
+        "sampler:stop",
     ]
-    assert events[9] == "clock:cpu"
     assert "sampler:abort" not in events
     assert result["transport_metrics"]["parent_wall_ns"] == 900
     assert result["transport_metrics"]["parent_cpu_ns"] == 400
