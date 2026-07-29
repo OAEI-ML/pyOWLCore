@@ -7,6 +7,10 @@ on:
         description: Successful Wheels workflow run ID to promote without rebuilding
         required: true
         type: string
+      performance_run_id:
+        description: Successful Native performance run ID bound to the same Wheels candidate
+        required: true
+        type: string
       tag:
         description: Signed v<version> tag whose commit must match the Wheels run
         required: true
@@ -88,11 +92,38 @@ jobs:
           assert run["head_sha"] == os.environ["SOURCE_SHA"]
           assert run["head_repository"]["full_name"] == os.environ["GITHUB_REPOSITORY"]
           PY
+      - name: Verify the referenced Native performance run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.performance_run_id }}
+          SOURCE_SHA: ${{ steps.verify.outputs.source_sha }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" > performance-run.json
+          python - <<'PY'
+          import json
+          import os
+
+          with open("performance-run.json", encoding="utf-8") as stream:
+              run = json.load(stream)
+          assert run["name"] == "Native performance"
+          assert run["path"] == ".github/workflows/native-performance.yml"
+          assert run["event"] == "workflow_dispatch"
+          assert run["conclusion"] == "success"
+          assert run["head_sha"] == os.environ["SOURCE_SHA"]
+          assert run["head_repository"]["full_name"] == os.environ["GITHUB_REPOSITORY"]
+          PY
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-candidate-${{ steps.verify.outputs.source_sha }}
           path: candidate
           run-id: ${{ inputs.wheels_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-performance-${{ steps.verify.outputs.source_sha }}
+          path: performance
+          run-id: ${{ inputs.performance_run_id }}
           github-token: ${{ github.token }}
       - name: Verify report, checksums, set shape, and release metadata
         env:
@@ -128,12 +159,13 @@ jobs:
           assert len(actual) == 27
           assert actual == expected
           allowed_staged = {
+              "reference_performance",
               "signatures",
               "source_tag_verified",
               "testpypi_rehearsal",
           }
           gates = report["gates"]
-          assert gates["testpypi_rehearsal"]["status"] == "blocked"
+          assert all(gates[name]["status"] == "blocked" for name in allowed_staged)
           assert all(
               gate["status"] == "passed"
               for name, gate in gates.items()
@@ -156,8 +188,171 @@ jobs:
           assert unexpected == [], unexpected
           PY
           python -m tools.packaging.artifact_inspector candidate/dist/* --release --output candidate/release-artifact-inspection.json
+      - name: Verify authenticated reference-performance evidence
+        id: performance
+        env:
+          PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
+          SOURCE_SHA: ${{ steps.verify.outputs.source_sha }}
+          WHEELS_RUN_ID: ${{ inputs.wheels_run_id }}
+        run: |
+          (
+            cd performance
+            sha256sum --check SHA256SUMS
+          )
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import shutil
+
+          performance_dir = Path("performance")
+          assert {
+              path.name for path in performance_dir.iterdir()
+          } == {"SHA256SUMS", "evidence.json", "performance-report.json"}
+          evidence_path = performance_dir / "evidence.json"
+          report_path = performance_dir / "performance-report.json"
+          evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          candidate_report_path = Path("candidate/release-report.json")
+          candidate_report = json.loads(candidate_report_path.read_text(encoding="utf-8"))
+
+          assert set(evidence) == {
+              "assertions",
+              "candidate_release_report_sha256",
+              "comparator_manifest_sha256",
+              "corpus_manifest_sha256",
+              "installed_native_extension_sha256",
+              "performance_report",
+              "performance_run_id",
+              "run_url",
+              "schema",
+              "selected_wheel",
+              "source_identity_sha256",
+              "source_revision",
+              "status",
+              "wheels_run_id",
+          }
+          assert evidence["schema"] == "pyowl-core/native-performance-evidence/v1"
+          assert evidence["status"] == "passed"
+          assert evidence["source_revision"] == os.environ["SOURCE_SHA"]
+          assert evidence["wheels_run_id"] == os.environ["WHEELS_RUN_ID"]
+          assert evidence["performance_run_id"] == os.environ["PERFORMANCE_RUN_ID"]
+          assert evidence["run_url"].endswith(
+              f"/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+              f"{os.environ['PERFORMANCE_RUN_ID']}"
+          )
+          assert evidence["candidate_release_report_sha256"] == hashlib.sha256(
+              candidate_report_path.read_bytes()
+          ).hexdigest()
+
+          comparator_manifest_sha256 = hashlib.sha256(
+              Path("benchmarks/comparators/comparators.toml").read_bytes()
+          ).hexdigest()
+          corpus_manifest_sha256 = hashlib.sha256(
+              Path("benchmarks/corpora.toml").read_bytes()
+          ).hexdigest()
+          assert evidence["comparator_manifest_sha256"] == comparator_manifest_sha256
+          assert evidence["corpus_manifest_sha256"] == corpus_manifest_sha256
+          assert report["comparator_manifest_sha256"] == comparator_manifest_sha256
+          assert report["corpus_manifest_sha256"] == corpus_manifest_sha256
+          assert report["source_identity"]["sha256"] == evidence["source_identity_sha256"]
+          assert evidence["performance_report"] == {
+              "filename": report_path.name,
+              "sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+          }
+
+          selected = next(
+              row
+              for row in candidate_report["artifacts"]
+              if row["filename"] == evidence["selected_wheel"]["filename"]
+          )
+          assert selected["filename"].endswith(
+              "-cp312-cp312-macosx_13_0_x86_64.whl"
+          )
+          assert selected["kind"] == "wheel"
+          assert selected["variant"] == "native"
+          assert evidence["selected_wheel"]["sha256"] == selected["sha256"]
+          selected_path = Path("candidate/dist") / selected["filename"]
+          assert hashlib.sha256(selected_path.read_bytes()).hexdigest() == selected["sha256"]
+
+          assert report["schema"] == "pyowl-core/comparator-baseline/v1"
+          assert report["contract_valid"] is True
+          assert report["comparative_complete"] is True
+          completion = report["completion_requirements"]
+          assert completion["passed"] is True
+          assert completion["all_scenarios_succeeded"] is True
+          assert completion["contracts_match"] is True
+          assert completion["missing_required_pins"] == []
+          assert completion["required_modes_requested"] is True
+          ratio_gates = report["ratio_gates"]
+          assert ratio_gates["configured"] is True
+          assert ratio_gates["passed"] is True
+          assert ratio_gates["reasons"] == []
+          machine = report["reference_machine"]
+          machine_evidence = machine["environment_evidence"]
+          assert machine["approval"] == "approved"
+          assert machine_evidence["matches"] is True
+          assert all(machine_evidence["field_matches"].values())
+          assert report["environment"]["git_commit"] == os.environ["SOURCE_SHA"]
+          assert report["environment"]["git_dirty"] is False
+          assert report["execution_errors"] == []
+          assert report["not_run_required"] == []
+          assert report["equality_assertions"]
+          assert all(row["passed"] is True for row in report["equality_assertions"])
+          assert {row["id"] for row in report["corpora"]} == {
+              "oaei-bioml-doid-2024",
+              "oaei-bioml-ncit-2024",
+              "hpo-base-2026-06-23",
+          }
+          assert set(completion["required_pin_ids"]) == {
+              "pyowl-python-common",
+              "pyowl-native-wheel-common",
+              "pyowl-direct-rust-common",
+              "horned-owl-raw",
+              "horned-owl-common",
+              "py-horned-common",
+              "owlapi-common",
+          }
+          methodology = report["methodology"]
+          assert methodology["warmups"] == 2
+          assert methodology["repetitions"] == 20
+          assert methodology["schedule"]["seed"] == 180643
+          assert set(methodology["process_modes"]) == {
+              "fresh-process",
+              "steady-process",
+          }
+          assert set(methodology["input_modes"]) == {"resident-bytes", "file"}
+          assert set(evidence["assertions"]) == {
+              "comparative_complete",
+              "completion_passed",
+              "contract_valid",
+              "ratio_gates_passed",
+              "reference_machine_approved",
+              "reference_machine_matches",
+          }
+          assert all(value is True for value in evidence["assertions"].values())
+
+          native_hashes = {
+              sample["artifact"]["artifact_sha256"]
+              for row in report["lanes"]
+              if row["lane"] == "pyowl-native-wheel-common"
+              for sample in row["samples"]
+          }
+          assert native_hashes == {evidence["installed_native_extension_sha256"]}
+          destination = Path("candidate/reference-performance")
+          assert not destination.exists()
+          shutil.copytree(performance_dir, destination)
+          evidence_sha256 = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+          with Path(os.environ["GITHUB_OUTPUT"]).open(
+              "a", encoding="utf-8", newline="\n"
+          ) as stream:
+              stream.write(f"evidence_sha256={evidence_sha256}\n")
+          PY
       - name: Bind signed source to the immutable artifact verification
         env:
+          PERFORMANCE_EVIDENCE_SHA256: ${{ steps.performance.outputs.evidence_sha256 }}
+          PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
           SOURCE_SHA: ${{ steps.verify.outputs.source_sha }}
           TAG: ${{ inputs.tag }}
         run: |
@@ -168,10 +363,23 @@ jobs:
 
           path = Path("candidate/gates.json")
           payload = json.loads(path.read_text(encoding="utf-8"))
+          performance_run_url = (
+              f"{os.environ['GITHUB_SERVER_URL']}/"
+              f"{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+              f"{os.environ['PERFORMANCE_RUN_ID']}"
+          )
           payload["gates"]["source_tag_verified"] = {
               "status": "passed",
               "evidence": (
                   f"signed tag {os.environ['TAG']} verified at "
+                  f"{os.environ['SOURCE_SHA']}"
+              ),
+          }
+          payload["gates"]["reference_performance"] = {
+              "status": "passed",
+              "evidence": (
+                  f"{performance_run_url}: authenticated complete comparator evidence "
+                  f"sha256 {os.environ['PERFORMANCE_EVIDENCE_SHA256']} for "
                   f"{os.environ['SOURCE_SHA']}"
               ),
           }

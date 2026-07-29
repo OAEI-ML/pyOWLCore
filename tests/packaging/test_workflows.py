@@ -10,6 +10,7 @@ WHEELS = (WORKFLOWS / "wheels.yml").read_text(encoding="utf-8")
 RELEASE = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
 CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 NATIVE_SAFETY = (WORKFLOWS / "native-safety.yml").read_text(encoding="utf-8")
+NATIVE_PERFORMANCE = (WORKFLOWS / "native-performance.yml").read_text(encoding="utf-8")
 PLATFORM_AUDIT = (ROOT / "tools" / "packaging" / "platform_audit.py").read_text(encoding="utf-8")
 DIRECT_RUNNER_BUILD = (
     ROOT / "tools" / "benchmark" / "comparators" / "build_direct_runner.py"
@@ -40,7 +41,7 @@ def _inline_python(workflow: str) -> tuple[str, ...]:
 
 
 def test_every_external_action_is_pinned_to_a_full_commit() -> None:
-    for workflow in (CI, WHEELS, RELEASE, NATIVE_SAFETY):
+    for workflow in (CI, WHEELS, RELEASE, NATIVE_SAFETY, NATIVE_PERFORMANCE):
         actions = ACTION.findall(workflow)
         assert actions
         for action in actions:
@@ -54,7 +55,12 @@ def test_ci_container_images_are_pinned_to_exact_manifests() -> None:
 
 
 def test_inline_workflow_python_is_syntactically_valid() -> None:
-    snippets = _inline_python(WHEELS) + _inline_python(RELEASE) + _inline_python(NATIVE_SAFETY)
+    snippets = (
+        _inline_python(WHEELS)
+        + _inline_python(RELEASE)
+        + _inline_python(NATIVE_SAFETY)
+        + _inline_python(NATIVE_PERFORMANCE)
+    )
     assert len(snippets) >= 9
     for index, snippet in enumerate(snippets):
         compile(snippet, f"workflow-inline-{index}.py", "exec")
@@ -186,10 +192,19 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
 
 def test_release_consumes_verified_artifacts_and_never_rebuilds() -> None:
     assert "wheels_run_id" in RELEASE
+    assert "performance_run_id" in RELEASE
     assert "run-id: ${{ inputs.wheels_run_id }}" in RELEASE
+    assert "run-id: ${{ inputs.performance_run_id }}" in RELEASE
     assert 'run["name"] == "Wheels"' in RELEASE
+    assert 'run["name"] == "Native performance"' in RELEASE
     assert 'run["conclusion"] == "success"' in RELEASE
     assert 'run["head_sha"] == os.environ["SOURCE_SHA"]' in RELEASE
+    assert 'run["event"] == "workflow_dispatch"' in RELEASE
+    assert 'run["path"] == ".github/workflows/native-performance.yml"' in RELEASE
+    assert 'evidence["wheels_run_id"] == os.environ["WHEELS_RUN_ID"]' in RELEASE
+    assert 'evidence["performance_run_id"] == os.environ["PERFORMANCE_RUN_ID"]' in RELEASE
+    assert 'evidence["selected_wheel"]["sha256"] == selected["sha256"]' in RELEASE
+    assert 'payload["gates"]["reference_performance"]' in RELEASE
     assert "git verify-tag" in RELEASE
     assert 'test "$source_sha" = "$GITHUB_SHA"' in RELEASE
     assert 'version="$(python -m tools.packaging.release_tag "$TAG")"' in RELEASE
@@ -198,6 +213,87 @@ def test_release_consumes_verified_artifacts_and_never_rebuilds() -> None:
     assert "sha256sum --check" in RELEASE
     assert "python -m build" not in RELEASE
     assert "packages-dir: candidate/dist/" in RELEASE
+    performance_verification = RELEASE.index(
+        "Verify authenticated reference-performance evidence"
+    )
+    performance_gate = RELEASE.index('payload["gates"]["reference_performance"]')
+    regenerated_report = RELEASE.index(
+        "python -m tools.packaging.release_report",
+        performance_gate,
+    )
+    assert performance_verification < performance_gate < regenerated_report
+    assert 'gates[name]["status"] == "blocked" for name in allowed_staged' in RELEASE
+    assert "candidate/reference-performance" in RELEASE
+
+
+def test_native_performance_is_guarded_complete_and_fail_closed() -> None:
+    for requirement in (
+        "workflow_dispatch:",
+        "wheels_run_id:",
+        "group: native-performance-${{ github.sha }}",
+        "cancel-in-progress: false",
+        "actions: read",
+        "contents: read",
+        "name: native-performance",
+        "self-hosted",
+        "shared-darwin25-x86_64",
+        "timeout-minutes:",
+        'run["name"] == "Wheels"',
+        'run["conclusion"] == "success"',
+        'run["head_sha"] == os.environ["GITHUB_SHA"]',
+        'run["head_repository"]["full_name"] == os.environ["GITHUB_REPOSITORY"]',
+        "release-candidate-${{ github.sha }}",
+        "run-id: ${{ inputs.wheels_run_id }}",
+        "pyowl_core-*-cp312-cp312-macosx_13_0_x86_64.whl",
+        "python -m tools.benchmark.comparators.build_direct_runner",
+        "oaei-bioml-doid-2024",
+        "oaei-bioml-ncit-2024",
+        "hpo-base-2026-06-23",
+        "pyowl-python-common",
+        "pyowl-native-wheel-common",
+        "pyowl-direct-rust-common",
+        "horned-owl-raw",
+        "horned-owl-common",
+        "py-horned-common",
+        "owlapi-common",
+        "PYOWL_CORE_PY_HORNED_VENV_BIN",
+        (
+            "PYOWL_CORE_PY_HORNED_RUNNER: ${{ github.workspace }}/"
+            "benchmarks/comparators/runners/py_horned_common.py"
+        ),
+        'py_horned_runner.is_relative_to(Path.cwd().resolve())',
+        "py_horned_runner.read_bytes()",
+        'export PATH="$PY_HORNED_VENV_BIN:$PATH"',
+        "--process-mode fresh-process",
+        "--process-mode steady-process",
+        "--input-mode resident-bytes",
+        "--input-mode file",
+        "--warmups 2",
+        "--repetitions 20",
+        "--seed 180643",
+        'report["contract_valid"] is True',
+        'report["comparative_complete"] is True',
+        'completion["passed"] is True',
+        'ratio_gates["configured"] is True',
+        'ratio_gates["passed"] is True',
+        'machine["approval"] == "approved"',
+        'machine_evidence["matches"] is True',
+        'environment["git_commit"] == os.environ["GITHUB_SHA"]',
+        'environment["git_dirty"] is False',
+        '"schema": "pyowl-core/native-performance-evidence/v1"',
+        '"source_revision": os.environ["GITHUB_SHA"]',
+        '"wheels_run_id": os.environ["WHEELS_RUN_ID"]',
+        '"performance_run_id": os.environ["GITHUB_RUN_ID"]',
+        "native-performance-${{ github.sha }}",
+        "if-no-files-found: error",
+    ):
+        assert requirement in NATIVE_PERFORMANCE
+    assert "\n  push:" not in NATIVE_PERFORMANCE
+    assert "\n  pull_request:" not in NATIVE_PERFORMANCE
+    assert "\n  schedule:" not in NATIVE_PERFORMANCE
+    assert "--allow-partial" not in NATIVE_PERFORMANCE
+    assert "continue-on-error" not in NATIVE_PERFORMANCE
+    assert "${{ vars.PYOWL_CORE_PY_HORNED_RUNNER }}" not in NATIVE_PERFORMANCE
 
 
 def test_release_uses_protected_oidc_environments_without_tokens() -> None:

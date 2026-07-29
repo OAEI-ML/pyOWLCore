@@ -1,0 +1,476 @@
+name: Native performance
+
+on:
+  workflow_dispatch:
+    inputs:
+      wheels_run_id:
+        description: Successful Wheels workflow run ID for this exact source revision
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: native-performance-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  REFERENCE_MACHINE_ID: shared-darwin25-x86_64
+
+jobs:
+  reference:
+    name: Approved reference-host comparison
+    environment:
+      name: native-performance
+    runs-on: [self-hosted, macOS, X64, native-performance, shared-darwin25-x86_64]
+    timeout-minutes: 720
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12.3"
+      - name: Verify exact checkout and approved host inputs
+        env:
+          PYOWL_CORE_HORNED_RUNNER: ${{ vars.PYOWL_CORE_HORNED_RUNNER }}
+          PYOWL_CORE_OWLAPI_RUNNER: ${{ vars.PYOWL_CORE_OWLAPI_RUNNER }}
+          PY_HORNED_VENV_BIN: ${{ vars.PYOWL_CORE_PY_HORNED_VENV_BIN }}
+          REFERENCE_CORPUS_CACHE: ${{ vars.PYOWL_CORE_REFERENCE_CORPUS_CACHE }}
+          REFERENCE_CPU_MODEL: ${{ vars.PYOWL_CORE_REFERENCE_CPU_MODEL }}
+          REFERENCE_POWER_MODE: ${{ vars.PYOWL_CORE_REFERENCE_POWER_MODE }}
+          REFERENCE_STORAGE: ${{ vars.PYOWL_CORE_REFERENCE_STORAGE }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
+          import tomllib
+
+          manifest = tomllib.loads(
+              Path("benchmarks/comparators/comparators.toml").read_text(encoding="utf-8")
+          )
+          machine = manifest["reference_machine"]
+          assert machine["id"] == os.environ["REFERENCE_MACHINE_ID"]
+          assert machine["approval"] == "approved"
+          for name in ("os", "cpu", "storage", "power_mode"):
+              value = machine[name]
+              assert isinstance(value, str) and value.strip()
+              assert "pending" not in value.casefold()
+              assert "unapproved" not in value.casefold()
+
+          for name in (
+              "REFERENCE_CPU_MODEL",
+              "REFERENCE_POWER_MODE",
+              "REFERENCE_STORAGE",
+          ):
+              value = os.environ.get(name, "")
+              assert value and value == value.strip() and "\n" not in value
+              assert len(value) <= 4096
+
+          cache = Path(os.environ["REFERENCE_CORPUS_CACHE"])
+          assert cache.is_absolute() and cache.is_dir() and not cache.is_symlink()
+          corpora = {row["id"]: row for row in tomllib.loads(
+              Path("benchmarks/corpora.toml").read_text(encoding="utf-8")
+          )["corpus"]}
+          for corpus_id in (
+              "oaei-bioml-doid-2024",
+              "oaei-bioml-ncit-2024",
+              "hpo-base-2026-06-23",
+          ):
+              row = corpora[corpus_id]
+              suffix = {
+                  "functional": ".ofn",
+                  "owlxml": ".owx",
+                  "turtle": ".ttl",
+                  "rdfxml": ".rdf",
+              }[row["format"]]
+              path = cache / f"{corpus_id}{suffix}"
+              assert path.is_file() and not path.is_symlink()
+              assert path.stat().st_size == row["bytes"]
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == row["sha256"]
+
+          pins = {row["id"]: row for row in manifest["comparator"]}
+          launchers = {
+              "horned-owl-common": "PYOWL_CORE_HORNED_RUNNER",
+              "owlapi-common": "PYOWL_CORE_OWLAPI_RUNNER",
+          }
+          for lane, variable in launchers.items():
+              raw = os.environ.get(variable, "")
+              path = Path(raw)
+              assert raw and path.is_absolute()
+              resolved = path.resolve(strict=True)
+              assert resolved.is_file() and os.access(resolved, os.X_OK)
+              assert hashlib.sha256(resolved.read_bytes()).hexdigest() == pins[lane][
+                  "runner_sha256"
+              ]
+
+          py_horned_runner = Path(
+              "benchmarks/comparators/runners/py_horned_common.py"
+          ).resolve(strict=True)
+          assert py_horned_runner.is_relative_to(Path.cwd().resolve())
+          assert py_horned_runner.is_file() and os.access(py_horned_runner, os.X_OK)
+          assert hashlib.sha256(py_horned_runner.read_bytes()).hexdigest() == pins[
+              "py-horned-common"
+          ]["runner_sha256"]
+          py_horned_bin = Path(os.environ["PY_HORNED_VENV_BIN"])
+          assert py_horned_bin.is_absolute() and py_horned_bin.is_dir()
+          py_horned_python = py_horned_bin / "python3"
+          assert py_horned_python.is_file() and os.access(py_horned_python, os.X_OK)
+          PY
+      - name: Verify the referenced Wheels run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.wheels_run_id }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID" > "$RUNNER_TEMP/wheels-run.json"
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+
+          run = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "wheels-run.json").read_text(encoding="utf-8")
+          )
+          assert run["name"] == "Wheels"
+          assert run["conclusion"] == "success"
+          assert run["head_sha"] == os.environ["GITHUB_SHA"]
+          assert run["head_repository"]["full_name"] == os.environ["GITHUB_REPOSITORY"]
+          PY
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/candidate
+          run-id: ${{ inputs.wheels_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify the candidate and select its exact reference-host wheel
+        id: candidate
+        env:
+          CANDIDATE_DIR: ${{ runner.temp }}/candidate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          candidate = Path(os.environ["CANDIDATE_DIR"])
+          checksums = candidate / "SHA256SUMS"
+          assert checksums.is_file() and not checksums.is_symlink()
+          checked = {}
+          for line in checksums.read_text(encoding="ascii").splitlines():
+              digest, marker, relative = line.partition("  ")
+              assert marker and len(digest) == 64
+              assert all(character in "0123456789abcdef" for character in digest)
+              path = candidate / relative
+              assert path.is_file() and not path.is_symlink()
+              assert path.resolve().is_relative_to(candidate.resolve())
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+              assert relative not in checked
+              checked[relative] = digest
+
+          report_path = candidate / "release-report.json"
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          assert report["source_revision"] == os.environ["GITHUB_SHA"]
+          assert report["artifact_counts"] == {
+              "pure_wheels": 1,
+              "native_wheels": 25,
+              "sdists": 1,
+          }
+          expected = {row["filename"]: row["sha256"] for row in report["artifacts"]}
+          assert checked == {f"dist/{name}": digest for name, digest in expected.items()}
+          staged = {
+              "reference_performance",
+              "signatures",
+              "source_tag_verified",
+              "testpypi_rehearsal",
+          }
+          assert all(
+              report["gates"][name]["status"] == "blocked" for name in staged
+          )
+          assert all(
+              gate["status"] == "passed"
+              for name, gate in report["gates"].items()
+              if name not in staged
+          )
+          assert all(
+              row["inspection_ok"]
+              and not row["errors"]
+              and not row["release_blockers"]
+              for row in report["artifacts"]
+          )
+          unexpected = [
+              blocker
+              for blocker in report["blockers"]
+              if not any(
+                  f"release gate {name} is blocked" in blocker for name in staged
+              )
+          ]
+          assert unexpected == [], unexpected
+          wheels = tuple(
+              (candidate / "dist").glob(
+                  "pyowl_core-*-cp312-cp312-macosx_13_0_x86_64.whl"
+              )
+          )
+          assert len(wheels) == 1
+          wheel = wheels[0]
+          wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
+          assert expected[wheel.name] == wheel_sha256
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8", newline="\n") as stream:
+              stream.write(f"wheel_filename={wheel.name}\n")
+              stream.write(f"wheel_sha256={wheel_sha256}\n")
+              stream.write(
+                  "candidate_report_sha256="
+                  f"{hashlib.sha256(report_path.read_bytes()).hexdigest()}\n"
+              )
+          PY
+      - name: Install and authenticate the selected delivered wheel
+        id: installed
+        env:
+          CANDIDATE_DIR: ${{ runner.temp }}/candidate
+          VENV_DIR: ${{ runner.temp }}/native-performance-venv
+          WHEEL_FILENAME: ${{ steps.candidate.outputs.wheel_filename }}
+        run: |
+          python -m venv "$VENV_DIR"
+          "$VENV_DIR/bin/python" -m pip install \
+            --no-deps --no-index "$CANDIDATE_DIR/dist/$WHEEL_FILENAME"
+          "$VENV_DIR/bin/python" - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import importlib.metadata
+          import os
+
+          import pyowl_core
+          import pyowl_core._native as native
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          package = Path(pyowl_core.__file__).resolve()
+          extension = Path(native.__file__).resolve()
+          assert not package.is_relative_to(workspace)
+          assert not extension.is_relative_to(workspace)
+          assert importlib.metadata.version("pyowl-core") == "0.1.0.dev0"
+          native.self_test()
+          digest = hashlib.sha256(extension.read_bytes()).hexdigest()
+          with Path(os.environ["GITHUB_OUTPUT"]).open(
+              "a", encoding="utf-8", newline="\n"
+          ) as stream:
+              stream.write(f"native_extension_sha256={digest}\n")
+          PY
+      - name: Rebuild and authenticate the direct retained-engine runner
+        env:
+          DIRECT_TARGET: ${{ runner.temp }}/direct-target
+        run: |
+          rustup run 1.97.1 rustc --version --verbose
+          python -m tools.benchmark.comparators.build_direct_runner \
+            --target-dir "$DIRECT_TARGET" --print-sha256
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
+          import tomllib
+
+          manifest = tomllib.loads(
+              Path("benchmarks/comparators/comparators.toml").read_text(encoding="utf-8")
+          )
+          pin = next(
+              row for row in manifest["comparator"]
+              if row["id"] == "pyowl-direct-rust-common"
+          )
+          binary = Path(
+              os.environ["DIRECT_TARGET"],
+              "release",
+              "pyowl-core-direct-comparator",
+          )
+          assert binary.is_file() and os.access(binary, os.X_OK)
+          assert hashlib.sha256(binary.read_bytes()).hexdigest() == pin["runner_sha256"]
+          PY
+      - name: Run the complete paired reference matrix
+        env:
+          PYOWL_CORE_DIRECT_RUNNER: ${{ runner.temp }}/direct-target/release/pyowl-core-direct-comparator
+          PYOWL_CORE_HORNED_RUNNER: ${{ vars.PYOWL_CORE_HORNED_RUNNER }}
+          PYOWL_CORE_OWLAPI_RUNNER: ${{ vars.PYOWL_CORE_OWLAPI_RUNNER }}
+          PYOWL_CORE_PY_HORNED_RUNNER: ${{ github.workspace }}/benchmarks/comparators/runners/py_horned_common.py
+          PY_HORNED_VENV_BIN: ${{ vars.PYOWL_CORE_PY_HORNED_VENV_BIN }}
+          REFERENCE_CORPUS_CACHE: ${{ vars.PYOWL_CORE_REFERENCE_CORPUS_CACHE }}
+          REFERENCE_CPU_MODEL: ${{ vars.PYOWL_CORE_REFERENCE_CPU_MODEL }}
+          REFERENCE_POWER_MODE: ${{ vars.PYOWL_CORE_REFERENCE_POWER_MODE }}
+          REFERENCE_STORAGE: ${{ vars.PYOWL_CORE_REFERENCE_STORAGE }}
+          VENV_PYTHON: ${{ runner.temp }}/native-performance-venv/bin/python
+        run: |
+          mkdir -p benchmarks/results
+          test ! -e benchmarks/results/corpora
+          ln -s "$REFERENCE_CORPUS_CACHE" benchmarks/results/corpora
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/native-performance-evidence"
+          export PATH="$PY_HORNED_VENV_BIN:$PATH"
+          "$VENV_PYTHON" -m tools.benchmark.comparators.runner \
+            --corpus oaei-bioml-doid-2024 \
+            --corpus oaei-bioml-ncit-2024 \
+            --corpus hpo-base-2026-06-23 \
+            --lane pyowl-python-common \
+            --lane pyowl-native-wheel-common \
+            --lane pyowl-direct-rust-common \
+            --lane horned-owl-raw \
+            --lane horned-owl-common \
+            --lane py-horned-common \
+            --lane owlapi-common \
+            --process-mode fresh-process \
+            --process-mode steady-process \
+            --input-mode resident-bytes \
+            --input-mode file \
+            --warmups 2 \
+            --repetitions 20 \
+            --seed 180643 \
+            --reference-cpu-model "$REFERENCE_CPU_MODEL" \
+            --reference-storage "$REFERENCE_STORAGE" \
+            --reference-power-mode "$REFERENCE_POWER_MODE" \
+            --output "$RUNNER_TEMP/native-performance-evidence/performance-report.json"
+      - name: Validate and bind immutable reference evidence
+        env:
+          CANDIDATE_REPORT_SHA256: ${{ steps.candidate.outputs.candidate_report_sha256 }}
+          EVIDENCE_DIR: ${{ runner.temp }}/native-performance-evidence
+          NATIVE_EXTENSION_SHA256: ${{ steps.installed.outputs.native_extension_sha256 }}
+          SELECTED_WHEEL_FILENAME: ${{ steps.candidate.outputs.wheel_filename }}
+          SELECTED_WHEEL_SHA256: ${{ steps.candidate.outputs.wheel_sha256 }}
+          WHEELS_RUN_ID: ${{ inputs.wheels_run_id }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          evidence_dir = Path(os.environ["EVIDENCE_DIR"])
+          report_path = evidence_dir / "performance-report.json"
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          assert report["schema"] == "pyowl-core/comparator-baseline/v1"
+          assert report["contract_valid"] is True
+          assert report["comparative_complete"] is True
+          completion = report["completion_requirements"]
+          assert completion["passed"] is True
+          assert completion["all_scenarios_succeeded"] is True
+          assert completion["contracts_match"] is True
+          assert completion["missing_required_pins"] == []
+          ratio_gates = report["ratio_gates"]
+          assert ratio_gates["configured"] is True
+          assert ratio_gates["passed"] is True
+          assert ratio_gates["reasons"] == []
+          machine = report["reference_machine"]
+          machine_evidence = machine["environment_evidence"]
+          assert machine["approval"] == "approved"
+          assert machine_evidence["matches"] is True
+          assert all(machine_evidence["field_matches"].values())
+          environment = report["environment"]
+          assert environment["git_commit"] == os.environ["GITHUB_SHA"]
+          assert environment["git_dirty"] is False
+          assert report["execution_errors"] == []
+          assert report["not_run_required"] == []
+          assert report["equality_assertions"]
+          assert all(row["passed"] is True for row in report["equality_assertions"])
+          assert {row["id"] for row in report["corpora"]} == {
+              "oaei-bioml-doid-2024",
+              "oaei-bioml-ncit-2024",
+              "hpo-base-2026-06-23",
+          }
+          assert set(completion["required_pin_ids"]) == {
+              "pyowl-python-common",
+              "pyowl-native-wheel-common",
+              "pyowl-direct-rust-common",
+              "horned-owl-raw",
+              "horned-owl-common",
+              "py-horned-common",
+              "owlapi-common",
+          }
+          methodology = report["methodology"]
+          assert methodology["warmups"] == 2
+          assert methodology["repetitions"] == 20
+          assert methodology["schedule"]["seed"] == 180643
+          assert set(methodology["process_modes"]) == {
+              "fresh-process",
+              "steady-process",
+          }
+          assert set(methodology["input_modes"]) == {"resident-bytes", "file"}
+
+          manifest_sha256 = hashlib.sha256(
+              Path("benchmarks/comparators/comparators.toml").read_bytes()
+          ).hexdigest()
+          corpus_manifest_sha256 = hashlib.sha256(
+              Path("benchmarks/corpora.toml").read_bytes()
+          ).hexdigest()
+          assert report["comparator_manifest_sha256"] == manifest_sha256
+          assert report["corpus_manifest_sha256"] == corpus_manifest_sha256
+
+          native_hashes = {
+              sample["artifact"]["artifact_sha256"]
+              for row in report["lanes"]
+              if row["lane"] == "pyowl-native-wheel-common"
+              for sample in row["samples"]
+          }
+          assert native_hashes == {os.environ["NATIVE_EXTENSION_SHA256"]}
+          report_sha256 = hashlib.sha256(report_path.read_bytes()).hexdigest()
+          evidence = {
+              "schema": "pyowl-core/native-performance-evidence/v1",
+              "status": "passed",
+              "source_revision": os.environ["GITHUB_SHA"],
+              "wheels_run_id": os.environ["WHEELS_RUN_ID"],
+              "performance_run_id": os.environ["GITHUB_RUN_ID"],
+              "run_url": (
+                  f"{os.environ['GITHUB_SERVER_URL']}/"
+                  f"{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+                  f"{os.environ['GITHUB_RUN_ID']}"
+              ),
+              "candidate_release_report_sha256": os.environ[
+                  "CANDIDATE_REPORT_SHA256"
+              ],
+              "comparator_manifest_sha256": manifest_sha256,
+              "corpus_manifest_sha256": corpus_manifest_sha256,
+              "source_identity_sha256": report["source_identity"]["sha256"],
+              "selected_wheel": {
+                  "filename": os.environ["SELECTED_WHEEL_FILENAME"],
+                  "sha256": os.environ["SELECTED_WHEEL_SHA256"],
+              },
+              "installed_native_extension_sha256": os.environ[
+                  "NATIVE_EXTENSION_SHA256"
+              ],
+              "performance_report": {
+                  "filename": report_path.name,
+                  "sha256": report_sha256,
+              },
+              "assertions": {
+                  "contract_valid": True,
+                  "comparative_complete": True,
+                  "completion_passed": True,
+                  "ratio_gates_passed": True,
+                  "reference_machine_approved": True,
+                  "reference_machine_matches": True,
+              },
+          }
+          evidence_path = evidence_dir / "evidence.json"
+          evidence_path.write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          checksums = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in (evidence_path, report_path)
+          }
+          (evidence_dir / "SHA256SUMS").write_text(
+              "".join(f"{digest}  {name}\n" for name, digest in sorted(checksums.items())),
+              encoding="ascii",
+          )
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-performance-${{ github.sha }}
+          path: ${{ runner.temp }}/native-performance-evidence/
+          if-no-files-found: error
+          retention-days: 30
