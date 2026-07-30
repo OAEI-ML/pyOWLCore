@@ -10,10 +10,10 @@ pyELK, pyHermiT, pyOwl2Vec-Star-projector, and OAEI evaluation code. Consumers
 build their own reasoning or projection IR; they do not reparse paths or own a
 second OWL object model.
 
-The repository-owned implementation is complete through the documentation/API
-stabilization candidate. It is not yet a published 1.0 release: hosted artifact
-verification, external publication, legal, security, reference-platform
-performance, and coordinated consumer gates remain in
+Version `0.1.0` is the first production publication of the stabilized 0.1 API.
+The portable implementation is the compatibility baseline; native wheels are
+optional accelerators and can be published independently as their platform
+builds complete. Release decisions and retained limitations are recorded in
 [the release checklist](docs/release-checklist.md).
 
 ## Installation
@@ -77,11 +77,10 @@ edges, repair an ontology, or expose consumer-private IDs. See
 ## Release status
 
 The distribution name is `pyowl-core`; the import package is `pyowl_core`.
-The source tree is a pre-1.0 development candidate and is not yet a published
-1.0 release. Native wheels are optional optimizations and must never remove
-features from the pure fallback. Release owners must complete the external
-artifact, legal, security, and trusted-publishing gates before promoting a
-candidate.
+The source tree carries the production `0.1.0` release. Native wheels are
+optional optimizations and must never remove features from the pure fallback.
+The 1.0 API remains a future compatibility milestone; it is not implied by the
+production status of the 0.1 line.
 
 ## Documentation
 
@@ -104,11 +103,11 @@ Normative requirements begin at [the master specification](specs/SPEC.md).
 - Distribution: `pyowl-core`
 - Import: `pyowl_core`
 - Python: `>=3.10`
-- Current package line: `0.1.x` development candidate
+- Current package line: production `0.1.x`
 - API: `(0, 1)`; model schema: `1`; wire: `(1, 1)`; adapter protocol: `1`
 - Runtime/build: no JDK, JRE, JVM, OWLAPI, JPype, ROBOT, Maven, Gradle, or Java archive
-- Project source license: Apache License 2.0; artifact notices remain subject to
-  completed third-party review
+- Project source license: Apache License 2.0; packaged third-party notices are
+  listed in `THIRD_PARTY_LICENSES/`
 
 The exact tested consumer commits and ranges are recorded in
 [`reports/integration/consumer-compatibility.json`](reports/integration/consumer-compatibility.json).

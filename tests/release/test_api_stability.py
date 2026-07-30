@@ -61,10 +61,11 @@ def test_release_checklist_records_owner_override() -> None:
     assert "- [x] Consumer requirements target" in checklist
 
 
-def test_docs_disclose_candidate_status_and_unsupported_performance_claims() -> None:
+def test_docs_disclose_release_status_and_unsupported_performance_claims() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     performance = (ROOT / "docs" / "performance.md").read_text(encoding="utf-8")
-    assert "not yet a published 1.0 release" in readme
+    assert "production `0.1.0` release" in readme
+    assert "1.0 API remains a future compatibility milestone" in readme
     assert "No 2x parser claim" in " ".join(performance.split())
     assert "shared-host" in performance
     assert "reference" in performance

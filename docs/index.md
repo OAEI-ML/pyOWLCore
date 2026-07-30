@@ -1,8 +1,8 @@
 # pyowl-core documentation
 
-This documentation describes the implemented 0.1 development candidate and
-the evidence required before 1.0. Normative behavior remains defined by the
-files under `specs/`; examples never override those contracts.
+This documentation describes the production 0.1 release line and the
+compatibility boundary reserved for a future 1.0. Normative behavior remains
+defined by the files under `specs/`; examples never override those contracts.
 
 ## Install
 

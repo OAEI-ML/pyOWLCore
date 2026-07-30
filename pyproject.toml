@@ -13,7 +13,7 @@ license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_LICENSES/*"]
 authors = [{ name = "pyowl-core contributors" }]
 keywords = ["OWL", "OWL2", "ontology", "semantic-web", "reasoning"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
