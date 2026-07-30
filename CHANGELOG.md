@@ -4,6 +4,26 @@ All notable user-visible changes are recorded here. The project follows
 Semantic Versioning for the package/API independently of its model, wire, and
 adapter protocol versions.
 
+## 0.1.1 — 2026-07-30
+
+### Fixed
+
+- Preserved cancellation clocks, mapped-buffer ownership, sealed-view
+  lifecycles, and pure-Python behavior across CPython and PyPy.
+- Owned mutable wire input at the public native boundary before capability or
+  cancellation setup can observe later mutation.
+- Made native-wheel builds and target-platform audits reproducible across the
+  supported Linux, macOS, and Windows hosted runners.
+- Required one atomic 27-file distribution set from one exact source revision;
+  the already-published `0.1.0` universal wheel and sdist are not combined with
+  native wheels built from the corrected source.
+
+### Compatibility
+
+- API `(0,1)`, model schema `1`, wire `(1,1)`, adapter protocol `1`, and encoded
+  structural view v1 are unchanged. Existing `pyowl-core>=0.1,<0.2` consumer
+  constraints continue to admit this patch release.
+
 ## 0.1.0 — 2026-07-30
 
 ### Added

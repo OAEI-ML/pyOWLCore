@@ -127,7 +127,7 @@ def build_release_report(
     *,
     source_revision: str,
     gates: dict[str, ReleaseGate],
-    expected_version: str = "0.1.0",
+    expected_version: str = "0.1.1",
 ) -> dict[str, object]:
     """Inspect and bind an artifact set to explicit internal/external gates."""
 
@@ -285,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact_dir", type=Path)
     parser.add_argument("--source-revision", required=True)
-    parser.add_argument("--expected-version", default="0.1.0")
+    parser.add_argument("--expected-version", default="0.1.1")
     parser.add_argument("--gate-file", type=Path)
     parser.add_argument("--gate", action="append", default=[], type=parse_gate)
     parser.add_argument("--output", required=True, type=Path)

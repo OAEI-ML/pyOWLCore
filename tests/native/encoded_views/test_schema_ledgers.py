@@ -68,7 +68,10 @@ def test_generated_schema_and_version_decision_are_current() -> None:
     assert decision["adapter_protocol"] == pyowl_core.ADAPTER_PROTOCOL_VERSION
     assert decision["model_schema"] == pyowl_core.MODEL_SCHEMA_VERSION
     assert tuple(decision["wire_format"]) == pyowl_core.WIRE_FORMAT_VERSION
-    assert decision["package_version"] == pyowl_core.__version__
+    # The WP17 ledger records its immutable promotion-time package version;
+    # later WP18 SemVer patches do not reinterpret the encoded contract.
+    assert decision["package_version"] == "0.1.0"
+    assert pyowl_core.__version__ == "0.1.1"
 
 
 def test_schema_constructor_and_descriptor_rows_cover_exact_registry() -> None:

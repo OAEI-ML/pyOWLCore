@@ -239,6 +239,7 @@ def test_release_consumes_verified_artifacts_and_never_rebuilds() -> None:
     assert 'report["release_ready"] is True' in RELEASE
     assert "sha256sum --check" in RELEASE
     assert "python -m build" not in RELEASE
+    assert re.search(r"\b0\.1\.\d+\b", RELEASE) is None
     assert "packages-dir: candidate/dist/" in RELEASE
     performance_verification = RELEASE.index(
         "Verify authenticated reference-performance evidence"
@@ -249,7 +250,7 @@ def test_release_consumes_verified_artifacts_and_never_rebuilds() -> None:
         performance_gate,
     )
     assert performance_verification < performance_gate < regenerated_report
-    assert 'gates[name]["status"] == "blocked" for name in allowed_staged' in RELEASE
+    assert 'gates[name]["status"] in {"blocked", "passed"}' in RELEASE
     assert "candidate/reference-performance" in RELEASE
 
 
@@ -367,13 +368,27 @@ def test_release_signs_final_report_and_verifies_index_attestations() -> None:
     assert RELEASE[public_index:].count("pypi-attestations verify pypi") == 1
 
 
-def test_checked_gate_manifest_records_owner_authorized_closures() -> None:
-    path = ROOT / "reports" / "release" / "0.1.0" / "gates.json"
+def test_checked_gate_manifest_stages_only_exact_run_evidence() -> None:
+    path = ROOT / "reports" / "release" / "0.1.1" / "gates.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema"] == 1
     gates = payload["gates"]
     assert len(gates) == 12
-    assert {gate["status"] for gate in gates.values()} == {"passed"}
+    assert {
+        name for name, gate in gates.items() if gate["status"] == "blocked"
+    } == {
+        "advisory_scan",
+        "platform_artifact_audit",
+    }
+    assert all(
+        gate["status"] == "passed"
+        for name, gate in gates.items()
+        if name
+        not in {
+            "advisory_scan",
+            "platform_artifact_audit",
+        }
+    )
     evidence = " ".join(gate["evidence"] for gate in gates.values())
-    for phrase in ("PyPI", "legal", "DOID", "owner"):
+    for phrase in ("PyPI", "legal", "exact-source", "owner"):
         assert phrase in evidence

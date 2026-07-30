@@ -72,7 +72,7 @@ jobs:
               source.extractall(target, filter="data")
           PY
           (
-            cd candidate/unpacked/pyowl_core-0.1.0
+            cd candidate/unpacked/pyowl_core-0.1.1
             PYOWL_CORE_BUILD_NATIVE=0 SOURCE_DATE_EPOCH=1735689600 python -m build --no-isolation --wheel --outdir ../../rebuilt
           )
           cmp candidate/direct/*.whl candidate/rebuilt/*.whl
@@ -91,7 +91,7 @@ jobs:
           cp -R candidate/supply-chain source-artifact/supply-chain
           cp -R candidate/security source-artifact/security
           cp candidate/source-inspection.json source-artifact/source-inspection.json
-          cp reports/release/0.1.0/gates.json source-artifact/gates.json
+          cp reports/release/0.1.1/gates.json source-artifact/gates.json
           cd source-artifact
           sha256sum dist/* | LC_ALL=C sort > source-SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -482,7 +482,7 @@ jobs:
       - name: Test the complete local-index target resolver matrix
         run: |
           python -m venv /tmp/pyowl-native-env
-          /tmp/pyowl-native-env/bin/pip install --no-index --no-deps --find-links candidate/dist pyowl-core==0.1.0
+          /tmp/pyowl-native-env/bin/pip install --no-index --no-deps --find-links candidate/dist pyowl-core==0.1.1
           /tmp/pyowl-native-env/bin/python -c "import pyowl_core._native as n; n.self_test()"
           python - <<'PY'
           from pathlib import Path
@@ -578,7 +578,7 @@ jobs:
                       target["abi"],
                       "--dest",
                       str(destination),
-                      "pyowl-core==0.1.0",
+                      "pyowl-core==0.1.1",
                   ],
                   check=True,
               )

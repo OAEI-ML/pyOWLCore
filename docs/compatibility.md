@@ -4,7 +4,7 @@
 
 | Domain | Current | Compatibility rule |
 |---|---:|---|
-| Package/API | `0.1.0`, API `(0,1)` | SemVer and explicit API tuple |
+| Package/API | `0.1.1`, API `(0,1)` | SemVer and explicit API tuple |
 | Model | `1` | equality/fingerprint changes require a new schema |
 | Wire | `(1,1)` | major incompatible; minor only backwards-compatible additions |
 | Adapter | `1` | provider/plugin negotiation must match |
@@ -23,6 +23,10 @@ performance-evidence commit is `4fe32971780e38d2d83932bb93b8c2195bdfcc5f`,
 which adds the paired DOID result. The compatibility manifest records that
 evidence subject instead of attempting to embed its own circular Git identity.
 Neither successor changes the `pyowl_core` package runtime used by consumers.
+That recorded runtime reported package `0.1.0`; the `0.1.1` patch retains the
+same API/model/wire/adapter/encoded-view contracts and remains inside every
+recorded `>=0.1,<0.2` consumer range. The historical exact-commit evidence is
+not relabeled as a new run.
 
 Every recorded workflow requires public encoded structural schema
 `pyowl-core/structural-columns` v1. Compatibility consumers observe that

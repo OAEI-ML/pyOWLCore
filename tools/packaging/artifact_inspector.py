@@ -884,7 +884,7 @@ def _validate_sdist(
 def inspect_artifact(
     path: Path,
     *,
-    expected_version: str = "0.1.0",
+    expected_version: str = "0.1.1",
     expected_variant: ArtifactVariant | None = None,
     require_project_urls: bool = False,
 ) -> InspectionResult:
@@ -968,7 +968,7 @@ def inspect_artifact(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifacts", nargs="+", type=Path)
-    parser.add_argument("--expected-version", default="0.1.0")
+    parser.add_argument("--expected-version", default="0.1.1")
     parser.add_argument("--variant", choices=("pure", "native", "sdist"))
     parser.add_argument("--release", action="store_true", help="require approved project URLs")
     parser.add_argument("--output", type=Path)

@@ -406,7 +406,7 @@ def test_non_macos_extension_needs_no_install_name_tool(
 
 
 def test_source_archive_normalizes_gzip_tar_metadata_and_order(tmp_path: Path) -> None:
-    source = tmp_path / "pyowl_core-0.1.0"
+    source = tmp_path / "pyowl_core-0.1.1"
     nested = source / "package"
     nested.mkdir(parents=True)
     regular = nested / "module.py"

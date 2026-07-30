@@ -19,7 +19,7 @@ def _wheel(
     member: str,
     payload: bytes = b"native fixture",
 ) -> Path:
-    path = tmp_path / f"pyowl_core-0.1.0-cp310-cp310-{tag}.whl"
+    path = tmp_path / f"pyowl_core-0.1.1-cp310-cp310-{tag}.whl"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(f"pyowl_core/{member}", payload)
     return path
@@ -245,7 +245,7 @@ def test_complete_audit_set_is_exactly_hash_bound(
     for lane, (platform, arch, tag) in platform_audit.APPROVED_LANES.items():
         rows: list[dict[str, object]] = []
         for version in range(310, 315):
-            wheel = artifact_dir / f"pyowl_core-0.1.0-cp{version}-cp{version}-{tag}.whl"
+            wheel = artifact_dir / f"pyowl_core-0.1.1-cp{version}-cp{version}-{tag}.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
                 archive.writestr("pyowl_core/_native.fixture.so", b"native fixture")
             rows.append(_wheel_row(wheel, platform=platform))

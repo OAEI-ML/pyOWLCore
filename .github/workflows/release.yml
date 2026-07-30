@@ -167,7 +167,10 @@ jobs:
               "testpypi_rehearsal",
           }
           gates = report["gates"]
-          assert all(gates[name]["status"] == "blocked" for name in allowed_staged)
+          assert all(
+              gates[name]["status"] in {"blocked", "passed"}
+              for name in allowed_staged
+          )
           assert all(
               gate["status"] == "passed"
               for name, gate in gates.items()
@@ -396,17 +399,12 @@ jobs:
           import json
 
           report = json.loads(Path("candidate/release-report.json").read_text(encoding="utf-8"))
-          assert report["release_ready"] is False
-          assert report["gates"]["testpypi_rehearsal"]["status"] == "blocked"
-          assert report["gates"]["signatures"]["status"] == "blocked"
+          assert report["release_ready"] is True
           assert all(
               gate["status"] == "passed"
-              for name, gate in report["gates"].items()
-              if name not in {"signatures", "testpypi_rehearsal"}
+              for gate in report["gates"].values()
           )
-          assert len(report["blockers"]) == 2, report["blockers"]
-          assert any("testpypi_rehearsal" in item for item in report["blockers"])
-          assert any("signatures" in item for item in report["blockers"])
+          assert report["blockers"] == []
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

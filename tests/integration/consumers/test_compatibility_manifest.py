@@ -116,7 +116,10 @@ def test_recorded_consumer_contracts_negotiate_with_the_implementation_checkpoin
     assert payload["schema"] == "pyowl-core.consumer-compatibility/4"
     assert payload["recorded_date"] == "2026-07-29"
     core = cast(dict[str, Any], payload["core"])
-    assert core["package_version"] == pyowl_core.__version__
+    # This is exact historical evidence for the 0.1.0 runtime. Patch releases
+    # remain compatible through the recorded >=0.1,<0.2 consumer constraints.
+    assert core["package_version"] == "0.1.0"
+    assert pyowl_core.__version__ == "0.1.1"
     assert tuple(core["api_version"]) == pyowl_core.API_VERSION
     assert core["model_schema"] == pyowl_core.MODEL_SCHEMA_VERSION
     assert tuple(core["wire_format"]) == pyowl_core.WIRE_FORMAT_VERSION

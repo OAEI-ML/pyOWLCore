@@ -10,11 +10,13 @@ pyELK, pyHermiT, pyOwl2Vec-Star-projector, and OAEI evaluation code. Consumers
 build their own reasoning or projection IR; they do not reparse paths or own a
 second OWL object model.
 
-Version `0.1.0` is the first production publication of the stabilized 0.1 API.
-The portable implementation is the compatibility baseline; native wheels are
-optional accelerators and can be published independently as their platform
-builds complete. Release decisions and retained limitations are recorded in
-[the release checklist](docs/release-checklist.md).
+Version `0.1.0` was the first production publication of the stabilized 0.1 API.
+Version `0.1.1` is the current corrective release candidate and keeps the same
+public API, model, wire, adapter, and encoded-view versions. The portable
+implementation is the compatibility baseline; native wheels are optional
+accelerators, but every file for one package version is built atomically from
+one source revision. Release decisions and retained limitations are recorded
+in [the release checklist](docs/release-checklist.md).
 
 ## Installation
 
@@ -77,10 +79,10 @@ edges, repair an ontology, or expose consumer-private IDs. See
 ## Release status
 
 The distribution name is `pyowl-core`; the import package is `pyowl_core`.
-The source tree carries the production `0.1.0` release. Native wheels are
-optional optimizations and must never remove features from the pure fallback.
-The 1.0 API remains a future compatibility milestone; it is not implied by the
-production status of the 0.1 line.
+The source tree carries the production `0.1.1` patch release candidate. Native
+wheels are optional optimizations and must never remove features from the pure
+fallback. The 1.0 API remains a future compatibility milestone; it is not
+implied by the production status of the 0.1 line.
 
 ## Documentation
 

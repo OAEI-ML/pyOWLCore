@@ -288,11 +288,10 @@ def check_generated_ledgers(root: Path) -> tuple[str, ...]:
         pyowl_core.ADAPTER_PROTOCOL_VERSION,
         pyowl_core.MODEL_SCHEMA_VERSION,
         pyowl_core.WIRE_FORMAT_VERSION,
-        pyowl_core.__version__,
     )
-    expected_runtime = ((0, 1), 1, 1, (1, 1), "0.1.0")
+    expected_runtime = ((0, 1), 1, 1, (1, 1))
     if runtime != expected_runtime:
-        errors.append(f"runtime version decision drifted: {runtime!r}")
+        errors.append(f"runtime encoded-contract decision drifted: {runtime!r}")
     return tuple(errors)
 
 

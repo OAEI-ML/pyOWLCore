@@ -1,5 +1,11 @@
 # Migration to pyowl-core
 
+## Updating from 0.1.0 to 0.1.1
+
+No public API, model, wire, adapter, or encoded-view migration is required.
+Upgrade the complete distribution version together; do not combine the
+published `0.1.0` universal files with `0.1.1` native wheels.
+
 ## Purpose
 
 Move shared OWL parsing and structural values into one `OntologyView`. Keep
@@ -81,4 +87,3 @@ is not shipped in the Java-free runtime.
 
 Review [the exact compatibility table](docs/compatibility.md) before widening a
 dependency range or reusing a persisted consumer cache.
-

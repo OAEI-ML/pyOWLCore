@@ -1,0 +1,53 @@
+{
+  "gates": {
+    "advisory_scan": {
+      "evidence": "the exact-source Wheels run must replace this entry with its checksum-bound RustSec evidence",
+      "status": "blocked"
+    },
+    "consumer_matrix": {
+      "evidence": "the recorded five-consumer matrix accepts pyowl-core>=0.1,<0.2 and 0.1.1 preserves API, model, wire, adapter, and encoded-view contracts",
+      "status": "passed"
+    },
+    "legal_review": {
+      "evidence": "the release owner approved the unchanged Apache-2.0 legal and third-party notice boundary; the exact-source supply-chain check remains mandatory",
+      "status": "passed"
+    },
+    "name_control": {
+      "evidence": "the release owner controls the existing pyowl-core PyPI project and authorized the 0.1.1 corrective publication",
+      "status": "passed"
+    },
+    "platform_artifact_audit": {
+      "evidence": "the exact-source Wheels run must replace this entry after all 25 native wheels and five platform manifests pass",
+      "status": "blocked"
+    },
+    "project_urls": {
+      "evidence": "OAEI-ML repository, documentation, and issue URLs remain configured in package metadata",
+      "status": "passed"
+    },
+    "reference_performance": {
+      "evidence": "release owner inherited the accepted paired DOID and retained-native performance evidence because 0.1.1 changes packaging/lifecycle implementation without changing the measured public contracts or semantics",
+      "status": "passed"
+    },
+    "release_owner_approval": {
+      "evidence": "owner-release-authorization.md authorizes an atomic 0.1.1 corrective release without relabeling 0.1.0 evidence",
+      "status": "passed"
+    },
+    "signatures": {
+      "evidence": "release owner waived pre-upload signature gating for the authorized account-token publication; the trusted OIDC workflow remains available for future releases",
+      "status": "passed"
+    },
+    "source_tag_verified": {
+      "evidence": "release owner authorized v0.1.1 creation from the final validated 0.1.1 release commit",
+      "status": "passed"
+    },
+    "testpypi_rehearsal": {
+      "evidence": "release owner waived TestPyPI rehearsal and authorized direct PyPI upload followed by public-index verification",
+      "status": "passed"
+    },
+    "trusted_publishing": {
+      "evidence": "release owner authorized local account-scoped PyPI API-token upload for 0.1.1; protected OIDC publishing remains configured for future releases",
+      "status": "passed"
+    }
+  },
+  "schema": 1
+}
