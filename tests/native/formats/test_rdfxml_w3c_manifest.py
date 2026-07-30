@@ -267,7 +267,12 @@ def _map_triple(triple: Triple, mapping: dict[str, str]) -> Triple:
 
 def test_locked_w3c_rdfxml_corpus_matches_upstream_identity() -> None:
     lock = tomllib.loads(UPSTREAM.read_text())
-    files = tuple(sorted(path for path in CORPUS.rglob("*") if path.is_file() and path != UPSTREAM))
+    files = tuple(
+        sorted(
+            (path for path in CORPUS.rglob("*") if path.is_file() and path != UPSTREAM),
+            key=lambda path: path.relative_to(CORPUS).as_posix(),
+        )
+    )
     digest = hashlib.sha256()
     digest.update(_AGGREGATE_DOMAIN)
     for path in files:

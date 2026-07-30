@@ -5,6 +5,7 @@ import multiprocessing
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -20,6 +21,7 @@ from pyowl_core import (
     encode_snapshot,
     open_snapshot,
 )
+from pyowl_core.wire import mapping as mapping_module
 
 from .conftest import snapshot
 
@@ -85,6 +87,31 @@ def test_context_close_and_dependent_leases(tmp_path: Path) -> None:
     with _open_mapped(path) as context:
         assert context.structural_fingerprint.digest
     assert isinstance(context, MappedOntologySnapshot) and context.closed
+
+
+def test_failed_validation_closes_its_mmap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    encoded = bytearray(encode_snapshot(snapshot("A")))
+    encoded[-1] ^= 1
+    path = tmp_path / "corrupt.pyocore"
+    path.write_bytes(encoded)
+    mappings: list[Any] = []
+    real_mmap = mapping_module._mmap.mmap
+
+    def tracking_mmap(*args: object, **kwargs: object) -> Any:
+        selected = real_mmap(*args, **kwargs)
+        mappings.append(selected)
+        return selected
+
+    monkeypatch.setattr(mapping_module._mmap, "mmap", tracking_mmap)
+
+    with pytest.raises(WireCorruptionError):
+        open_snapshot(path)
+
+    assert len(mappings) == 1
+    assert mappings[0].closed
 
 
 @pytest.mark.skipif(

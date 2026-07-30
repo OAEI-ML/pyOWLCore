@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import gc
-import tracemalloc
+import importlib.util
 from dataclasses import replace
 
 import pytest
@@ -20,6 +20,8 @@ from pyowl_core import (
 )
 
 from .conftest import declaration, snapshot
+
+_HAS_TRACEMALLOC = importlib.util.find_spec("_tracemalloc") is not None
 
 
 class _Lease:
@@ -140,7 +142,10 @@ class _InstrumentedView:
         self.closed = True
 
 
+@pytest.mark.skipif(not _HAS_TRACEMALLOC, reason="interpreter does not provide _tracemalloc")
 def test_million_axiom_overlay_creation_is_delta_sized_and_does_not_iterate() -> None:
+    import tracemalloc
+
     arena = _InstrumentedView(snapshot("A"))
     assert isinstance(arena, OntologyView)
     arena.report_calls = 0
@@ -158,7 +163,10 @@ def test_million_axiom_overlay_creation_is_delta_sized_and_does_not_iterate() ->
     assert peak - before < 512_000
 
 
+@pytest.mark.skipif(not _HAS_TRACEMALLOC, reason="interpreter does not provide _tracemalloc")
 def test_two_million_axiom_composition_retains_arenas_without_iteration() -> None:
+    import tracemalloc
+
     left = _InstrumentedView(snapshot("A"))
     right = _InstrumentedView(snapshot("B"))
     tracemalloc.start()

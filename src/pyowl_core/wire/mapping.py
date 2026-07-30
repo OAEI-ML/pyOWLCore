@@ -6,6 +6,7 @@ import mmap as _mmap
 import os
 import stat
 import threading
+import traceback
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import suppress
 from pathlib import Path
@@ -625,6 +626,12 @@ def open_snapshot(
         mapping = None
         fd = -1
         return MappedOntologySnapshot(state)
+    except BaseException as error:
+        # Validation failures can retain mmap-backed memoryview slices in
+        # traceback frame locals.  Clear those locals before closing the
+        # mapping so Windows does not leave a corrupt cache file locked.
+        traceback.clear_frames(error.__traceback__)
+        raise
     finally:
         if mapping is not None:
             with suppress(BufferError):
