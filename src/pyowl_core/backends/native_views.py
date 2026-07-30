@@ -730,6 +730,11 @@ def _request_encoded_source_v1(
     if type(result) is not EncodedStructuralViewV1 or result._seal is not _VALIDATED_VIEW_SEAL:
         _fail("referenced owner returned an invalid encoded view", "ENCODED_VIEW_SEGMENTS")
     trusted_zero_copy = _trusted_buffer_mode(result.buffers)
+    if trusted_zero_copy is None:
+        # A sealed publication must already have been normalized onto an
+        # approved exporter. Force the immutable-exporter check so mutation of
+        # a sealed view fails at the buffer boundary instead of being copied.
+        trusted_zero_copy = _TRUSTED_ZERO_COPY
     return _freeze_encoded_structural_view_v1(
         result,
         expected_owner=owner,
@@ -1861,6 +1866,8 @@ def _freeze_segments(
                 # Recheck the exporter invariant so object.__setattr__ cannot
                 # turn the validation seal into a zero-copy bypass.
                 source_trust = _trusted_buffer_mode(source.buffers)
+                if source_trust is None:
+                    source_trust = _TRUSTED_ZERO_COPY
             frozen_source = _freeze_encoded_structural_view_v1(
                 source,
                 expected_owner=owner,
