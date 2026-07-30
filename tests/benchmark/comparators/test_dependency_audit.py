@@ -28,7 +28,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyowl-core"
-version = "0.1.0.dev0"
+version = "0.1.0"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 dependencies = []
@@ -57,7 +57,7 @@ recursive-exclude reports/performance/redesign-baseline dependency-audit-*.json
 
 _METADATA = b"""Metadata-Version: 2.4
 Name: pyowl-core
-Version: 0.1.0.dev0
+Version: 0.1.0
 Requires-Python: >=3.10
 License-Expression: Apache-2.0
 Provides-Extra: dev
@@ -378,7 +378,7 @@ def test_supplied_clean_artifact_can_pass(kind: str, tmp_path: Path) -> None:
 @pytest.mark.parametrize("member", ("WHEEL", "RECORD"))
 def test_wheel_requires_complete_dist_info_structure(member: str, tmp_path: Path) -> None:
     root = _clean_repository(tmp_path)
-    dist_info = "pyowl_core-0.1.0.dev0.dist-info"
+    dist_info = "pyowl_core-0.1.0.dist-info"
     artifact = _wheel(tmp_path, {}, omit=frozenset({f"{dist_info}/{member}"}))
 
     row = _artifact_rows(audit_dependency_exclusion(root, (artifact,)))[0]
@@ -389,7 +389,7 @@ def test_wheel_requires_complete_dist_info_structure(member: str, tmp_path: Path
 
 def test_wheel_requires_matching_metadata_and_record_membership(tmp_path: Path) -> None:
     root = _clean_repository(tmp_path)
-    dist_info = "pyowl_core-0.1.0.dev0.dist-info"
+    dist_info = "pyowl_core-0.1.0.dist-info"
     wrong_metadata = _METADATA.replace(b"Name: pyowl-core", b"Name: unrelated")
     artifact = _wheel(tmp_path, {f"{dist_info}/METADATA": wrong_metadata})
     with zipfile.ZipFile(artifact, "a") as archive:
@@ -405,7 +405,7 @@ def test_wheel_requires_matching_metadata_and_record_membership(tmp_path: Path) 
 
 def test_sdist_requires_matching_pyproject_identity(tmp_path: Path) -> None:
     root = _clean_repository(tmp_path)
-    source_root = "pyowl_core-0.1.0.dev0"
+    source_root = "pyowl_core-0.1.0"
     artifact = _sdist(
         tmp_path,
         {
@@ -429,7 +429,7 @@ def test_sdist_requires_matching_pyproject_identity(tmp_path: Path) -> None:
 )
 def test_sdist_requires_identity_and_project_layout(relative: str, tmp_path: Path) -> None:
     root = _clean_repository(tmp_path)
-    source_root = "pyowl_core-0.1.0.dev0"
+    source_root = "pyowl_core-0.1.0"
     artifact = _sdist(tmp_path, {}, omit=frozenset({f"{source_root}/{relative}"}))
 
     row = _artifact_rows(audit_dependency_exclusion(root, (artifact,)))[0]
@@ -539,7 +539,7 @@ def test_artifacts_reject_java_members_and_comparator_payloads(tmp_path: Path) -
 @pytest.mark.parametrize("kind", ("wheel", "sdist"))
 def test_artifacts_scan_packaged_python_and_stub_payloads(kind: str, tmp_path: Path) -> None:
     root = _clean_repository(tmp_path)
-    package = "pyowl_core" if kind == "wheel" else "pyowl_core-0.1.0.dev0/src/pyowl_core"
+    package = "pyowl_core" if kind == "wheel" else "pyowl_core-0.1.0/src/pyowl_core"
     additions = {
         f"{package}/dynamic.py": (
             b'from importlib import import_module as load\nload("py_horned_owl")\n'
@@ -599,8 +599,8 @@ def test_sdist_rejects_comparator_path_and_locked_horned_dependency(tmp_path: Pa
     artifact = _sdist(
         tmp_path,
         {
-            "pyowl_core-0.1.0.dev0/benchmarks/comparators/comparators.toml": b"schema = 1\n",
-            "pyowl_core-0.1.0.dev0/native/Cargo.lock": (
+            "pyowl_core-0.1.0/benchmarks/comparators/comparators.toml": b"schema = 1\n",
+            "pyowl_core-0.1.0/native/Cargo.lock": (
                 b'version = 4\n[[package]]\nname = "horned-owl"\nversion = "1.4.0"\n'
             ),
         },
@@ -619,7 +619,7 @@ def test_wheel_metadata_rejects_py_horned_runtime_dependency(tmp_path: Path) -> 
     artifact = _wheel(
         tmp_path,
         {
-            "pyowl_core-0.1.0.dev0.dist-info/METADATA": (
+            "pyowl_core-0.1.0.dist-info/METADATA": (
                 b"Metadata-Version: 2.4\nName: pyowl-core\nRequires-Dist: py-horned-owl==1.4.0\n"
             )
         },
@@ -705,10 +705,10 @@ def _wheel(
     variant: str = "pure",
     omit: frozenset[str] = frozenset(),
 ) -> Path:
-    dist_info = "pyowl_core-0.1.0.dev0.dist-info"
+    dist_info = "pyowl_core-0.1.0.dist-info"
     tag = "py3-none-any" if variant == "pure" else "cp310-cp310-manylinux_2_28_x86_64"
     entries = {
-        "pyowl_core/__init__.py": b'__version__ = "0.1.0.dev0"\n',
+        "pyowl_core/__init__.py": b'__version__ = "0.1.0"\n',
         f"{dist_info}/METADATA": _METADATA,
         f"{dist_info}/WHEEL": (
             "Wheel-Version: 1.0\n"
@@ -727,7 +727,7 @@ def _wheel(
     record_name = f"{dist_info}/RECORD"
     if record_name not in omit:
         entries[record_name] = _record(entries, record_name)
-    path = root / f"pyowl_core-0.1.0.dev0-{tag}.whl"
+    path = root / f"pyowl_core-0.1.0-{tag}.whl"
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, payload in sorted(entries.items()):
             info = zipfile.ZipInfo(name, date_time=(2025, 1, 1, 0, 0, 0))
@@ -742,12 +742,12 @@ def _sdist(
     *,
     omit: frozenset[str] = frozenset(),
 ) -> Path:
-    source_root = "pyowl_core-0.1.0.dev0"
+    source_root = "pyowl_core-0.1.0"
     entries = {
         f"{source_root}/PKG-INFO": _METADATA,
         f"{source_root}/pyproject.toml": _PYPROJECT.encode(),
         f"{source_root}/setup.py": b"from setuptools import setup\nsetup()\n",
-        f"{source_root}/src/pyowl_core/__init__.py": b'__version__ = "0.1.0.dev0"\n',
+        f"{source_root}/src/pyowl_core/__init__.py": b'__version__ = "0.1.0"\n',
         f"{source_root}/native/Cargo.lock": b"version = 4\n",
         f"{source_root}/native/Cargo.toml": (b'[package]\nname = "fixture"\nversion = "0.0.0"\n'),
         f"{source_root}/native/src/lib.rs": b"",
@@ -757,7 +757,7 @@ def _sdist(
     entries.update(additions)
     for name in omit:
         entries.pop(name, None)
-    path = root / "pyowl_core-0.1.0.dev0.tar.gz"
+    path = root / "pyowl_core-0.1.0.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
         for name, payload in sorted(entries.items()):
             info = tarfile.TarInfo(name)

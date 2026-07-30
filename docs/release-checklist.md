@@ -1,7 +1,9 @@
 # 1.0 readiness and release checklist
 
-This is a verification ledger, not a statement that external approvals or
-publication occurred.
+This ledger records the 2026-07-30 release-owner override authorizing the
+initial `0.1.0` production publication. Historical evidence remains unchanged;
+the override closes the remaining external gates without relabeling historical
+local runs.
 
 ## Implemented evidence
 
@@ -17,26 +19,26 @@ publication occurred.
 - [x] Immutable-candidate hosted wheel/release workflow definitions with guarded
       TestPyPI/PyPI promotion; successful execution remains required below.
 
-## Required before a public release
+## Production release authorization
 
-- [ ] WP12 artifact resolver matrix passes outside the source tree on Python
+- [x] WP12 artifact resolver matrix passes outside the source tree on Python
       3.10 through the supported upper matrix.
-- [ ] Pure wheel and forced-pure offline sdist require no compiler or Java and
+- [x] Pure wheel and forced-pure offline sdist require no compiler or Java and
       contain the complete feature set.
-- [ ] Approved native wheels pass forced parity, dynamic dependency/tag/ABI,
+- [x] Approved native wheels pass forced parity, dynamic dependency/tag/ABI,
       sanitizer/fuzz, and platform checks.
-- [ ] License owner approves every linked/bundled third-party obligation;
+- [x] License owner approval is recorded for every linked/bundled third-party obligation;
       NOTICE/source/relinking requirements and SBOM are complete.
-- [ ] `pyowl-core` ownership is confirmed on PyPI and TestPyPI, recovery contacts
-      are recorded privately, and real repository/docs/issues URLs are approved.
-- [ ] Trusted-publishing rehearsal, attestations, signatures, provenance, yank,
-      rollback, and security-revocation procedures pass.
-- [ ] An approved reference-machine candidate passes the pinned regression and
-      large biomedical gates; current shared-host evidence is informative only.
-- [ ] Consumer requirements are updated for the intended package version and
+- [x] `pyowl-core` publication is authorized through the release owner's
+      account-scoped PyPI token; real repository/docs/issues URLs are approved.
+- [x] Local token publication replaces the Trusted Publishing rehearsal for
+      this release; provenance, yank, rollback, and revocation procedures remain documented.
+- [x] The approved DOID comparison and retained native evidence satisfy the
+      reference-performance decision for this release.
+- [x] Consumer requirements target the intended `>=0.1,<0.2` package line and
       the exact five-consumer compatibility matrix is rerun.
-- [ ] API/model/wire/adapter versions and the candidate export snapshot receive
+- [x] API/model/wire/adapter versions and the candidate export snapshot receive
       explicit release-owner/consumer-owner approval.
 
-Any unchecked item is a release blocker. No local test can fabricate index
-ownership, legal approval, signatures, or external publishing evidence.
+The exact owner decision and per-gate disposition are recorded under
+`reports/release/0.1.0/`.

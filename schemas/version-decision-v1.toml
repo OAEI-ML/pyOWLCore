@@ -9,7 +9,7 @@ model_schema = 1
 api_version = [0, 1]
 adapter_protocol = 1
 wire_format = [1, 1]
-package_version = "0.1.0.dev0"
+package_version = "0.1.0"
 capability_advertised = true
 promotion_owner = "WP17"
 

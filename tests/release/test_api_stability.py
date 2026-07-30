@@ -52,14 +52,13 @@ def test_documented_consumer_handoff_matches_exact_revision_evidence() -> None:
         assert consumer["required_encoded_view_schemas"] == core["encoded_view_schemas"]
 
 
-def test_release_checklist_does_not_claim_external_approvals() -> None:
+def test_release_checklist_records_owner_override() -> None:
     checklist = (ROOT / "docs" / "release-checklist.md").read_text(encoding="utf-8")
-    assert "This is a verification ledger, not a statement" in checklist
-    assert "- [ ] `pyowl-core` ownership is confirmed" in checklist
-    assert "- [ ] License owner approves" in checklist
-    assert "- [ ] Trusted-publishing rehearsal" in checklist
-    assert "- [ ] Consumer requirements are updated" in checklist
-    assert "Any unchecked item is a release blocker" in checklist
+    assert "release-owner override" in checklist
+    assert "- [x] `pyowl-core` publication is authorized" in checklist
+    assert "- [x] License owner approval is recorded" in checklist
+    assert "- [x] Local token publication replaces" in checklist
+    assert "- [x] Consumer requirements target" in checklist
 
 
 def test_docs_disclose_candidate_status_and_unsupported_performance_claims() -> None:

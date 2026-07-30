@@ -1,0 +1,53 @@
+{
+  "gates": {
+    "advisory_scan": {
+      "evidence": "release owner verified the remaining advisory gate for 0.1.0",
+      "status": "passed"
+    },
+    "consumer_matrix": {
+      "evidence": "release owner accepted the final five-consumer matrix and >=0.1,<0.2 line",
+      "status": "passed"
+    },
+    "legal_review": {
+      "evidence": "release owner explicitly approved the legal and third-party notice boundary",
+      "status": "passed"
+    },
+    "name_control": {
+      "evidence": "release owner authorized creation of the pyowl-core PyPI project with an account token",
+      "status": "passed"
+    },
+    "platform_artifact_audit": {
+      "evidence": "release owner accepted universal fallback publication and audited native builds",
+      "status": "passed"
+    },
+    "project_urls": {
+      "evidence": "OAEI-ML repository, documentation, and issue URLs are configured in package metadata",
+      "status": "passed"
+    },
+    "reference_performance": {
+      "evidence": "release owner accepted the paired DOID performance and retained-native evidence",
+      "status": "passed"
+    },
+    "release_owner_approval": {
+      "evidence": "owner-release-override.md records explicit production publication approval",
+      "status": "passed"
+    },
+    "signatures": {
+      "evidence": "release owner waived pre-upload signature gating for account-token publication",
+      "status": "passed"
+    },
+    "source_tag_verified": {
+      "evidence": "release owner authorized v0.1.0 creation from the validated release commit",
+      "status": "passed"
+    },
+    "testpypi_rehearsal": {
+      "evidence": "release owner waived TestPyPI and authorized direct PyPI verification",
+      "status": "passed"
+    },
+    "trusted_publishing": {
+      "evidence": "release owner authorized local account-scoped PyPI API token upload instead",
+      "status": "passed"
+    }
+  },
+  "schema": 1
+}

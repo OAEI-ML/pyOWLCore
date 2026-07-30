@@ -165,7 +165,7 @@ def test_wrapper_metadata_is_independent_of_checkout_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CARGO_PKG_VERSION", "0.1.0-dev.0")
+    monkeypatch.setenv("CARGO_PKG_VERSION", "0.1.0")
     arguments = [
         "--crate-name=_native",
         "--crate-type",

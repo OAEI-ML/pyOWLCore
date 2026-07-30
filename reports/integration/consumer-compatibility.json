@@ -9,7 +9,7 @@
     "direct_safety_commit": "a81665241ae86036a3fbe0325f7bcf43660f3a12",
     "performance_evidence_commit": "4fe32971780e38d2d83932bb93b8c2195bdfcc5f",
     "adapter_contract_commit": "75132daaf8f665b6f72dbbd7c9fcf30ef23e1eb7",
-    "package_version": "0.1.0.dev0",
+    "package_version": "0.1.0",
     "python": ">=3.10",
     "api_version": [0, 1],
     "model_schema": 1,

@@ -11,7 +11,7 @@ from tools.packaging.artifact_inspector import InspectionResult
 from tools.packaging.release_report import REQUIRED_RELEASE_GATES, ReleaseGate
 
 REVISION = "a" * 40
-VERSION = "0.1.0.dev0"
+VERSION = "0.1.0"
 
 
 def _result(

@@ -29,7 +29,7 @@ def audit_metadata(root: Path) -> list[str]:
     text = pyproject.read_text(encoding="utf-8")
     expectations = {
         r'(?m)^name\s*=\s*"pyowl-core"\s*$': "distribution name",
-        r'(?m)^version\s*=\s*"0\.1\.0\.dev0"\s*$': "version",
+        r'(?m)^version\s*=\s*"0\.1\.0"\s*$': "version",
         r'(?m)^requires-python\s*=\s*">=3\.10"\s*$': "Python requirement",
         r'(?m)^license\s*=\s*"Apache-2\.0"\s*$': "SPDX license",
         r'(?m)^license-files\s*=\s*\["LICENSE", "NOTICE", "THIRD_PARTY_LICENSES/\*"\]\s*$': (
@@ -59,7 +59,7 @@ def audit_metadata(root: Path) -> list[str]:
     if not marker.is_file():
         violations.append("metadata: missing py.typed")
     expected_values = {
-        "__version__": "0.1.0.dev0",
+        "__version__": "0.1.0",
         "API_VERSION": (0, 1),
         "MODEL_SCHEMA_VERSION": 1,
         "WIRE_FORMAT_VERSION": (1, 1),

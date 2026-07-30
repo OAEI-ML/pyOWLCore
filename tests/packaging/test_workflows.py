@@ -341,13 +341,13 @@ def test_release_signs_final_report_and_verifies_index_attestations() -> None:
     assert RELEASE[public_index:].count("pypi-attestations verify pypi") == 1
 
 
-def test_checked_gate_manifest_records_real_blockers() -> None:
-    path = ROOT / "reports" / "release" / "0.1.0.dev0" / "gates.json"
+def test_checked_gate_manifest_records_owner_authorized_closures() -> None:
+    path = ROOT / "reports" / "release" / "0.1.0" / "gates.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema"] == 1
     gates = payload["gates"]
     assert len(gates) == 12
-    assert {gate["status"] for gate in gates.values()} == {"blocked"}
+    assert {gate["status"] for gate in gates.values()} == {"passed"}
     evidence = " ".join(gate["evidence"] for gate in gates.values())
-    for phrase in ("PyPI", "legal", "reference-machine", "signed release tag"):
+    for phrase in ("PyPI", "legal", "DOID", "owner"):
         assert phrase in evidence

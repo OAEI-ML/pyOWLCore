@@ -22,7 +22,7 @@ use sha2::{Digest, Sha256};
 const LANE: &str = "pyowl-direct-rust-common";
 const IMPLEMENTATION: &str = "pyowl-core-direct-rust";
 const BOUNDARY: &str = "common-contract-ready";
-const ENGINE_VERSION: &str = "0.1.0.dev0";
+const ENGINE_VERSION: &str = "0.1.0";
 const ENGINE_REVISION: &str = "Cargo.lock SHA-256 plus exact Git revision captured in every report";
 const ENGINE_ARTIFACT: &str = "release direct-engine runner built from native/Cargo.lock";
 const ALLOCATOR: &str = "Rust system allocator";
@@ -62,7 +62,7 @@ const NATIVE_CARGO_LOCK: &[u8] = include_bytes!("../../../../../native/Cargo.loc
 const NATIVE_LOCK_STANZA: &str = concat!(
     "[[package]]\n",
     "name = \"pyowl-core-native\"\n",
-    "version = \"0.1.0-dev.0\"\n",
+    "version = \"0.1.0\"\n",
 );
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);

@@ -56,7 +56,7 @@ print(json.dumps({
             self.assertEqual(evidence["before"], evidence["after"])
             self.assertEqual(evidence["warnings"], [])
             self.assertEqual(evidence["forbidden"], [])
-            self.assertEqual(evidence["version"], "0.1.0.dev0")
+            self.assertEqual(evidence["version"], "0.1.0")
 
     def test_foundation_values_are_hash_seed_deterministic(self) -> None:
         script = """

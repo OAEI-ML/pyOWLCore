@@ -12,7 +12,7 @@ EXPECTED_REPORT = {
     "ok": True,
     "package": "pyowl_core",
     "schema": 1,
-    "version": "0.1.0.dev0",
+    "version": "0.1.0",
     "violations": [],
 }
 

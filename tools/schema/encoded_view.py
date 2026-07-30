@@ -206,7 +206,7 @@ def render_version_decision() -> str:
             "api_version = [0, 1]",
             "adapter_protocol = 1",
             "wire_format = [1, 1]",
-            'package_version = "0.1.0.dev0"',
+            'package_version = "0.1.0"',
             "capability_advertised = true",
             'promotion_owner = "WP17"',
             "",
@@ -290,7 +290,7 @@ def check_generated_ledgers(root: Path) -> tuple[str, ...]:
         pyowl_core.WIRE_FORMAT_VERSION,
         pyowl_core.__version__,
     )
-    expected_runtime = ((0, 1), 1, 1, (1, 1), "0.1.0.dev0")
+    expected_runtime = ((0, 1), 1, 1, (1, 1), "0.1.0")
     if runtime != expected_runtime:
         errors.append(f"runtime version decision drifted: {runtime!r}")
     return tuple(errors)

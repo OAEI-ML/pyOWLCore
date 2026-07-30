@@ -33,7 +33,7 @@ development evidence rather than runtime or release dependencies.
 
 No WP13 implementation change alters equality, constructor semantics, wire
 meaning, or provider negotiation. The candidate therefore remains package
-`0.1.0.dev0`, API `(0,1)`, model schema `1`, wire `(1,1)`, and adapter protocol
+`0.1.0`, API `(0,1)`, model schema `1`, wire `(1,1)`, and adapter protocol
 `1`. Moving the package to `1.0.0` is a coordinated release decision, not a
 documentation edit: every existing consumer currently constrains core to
 `>=0.1,<0.2` and must be retested after its range changes.
