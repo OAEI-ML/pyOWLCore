@@ -970,17 +970,30 @@ def _produce_mapped_direct_view_v1(
         None,
     )
     trusted_zero_copy = _trusted_buffer_mode(buffers)
-    if trusted_zero_copy is not _TRUSTED_MAPPED_ZERO_COPY:
-        trusted_zero_copy = None
-    return _freeze_encoded_structural_view_v1(
-        candidate,
-        expected_owner=owner,
-        expected_scope=scope,
-        expected_document_key=document_key,
-        limits=limits,
-        trusted_zero_copy=trusted_zero_copy,
-        active_views=frozenset(),
-    )
+    if trusted_zero_copy is _TRUSTED_MAPPED_ZERO_COPY:
+        return _freeze_encoded_structural_view_v1(
+            candidate,
+            expected_owner=owner,
+            expected_scope=scope,
+            expected_document_key=document_key,
+            limits=limits,
+            trusted_zero_copy=trusted_zero_copy,
+            active_views=frozenset(),
+        )
+    try:
+        return _freeze_encoded_structural_view_v1(
+            candidate,
+            expected_owner=owner,
+            expected_scope=scope,
+            expected_document_key=document_key,
+            limits=limits,
+            trusted_zero_copy=None,
+            active_views=frozenset(),
+        )
+    finally:
+        # The fallback owns immutable copies, so it must not leave lifecycle
+        # correctness dependent on interpreter-specific finalizer timing.
+        lease.release()
 
 
 def _produce_native_direct_view_v1(
@@ -1697,6 +1710,7 @@ def _freeze_encoded_structural_view_v1(
         _fail(
             "encoded structural fingerprint does not cover the buffers", "ENCODED_VIEW_FINGERPRINT"
         )
+    retained_source = candidate if trusted else expected_owner
     return EncodedStructuralViewV1(
         schema_name,
         schema_version,
@@ -1708,7 +1722,7 @@ def _freeze_encoded_structural_view_v1(
         segments,
         expected_scope,
         expected_document_key,
-        candidate,
+        retained_source,
         _VALIDATED_VIEW_SEAL,
     )
 
@@ -1913,6 +1927,7 @@ def _freeze_segments(
                 )
         elif member_token is not None:
             _fail("only composite member segments have tokens", "ENCODED_VIEW_SEGMENTS")
+        retained_source = raw_segment if trusted else (owner, frozen_source)
         frozen.append(
             EncodedStructuralSegmentV1(
                 role,
@@ -1922,7 +1937,7 @@ def _freeze_segments(
                 root_ids,
                 anonymous_scope_map,
                 member_token,
-                raw_segment,
+                retained_source,
             )
         )
 

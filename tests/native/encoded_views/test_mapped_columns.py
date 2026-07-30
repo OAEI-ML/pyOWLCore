@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import pyowl_core
+import pyowl_core.backends.native_views as native_views_module
 from pyowl_core.exceptions import SnapshotInUseError, WireCorruptionError, WireLimitError
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
 from tests.native.encoded_views._support import (
@@ -63,6 +64,27 @@ def test_mapped_closure_borrows_one_exporter_without_scalar_materialization(
     gc.collect()
     mapped.close()
     assert mapped.closed
+
+
+def test_mapped_copy_fallback_releases_its_lease_deterministically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = complete_constructor_snapshot()
+    expected = scalar_root_bytes(source)
+    path = tmp_path / "copy-fallback.pyocore"
+    path.write_bytes(pyowl_core.encode_snapshot(source))
+    mapped = pyowl_core.open_snapshot(path)
+    assert isinstance(mapped, pyowl_core.MappedOntologySnapshot)
+    monkeypatch.setattr(native_views_module, "_trusted_buffer_mode", lambda _buffers: None)
+
+    encoded = mapped.view(pyowl_core.EncodedStructuralView)
+
+    assert decode_root_canonical_bytes(encoded.buffers) == expected
+    assert all(type(value.obj) is bytes for value in encoded.buffers.values())
+    mapped.close()
+    assert mapped.closed
+    assert decode_root_canonical_bytes(encoded.buffers) == expected
 
 
 def test_legacy_wire_without_columns_falls_back_to_scalar_materialization(
