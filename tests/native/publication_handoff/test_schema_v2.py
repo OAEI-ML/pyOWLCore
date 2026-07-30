@@ -59,6 +59,7 @@ from tools.schema.native_snapshot_publication_v2 import (
 ROOT = Path(__file__).parents[3]
 SCHEMA = ROOT / "schemas" / "native-snapshot-publication-v2.toml"
 RUST_FACADE = ROOT / "native" / "src" / "publication" / "facade_v2.rs"
+RUST_AUXILIARY = ROOT / "native" / "src" / "publication" / "auxiliary.rs"
 _CANONICAL_PREFIX = b"pyowl-core:typed-toml-tree:v1\x00"
 
 
@@ -103,9 +104,13 @@ def _rows(
 
 
 def _rust_digest(name: str) -> bytes:
-    source = RUST_FACADE.read_text(encoding="utf-8")
-    matched = re.search(rf"\b{name}\b[^=]*=\s*\[(.*?)\];", source, re.DOTALL)
-    assert matched is not None, f"missing Rust V2 digest constant {name}"
+    matches = []
+    for path in (RUST_FACADE, RUST_AUXILIARY):
+        source = path.read_text(encoding="utf-8")
+        if matched := re.search(rf"\b{name}\b[^=]*=\s*\[(.*?)\];", source, re.DOTALL):
+            matches.append(matched)
+    assert len(matches) == 1, f"expected one Rust V2 digest constant {name}, found {len(matches)}"
+    matched = matches[0]
     octets = bytes(int(value, 16) for value in re.findall(r"0x([0-9a-fA-F]{2})", matched[1]))
     assert len(octets) == 32, f"Rust V2 digest constant {name} is not bytes32"
     return octets

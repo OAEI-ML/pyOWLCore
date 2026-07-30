@@ -80,14 +80,14 @@ def test_subinterpreter_repeatedly_selects_complete_python_fallback() -> None:
     if not _has_subinterpreter_api():
         pytest.skip("CPython runtime does not expose a subinterpreter test API")
 
-    # Some older CPython patch releases abort while finalizing stdlib ``ssl`` in
-    # a subinterpreter. Isolate that runtime defect before importing pyowl-core,
-    # which exposes the HTTP resolver and therefore imports ``ssl``.
-    preflight = _run_isolated("--preflight-ssl", "--repetitions", "1")
+    # Some CPython builds cannot load or finalize the stdlib C extensions used
+    # by the HTTP and XML parsers in a legacy subinterpreter. Isolate those
+    # runtime limitations before importing pyowl-core.
+    preflight = _run_isolated("--preflight-stdlib", "--repetitions", "1")
     if preflight.returncode != 0:
         pytest.skip(
-            "this CPython build cannot safely finalize its own ssl module in a "
-            "subinterpreter"
+            "this CPython build cannot safely load or finalize its ssl/pyexpat "
+            "modules in a subinterpreter"
         )
 
     completed = _run_isolated("--repetitions", "8")

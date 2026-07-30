@@ -77,7 +77,7 @@ def test_wheel_matrix_covers_supported_runtime_and_platforms() -> None:
         "windows-latest",
     ):
         assert runner in WHEELS
-    assert "rustup toolchain install 1.83.0" in WHEELS
+    assert "rustup toolchain install 1.97.1" in WHEELS
     assert "--default-toolchain 1.83.0" in WHEELS
     assert "pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55" in WHEELS
     assert 'MACOSX_DEPLOYMENT_TARGET: "13.0"' in WHEELS
@@ -105,7 +105,7 @@ def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
         "test_rust_process_lifecycle.py",
         "PYOWL_CORE_TEST_HOOKS_REQUIRED",
         "-k free_threaded",
-        "cargo-fuzz --version 0.12.0 --locked",
+        "cargo-fuzz --version 0.13.2 --locked",
         "--sanitizer address functional",
         "--sanitizer address wire",
         "-max_total_time=60",
@@ -165,7 +165,8 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         ".cibw-target-$PYOWL_CORE_BUILD_PASS",
         "PYOWL_CORE_BUILD_PASS: candidate",
         "PYOWL_CORE_BUILD_PASS: rebuild",
-        "python -m pytest -q -p no:cacheprovider {project}/tests",
+        "sys.path.insert(0, project)",
+        "pytest.main(['-q', '-p', 'no:cacheprovider'",
         "PYOWL_CORE_TEST_NATIVE_LIBRARY=1",
         "CIBW_TEST_ENVIRONMENT",
         "assert len(results) == 29",

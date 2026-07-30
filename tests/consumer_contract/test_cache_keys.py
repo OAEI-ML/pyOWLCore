@@ -58,7 +58,7 @@ def test_cache_comparison_is_exhaustive_and_fail_closed() -> None:
         consumer_version="9.0",
         compiler_schema="old-ir/1",
         compatibility_id="old-semantics",
-        core_package_version="0.1.0",
+        core_package_version="9.0.0",
         semantic_options_sha256=b"x" * 32,
     )
     report = compare_cache_keys(actual, expected)

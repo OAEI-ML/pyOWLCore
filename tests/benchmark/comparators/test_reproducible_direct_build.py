@@ -4,7 +4,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10
+    import tomli as tomllib
 
 from tools.benchmark.comparators import build_direct_runner as build_module
 from tools.benchmark.comparators.build_direct_runner import (

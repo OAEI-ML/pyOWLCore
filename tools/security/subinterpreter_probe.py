@@ -89,13 +89,18 @@ def _run(statement: str, repetitions: int) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repetitions", type=int, default=8)
-    parser.add_argument("--preflight-ssl", action="store_true")
+    parser.add_argument(
+        "--preflight-stdlib",
+        "--preflight-ssl",
+        dest="preflight_stdlib",
+        action="store_true",
+    )
     arguments = parser.parse_args(argv)
     if arguments.repetitions < 1:
         parser.error("--repetitions must be positive")
 
-    mode = "stdlib-ssl-preflight" if arguments.preflight_ssl else "python-fallback"
-    statement = "import ssl" if arguments.preflight_ssl else _FALLBACK_PROBE
+    mode = "stdlib-preflight" if arguments.preflight_stdlib else "python-fallback"
+    statement = "import pyexpat\nimport ssl" if arguments.preflight_stdlib else _FALLBACK_PROBE
     api = _run(statement, arguments.repetitions)
     print(
         json.dumps(
@@ -106,7 +111,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "api": api,
                 "interpreters_created": arguments.repetitions,
                 "interpreters_destroyed": arguments.repetitions,
-                "documents_parsed": 0 if arguments.preflight_ssl else arguments.repetitions,
+                "documents_parsed": 0 if arguments.preflight_stdlib else arguments.repetitions,
                 "native_extension_import_attempts": 0,
             },
             sort_keys=True,

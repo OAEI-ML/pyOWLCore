@@ -21,7 +21,7 @@ from typing import Literal, cast
 from tools.packaging.artifact_inspector import inspect_artifact
 
 try:
-    import tomllib  # type: ignore[import-untyped, unused-ignore]
+    import tomllib  # type: ignore[import-not-found, import-untyped, unused-ignore]
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10
     import tomli as tomllib  # type: ignore[import-not-found, import-untyped, unused-ignore]
 

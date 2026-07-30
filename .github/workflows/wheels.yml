@@ -31,17 +31,19 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - name: Select the Rust MSRV
+      - name: Select the pinned artifact toolchain
         run: |
-          rustup toolchain install 1.83.0 --profile minimal --no-self-update
-          rustup default 1.83.0
-          rustc --version | grep 'rustc 1.83.0'
+          rustup toolchain install 1.97.1 --profile minimal --no-self-update
+          rustup default 1.97.1
+          rustc --version | grep 'rustc 1.97.1'
       - name: Install pinned build tools
         run: >-
           python -m pip install
           build==1.5.0 setuptools==83.0.0 wheel==0.45.1
       - name: Validate dependency and license evidence
-        run: python -m tools.packaging.supply_chain --check --output-dir reports/release/0.1.0
+        run: |
+          python -m tools.packaging.supply_chain --output-dir candidate/supply-chain
+          python -m tools.packaging.supply_chain --check --output-dir candidate/supply-chain
       - name: Run the maintained RustSec advisory scan
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
@@ -79,9 +81,7 @@ jobs:
           candidate/dist/*
           --output candidate/source-inspection.json
       - name: Emit deterministic SBOMs
-        run: >-
-          python -m tools.packaging.supply_chain
-          --output-dir candidate/supply-chain
+        run: python -m tools.packaging.supply_chain --check --output-dir candidate/supply-chain
       - name: Record checksums
         run: |
           mkdir -p source-artifact
@@ -175,7 +175,11 @@ jobs:
         python -c "import pyowl_core._native as n;
         n.self_test();
         assert n.WIRE_FORMAT_VERSION == (1, 1)" &&
-        python -m pytest -q -p no:cacheprovider {project}/tests &&
+        python -c "import os, sys, pytest;
+        project = os.path.realpath(r'{project}');
+        sys.path.insert(0, project);
+        raise SystemExit(pytest.main(['-q', '-p', 'no:cacheprovider',
+        os.path.join(project, 'tests')]))" &&
         python {project}/docs/examples/parse_once.py &&
         python {project}/docs/examples/secure_local_import.py
       MACOSX_DEPLOYMENT_TARGET: "13.0"
@@ -210,12 +214,12 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - name: Select the Rust MSRV
+      - name: Select the pinned artifact toolchain
         shell: bash
         run: |
-          rustup toolchain install 1.83.0 --profile minimal --no-self-update
-          rustup default 1.83.0
-          rustc --version | grep 'rustc 1.83.0'
+          rustup toolchain install 1.97.1 --profile minimal --no-self-update
+          rustup default 1.97.1
+          rustc --version | grep 'rustc 1.97.1'
           cargo --version
       - name: Build and test version-specific native wheels
         uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55 # v4.1.0

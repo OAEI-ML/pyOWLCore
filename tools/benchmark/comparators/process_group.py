@@ -36,13 +36,16 @@ class _ProcessExitObserver:
         observer = cls(pid=process.pid, owner_pid=os.getpid())
         if hasattr(os, "waitid") and hasattr(os, "WNOWAIT"):
             return observer
-        if hasattr(select, "kqueue") and hasattr(select, "KQ_NOTE_EXIT"):
-            queue = select.kqueue()
-            change = select.kevent(
+        select_api = vars(select)
+        if "kqueue" in select_api and "KQ_NOTE_EXIT" in select_api:
+            kqueue = select_api["kqueue"]
+            kevent = select_api["kevent"]
+            queue = kqueue()
+            change = kevent(
                 process.pid,
-                filter=select.KQ_FILTER_PROC,
-                flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
-                fflags=select.KQ_NOTE_EXIT,
+                filter=select_api["KQ_FILTER_PROC"],
+                flags=select_api["KQ_EV_ADD"] | select_api["KQ_EV_ENABLE"],
+                fflags=select_api["KQ_NOTE_EXIT"],
             )
             try:
                 events = queue.control([change], 1, 0)
