@@ -323,7 +323,15 @@ jobs:
         run: |
           python -m pip install delvewheel==1.11.2
           New-Item -ItemType Directory -Force platform-audit | Out-Null
-          $dumpbin = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe' |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere)) { throw 'vswhere.exe was not found' }
+          $installation = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $installation) { throw 'Visual Studio C++ tools were not found' }
+          $dumpbin = Get-ChildItem `
+            (Join-Path $installation 'VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe') `
+            -File -ErrorAction SilentlyContinue |
             Sort-Object FullName | Select-Object -Last 1
           if (-not $dumpbin) { throw 'dumpbin.exe was not found' }
           $env:PATH = "$($dumpbin.Directory.FullName);$env:PATH"

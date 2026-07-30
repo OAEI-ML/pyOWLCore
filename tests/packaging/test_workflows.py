@@ -192,6 +192,9 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         "--ignore=tests/benchmark/comparators",
         "--no-index",
         "*-py3-none-any.whl",
+        "vswhere.exe",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "-ErrorAction SilentlyContinue",
     ):
         assert requirement in WHEELS
     assert "PYOWL_CORE_BUILD_NATIVE=0" in WHEELS
@@ -199,6 +202,7 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
     assert "group: wheels-${{ github.ref }}" in WHEELS
     assert "cancel-in-progress: true" in WHEELS
     assert 'rust_flags.append("-Clink-arg=/Brepro")' in BUILD_HELPER
+    assert "Visual Studio\\2022" not in WHEELS
     assert "abi3" not in WHEELS.casefold()
     assert "free-thread" not in WHEELS.casefold()
     for command in (
