@@ -133,9 +133,6 @@ def build_native_extension(
             "/rust/cargo-git",
         )
     )
-    if sys.platform == "darwin":
-        # Apple's linker otherwise emits a fresh LC_UUID for byte-identical inputs.
-        rust_flags.extend(("-C", "link-arg=-Wl,-no_uuid"))
     selected["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(rust_flags)
     selected.pop("RUSTFLAGS", None)
     try:

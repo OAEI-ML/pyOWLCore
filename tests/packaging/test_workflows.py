@@ -77,7 +77,7 @@ def test_wheel_matrix_covers_supported_runtime_and_platforms() -> None:
         "windows-latest",
     ):
         assert runner in WHEELS
-    assert "rustup toolchain install 1.97.1" in WHEELS
+    assert "rustup toolchain install 1.83.0" in WHEELS
     assert "--default-toolchain 1.83.0" in WHEELS
     assert "pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55" in WHEELS
     assert 'MACOSX_DEPLOYMENT_TARGET: "13.0"' in WHEELS

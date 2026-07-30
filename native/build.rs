@@ -14,6 +14,12 @@ const GENERATED_DESCRIPTOR: &str = "encoded-view-v1.json";
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(fuzzing)");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        // Apply deterministic Mach-O linking only to this crate's cdylib.
+        // A global rustflag also reaches proc-macro dependencies, whose
+        // dylibs Rust 1.83 cannot load after LC_UUID removal.
+        println!("cargo:rustc-cdylib-link-arg=-Wl,-no_uuid");
+    }
     if let Err(error) = generate_encoded_view_schema() {
         panic!("cannot generate native encoded-view schema: {error}");
     }

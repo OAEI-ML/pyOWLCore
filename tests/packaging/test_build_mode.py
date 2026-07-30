@@ -10,6 +10,8 @@ import pytest
 
 import pyowl_build
 
+ROOT = Path(__file__).parents[2]
+
 
 @pytest.mark.parametrize(
     ("value", "expected"),
@@ -142,7 +144,7 @@ def test_native_artifact_path_honours_target_configuration(tmp_path: Path) -> No
     )
 
 
-def test_macos_native_build_disables_nondeterministic_linker_uuid(
+def test_macos_native_build_keeps_proc_macro_link_flags_loadable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -170,7 +172,14 @@ def test_macos_native_build_disables_nondeterministic_linker_uuid(
         environment=environment,
     ) == artifact
     flags = captured["CARGO_ENCODED_RUSTFLAGS"].split("\x1f")
-    assert flags[-2:] == ["-C", "link-arg=-Wl,-no_uuid"]
+    assert "link-arg=-Wl,-no_uuid" not in flags
+
+
+def test_native_cdylib_disables_nondeterministic_macos_linker_uuid() -> None:
+    build_script = (ROOT / "native" / "build.rs").read_text(encoding="utf-8")
+
+    assert 'env::var("CARGO_CFG_TARGET_OS")' in build_script
+    assert 'println!("cargo:rustc-cdylib-link-arg=-Wl,-no_uuid")' in build_script
 
 
 def test_macos_extension_install_name_is_reproducible(
