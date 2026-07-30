@@ -191,6 +191,7 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
 
 
 def test_release_consumes_verified_artifacts_and_never_rebuilds() -> None:
+    assert 'test "$GITHUB_REPOSITORY" = "OAEI-ML/pyOWLCore"' in RELEASE
     assert "wheels_run_id" in RELEASE
     assert "performance_run_id" in RELEASE
     assert "run-id: ${{ inputs.wheels_run_id }}" in RELEASE

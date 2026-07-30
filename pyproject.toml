@@ -27,6 +27,12 @@ classifiers = [
 ]
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/OAEI-ML/pyOWLCore"
+Repository = "https://github.com/OAEI-ML/pyOWLCore"
+Documentation = "https://github.com/OAEI-ML/pyOWLCore/tree/main/docs"
+Issues = "https://github.com/OAEI-ML/pyOWLCore/issues"
+
 [project.optional-dependencies]
 dev = [
   "build>=1.2",

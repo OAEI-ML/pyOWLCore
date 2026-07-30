@@ -36,6 +36,19 @@ def audit_metadata(root: Path) -> list[str]:
             "license files"
         ),
         r"(?ms)^dependencies\s*=\s*\[\s*\]": "empty runtime dependencies",
+        (
+            r'(?m)^Homepage\s*=\s*"https://github\.com/OAEI-ML/pyOWLCore"\s*$'
+        ): "homepage URL",
+        (
+            r'(?m)^Repository\s*=\s*"https://github\.com/OAEI-ML/pyOWLCore"\s*$'
+        ): "repository URL",
+        (
+            r'(?m)^Documentation\s*=\s*"https://github\.com/OAEI-ML/'
+            r'pyOWLCore/tree/main/docs"\s*$'
+        ): "documentation URL",
+        (
+            r'(?m)^Issues\s*=\s*"https://github\.com/OAEI-ML/pyOWLCore/issues"\s*$'
+        ): "issues URL",
     }
     for pattern, label in expectations.items():
         if not re.search(pattern, text):

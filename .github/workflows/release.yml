@@ -41,6 +41,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ inputs.tag }}
+      - name: Verify official repository
+        run: test "$GITHUB_REPOSITORY" = "OAEI-ML/pyOWLCore"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
