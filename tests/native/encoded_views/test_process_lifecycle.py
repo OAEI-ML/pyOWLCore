@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import mmap
 import os
 import select
 import signal
@@ -176,6 +177,9 @@ def test_mapped_view_retains_inherited_mapping_across_fork(tmp_path: Path) -> No
     mapped = pyowl_core.open_snapshot(path)
     assert isinstance(mapped, pyowl_core.MappedOntologySnapshot)
     encoded_holder = [mapped.view(pyowl_core.EncodedStructuralView)]
+    mapped_zero_copy = (
+        type(next(iter(encoded_holder[0].buffers.values())).obj) is mmap.mmap
+    )
 
     read_fd, write_fd = os.pipe()
     child = os.fork()
@@ -190,9 +194,13 @@ def test_mapped_view_retains_inherited_mapping_across_fork(tmp_path: Path) -> No
     os.close(write_fd)
     assert _wait_for_child(read_fd, child) == b"ENCODED_VIEW_FORK_OK"
     assert decode_root_canonical_bytes(encoded_holder[0].buffers) == expected
-    with pytest.raises(SnapshotInUseError):
+    if not mapped_zero_copy:
         mapped.close()
-    encoded_holder.clear()
-    gc.collect()
-    mapped.close()
+        assert decode_root_canonical_bytes(encoded_holder[0].buffers) == expected
+    else:
+        with pytest.raises(SnapshotInUseError):
+            mapped.close()
+        encoded_holder.clear()
+        gc.collect()
+        mapped.close()
     assert mapped.closed

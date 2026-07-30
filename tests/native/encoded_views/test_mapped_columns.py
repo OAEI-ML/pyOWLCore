@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import gc
 import mmap
-import platform
 from pathlib import Path
 
 import pytest
@@ -49,20 +48,24 @@ def test_mapped_closure_borrows_one_exporter_without_scalar_materialization(
     assert mapped._mapped_state.decoded is None
     exporters = tuple(value.obj for value in encoded.buffers.values())
     assert exporters
-    if platform.python_implementation() == "PyPy":
-        # PyPy does not expose mmap as the direct memoryview exporter. The
-        # validation boundary therefore uses the immutable-copy fallback.
-        assert all(type(value) is bytes for value in exporters)
-    else:
-        assert type(exporters[0]) is mmap.mmap
+    mapped_zero_copy = type(exporters[0]) is mmap.mmap
+    if mapped_zero_copy:
         assert all(value is exporters[0] for value in exporters)
+    else:
+        # Interpreters that do not expose mmap as the direct memoryview
+        # exporter use the immutable-copy fallback.
+        assert all(type(value) is bytes for value in exporters)
     assert all(value.readonly for value in encoded.buffers.values())
 
-    with pytest.raises(SnapshotInUseError):
+    if not mapped_zero_copy:
         mapped.close()
-    del encoded
-    gc.collect()
-    mapped.close()
+        assert decode_root_canonical_bytes(encoded.buffers) == expected
+    else:
+        with pytest.raises(SnapshotInUseError):
+            mapped.close()
+        del encoded
+        gc.collect()
+        mapped.close()
     assert mapped.closed
 
 
