@@ -616,7 +616,7 @@ jobs:
             cd candidate
             sha256sum dist/* | LC_ALL=C sort > SHA256SUMS
           )
-          python -m tools.packaging.release_report candidate/dist --source-revision "${{ github.sha }}" --gate-file candidate/gates.json --output candidate/release-report.json
+          python -m tools.packaging.release_report candidate/dist --source-revision "${{ github.sha }}" --gate-file candidate/gates.json --output candidate/release-report.json --require-ready
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-candidate-${{ github.sha }}

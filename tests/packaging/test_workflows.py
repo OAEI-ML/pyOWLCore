@@ -51,6 +51,7 @@ def test_every_external_action_is_pinned_to_a_full_commit() -> None:
 
 
 def test_locked_test_corpora_have_platform_stable_checkout_bytes() -> None:
+    assert "* text=auto eol=lf" in GIT_ATTRIBUTES
     assert "tests/data/** text eol=lf" in GIT_ATTRIBUTES
     assert "tests/data/**/*.gz -text" in GIT_ATTRIBUTES
     assert "tests/data/**/*.zip -text" in GIT_ATTRIBUTES
@@ -166,6 +167,7 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         "tools.packaging.import_probe",
         "tools.packaging.supply_chain",
         "tools.packaging.release_report",
+        "--require-ready",
         "tools.packaging.platform_audit audit",
         "tools.packaging.platform_audit verify-set",
         "cargo audit --deny warnings",
