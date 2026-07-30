@@ -163,6 +163,12 @@ def test_direct_runner_uses_the_python_free_native_feature_seam() -> None:
         if isinstance(package, dict) and isinstance(package.get("name"), str)
     }
     assert "pyo3" not in direct_packages
+    locked_native = next(
+        package
+        for package in direct_lock["package"]
+        if isinstance(package, dict) and package.get("name") == "pyowl-core-native"
+    )
+    assert locked_native["version"] == native_manifest["package"]["version"]
     assert "pyo3-build-config" not in direct_packages
     assert '#[cfg(feature = "extension-module")]' in native_build
     assert "pyo3_build_config::add_extension_module_link_args();" in native_build
