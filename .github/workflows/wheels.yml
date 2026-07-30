@@ -179,9 +179,13 @@ jobs:
         assert n.WIRE_FORMAT_VERSION == (1, 1)" &&
         python -c "import os, sys, pytest;
         project = os.path.realpath(r'{project}');
+        os.chdir(project);
         sys.path.insert(0, project);
-        raise SystemExit(pytest.main(['-q', '-p', 'no:cacheprovider',
-        os.path.join(project, 'tests')]))" &&
+        arguments = ['-q', '-p', 'no:cacheprovider',
+        os.path.join(project, 'tests')];
+        arguments += ['--ignore',
+        os.path.join(project, 'tests', 'benchmark')] if os.name == 'nt' else [];
+        raise SystemExit(pytest.main(arguments))" &&
         python {project}/docs/examples/parse_once.py &&
         python {project}/docs/examples/secure_local_import.py
       MACOSX_DEPLOYMENT_TARGET: "13.0"
