@@ -12,6 +12,7 @@ CI = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
 NATIVE_SAFETY = (WORKFLOWS / "native-safety.yml").read_text(encoding="utf-8")
 NATIVE_PERFORMANCE = (WORKFLOWS / "native-performance.yml").read_text(encoding="utf-8")
 PLATFORM_AUDIT = (ROOT / "tools" / "packaging" / "platform_audit.py").read_text(encoding="utf-8")
+GIT_ATTRIBUTES = (ROOT / ".gitattributes").read_text(encoding="utf-8")
 DIRECT_RUNNER_BUILD = (
     ROOT / "tools" / "benchmark" / "comparators" / "build_direct_runner.py"
 ).read_text(encoding="utf-8")
@@ -46,6 +47,12 @@ def test_every_external_action_is_pinned_to_a_full_commit() -> None:
         assert actions
         for action in actions:
             assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", action), action
+
+
+def test_locked_test_corpora_have_platform_stable_checkout_bytes() -> None:
+    assert "tests/data/** text eol=lf" in GIT_ATTRIBUTES
+    assert "tests/data/**/*.gz -text" in GIT_ATTRIBUTES
+    assert "tests/data/**/*.zip -text" in GIT_ATTRIBUTES
 
 
 def test_ci_container_images_are_pinned_to_exact_manifests() -> None:

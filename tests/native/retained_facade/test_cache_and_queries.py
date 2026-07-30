@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -28,6 +27,7 @@ from pyowl_core.diagnostics import SourceSpan
 from pyowl_core.document.native_storage import (
     _deep_size,
     _NativeSharedState,
+    _shallow_size,
     ontology_snapshot_from_native_publication_v2,
 )
 from pyowl_core.document.provenance import SourceMap
@@ -244,7 +244,7 @@ def test_cache_drops_an_empty_grown_container_after_candidate_eviction() -> None
     admission_bytes = (
         _deep_size(key, visited)
         + _deep_size((decoded, 1), visited)
-        + sys.getsizeof(OrderedDict())
+        + _shallow_size(OrderedDict())
     )
     values = publication_fields()
     options = cast(LoadOptions, values["load_options"])

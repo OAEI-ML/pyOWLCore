@@ -127,7 +127,6 @@ _STRUCTURAL_COLLECTIONS = frozenset(
 )
 _MISSING = object()
 _REPLACE_ERROR = "native ontology facades cannot be replaced; materialize them first"
-_EMPTY_CACHE_BYTES = sys.getsizeof(OrderedDict())
 _WIRE_STRUCTURAL_ALIAS_SEAL_V1 = object()
 _NO_ANONYMOUS_SCOPES_SEAL_V2 = object()
 _COMMON_CONTRACT_RECORD_INVENTORY_DOMAIN_V1 = (
@@ -268,6 +267,31 @@ class _NativeIngestionCountersV2:
                 raise ValueError(f"{name} must be a nonnegative integer")
 
 
+def _shallow_size(value: object) -> int:
+    """Return a bounded cache charge on CPython and PyPy.
+
+    PyPy deliberately does not implement ``sys.getsizeof`` because its object
+    graph shares storage in ways that make isolated measurements misleading.
+    Native wheels currently target CPython, but the pure wheel must still be
+    importable and testable on PyPy, so use a conservative logical charge
+    there.  CPython retains its exact interpreter-provided accounting.
+    """
+
+    try:
+        return sys.getsizeof(value)
+    except TypeError:
+        if isinstance(value, (str, bytes, bytearray)):
+            return 64 + len(value)
+        if isinstance(value, Mapping):
+            return 128 + 64 * len(value)
+        if isinstance(value, (tuple, list, set, frozenset, CanonicalSet)):
+            return 64 + 16 * len(value)
+        return 64
+
+
+_EMPTY_CACHE_BYTES = _shallow_size(OrderedDict())
+
+
 def _deep_size(value: object, seen: set[int] | None = None) -> int:
     """Return a conservative recursive charge for an immutable cached value."""
 
@@ -276,7 +300,7 @@ def _deep_size(value: object, seen: set[int] | None = None) -> int:
     if identity in visited:
         return 0
     visited.add(identity)
-    total = sys.getsizeof(value)
+    total = _shallow_size(value)
     if isinstance(value, Mapping):
         return total + sum(
             _deep_size(key, visited) + _deep_size(item, visited) for key, item in value.items()
@@ -420,7 +444,7 @@ class _NativeSharedState:
     def _retained_cache_bytes(self) -> int:
         if self._cache is None:
             return 0
-        return sys.getsizeof(self._cache) + self._cache_entry_bytes
+        return _shallow_size(self._cache) + self._cache_entry_bytes
 
     def counters(self) -> NativePythonFacadeCountersV2:
         self._after_fork()

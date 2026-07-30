@@ -1,1 +1,3 @@
-tests/data/** -text
+tests/data/** text eol=lf
+tests/data/**/*.gz -text
+tests/data/**/*.zip -text

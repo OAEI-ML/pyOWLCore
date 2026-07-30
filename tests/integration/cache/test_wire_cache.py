@@ -19,7 +19,8 @@ def test_atomic_write_mode_digest_and_crash_cleanup(
     path = tmp_path / "snapshot.pyocore"
     digest = write_snapshot(source, path, durability=DurabilityPolicy.FULL)
     assert digest.digest == path.read_bytes()[56:88]
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
     failed = tmp_path / "failed.pyocore"
     original_replace = os.replace
@@ -40,13 +41,24 @@ def test_atomic_write_uses_path_chmod_when_descriptor_chmod_is_unavailable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    chmod_calls: list[tuple[object, int]] = []
+    original_chmod = cache_module.os.chmod
+
+    def recording_chmod(path: object, mode: int) -> None:
+        chmod_calls.append((path, mode))
+        original_chmod(path, mode)
+
     monkeypatch.delattr(cache_module.os, "fchmod", raising=False)
+    monkeypatch.setattr(cache_module.os, "chmod", recording_chmod)
     path = tmp_path / "portable.pyocore"
 
     write_snapshot(snapshot("A"), path, durability=DurabilityPolicy.NONE)
 
     assert path.is_file()
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert len(chmod_calls) == 1
+    assert chmod_calls[0][1] == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_concurrent_publish_converges_and_corruption_is_quarantined(tmp_path: Path) -> None:

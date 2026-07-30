@@ -129,10 +129,12 @@ class WireCache:
             if target.exists():
                 try:
                     existing = open_snapshot(target, limits=self.limits, verify=True)
-                    if existing.structural_fingerprint != structural:
-                        raise WireCorruptionError("cache entry structural key mismatch")
-                    if isinstance(existing, MappedOntologySnapshot):
-                        existing.close()
+                    try:
+                        if existing.structural_fingerprint != structural:
+                            raise WireCorruptionError("cache entry structural key mismatch")
+                    finally:
+                        if isinstance(existing, MappedOntologySnapshot):
+                            existing.close()
                     return CacheEntry(structural, wire, target)
                 except (WireError, OSError):
                     self._quarantine(target)
@@ -399,7 +401,7 @@ def _publish_bytes(
         if temporary is not None:
             os.replace(temporary, target)
             temporary = None
-        if durability is DurabilityPolicy.FULL:
+        if durability is DurabilityPolicy.FULL and os.name != "nt":
             directory_fd = os.open(target.parent, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
             try:
                 os.fsync(directory_fd)
