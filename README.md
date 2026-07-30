@@ -1,5 +1,9 @@
 # pyowl-core
 
+[![PyPI](https://img.shields.io/pypi/v/pyowl-core)](https://pypi.org/project/pyowl-core/)
+[![Python](https://img.shields.io/pypi/pyversions/pyowl-core)](https://pypi.org/project/pyowl-core/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 `pyowl-core` is a Java-free OWL 2 structural kernel for Python 3.10 and newer.
 It parses an ontology once and exposes the same immutable view to Exact-OM,
 pyELK, pyHermiT, pyOwl2Vec-Star-projector, and OAEI evaluation code. Consumers
@@ -11,6 +15,19 @@ stabilization candidate. It is not yet a published 1.0 release: hosted artifact
 verification, external publication, legal, security, reference-platform
 performance, and coordinated consumer gates remain in
 [the release checklist](docs/release-checklist.md).
+
+## Installation
+
+```bash
+python -m pip install pyowl-core
+```
+
+The portable wheel provides the complete Python implementation without Java or
+a native compiler. Compatible platform wheels may add private Rust
+acceleration, but public behavior and values remain identical. Use
+`BackendPreference.PYTHON` for a quiet, explicit portable path or
+`BackendPreference.NATIVE` when acceleration is required and fallback would be
+an error.
 
 ## Quick start
 
@@ -57,16 +74,18 @@ It deliberately does not classify, realize, check consistency, project graph
 edges, repair an ontology, or expose consumer-private IDs. See
 [architecture and view lifecycles](docs/views-and-architecture.md).
 
-## Installation status
+## Release status
 
-The intended distribution name is `pyowl-core`; control of that provisional
-name must be confirmed before publication. The pure build requires no compiler
-and no Java runtime. Native wheels are optional optimizations and must never
-remove features from the pure fallback. Until release artifacts are published,
-install from a reviewed checkout rather than assuming a PyPI release exists.
+The distribution name is `pyowl-core`; the import package is `pyowl_core`.
+The source tree is a pre-1.0 development candidate and is not yet a published
+1.0 release. Native wheels are optional optimizations and must never remove
+features from the pure fallback. Release owners must complete the external
+artifact, legal, security, and trusted-publishing gates before promoting a
+candidate.
 
 ## Documentation
 
+- [Documentation index](docs/index.md)
 - [API guide](docs/api.md)
 - [Documents, snapshots, views, overlays, and composites](docs/views-and-architecture.md)
 - [Parse-once consumer handoff](docs/consumer-handoff.md)
@@ -82,7 +101,7 @@ Normative requirements begin at [the master specification](specs/SPEC.md).
 
 ## Compatibility boundary
 
-- Distribution: `pyowl-core` (provisional until the name-control gate passes)
+- Distribution: `pyowl-core`
 - Import: `pyowl_core`
 - Python: `>=3.10`
 - Current package line: `0.1.x` development candidate

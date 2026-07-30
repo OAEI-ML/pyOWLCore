@@ -4,6 +4,29 @@ This documentation describes the implemented 0.1 development candidate and
 the evidence required before 1.0. Normative behavior remains defined by the
 files under `specs/`; examples never override those contracts.
 
+## Install
+
+```bash
+python -m pip install pyowl-core
+```
+
+The distribution is `pyowl-core`; Python code imports `pyowl_core`. The
+portable implementation is complete and compiler-free. Native wheels are
+optional accelerators with the same public values and semantics.
+
+## Start here
+
+- New users: run [`examples/parse_once.py`](examples/parse_once.py), then read
+  the [API guide](api.md).
+- Applications sharing ontologies across components: read
+  [consumer handoff](consumer-handoff.md).
+- Applications resolving imports or handling untrusted inputs: read
+  [security](security.md).
+- Deployments requiring native acceleration: read
+  [troubleshooting](troubleshooting.md) and [performance](performance.md).
+
+## Reference
+
 - [API guide](api.md)
 - [View and ownership architecture](views-and-architecture.md)
 - [Consumer handoff](consumer-handoff.md)

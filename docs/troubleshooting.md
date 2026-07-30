@@ -1,5 +1,17 @@
 # Troubleshooting
 
+## Confirm the installed package
+
+The distribution is named `pyowl-core`, while the import is `pyowl_core`:
+
+```bash
+python -m pip show pyowl-core
+python -c "import pyowl_core; print(pyowl_core.__version__)"
+```
+
+If Python imports a checkout instead of the intended wheel, run the command
+outside the repository and inspect `pyowl_core.__file__`.
+
 ## Native backend warning
 
 `NativeBackendUnavailableWarning` under `backend="auto"` means the private
@@ -44,4 +56,3 @@ Use the pinned evidence in [performance.md](performance.md). There is no
 supported blanket “2x parsing” claim. Repeated parsing usually indicates a
 consumer handoff bug; verify view identity and instrumentation counters before
 tuning parser internals.
-
