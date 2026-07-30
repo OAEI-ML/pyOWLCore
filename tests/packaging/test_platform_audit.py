@@ -176,6 +176,33 @@ def test_windows_lane_rejects_non_system_dll(
         platform_audit.audit_native_wheel(wheel, lane="windows-x86_64", runner=runner)
 
 
+def test_windows_lane_accepts_windows_cryptographic_primitives(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _structurally_valid(monkeypatch)
+    wheel = _wheel(tmp_path, "win_amd64", "_native.cp310-win_amd64.pyd")
+
+    def runner(command: tuple[str, ...]) -> str:
+        if command[:2] == ("delvewheel", "show"):
+            return "external dependencies inspected\n"
+        if command[:2] == ("dumpbin", "/HEADERS"):
+            return "8664 machine (x64)\n"
+        if command[:2] == ("dumpbin", "/DEPENDENTS"):
+            return " KERNEL32.dll\n bcryptPrimitives.dll\n"
+        if command[:2] == ("dumpbin", "/EXPORTS"):
+            return "1 0 00001000 PyInit__native\n"
+        raise AssertionError(command)
+
+    result = platform_audit.audit_native_wheel(
+        wheel,
+        lane="windows-x86_64",
+        runner=runner,
+    )
+    assert result["dependencies"] == ["KERNEL32.dll", "bcryptPrimitives.dll"]
+    assert result["exports"] == ["PyInit__native"]
+
+
 def _wheel_row(path: Path, *, platform: str) -> dict[str, object]:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     tools = {

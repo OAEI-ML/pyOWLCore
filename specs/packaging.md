@@ -101,7 +101,10 @@ At minimum evaluate:
 Additional architectures are advertised only after real or official emulated
 tests, including large-file mmap and endianness/alignment assumptions. Linux
 wheels are repaired/audited; macOS deployment targets and Windows CRT DLLs are
-inspected. No wheel downloads code/data at import or first parse.
+inspected. The Windows dependency allowlist includes the OS-owned
+`bcryptprimitives.dll` cryptographic provider, but continues to reject
+unrecognized or bundled vendor DLLs. No wheel downloads code/data at import or
+first parse.
 
 Free-threaded CPython and subinterpreters use pure Python until thread-safety and
 extension tags are fully audited. The dispatcher must proactively avoid an

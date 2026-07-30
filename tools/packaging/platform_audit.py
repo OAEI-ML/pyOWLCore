@@ -50,7 +50,8 @@ _LINUX_ALLOWED = re.compile(
 )
 _WINDOWS_ALLOWED = re.compile(
     r"(?i)^(?:api-ms-win-[a-z0-9-]+|python3(?:10|11|12|13|14)|"
-    r"advapi32|bcrypt|comdlg32|crypt32|gdi32|kernel32|msvcp140|ntdll|ole32|"
+    r"advapi32|bcrypt(?:primitives)?|comdlg32|crypt32|gdi32|kernel32|msvcp140|"
+    r"ntdll|ole32|"
     r"oleaut32|rpcrt4|secur32|shell32|ucrtbase|user32|userenv|vcruntime140(?:_1)?|"
     r"winhttp|winmm|ws2_32)\.dll$"
 )
