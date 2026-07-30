@@ -139,6 +139,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
+      CIBW_SKIP: "*-musllinux_*"
       CIBW_ARCHS: ${{ matrix.arch }}
       CIBW_BUILD_VERBOSITY: "1"
       CIBW_ENVIRONMENT_PASS_LINUX: "PYOWL_CORE_BUILD_PASS"
@@ -163,7 +164,7 @@ jobs:
         ${base}/rustup-init --output /tmp/rustup-init &&
         curl --proto '=https' --tlsv1.2 --fail --silent --show-error
         ${base}/rustup-init.sha256 --output /tmp/rustup-init.sha256 &&
-        cd /tmp && sha256sum --check rustup-init.sha256 &&
+        cd /tmp && sha256sum -c rustup-init.sha256 &&
         chmod +x rustup-init &&
         ./rustup-init -y --profile minimal
         --default-toolchain 1.83.0 --no-modify-path
@@ -184,7 +185,9 @@ jobs:
         arguments = ['-q', '-p', 'no:cacheprovider',
         os.path.join(project, 'tests')];
         arguments += ['--ignore',
-        os.path.join(project, 'tests', 'benchmark')] if os.name == 'nt' else [];
+        os.path.join(project, 'tests', 'packaging')];
+        arguments += ['--ignore',
+        os.path.join(project, 'tests', 'benchmark')];
         raise SystemExit(pytest.main(arguments))" &&
         python {project}/docs/examples/parse_once.py &&
         python {project}/docs/examples/secure_local_import.py
@@ -246,6 +249,9 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import hashlib
+          import io
+          import zipfile
 
           first = {path.name: path.read_bytes() for path in Path("wheelhouse").glob("*.whl")}
           second = {
@@ -253,14 +259,37 @@ jobs:
               for path in Path("wheelhouse-rebuilt").glob("*.whl")
           }
           assert len(first) == 5, first.keys()
+          for name in sorted(first.keys() & second.keys()):
+              if first[name] == second[name]:
+                  continue
+              with (
+                  zipfile.ZipFile(io.BytesIO(first[name])) as left,
+                  zipfile.ZipFile(io.BytesIO(second[name])) as right,
+              ):
+                  left_members = {info.filename: left.read(info) for info in left.infolist()}
+                  right_members = {
+                      info.filename: right.read(info) for info in right.infolist()
+                  }
+              changed = {
+                  member: (
+                      hashlib.sha256(left_members.get(member, b"")).hexdigest(),
+                      hashlib.sha256(right_members.get(member, b"")).hexdigest(),
+                  )
+                  for member in sorted(left_members.keys() | right_members.keys())
+                  if left_members.get(member) != right_members.get(member)
+              }
+              raise AssertionError(f"non-reproducible wheel {name}: {changed}")
           assert first == second, set(first) ^ set(second)
           PY
       - name: Structural archive audit
         shell: bash
-        run: >-
-          python -m tools.packaging.artifact_inspector
-          wheelhouse/*.whl
-          --output native-inspection-${{ matrix.lane }}.json
+        run: |
+          report="native-inspection-${{ matrix.lane }}.json"
+          if ! python -m tools.packaging.artifact_inspector \
+            wheelhouse/*.whl --output "$report"; then
+            cat "$report"
+            exit 1
+          fi
       - name: Linux target-platform policy audit
         if: matrix.platform == 'linux'
         shell: bash

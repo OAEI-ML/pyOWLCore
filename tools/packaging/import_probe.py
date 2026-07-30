@@ -18,6 +18,13 @@ _BLOCKED_EVENTS = {"os.posix_spawn", "os.spawn", "os.system"}
 _FORBIDDEN_MODULE_PREFIXES = ("deeponto", "jpype", "mowl")
 
 
+def _open_event_attempts_write(mode: object, flags: object) -> bool:
+    """Interpret an ``open`` audit event without relying on PyPy's read flags."""
+    if isinstance(mode, str):
+        return any(marker in mode for marker in "wax+")
+    return isinstance(flags, int) and flags & _WRITE_FLAGS != 0
+
+
 def _is_interpreter_bytecode_cache_write(path: str | bytes | os.PathLike[str]) -> bool:
     """Recognize the interpreter's own tagged ``__pycache__`` output."""
     normalized = os.fsdecode(path).replace("\\", "/")
@@ -45,8 +52,9 @@ def run_import_probe(package: str = "pyowl_core") -> dict[str, Any]:
             observed.append(event)
             raise RuntimeError(f"blocked import side effect: {event}")
         if event == "open" and len(args) >= 3:
+            mode = args[1]
             flags = args[2]
-            if isinstance(flags, int) and flags & _WRITE_FLAGS:
+            if _open_event_attempts_write(mode, flags):
                 path = os.fspath(args[0]) if isinstance(args[0], (str, bytes, os.PathLike)) else "?"
                 # PyPy 3.10 can emit this interpreter cache write despite
                 # sys.dont_write_bytecode; keep the exception tag-specific.

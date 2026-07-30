@@ -23,7 +23,14 @@ class CancellationToken:
         self._cancelled = threading.Event()
         self._lock = threading.Lock()
         self._reason: str | None = None
-        self._deadline = None if deadline_seconds is None else time.monotonic() + deadline_seconds
+        if deadline_seconds is None:
+            self._deadline = None
+        else:
+            started = time.monotonic()
+            resolution = time.get_clock_info("monotonic").resolution
+            self._deadline = (
+                started if deadline_seconds < resolution else started + deadline_seconds
+            )
 
     @property
     def cancelled(self) -> bool:

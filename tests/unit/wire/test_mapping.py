@@ -87,6 +87,10 @@ def test_context_close_and_dependent_leases(tmp_path: Path) -> None:
     assert isinstance(context, MappedOntologySnapshot) and context.closed
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows does not allow replacing a file while its mapping is active",
+)
 def test_atomic_replacement_keeps_old_mapping_and_in_place_change_is_detected(
     tmp_path: Path,
 ) -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from pyowl_core import DurabilityPolicy, WireCache, encode_snapshot, write_snapshot
+from pyowl_core.wire import cache as cache_module
 from tests.unit.wire.conftest import snapshot
 
 
@@ -33,6 +34,19 @@ def test_atomic_write_mode_digest_and_crash_cleanup(
         write_snapshot(source, failed)
     assert not failed.exists()
     assert not tuple(tmp_path.glob(".*.tmp"))
+
+
+def test_atomic_write_uses_path_chmod_when_descriptor_chmod_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(cache_module.os, "fchmod", raising=False)
+    path = tmp_path / "portable.pyocore"
+
+    write_snapshot(snapshot("A"), path, durability=DurabilityPolicy.NONE)
+
+    assert path.is_file()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_concurrent_publish_converges_and_corruption_is_quarantined(tmp_path: Path) -> None:

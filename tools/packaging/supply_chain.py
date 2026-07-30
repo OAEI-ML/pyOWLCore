@@ -260,7 +260,8 @@ def validate_inventory(root: Path) -> list[str]:
     try:
         inventory = load_inventory(inventory_path)
     except (KeyError, OSError, TypeError, ValueError) as error:
-        return [f"inventory: cannot load {inventory_path.relative_to(root)}: {error}"]
+        display_path = inventory_path.relative_to(root).as_posix()
+        return [f"inventory: cannot load {display_path}: {error}"]
     violations: list[str] = []
     violations.extend(validate_notice(root, inventory))
     if inventory.schema != 1:

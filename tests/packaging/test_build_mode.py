@@ -254,6 +254,111 @@ def test_macos_extension_install_name_is_reproducible(
     assert first[uuid_offset : uuid_offset + 16] != b"\0" * 16
 
 
+def test_macos_arm_code_signature_is_recomputed_after_uuid_normalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identifier = b"@rpath/_native.so\0"
+    dylib_size = 24 + len(identifier)
+    dylib_size += -dylib_size % 8
+    dylib = struct.pack("<IIIIII", 0xD, dylib_size, 24, 123456789, 0, 0)
+    uuid = struct.pack("<II", 0x1B, 24) + b"\x11" * 16
+    signature = struct.pack("<IIII", 0x1D, 16, 0, 0)
+    header = struct.pack(
+        "<IiiIIIII",
+        0xFEEDFACF,
+        0,
+        0,
+        6,
+        3,
+        dylib_size + len(uuid) + len(signature),
+        0,
+        0,
+    )
+    extension = tmp_path / "_native.cpython-310-darwin.so"
+    extension.write_bytes(
+        header + dylib + identifier.ljust(dylib_size - 24, b"\0") + uuid + signature
+    )
+    tools = {
+        "install_name_tool": "/usr/bin/install_name_tool",
+        "codesign": "/usr/bin/codesign",
+    }
+    monkeypatch.setattr(
+        pyowl_build.shutil,
+        "which",
+        lambda command, **_kwargs: tools[command],
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        pyowl_build.subprocess,
+        "run",
+        lambda command, **_kwargs: calls.append(command),
+    )
+
+    pyowl_build.normalize_native_extension(
+        extension,
+        {"PATH": "/usr/bin"},
+        platform="darwin",
+    )
+
+    assert calls[-1] == [
+        "/usr/bin/codesign",
+        "--force",
+        "--sign",
+        "-",
+        "--identifier",
+        "org.oaei-ml.pyowl-core._native",
+        "--timestamp=none",
+        str(extension),
+    ]
+
+
+def test_macho_uuid_derivation_excludes_existing_code_signature(
+    tmp_path: Path,
+) -> None:
+    uuid_command = struct.pack("<II", 0x1B, 24)
+    command_bytes = 24 + 16
+    signature_offset = 32 + command_bytes
+    signature_size = 16
+    signature_command = struct.pack(
+        "<IIII",
+        0x1D,
+        16,
+        signature_offset,
+        signature_size,
+    )
+    header = struct.pack(
+        "<IiiIIIII",
+        0xFEEDFACF,
+        0,
+        0,
+        6,
+        2,
+        command_bytes,
+        0,
+        0,
+    )
+    binaries = [
+        tmp_path / "first.so",
+        tmp_path / "second.so",
+    ]
+    for path, signature_byte in zip(binaries, (b"\x44", b"\x99"), strict=True):
+        path.write_bytes(
+            header
+            + uuid_command
+            + b"\x11" * 16
+            + signature_command
+            + signature_byte * signature_size
+        )
+        pyowl_build.normalize_macho_uuid(path)
+
+    uuid_offset = 32 + 8
+    first = binaries[0].read_bytes()
+    second = binaries[1].read_bytes()
+    assert first[uuid_offset : uuid_offset + 16] == second[uuid_offset : uuid_offset + 16]
+    assert first[signature_offset:] != second[signature_offset:]
+
+
 def test_non_macos_extension_needs_no_install_name_tool(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -374,7 +374,10 @@ def _publish_bytes(
                 prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
             )
             temporary = Path(name)
-            os.fchmod(fd, 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            else:
+                os.chmod(temporary, 0o600)
         else:
             if target.is_symlink():
                 raise OSError("refusing to overwrite a symlink with atomic=False")

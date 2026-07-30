@@ -177,6 +177,31 @@ def normalize_native_extension(
         ) from error
     _zero_macho_dylib_timestamp(path)
     normalize_macho_uuid(path)
+    if _macho_has_code_signature(path):
+        signer = shutil.which("codesign", path=selected.get("PATH"))
+        if signer is None:
+            raise RuntimeError(
+                "pyowl-core cannot normalize the macOS native extension: codesign is unavailable"
+            )
+        try:
+            subprocess.run(
+                [
+                    signer,
+                    "--force",
+                    "--sign",
+                    "-",
+                    "--identifier",
+                    "org.oaei-ml.pyowl-core._native",
+                    "--timestamp=none",
+                    str(path),
+                ],
+                env=dict(selected),
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise RuntimeError(
+                f"pyowl-core could not deterministically sign the macOS extension: {error}"
+            ) from error
 
 
 def build_reproducible_sdist(
@@ -290,6 +315,7 @@ def normalize_macho_uuid(path: Path) -> None:
     (command_count,) = struct.unpack_from(f"{endian}I", payload, 16)
     offset = header_size
     uuid_offsets: list[int] = []
+    signature_ranges: list[tuple[int, int]] = []
     for _ in range(command_count):
         if offset + 8 > len(payload):
             raise RuntimeError("pyowl-core produced malformed macOS load commands")
@@ -300,6 +326,14 @@ def normalize_macho_uuid(path: Path) -> None:
             if command_size != 24:
                 raise RuntimeError("pyowl-core produced a malformed LC_UUID command")
             uuid_offsets.append(offset + 8)
+        elif command == 0x1D:  # LC_CODE_SIGNATURE
+            if command_size < 16:
+                raise RuntimeError("pyowl-core produced a malformed LC_CODE_SIGNATURE command")
+            data_offset, data_size = struct.unpack_from(f"{endian}II", payload, offset + 8)
+            data_end = data_offset + data_size
+            if data_end > len(payload):
+                raise RuntimeError("pyowl-core produced an out-of-range code signature")
+            signature_ranges.append((data_offset, data_end))
         offset += command_size
     if len(uuid_offsets) != 1:
         raise RuntimeError(
@@ -308,8 +342,40 @@ def normalize_macho_uuid(path: Path) -> None:
         )
     uuid_offset = uuid_offsets[0]
     payload[uuid_offset : uuid_offset + 16] = b"\0" * 16
-    payload[uuid_offset : uuid_offset + 16] = hashlib.sha256(payload).digest()[:16]
+    hashable = payload.copy()
+    for start, end in signature_ranges:
+        hashable[start:end] = b"\0" * (end - start)
+    payload[uuid_offset : uuid_offset + 16] = hashlib.sha256(hashable).digest()[:16]
     path.write_bytes(payload)
+
+
+def _macho_has_code_signature(path: Path) -> bool:
+    """Return whether a thin Mach-O contains an ``LC_CODE_SIGNATURE`` command."""
+    payload = path.read_bytes()
+    if len(payload) < 32:
+        raise RuntimeError("pyowl-core produced a truncated macOS binary")
+    formats = {
+        b"\xce\xfa\xed\xfe": ("<", 28),
+        b"\xcf\xfa\xed\xfe": ("<", 32),
+        b"\xfe\xed\xfa\xce": (">", 28),
+        b"\xfe\xed\xfa\xcf": (">", 32),
+    }
+    selected = formats.get(payload[:4])
+    if selected is None:
+        raise RuntimeError("pyowl-core produced an unsupported macOS Mach-O format")
+    endian, header_size = selected
+    (command_count,) = struct.unpack_from(f"{endian}I", payload, 16)
+    offset = header_size
+    for _ in range(command_count):
+        if offset + 8 > len(payload):
+            raise RuntimeError("pyowl-core produced malformed macOS load commands")
+        command, command_size = struct.unpack_from(f"{endian}II", payload, offset)
+        if command_size < 8 or offset + command_size > len(payload):
+            raise RuntimeError("pyowl-core produced malformed macOS load commands")
+        if command == 0x1D:  # LC_CODE_SIGNATURE
+            return True
+        offset += command_size
+    return False
 
 
 def _native_failure(mode: NativeBuildMode, reason: str) -> None:

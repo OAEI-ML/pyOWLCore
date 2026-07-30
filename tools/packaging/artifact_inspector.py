@@ -149,7 +149,7 @@ class _WheelReader:
         return tuple(entry.filename for entry in self._entries)
 
     def read(self, name: str) -> bytes:
-        return self._archive.read(name)
+        return self._archive.read(self._info[name])
 
     def mode(self, name: str) -> int:
         return self._info[name].external_attr >> 16

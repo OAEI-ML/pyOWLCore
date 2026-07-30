@@ -51,7 +51,8 @@ class ParseContext:
             self.cancel.check()
         deadline = self.limits.deadline_seconds
         elapsed = time.monotonic() - self.started
-        if deadline is not None and elapsed >= deadline:
+        resolution = time.get_clock_info("monotonic").resolution
+        if deadline is not None and (deadline < resolution or elapsed >= deadline):
             raise ResourceLimitError(
                 "resource limit deadline_seconds exceeded",
                 limit="deadline_seconds",

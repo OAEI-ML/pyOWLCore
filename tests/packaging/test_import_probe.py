@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from tools.packaging.import_probe import _is_interpreter_bytecode_cache_write
+from tools.packaging.import_probe import (
+    _is_interpreter_bytecode_cache_write,
+    _open_event_attempts_write,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_REPORT = {
@@ -47,6 +50,13 @@ def test_import_probe_recognizes_pypy_310_bytecode_cache_write(
     assert _is_interpreter_bytecode_cache_write(
         "/installed/pyowl_core/__pycache__/__init__.pypy310.pyc"
     )
+
+
+def test_import_probe_uses_text_mode_before_inconsistent_interpreter_flags() -> None:
+    assert not _open_event_attempts_write("r", -1)
+    assert not _open_event_attempts_write("rb", os.O_WRONLY)
+    assert _open_event_attempts_write("w", os.O_RDONLY)
+    assert _open_event_attempts_write(None, os.O_CREAT)
 
 
 def test_package_import_has_no_write_network_process_warning_or_eager_native_side_effect() -> None:
