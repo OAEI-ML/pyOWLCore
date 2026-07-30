@@ -169,6 +169,40 @@ def test_macos_native_build_keeps_proc_macro_link_flags_loadable(
     assert "link-arg=-Wl,-no_uuid" not in flags
 
 
+def test_windows_native_build_requests_reproducible_pe_linking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cargo = tmp_path / "cargo.exe"
+    cargo.write_text("", encoding="utf-8")
+    monkeypatch.setattr(pyowl_build.shutil, "which", lambda *args, **kwargs: str(cargo))
+    monkeypatch.setattr(pyowl_build.sys, "platform", "win32")
+    captured: dict[str, str] = {}
+
+    def run(command: list[str], *, cwd: Path, env: dict[str, str], check: bool) -> None:
+        assert command[0] == str(cargo)
+        assert cwd == tmp_path
+        assert check
+        captured.update(env)
+
+    monkeypatch.setattr(pyowl_build.subprocess, "run", run)
+    environment = {"PATH": str(tmp_path), "CARGO_TARGET_DIR": str(tmp_path / "target")}
+    artifact = pyowl_build.native_artifact_path(tmp_path, environment, platform="win32")
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"native")
+
+    assert (
+        pyowl_build.build_native_extension(
+            tmp_path,
+            pyowl_build.NativeBuildMode.REQUIRED,
+            environment=environment,
+        )
+        == artifact
+    )
+    flags = captured["CARGO_ENCODED_RUSTFLAGS"].split("\x1f")
+    assert flags.count("-Clink-arg=/Brepro") == 1
+
+
 def test_macos_extension_install_name_is_reproducible(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -16,6 +16,7 @@ GIT_ATTRIBUTES = (ROOT / ".gitattributes").read_text(encoding="utf-8")
 DIRECT_RUNNER_BUILD = (
     ROOT / "tools" / "benchmark" / "comparators" / "build_direct_runner.py"
 ).read_text(encoding="utf-8")
+BUILD_HELPER = (ROOT / "pyowl_build.py").read_text(encoding="utf-8")
 ACTION = re.compile(r"(?m)^\s*-?\s*uses:\s+([^\s#]+)")
 CONTAINER_IMAGE = re.compile(r"(?m)^\s*container:\s+([^\s#]+)")
 
@@ -197,6 +198,7 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
     assert "PYOWL_CORE_BUILD_NATIVE=1" in WHEELS
     assert "group: wheels-${{ github.ref }}" in WHEELS
     assert "cancel-in-progress: true" in WHEELS
+    assert 'rust_flags.append("-Clink-arg=/Brepro")' in BUILD_HELPER
     assert "abi3" not in WHEELS.casefold()
     assert "free-thread" not in WHEELS.casefold()
     for command in (

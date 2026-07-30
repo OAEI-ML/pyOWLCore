@@ -132,6 +132,9 @@ def build_native_extension(
             f"--remap-path-prefix={cargo_home.resolve() / 'git' / 'checkouts'}=/rust/cargo-git",
         )
     )
+    if sys.platform == "win32":
+        # MSVC otherwise records volatile linker identity in the PE image.
+        rust_flags.append("-Clink-arg=/Brepro")
     selected["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(rust_flags)
     selected.pop("RUSTFLAGS", None)
     try:
