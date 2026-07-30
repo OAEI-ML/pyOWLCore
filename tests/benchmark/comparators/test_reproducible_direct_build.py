@@ -36,6 +36,26 @@ def _root_with_wrapper(tmp_path: Path) -> Path:
     return root
 
 
+def test_rustup_lookup_preserves_multicall_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rustup_init = tmp_path / "rustup-init"
+    rustup_init.write_text("#!/bin/sh\n", encoding="utf-8")
+    rustup_init.chmod(0o755)
+    rustup = tmp_path / "rustup"
+    try:
+        rustup.symlink_to(rustup_init)
+    except OSError:
+        pytest.skip("filesystem does not support executable symlinks")
+    monkeypatch.setattr(build_module.shutil, "which", lambda *_args, **_kwargs: str(rustup))
+
+    selected = build_module._rustup_executable({"PATH": str(tmp_path)})
+
+    assert selected == rustup.absolute()
+    assert selected.name == "rustup"
+
+
 def test_direct_runner_matches_native_release_safety_profile() -> None:
     direct = tomllib.loads(
         (ROOT / "benchmarks/comparators/runners/direct/Cargo.toml").read_text(encoding="utf-8")

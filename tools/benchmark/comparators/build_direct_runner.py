@@ -107,7 +107,10 @@ def _rustup_executable(environ: Mapping[str, str]) -> Path:
     executable = "rustup.exe" if os.name == "nt" else "rustup"
     candidates.extend((cargo_home / "bin" / executable, Path.home() / ".cargo/bin" / executable))
     for candidate in candidates:
-        selected = candidate.resolve()
+        # Homebrew exposes ``rustup`` as a symlink to the multi-call
+        # ``rustup-init`` binary. Preserve argv[0] so the binary dispatches as
+        # rustup instead of entering installer mode.
+        selected = candidate.absolute()
         if selected.is_file() and os.access(selected, os.X_OK):
             return selected
     raise DirectRunnerBuildError("rustup is not available")
