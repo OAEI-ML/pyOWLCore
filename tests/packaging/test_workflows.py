@@ -194,6 +194,8 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         assert requirement in WHEELS
     assert "PYOWL_CORE_BUILD_NATIVE=0" in WHEELS
     assert "PYOWL_CORE_BUILD_NATIVE=1" in WHEELS
+    assert "group: wheels-${{ github.ref }}" in WHEELS
+    assert "cancel-in-progress: true" in WHEELS
     assert "abi3" not in WHEELS.casefold()
     assert "free-thread" not in WHEELS.casefold()
     for command in (

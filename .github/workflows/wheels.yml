@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: wheels-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   PYTHONDONTWRITEBYTECODE: "1"
