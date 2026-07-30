@@ -6,6 +6,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import sys
 import warnings
 from pathlib import Path
@@ -15,6 +16,19 @@ _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
 _BLOCKED_EVENT_PREFIXES = ("socket.", "subprocess.")
 _BLOCKED_EVENTS = {"os.posix_spawn", "os.spawn", "os.system"}
 _FORBIDDEN_MODULE_PREFIXES = ("deeponto", "jpype", "mowl")
+
+
+def _is_interpreter_bytecode_cache_write(path: str | bytes | os.PathLike[str]) -> bool:
+    """Recognize the interpreter's own tagged ``__pycache__`` output."""
+    normalized = os.fsdecode(path).replace("\\", "/")
+    parent, separator, name = normalized.rpartition("/")
+    cache_tag = sys.implementation.cache_tag
+    return (
+        bool(separator)
+        and parent.rsplit("/", 1)[-1] == "__pycache__"
+        and cache_tag is not None
+        and re.search(rf"\.{re.escape(cache_tag)}(?:\.opt-\d+)?\.pyc$", name) is not None
+    )
 
 
 def run_import_probe(package: str = "pyowl_core") -> dict[str, Any]:
@@ -34,6 +48,10 @@ def run_import_probe(package: str = "pyowl_core") -> dict[str, Any]:
             flags = args[2]
             if isinstance(flags, int) and flags & _WRITE_FLAGS:
                 path = os.fspath(args[0]) if isinstance(args[0], (str, bytes, os.PathLike)) else "?"
+                # PyPy 3.10 can emit this interpreter cache write despite
+                # sys.dont_write_bytecode; keep the exception tag-specific.
+                if path != "?" and _is_interpreter_bytecode_cache_write(path):
+                    return
                 observed.append(f"open-write:{path!r}")
                 raise RuntimeError(f"blocked import filesystem write: {path!r}")
 
