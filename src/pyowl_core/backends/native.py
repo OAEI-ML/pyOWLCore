@@ -13,7 +13,7 @@ import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import TYPE_CHECKING, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.exceptions import (
@@ -412,6 +412,23 @@ def validate_canonical(
         return _call(extension, lambda: extension.validate_canonical(data, config, cancel))
 
 
+def _snapshot_writable_wire_input(data: object) -> object:
+    """Own mutable wire bytes before any capability or cancellation setup."""
+
+    if type(data) is bytes:
+        return data
+    try:
+        view = memoryview(cast(Any, data))
+    except (TypeError, ValueError):
+        return data
+    try:
+        if view.readonly or not view.c_contiguous:
+            return data
+        return view.tobytes()
+    finally:
+        view.release()
+
+
 def validate_wire(
     data: object,
     *,
@@ -419,6 +436,7 @@ def validate_wire(
     verify: bool = True,
     cancellation_token: CancellationToken | None = None,
 ) -> NativeValidation:
+    data = _snapshot_writable_wire_input(data)
     extension = require("wire-v1")
     selected = _coerce_limits(limits)
     if not isinstance(verify, bool):
@@ -436,6 +454,7 @@ def roundtrip_wire(
     verify: bool = True,
     cancellation_token: CancellationToken | None = None,
 ) -> bytes:
+    data = _snapshot_writable_wire_input(data)
     extension = require("wire-v1")
     selected = _coerce_limits(limits)
     if not isinstance(verify, bool):

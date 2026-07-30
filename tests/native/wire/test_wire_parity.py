@@ -324,8 +324,11 @@ class NativeWireParityTests(unittest.TestCase):
 
         timer = threading.Timer(0.001, mutate_after_gil_release)
         timer.start()
-        output = native.roundtrip_wire(mutable)
-        timer.join(timeout=1.0)
+        try:
+            output = native.roundtrip_wire(mutable)
+        finally:
+            timer.join(timeout=1.0)
+        self.assertFalse(timer.is_alive())
         self.assertEqual(output, original)
         self.assertNotEqual(bytes(mutable), original)
 

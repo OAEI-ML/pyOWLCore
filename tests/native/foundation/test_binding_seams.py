@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -135,3 +136,52 @@ def test_stale_private_abi_fails_closed_before_native_code_runs() -> None:
     assert runtime.probe.available is False
     assert runtime.probe.reason == "native extension metadata is incompatible"
     assert calls == []
+
+
+@pytest.mark.parametrize("operation", ("roundtrip_wire", "validate_wire"))
+def test_public_wire_entry_owns_writable_input_before_capability_setup(
+    operation: str,
+) -> None:
+    source = bytearray(b"wire input")
+    original = bytes(source)
+    captured: list[object] = []
+    validation = object()
+
+    def require_after_mutation(capability: str) -> SimpleNamespace:
+        assert capability == "wire-v1"
+        source[-1] ^= 1
+
+        def capture(data: object, _config: object, _cancel: object) -> bytes:
+            captured.append(data)
+            if operation == "validate_wire":
+                return b"receipt"
+            assert isinstance(data, bytes)
+            return data
+
+        return SimpleNamespace(**{operation: capture})
+
+    with (
+        patch("pyowl_core.backends.native.require", side_effect=require_after_mutation),
+        patch("pyowl_core.backends.native._relay", return_value=nullcontext(None)),
+        patch("pyowl_core.backends.native._decode_receipt", return_value=validation),
+    ):
+        result = getattr(native, operation)(source)
+
+    assert captured == [original]
+    assert captured[0] is not source
+    assert bytes(source) != original
+    assert result == (original if operation == "roundtrip_wire" else validation)
+
+
+def test_wire_entry_does_not_coerce_readonly_or_noncontiguous_inputs() -> None:
+    immutable = b"immutable"
+    readonly = memoryview(bytearray(b"readonly")).toreadonly()
+    noncontiguous = memoryview(bytearray(b"noncontiguous"))[::2]
+    invalid = object()
+
+    try:
+        for value in (immutable, readonly, noncontiguous, invalid):
+            assert native._snapshot_writable_wire_input(value) is value
+    finally:
+        readonly.release()
+        noncontiguous.release()
