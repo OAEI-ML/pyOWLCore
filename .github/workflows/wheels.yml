@@ -130,7 +130,14 @@ jobs:
         run: |
           python -c "import importlib.util; assert importlib.util.find_spec('pyowl_core._native') is None"
           python -m tools.packaging.import_probe
-          python -m pytest -q
+          pytest_args=()
+          # PyPy lacks the non-reaping subprocess observation required by the
+          # fail-closed benchmark harness. CPython and native-safety lanes
+          # retain complete comparator coverage.
+          if [ "${{ matrix.python }}" = "pypy3.10" ]; then
+            pytest_args+=(--ignore=tests/benchmark/comparators)
+          fi
+          python -m pytest -q "${pytest_args[@]}"
           python docs/examples/parse_once.py
           python docs/examples/secure_local_import.py
 

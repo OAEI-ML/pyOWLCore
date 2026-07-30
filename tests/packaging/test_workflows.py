@@ -188,6 +188,7 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         "assert len(results) == 29",
         "cp314t-pure-fallback",
         "pypy310-pure",
+        "--ignore=tests/benchmark/comparators",
         "--no-index",
         "*-py3-none-any.whl",
     ):

@@ -209,6 +209,21 @@ _TRUSTED_MAPPED_ZERO_COPY = object()
 _VALIDATED_VIEW_SEAL = object()
 
 
+def _trusted_buffer_mode(buffers: Mapping[str, memoryview]) -> object | None:
+    """Select zero-copy only when the interpreter exposes a provable exporter."""
+
+    exporters = tuple(value.obj for value in buffers.values())
+    if exporters and all(type(value) is bytes for value in exporters):
+        return _TRUSTED_ZERO_COPY
+    if (
+        exporters
+        and all(type(value) is _mmap.mmap for value in exporters)
+        and all(value is exporters[0] for value in exporters[1:])
+    ):
+        return _TRUSTED_MAPPED_ZERO_COPY
+    return None
+
+
 class NativeViewExtension(Protocol):
     VIEW_FEATURES: tuple[str, ...]
 
@@ -714,14 +729,7 @@ def _request_encoded_source_v1(
     result = owner.view(EncodedStructuralViewV1, **options)
     if type(result) is not EncodedStructuralViewV1 or result._seal is not _VALIDATED_VIEW_SEAL:
         _fail("referenced owner returned an invalid encoded view", "ENCODED_VIEW_SEGMENTS")
-    exporters = tuple(value.obj for value in result.buffers.values())
-    trusted_zero_copy = _TRUSTED_ZERO_COPY
-    if (
-        exporters
-        and all(type(value) is _mmap.mmap for value in exporters)
-        and all(value is exporters[0] for value in exporters[1:])
-    ):
-        trusted_zero_copy = _TRUSTED_MAPPED_ZERO_COPY
+    trusted_zero_copy = _trusted_buffer_mode(result.buffers)
     return _freeze_encoded_structural_view_v1(
         result,
         expected_owner=owner,
@@ -956,13 +964,16 @@ def _produce_mapped_direct_view_v1(
         retained,
         None,
     )
+    trusted_zero_copy = _trusted_buffer_mode(buffers)
+    if trusted_zero_copy is not _TRUSTED_MAPPED_ZERO_COPY:
+        trusted_zero_copy = None
     return _freeze_encoded_structural_view_v1(
         candidate,
         expected_owner=owner,
         expected_scope=scope,
         expected_document_key=document_key,
         limits=limits,
-        trusted_zero_copy=_TRUSTED_MAPPED_ZERO_COPY,
+        trusted_zero_copy=trusted_zero_copy,
         active_views=frozenset(),
     )
 
@@ -1847,18 +1858,9 @@ def _freeze_segments(
                 ) from error
             source_trust: object | None = None
             if type(source) is EncodedStructuralViewV1 and source._seal is _VALIDATED_VIEW_SEAL:
-                exporters = tuple(value.obj for value in source.buffers.values())
-                if (
-                    exporters
-                    and all(type(value) is _mmap.mmap for value in exporters)
-                    and all(value is exporters[0] for value in exporters[1:])
-                ):
-                    source_trust = _TRUSTED_MAPPED_ZERO_COPY
-                else:
-                    # Validated non-mapped publications are normalized onto
-                    # exact immutable bytes; recheck that invariant so
-                    # object.__setattr__ cannot turn the seal into a bypass.
-                    source_trust = _TRUSTED_ZERO_COPY
+                # Recheck the exporter invariant so object.__setattr__ cannot
+                # turn the validation seal into a zero-copy bypass.
+                source_trust = _trusted_buffer_mode(source.buffers)
             frozen_source = _freeze_encoded_structural_view_v1(
                 source,
                 expected_owner=owner,
