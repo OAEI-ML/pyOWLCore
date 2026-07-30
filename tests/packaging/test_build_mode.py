@@ -56,10 +56,7 @@ def test_forced_pure_never_probes_cargo(
         raise AssertionError((args, kwargs))
 
     monkeypatch.setattr(pyowl_build.shutil, "which", forbidden)
-    assert (
-        pyowl_build.build_native_extension(tmp_path, pyowl_build.NativeBuildMode.PURE)
-        is None
-    )
+    assert pyowl_build.build_native_extension(tmp_path, pyowl_build.NativeBuildMode.PURE) is None
 
 
 def test_auto_falls_back_but_required_mode_fails_without_cargo(
@@ -135,13 +132,7 @@ def test_native_artifact_path_honours_target_configuration(tmp_path: Path) -> No
         tmp_path,
         environment,
         platform="linux",
-    ) == (
-        tmp_path
-        / "cargo-output"
-        / "aarch64-unknown-linux-gnu"
-        / "release"
-        / "lib_native.so"
-    )
+    ) == (tmp_path / "cargo-output" / "aarch64-unknown-linux-gnu" / "release" / "lib_native.so")
 
 
 def test_macos_native_build_keeps_proc_macro_link_flags_loadable(
@@ -166,43 +157,51 @@ def test_macos_native_build_keeps_proc_macro_link_flags_loadable(
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(b"native")
 
-    assert pyowl_build.build_native_extension(
-        tmp_path,
-        pyowl_build.NativeBuildMode.REQUIRED,
-        environment=environment,
-    ) == artifact
+    assert (
+        pyowl_build.build_native_extension(
+            tmp_path,
+            pyowl_build.NativeBuildMode.REQUIRED,
+            environment=environment,
+        )
+        == artifact
+    )
     flags = captured["CARGO_ENCODED_RUSTFLAGS"].split("\x1f")
     assert "link-arg=-Wl,-no_uuid" not in flags
-
-
-def test_native_cdylib_disables_nondeterministic_macos_linker_uuid() -> None:
-    build_script = (ROOT / "native" / "build.rs").read_text(encoding="utf-8")
-
-    assert 'env::var("CARGO_CFG_TARGET_OS")' in build_script
-    assert 'println!("cargo:rustc-cdylib-link-arg=-Wl,-no_uuid")' in build_script
 
 
 def test_macos_extension_install_name_is_reproducible(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    extension = tmp_path / "_native.cpython-310-darwin.so"
     identifier = b"@rpath/_native.so\0"
     command_size = 24 + len(identifier)
     command_size += -command_size % 8
-    header = struct.pack(
-        "<IiiIIIII",
-        0xFEEDFACF,
-        0,
-        0,
-        6,
-        1,
-        command_size,
-        0,
-        0,
-    )
     command = struct.pack("<IIIIII", 0xD, command_size, 24, 123456789, 0, 0)
-    extension.write_bytes(header + command + identifier.ljust(command_size - 24, b"\0"))
+    uuid_command = struct.pack("<II", 0x1B, 24)
+
+    def write_extension(path: Path, uuid: bytes) -> None:
+        header = struct.pack(
+            "<IiiIIIII",
+            0xFEEDFACF,
+            0,
+            0,
+            6,
+            2,
+            command_size + 24,
+            0,
+            0,
+        )
+        path.write_bytes(
+            header + command + identifier.ljust(command_size - 24, b"\0") + uuid_command + uuid
+        )
+
+    extensions = [
+        tmp_path / "_native.cpython-310-darwin.so",
+        tmp_path / "copy/_native.cpython-310-darwin.so",
+    ]
+    extensions[1].parent.mkdir()
+    write_extension(extensions[0], b"\x11" * 16)
+    write_extension(extensions[1], b"\x22" * 16)
     calls: list[tuple[list[str], dict[str, str]]] = []
     monkeypatch.setattr(
         pyowl_build.shutil,
@@ -221,23 +220,38 @@ def test_macos_extension_install_name_is_reproducible(
 
     monkeypatch.setattr(pyowl_build.subprocess, "run", capture)
     environment = {"PATH": "/usr/bin"}
-    pyowl_build.normalize_native_extension(
-        extension,
-        environment,
-        platform="darwin",
-    )
+    for extension in extensions:
+        pyowl_build.normalize_native_extension(
+            extension,
+            environment,
+            platform="darwin",
+        )
     assert calls == [
         (
             [
                 "/usr/bin/install_name_tool",
                 "-id",
                 "@rpath/_native.cpython-310-darwin.so",
-                str(extension),
+                str(extensions[0]),
             ],
             environment,
-        )
+        ),
+        (
+            [
+                "/usr/bin/install_name_tool",
+                "-id",
+                "@rpath/_native.cpython-310-darwin.so",
+                str(extensions[1]),
+            ],
+            environment,
+        ),
     ]
-    assert struct.unpack_from("<I", extension.read_bytes(), 32 + 12) == (0,)
+    first = extensions[0].read_bytes()
+    second = extensions[1].read_bytes()
+    uuid_offset = 32 + command_size + 8
+    assert struct.unpack_from("<I", first, 32 + 12) == (0,)
+    assert first == second
+    assert first[uuid_offset : uuid_offset + 16] != b"\0" * 16
 
 
 def test_non_macos_extension_needs_no_install_name_tool(
@@ -295,8 +309,7 @@ def test_source_archive_normalizes_gzip_tar_metadata_and_order(tmp_path: Path) -
     )
     assert all(member.mtime == epoch for member in members)
     assert all(
-        (member.uid, member.gid, member.uname, member.gname) == (0, 0, "", "")
-        for member in members
+        (member.uid, member.gid, member.uname, member.gname) == (0, 0, "", "") for member in members
     )
     modes = {member.name: member.mode for member in members}
     assert modes[f"{source.name}/package/module.py"] == 0o644

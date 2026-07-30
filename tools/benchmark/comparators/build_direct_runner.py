@@ -11,8 +11,10 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from pyowl_build import normalize_macho_uuid
+
 TOOLCHAIN = "1.97.1"
-_BUILD_CONTRACT = "pyowl-core-direct-runner-v9"
+_BUILD_CONTRACT = "pyowl-core-direct-runner-v10"
 _ROOT = Path(__file__).resolve().parents[3]
 _MANIFEST = Path("benchmarks/comparators/runners/direct/Cargo.toml")
 _RUNNER_DIRECTORY = _MANIFEST.parent
@@ -227,6 +229,13 @@ def build_direct_runner(
     artifact = direct_runner_artifact(selected_target, platform=platform)
     if not artifact.is_file():
         raise DirectRunnerBuildError(f"Cargo did not produce {artifact}")
+    if platform == "darwin":
+        try:
+            normalize_macho_uuid(artifact)
+        except (OSError, RuntimeError) as error:
+            raise DirectRunnerBuildError(
+                f"could not normalize the direct-runner Mach-O UUID: {error}"
+            ) from error
     return artifact
 
 

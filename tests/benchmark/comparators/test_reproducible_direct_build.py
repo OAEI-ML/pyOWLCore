@@ -82,7 +82,7 @@ def test_direct_build_environment_remaps_every_host_path(
 
     flags = selected["CARGO_ENCODED_RUSTFLAGS"].split("\x1f")
     assert flags == [
-        "--cfg=pyowl_core_direct_runner_v9",
+        "--cfg=pyowl_core_direct_runner_v10",
         f"--remap-path-prefix={target.resolve()}=/rust/target",
         f"--remap-path-prefix={root.resolve()}=/rust/pyowl-core",
         f"--remap-path-prefix={cargo_home.resolve() / 'registry' / 'src'}=/rust/cargo-registry",
@@ -91,10 +91,6 @@ def test_direct_build_environment_remaps_every_host_path(
     assert selected["RUSTC_WRAPPER"] == str(
         root / "tools/benchmark/comparators/reproducible_rustc.py"
     )
-    build_script = (
-        ROOT / "benchmarks" / "comparators" / "runners" / "direct" / "build.rs"
-    ).read_text(encoding="utf-8")
-    assert "cargo:rustc-link-arg-bin=pyowl-core-direct-comparator=-Wl,-no_uuid" in build_script
     assert selected["PYOWL_CORE_DIRECT_REPRO_ROOT"] == str(root.resolve())
     assert selected["CARGO_INCREMENTAL"] == "0"
     assert selected["CARGO_TARGET_DIR"] == str(target.resolve())
@@ -263,6 +259,8 @@ def test_build_selects_and_verifies_rustup_toolchain_without_plus_syntax(
         return subprocess.CompletedProcess(selected_command, 0, "", "")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    normalized: list[Path] = []
+    monkeypatch.setattr(build_module, "normalize_macho_uuid", normalized.append)
     artifact = build_direct_runner(
         root,
         target_dir=tmp_path / "target",
@@ -288,6 +286,7 @@ def test_build_selects_and_verifies_rustup_toolchain_without_plus_syntax(
     assert isinstance(build_environment, dict)
     assert build_environment["RUSTUP_TOOLCHAIN"] == "1.97.1"
     assert build_environment["RUSTC"] == str(rustc)
+    assert normalized == [artifact]
 
 
 def test_build_rejects_a_mismatched_resolved_toolchain(
