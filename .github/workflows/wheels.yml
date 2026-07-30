@@ -17,6 +17,7 @@ concurrency:
 env:
   PYTHONDONTWRITEBYTECODE: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  RUSTSEC_TOOLCHAIN: "1.97.1"
   SOURCE_DATE_EPOCH: "1735689600"
 
 jobs:
@@ -46,7 +47,8 @@ jobs:
           python -m tools.packaging.supply_chain --check --output-dir candidate/supply-chain
       - name: Run the maintained RustSec advisory scan
         run: |
-          cargo install cargo-audit --version 0.22.2 --locked
+          rustup toolchain install "$RUSTSEC_TOOLCHAIN" --profile minimal --no-self-update
+          cargo +${RUSTSEC_TOOLCHAIN} install cargo-audit --version 0.22.2 --locked
           mkdir -p candidate/security
           cargo audit --deny warnings --file native/Cargo.lock --json | tee candidate/security/rustsec.json
       - name: Build fixed-epoch pure wheel and sdist
