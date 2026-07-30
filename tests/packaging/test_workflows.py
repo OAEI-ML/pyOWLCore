@@ -131,7 +131,7 @@ def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
         "python -m tools.benchmark.comparators.build_direct_runner",
         "tools.benchmark.comparators.linkage_audit",
         "--expected-runner-sha256",
-        "dumpbin.exe",
+        "Get-Command llvm-readobj -ErrorAction Stop",
         "if: always()",
         "if-no-files-found: error",
     ):
@@ -143,7 +143,6 @@ def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
     for requirement in (
         "CARGO_ENCODED_RUSTFLAGS",
         "--remap-path-prefix=",
-        "link-arg=-Wl,-no_uuid",
         "RUSTC_WRAPPER",
         "reproducible_rustc.py",
     ):

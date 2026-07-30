@@ -15,7 +15,7 @@ _LOCAL_MANIFESTS = frozenset(
         Path("benchmarks/comparators/runners/direct"),
     }
 )
-_METADATA_DOMAIN = b"pyowl-core-direct-runner-v8\0"
+_METADATA_DOMAIN = b"pyowl-core-direct-runner-v9\0"
 
 
 def _option_values(arguments: list[str], option: str) -> tuple[str, ...]:

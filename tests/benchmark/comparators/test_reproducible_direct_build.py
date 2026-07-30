@@ -66,7 +66,7 @@ def test_direct_runner_matches_native_release_safety_profile() -> None:
         assert direct["profile"]["release"][field] == native["profile"]["release"][field]
 
 
-def test_direct_build_environment_remaps_every_host_path_and_darwin_uuid(
+def test_direct_build_environment_remaps_every_host_path(
     tmp_path: Path,
 ) -> None:
     root = _root_with_wrapper(tmp_path)
@@ -82,17 +82,19 @@ def test_direct_build_environment_remaps_every_host_path_and_darwin_uuid(
 
     flags = selected["CARGO_ENCODED_RUSTFLAGS"].split("\x1f")
     assert flags == [
-        "--cfg=pyowl_core_direct_runner_v8",
+        "--cfg=pyowl_core_direct_runner_v9",
         f"--remap-path-prefix={target.resolve()}=/rust/target",
         f"--remap-path-prefix={root.resolve()}=/rust/pyowl-core",
         f"--remap-path-prefix={cargo_home.resolve() / 'registry' / 'src'}=/rust/cargo-registry",
         f"--remap-path-prefix={cargo_home.resolve() / 'git' / 'checkouts'}=/rust/cargo-git",
-        "-C",
-        "link-arg=-Wl,-no_uuid",
     ]
     assert selected["RUSTC_WRAPPER"] == str(
         root / "tools/benchmark/comparators/reproducible_rustc.py"
     )
+    build_script = (
+        ROOT / "benchmarks" / "comparators" / "runners" / "direct" / "build.rs"
+    ).read_text(encoding="utf-8")
+    assert "cargo:rustc-link-arg-bin=pyowl-core-direct-comparator=-Wl,-no_uuid" in build_script
     assert selected["PYOWL_CORE_DIRECT_REPRO_ROOT"] == str(root.resolve())
     assert selected["CARGO_INCREMENTAL"] == "0"
     assert selected["CARGO_TARGET_DIR"] == str(target.resolve())

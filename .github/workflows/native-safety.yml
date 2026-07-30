@@ -223,10 +223,9 @@ jobs:
           RUNNER_SHA256: ${{ steps.runner_sha.outputs.sha256 }}
           LINKAGE_EVIDENCE: direct-linkage-${{ matrix.lane }}.json
         run: |
-          $dumpbin = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe' |
-            Sort-Object FullName | Select-Object -Last 1
-          if (-not $dumpbin) { throw 'dumpbin.exe was not found' }
-          $env:PATH = "$($dumpbin.Directory.FullName);$env:PATH"
+          $llvmReadobj = Get-Command llvm-readobj -ErrorAction Stop
+          & $llvmReadobj.Source --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m tools.benchmark.comparators.linkage_audit `
             --binary $env:RUNNER_BINARY `
             --expected-runner-sha256 $env:RUNNER_SHA256 `

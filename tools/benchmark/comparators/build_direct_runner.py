@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 TOOLCHAIN = "1.97.1"
-_BUILD_CONTRACT = "pyowl-core-direct-runner-v8"
+_BUILD_CONTRACT = "pyowl-core-direct-runner-v9"
 _ROOT = Path(__file__).resolve().parents[3]
 _MANIFEST = Path("benchmarks/comparators/runners/direct/Cargo.toml")
 _RUNNER_DIRECTORY = _MANIFEST.parent
@@ -69,9 +69,6 @@ def reproducible_environment(
         f"--remap-path-prefix={cargo_home.resolve() / 'registry' / 'src'}=/rust/cargo-registry",
         f"--remap-path-prefix={cargo_home.resolve() / 'git' / 'checkouts'}=/rust/cargo-git",
     ]
-    if platform == "darwin":
-        rust_flags.extend(("-C", "link-arg=-Wl,-no_uuid"))
-
     selected["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(rust_flags)
     selected["CARGO_INCREMENTAL"] = "0"
     selected["CARGO_TARGET_DIR"] = os.fspath(selected_target)
