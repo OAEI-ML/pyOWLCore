@@ -189,6 +189,18 @@ def test_pure_wheel_structure_metadata_and_record_are_verified(tmp_path: Path) -
     )
 
 
+def test_wheel_record_allows_unrecorded_directory_entries(tmp_path: Path) -> None:
+    wheel = _wheel(tmp_path)
+    with zipfile.ZipFile(wheel, "a") as archive:
+        directory = zipfile.ZipInfo("pyowl_core-0.1.0.dist-info/licenses/")
+        directory.external_attr = 0o40755 << 16
+        archive.writestr(directory, b"")
+
+    result = inspect_artifact(wheel)
+
+    assert result.ok
+
+
 def test_native_wheel_is_not_mislabeled_as_universal_or_release_ready(tmp_path: Path) -> None:
     result = inspect_artifact(_wheel(tmp_path, "native"), expected_variant="native")
     assert result.ok

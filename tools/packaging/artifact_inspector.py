@@ -579,8 +579,14 @@ def _validate_record(reader: ArchiveReader) -> list[str]:
     if len(set(recorded_names)) != len(recorded_names):
         errors.append("wheel: RECORD contains duplicate member rows")
     recorded = {row[0]: row for row in valid_rows}
-    if set(recorded) != set(reader.names()):
-        errors.append("wheel: RECORD member set does not match archive")
+    archive_files = {name for name in reader.names() if not name.endswith("/")}
+    if set(recorded) != archive_files:
+        archive_only = sorted(archive_files - set(recorded))
+        record_only = sorted(set(recorded) - archive_files)
+        errors.append(
+            "wheel: RECORD member set does not match archive "
+            f"(archive-only={archive_only[:10]!r}, record-only={record_only[:10]!r})"
+        )
     for name, row in recorded.items():
         digest, size = row[1], row[2]
         if name == record_name:
