@@ -8,6 +8,8 @@ import time
 
 from .exceptions import OperationCancelledError
 
+_MONOTONIC_RESOLUTION = time.get_clock_info("monotonic").resolution
+
 
 class CancellationToken:
     """Read-only cancellation state safe to poll from worker threads."""
@@ -27,9 +29,10 @@ class CancellationToken:
             self._deadline = None
         else:
             started = time.monotonic()
-            resolution = time.get_clock_info("monotonic").resolution
             self._deadline = (
-                started if deadline_seconds < resolution else started + deadline_seconds
+                started
+                if deadline_seconds < _MONOTONIC_RESOLUTION
+                else started + deadline_seconds
             )
 
     @property

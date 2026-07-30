@@ -14,6 +14,8 @@ from pyowl_core.limits import ParseLimits
 from pyowl_core.model import IRI, Annotation, StructuralNode
 from pyowl_core.model.axioms import AxiomNode
 
+_MONOTONIC_RESOLUTION = time.get_clock_info("monotonic").resolution
+
 
 @dataclass(frozen=True, slots=True)
 class ParsedOntology:
@@ -51,8 +53,9 @@ class ParseContext:
             self.cancel.check()
         deadline = self.limits.deadline_seconds
         elapsed = time.monotonic() - self.started
-        resolution = time.get_clock_info("monotonic").resolution
-        if deadline is not None and (deadline < resolution or elapsed >= deadline):
+        if deadline is not None and (
+            deadline < _MONOTONIC_RESOLUTION or elapsed >= deadline
+        ):
             raise ResourceLimitError(
                 "resource limit deadline_seconds exceeded",
                 limit="deadline_seconds",
