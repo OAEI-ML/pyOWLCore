@@ -212,6 +212,12 @@ skippable optional sections or backwards-compatible features. Every consumer
 cache key includes its own compiler schema in addition to core versions and the
 appropriate snapshot fingerprint.
 
+The reviewed `0.2.0` successor transition is defined in
+[`large-document-reliability.md`](large-document-reliability.md): API line
+`(0, 2)`, model schema 2, multiplicity-preserving component-scoped anonymous
+canonicalization, and encoded structural schema 2. Wire and adapter versions
+remain independent and follow that document's explicit version ledger.
+
 Readers MUST reject an unknown required wire feature and MUST NOT reinterpret a
 new model schema as the old one. Cache readers rebuild on supported
 incompatibility; explicit IPC calls raise `WireVersionError`.

@@ -89,11 +89,25 @@ raw labels live only in `SourceMap`. Distinct documents are standardized apart,
 including documents in an import cycle or composition. Renaming source blank
 labels does not change document/logical fingerprints.
 
-The canonical-label algorithm must handle symmetric blank-node structures. It
-uses partition refinement plus deterministic tie resolution over complete
-structural neighborhoods; object address, parse order, source label, and hash
-iteration are forbidden tie-breakers. Golden adversarial symmetry cases and an
-independent implementation verify it.
+Model schema 2 partitions the structural blank graph into connected components
+before canonical labeling, charges canonical work per component while retaining
+document-global term/memory limits, and derives the document scope from a
+sorted multiplicity-preserving manifest of complete canonical component graph
+bytes. Component-local indices alone are insufficient: repeated isomorphic
+components receive distinct canonical occurrence ordinals so distinct
+anonymous individuals cannot collapse. The complete algorithm, the narrowly
+permitted internal association of indistinguishable source components to
+already-fixed slots, and all v2 domains are frozen in
+[`large-document-reliability.md`](large-document-reliability.md).
+
+The canonical-label algorithm handles symmetric blank-node structures using
+partition refinement plus deterministic tie resolution over complete
+structural neighborhoods. Object address, parse order, and hash iteration are
+forbidden tie-breakers. A source label may be inspected only inside an exact
+component equivalence class after output slots are fixed, where every
+association provably yields the same canonical set. It never enters canonical
+bytes or identity. Golden adversarial symmetry/multiplicity cases and an
+independent implementation verify this rule.
 
 Programmatic anonymous individuals are created through a `DocumentBuilder`
 scope, not a process-global/random constructor. Moving one between documents

@@ -43,6 +43,12 @@ formats. A consumer declares required features before compilation. Missing or
 incompatible features raise `AdapterCompatibilityError` with package/schema
 details; they never cause path reparsing or a private fallback parser.
 
+The `0.2.0` transition retains adapter protocol 1 but advertises model schema 2,
+wire 1.2, and encoded structural schema 2. Consumers MUST update their supported
+schema set and cache keys explicitly. Protocol compatibility alone never
+authorizes a consumer to read model-schema-2 identity or schema-2 columns
+through a schema-1 decoder.
+
 `SnapshotProvider.owl_snapshot()` returns an `OntologyView` and MUST be:
 
 - idempotent, cheap after initial load, and thread-safe;

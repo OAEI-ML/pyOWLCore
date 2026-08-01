@@ -1,9 +1,13 @@
 schema = 1
 project = "pyowl-core"
 python = ">=3.10"
-model_schema = 1
+api_major = 0
+api_minor = 2
+model_schema = 2
 wire_major = 1
+wire_minor = 2
 adapter_protocol = 1
+encoded_structural_schema = 2
 
 [[package]]
 id = "WP00"
@@ -137,3 +141,38 @@ brief = "WP18-native-performance-release.md"
 wave = 16
 depends = ["WP12", "WP16", "WP17"]
 owns = ["pyproject.toml", "setup.py", "MANIFEST.in", "NOTICE", "THIRD_PARTY_LICENSES/", "native/Cargo.toml", "native/Cargo.lock", "src/pyowl_core/__init__.py", "README.md", "CHANGELOG.md", "MIGRATION.md", "docs/performance.md", "docs/compatibility.md", "docs/release-checklist.md", "docs/releasing.md", "docs/spec-traceability.md", "tools/audit/", "tools/benchmark/", "tools/packaging/", "benchmarks/", "reports/integration/consumer-compatibility.json", "reports/performance/limitations.md", "reports/performance/native-redesign/", "reports/release/", "reports/workpackages/WP18.md", "tests/benchmark/native_redesign/", "tests/docs/", "tests/packaging/", "tests/release/", "tests/integration/native_consumers/", ".github/workflows/native-performance.yml", ".github/workflows/wheels.yml", ".github/workflows/release.yml"]
+
+[[package]]
+id = "WP19"
+brief = "WP19-structured-limit-errors.md"
+wave = 17
+depends = ["WP18"]
+owns = ["src/pyowl_core/exceptions.py", "src/pyowl_core/diagnostics.py", "src/pyowl_core/limits.py", "src/pyowl_core/model/anonymous.py", "src/pyowl_core/backends/native.py", "src/pyowl_core/backends/native_ingestion.py", "src/pyowl_core/_native.pyi", "native/src/error.rs", "native/src/limits.rs", "native/src/parse/anonymous.rs", "tests/foundation/test_diagnostics_exceptions.py", "tests/foundation/test_config_limits.py", "tests/differential/limits/", "tests/native/limits/", "reports/workpackages/WP19.md"]
+
+[[package]]
+id = "WP20"
+brief = "WP20-strict-rdf-mapping-evidence.md"
+wave = 18
+depends = ["WP19"]
+owns = ["src/pyowl_core/exceptions.py", "src/pyowl_core/document/provenance.py", "src/pyowl_core/io/formats/rdf.py", "src/pyowl_core/backends/native_ingestion.py", "src/pyowl_core/_native.pyi", "native/src/ingestion/rdfxml.rs", "tests/unit/formats/test_rdf_mapping_evidence.py", "tests/native/formats/test_rdf_mapping_evidence.py", "tests/differential/rdf_mapping/", "reports/workpackages/WP20.md"]
+
+[[package]]
+id = "WP21"
+brief = "WP21-reification-error-evidence.md"
+wave = 19
+depends = ["WP20"]
+owns = ["src/pyowl_core/io/formats/rdf.py", "src/pyowl_core/backends/native_ingestion.py", "native/src/ingestion/rdfxml.rs", "tests/unit/formats/test_rdf_reification_evidence.py", "tests/native/formats/test_rdf_reification_evidence.py", "tests/differential/rdf_reification/", "reports/workpackages/WP21.md"]
+
+[[package]]
+id = "WP22"
+brief = "WP22-partial-rdf-diagnostic-mode.md"
+wave = 20
+depends = ["WP21"]
+owns = ["src/pyowl_core/config.py", "src/pyowl_core/api.py", "src/pyowl_core/io/__init__.py", "src/pyowl_core/io/formats/__init__.py", "src/pyowl_core/io/formats/rdf.py", "src/pyowl_core/backends/native_ingestion.py", "src/pyowl_core/_native.pyi", "native/src/ingestion/mod.rs", "native/src/ingestion/rdfxml.rs", "native/src/ingestion/turtle.rs", "tools/audit/public-api-v0.txt", "docs/api.md", "tests/unit/formats/test_partial_rdf_mapping.py", "tests/integration/imports/test_partial_mapping_rejection.py", "reports/workpackages/WP22.md"]
+
+[[package]]
+id = "WP23"
+brief = "WP23-component-anonymous-canonicalization-v2.md"
+wave = 20
+depends = ["WP21"]
+owns = ["pyproject.toml", "setup.py", "src/pyowl_core/__init__.py", "src/pyowl_core/model/anonymous.py", "src/pyowl_core/document/document.py", "src/pyowl_core/document/snapshot.py", "src/pyowl_core/backends/native.py", "src/pyowl_core/backends/native_views.py", "src/pyowl_core/wire/", "native/build.rs", "native/src/lib.rs", "native/src/parse/anonymous.rs", "native/src/parse/retained.rs", "native/src/model/encoded_columns.rs", "native/src/bindings/views.rs", "schemas/model-v2.toml", "schemas/encoded-view-v2.toml", "schemas/version-decision-v2.toml", "tools/schema/", "tools/wire_reference/", "benchmarks/corpora.toml", "benchmarks/component_canonicalization/", "tools/benchmark/component_canonicalization/", "reports/performance/component-canonicalization-v2/", "reports/release/0.2.0/", "reports/workpackages/WP23.md", "README.md", "CHANGELOG.md", "MIGRATION.md", "docs/compatibility.md", "docs/performance.md", "docs/release-checklist.md", "tests/unit/model/test_anonymous_components_v2.py", "tests/unit/fingerprints/", "tests/unit/wire/", "tests/native/anonymous/", "tests/native/encoded_views/", "tests/native/wire/", "tests/differential/anonymous/", "tests/benchmark/component_canonicalization/", "tests/release/"]

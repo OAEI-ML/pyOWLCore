@@ -70,9 +70,24 @@ Parsing triples is not completion. The mapping phase MUST:
 
 An RDF graph that cannot be mapped to an OWL 2 structural ontology is not
 silently accepted as an empty/partial ontology. Strict mode raises
-`UnsupportedSyntaxError` with mapping rule IDs and bounded examples. Explicit
-`allow_partial_rdf_mapping=True` returns a document plus a nonconformant report;
-no reasoner-facing default enables it.
+`UnsupportedSyntaxError(code="RDF_MAPPING_INCOMPLETE")` with the completed
+bounded `RDFMappingReport` attached as `.rdf_mapping_report`. It includes total
+and consumed counts plus deterministic examples whose subject, predicate,
+object, and object kind are available without reparsing. Public errors never
+expose a backend-prefixed mapping code.
+
+Explicit `LoadOptions(allow_partial_rdf_mapping=True)` is supported on API
+`(0, 2)` only for one-document RDF/XML/Turtle diagnostic parsing. It returns a
+document plus a nonconformant report and explicitly counts dropped statements.
+Snapshot/coercion acquisition, non-RDF formats, caching, and reasoner-facing
+paths reject the option or a nonconformant document as specified in
+`large-document-reliability.md`; no default enables it.
+
+When an OWL axiom/annotation reification has no asserted main triple, the error
+diagnostic carries bounded subject, source, property, target, and target-kind
+evidence. The mapper never synthesizes the missing assertion. Evidence schemas,
+redaction, and Python/native parity are defined in
+`large-document-reliability.md`.
 
 RDF/XML external entities, DTD processing, and network retrieval are disabled.
 Turtle base/prefix expansion follows its Recommendation and configured base.

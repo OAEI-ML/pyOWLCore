@@ -7,6 +7,10 @@ handoff contract in the implementation branch. External publication/reference-
 machine gates may carry into a successor only where its brief says so; they
 remain release blockers and cannot be relabeled as passed.
 
+The manifest's top-level version fields describe the final successor target;
+the implementation continues to advertise its released values until the owning
+workpackage lands the coordinated version change.
+
 ## Execution graph
 
 ```text
@@ -42,18 +46,32 @@ WP07 + WP09 + WP14 --> WP15 retained arena/lazy facade
 WP02 + WP03 + WP15 --> WP16 native streaming ingestion
 WP05 + WP06 + WP11 + WP15 --> WP17 encoded views/wire/consumer handoff
 WP12 + WP16 + WP17 --> WP18 comparative performance release
+
+Large-document reliability successor:
+
+WP18 --> WP19 structured limits/telemetry
+WP19 --> WP20 strict RDF mapping evidence
+WP20 --> WP21 reification evidence
+WP21 --> WP22 partial RDF diagnostic API
+WP21 --> WP23 component anonymous canonicalization v2
 ```
 
 WP16 and WP17 are the intended parallel lanes after WP15 freezes the retained-
 storage, private-stub, and registration handoff. Their manifest ownership is
 disjoint: ingestion and encoded-view bindings/adapters are separate files.
 WP18 integrates them and owns comparative release evidence.
+WP20 and WP21 intentionally serialize ownership of the Python/native RDF
+mapping files. After WP21, WP22 and WP23 are disjoint implementation lanes:
+WP22 owns parser option routing and WP23 owns anonymous identity, schemas,
+versions, and the large-document gate. WP23 consumes WP22's frozen API handoff
+before the final release/version commit even though component implementation
+does not wait for it. WP23 remains open until that handoff is incorporated.
 WP17 exclusively owns the API/adapter/encoded-schema decision and records it in
 a generated ledger; WP18 exclusively owns the later package SemVer bump and
 release changelog/migration metadata. Their shared `__init__.py` handoff is
 line-scoped: WP17 establishes exports/contract constants, while WP18 changes
 only package `__version__` and verifies the frozen ledger.
-WP00-WP13 handoffs remain historical evidence; successor ownership reopens only
+WP00-WP18 handoffs remain historical evidence; successor ownership reopens only
 the paths listed in the manifest and does not retroactively alter old reports.
 For WP14-WP18 scheduling, a predecessor's recorded repository-owned handoff is
 sufficient to begin implementation; unresolved external publication, legal,

@@ -221,6 +221,21 @@ public exceptions. `MemoryError` is raised only for actual Python allocation
 failure; configured limits use `ResourceLimitError`. Sensitive source snippets,
 paths, and resolver data are redacted before crossing.
 
+The native error frame carries configured limit name, observed value, allowed
+value, and bounded immutable details as typed fields. The Python bridge never
+recovers those values from message text. Strict RDF mapping errors likewise
+carry the complete bounded `RDFMappingReport` before conversion, and
+reification errors carry the evidence keys defined in
+`large-document-reliability.md`. Internal `NATIVE_*` codes are normalized at
+the public boundary.
+
+Native anonymous canonicalization is a post-mapping structural operation, not
+an RDF-blank-node prepass. Model schema 2 partitions the same structural graph
+and applies the same multiplicity-preserving component scheme as the Python
+reference. Native telemetry reports component count, largest component,
+refinement rounds, and charged work term without exposing source labels or
+unbounded source excerpts.
+
 ## 8. Build modes and artifacts
 
 One sdist supports:

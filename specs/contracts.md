@@ -14,9 +14,11 @@ WIRE_FORMAT_VERSION: tuple[int, int]
 ADAPTER_PROTOCOL_VERSION: int
 ```
 
-The first implementation line is package `0.1.x`, model schema 1, wire 1.0,
-adapter protocol 1. No consumer compares `__version__` lexically; use packaging
-version parsing or the explicit tuples.
+The first implementation line is package `0.1.x`, API `(0, 1)`, model schema 1,
+wire 1.x, and adapter protocol 1. The coordinated successor described by
+`large-document-reliability.md` is package `0.2.0`, API `(0, 2)`, model schema
+2, wire 1.2, and encoded structural schema 2. No consumer compares `__version__`
+lexically; use packaging version parsing or the explicit tuples.
 
 ## 2. Input and configuration values
 
@@ -67,11 +69,19 @@ class LoadOptions:
     collect_provenance: bool = True
     validate_owl2_dl: bool = False
     deterministic: bool = True
+    allow_partial_rdf_mapping: bool = False
 ```
 
 Library APIs MUST NOT use a mutable options dictionary. Defaults are secure:
 local-only and offline. An application that needs network imports opts in by
 providing a resolver configured for approved schemes/hosts.
+
+`allow_partial_rdf_mapping` is a diagnostic-only API `(0, 2)` option. It is
+valid only for `parse_document` with RDF/XML or Turtle. It returns a document
+whose `rdf_mapping_report` explicitly records dropped triples. Snapshot/
+coercion acquisition, non-RDF formats, and reasoner-facing paths reject it with
+the stable option-conflict codes defined in
+`large-document-reliability.md`; the default remains strict.
 
 Input aliases are documented unions, not runtime base classes:
 
@@ -205,6 +215,8 @@ class OntologyDocument:
     def document_fingerprint(self) -> Fingerprint: ...
     @property
     def provenance(self) -> DocumentProvenance: ...
+    @property
+    def rdf_mapping_report(self) -> RDFMappingReport | None: ...
 
 @runtime_checkable
 class OntologyView(Protocol):
@@ -441,6 +453,26 @@ class Diagnostic:
     details: Mapping[str, str | int | bool] = immutable_mapping()
 ```
 
+RDF mapping evidence is public and immutable:
+
+```python
+@dataclass(frozen=True, slots=True, order=True)
+class RDFTripleEvidence:
+    subject: str
+    predicate: str
+    object: str
+    object_kind: Literal["iri", "blank", "literal"]
+
+@dataclass(frozen=True, slots=True)
+class RDFMappingReport:
+    conformant: bool
+    consumed_triples: int
+    total_triples: int
+    unconsumed: tuple[RDFTripleEvidence, ...] = ()
+    rule_ids: tuple[str, ...] = ()
+    diagnostics: tuple[Diagnostic, ...] = ()
+```
+
 Stable public exception roots:
 
 ```text
@@ -484,6 +516,15 @@ Exceptions have stable `.code`, optional `.diagnostic`, and chained causes.
 Messages are for people, never program control flow. `MemoryError`,
 `KeyboardInterrupt`, and `SystemExit` are not wrapped. Native panics cannot cross
 FFI and map to `BackendProtocolError(code="NATIVE_PANIC")`.
+
+A configured-limit `ResourceLimitError` has non-optional `.limit`,
+`.observed`, `.allowed`, and immutable `.details`; native and Python failures
+populate the same typed fields and never require message parsing.
+`UnsupportedSyntaxError(code="RDF_MAPPING_INCOMPLETE")` has a non-optional
+`.rdf_mapping_report`. Other unsupported-syntax errors MAY leave that attribute
+`None`. Reification failures expose bounded structural evidence through
+`.diagnostic.details`. Exact field and normalization rules are normative in
+`large-document-reliability.md`.
 
 No public exception name shadows a Python built-in or a well-known stdlib
 class: the parse failure is `OntologySyntaxError`, never built-in

@@ -42,6 +42,15 @@ encoded-structural section. Readers continue to accept historical minor-0
 images and use the complete scalar fallback when that optional section is
 absent.
 
+The `0.2.0` successor raises the supported/emitted maximum to minor 2. It keeps
+all required v1 section layouts and adds optional `ENCODED_STRUCTURAL_V2`
+(kind `0x8004`, schema 2) for model-schema-2/canonical-model-v2 columns.
+`ENCODED_STRUCTURAL_V1` remains kind `0x8003`, schema 1, and model schema 1;
+neither its descriptor nor its interpretation changes. A minor-2 reader may
+skip an unknown optional encoded section and use scalar required sections, but
+the independent model-schema check still rejects a snapshot from an unsupported
+model identity line.
+
 ## 3. Scalar conventions
 
 - byte order: little-endian;
@@ -168,6 +177,13 @@ resource limits, and root binding before publication. A mapped closure request
 borrows the eleven read-only slices from one mapping exporter and retains a
 snapshot lease. Historical files and non-closure selections use the complete
 scalar fallback rather than manufacturing a zero-copy claim.
+
+Wire minor 2 defines `ENCODED_STRUCTURAL_V2` (kind `0x8004`, schema 2) with the
+same bounded directory/container rules but the generated
+`pyowl-core/structural-columns` schema-2 descriptor, model schema 2, and magic
+`PYOCEV2\0`. Its canonical root binding is computed over canonical-model-v2
+bytes. A model-schema-2 writer MUST NOT emit the v1 section, and a reader MUST
+NOT reinterpret either section through the other descriptor.
 
 The section is emitted only when required-section metadata would lose the
 source view's loader-diagnostic digest or pre-materialization overlay/composite

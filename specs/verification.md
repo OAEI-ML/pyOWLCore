@@ -60,6 +60,12 @@ deviation entry, not a broad marker.
 Large benchmark ontologies are manifests/downloads when redistribution is not
 permitted. Tests verify hashes. No mutable URL or “latest” artifact is evidence.
 
+Live-incident evidence follows the same rule: byte size or a truncated digest
+does not identify an ontology. Restricted SNOMED data may close a private
+incident lane but cannot be the sole public release gate; a redistributable or
+generated corpus must exercise the same Functional Syntax component-scaling
+property.
+
 ## 5. Generative and metamorphic tests
 
 Bounded recursive strategies generate every primitive, expression, annotated
@@ -79,6 +85,10 @@ Required metamorphic relations include:
   preserve lexical spelling;
 - alpha-renaming blank labels preserves identity/fingerprints, while moving an
   anonymous individual to another document does not;
+- permuting disconnected anonymous components preserves output; repeated
+  isomorphic components retain multiplicity and distinct canonical occurrence
+  slots; and canonical work is component-scoped without weakening global term
+  bounds;
 - parse → write → parse preserves structure; RDF results are graph-isomorphic;
 - equal effective overlay histories have equal semantic fingerprints;
 - overlay/composite query results equal independent materialization; and
@@ -95,6 +105,15 @@ This is a release requirement for all supported features. Compare canonical
 values, reports/diagnostic codes, fingerprints, writer bytes where canonical,
 wire bytes, indexes, limits/cancellation, and consumer outputs. Randomized tests
 run forced backend and reject native fallback.
+
+Configured-limit differential fixtures compare typed `limit`, `observed`,
+`allowed`, and immutable details without inspecting messages. Strict RDF
+mapping fixtures compare the attached counts/rule IDs/bounded triple evidence,
+including object kind, from the first failing parse. Missing-main-triple
+reification fixtures compare bounded diagnostic detail keys. Anonymous model
+schema 2 fixtures include disconnected non-isomorphic components, repeated
+isomorphic components, one oversized component, and blank-label/root/component
+permutations against the independent canonical implementation.
 
 Retained-native tests additionally compare lazy scalar materialization and the
 complete `EncodedStructuralView` against independent Python traversal for every

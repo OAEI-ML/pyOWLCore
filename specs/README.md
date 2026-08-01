@@ -16,6 +16,7 @@ already-delivered functionality. Begin with the master specification.
 | [`adapters.md`](adapters.md) | Exact-OM, pyELK, pyHermiT, projector and evaluator integration |
 | [`native-backend.md`](native-backend.md) | Rust acceleration and complete Python fallback |
 | [`native-ontology-redesign.md`](native-ontology-redesign.md) | retained-native ontology engine, lazy facade, comparator targets, and WP14-WP18 plan |
+| [`large-document-reliability.md`](large-document-reliability.md) | component-scoped anonymous canonicalization, structured limits, and RDF failure evidence for WP19-WP23 |
 | [`security.md`](security.md) | hostile input, resource, filesystem, network and supply-chain policy |
 | [`performance.md`](performance.md) | large biomedical benchmarks and regression gates |
 | [`packaging.md`](packaging.md) | Python 3.10, pure/native artifacts, license/Java/name release gates |

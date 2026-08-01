@@ -32,6 +32,12 @@ Defaults support large biomedical ontologies but are finite. Applications may
 raise them explicitly. Limit errors include which named limit was exceeded and
 observed/allowed counts without embedding hostile content.
 
+For every configured-limit failure, `limit`, `observed`, and `allowed` are
+typed, non-optional public values on both backends; bounded immutable details
+identify safe phase/component context. Messages are never parsed for control
+flow. The native boundary transports these fields rather than reconstructing
+them from text.
+
 No parser “recovers” by dropping excess items and returning a valid document.
 No counter narrows silently. Count × size and offset + length are checked before
 allocation/access.
@@ -47,6 +53,13 @@ RDF collection traversal detects cycles/shared malformed tails and applies list
 length/visited limits. Blank-node canonicalization uses algorithms with bounded
 work and a limit for pathological symmetric graphs; exceeding it is explicit,
 never parse-order fallback. Turtle lexer buffers token/string/comment size.
+
+Model-schema-2 anonymous canonicalization applies `max_canonical_work` to each
+connected component, but partitioning and the sum of all labels/arcs remain
+subject to document-global `max_terms`, temporary-memory, deadline, and
+cancellation bounds. A component cannot borrow work from another, and one
+oversized symmetric component still fails. See
+`large-document-reliability.md`.
 
 Unicode decoding is strict by format rules. Diagnostics bound excerpts and
 escape control characters to prevent terminal/log injection.
@@ -150,4 +163,3 @@ cache/snapshot.
 - no secret/credential/path leakage snapshots; and
 - a published security contact, supported-version policy, and coordinated
   disclosure process before 1.0.
-
