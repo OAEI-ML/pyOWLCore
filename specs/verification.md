@@ -115,6 +115,14 @@ schema 2 fixtures include disconnected non-isomorphic components, repeated
 isomorphic components, one oversized component, and blank-label/root/component
 permutations against the independent canonical implementation.
 
+The four-input incident lane records post-mapping structural component count,
+maximum labels/arcs/roots/span, and maximum open root intervals for NCIt, FMA,
+and both SNOMED serializations. Any XML-level preflight is labeled as an
+over-approximation. Native limit tests drive both confirmed
+`max_canonical_work` enforcement paths and compare structured fields despite
+different messages. FMA reification tests retain total/evidence/suppressed
+counts and never infer annotation parity from a complete composite flag.
+
 Retained-native tests additionally compare lazy scalar materialization and the
 complete `EncodedStructuralView` against independent Python traversal for every
 constructor. Allocation/object counters assert publication is not proportional

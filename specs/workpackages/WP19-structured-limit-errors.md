@@ -29,6 +29,9 @@ subsequent algorithm and schema change.
   `observed`, `allowed`, and immutable bounded `details` for configured limits.
 - A typed native error payload carrying the same fields through FFI, with a
   census eliminating message-derived limit classification.
+- A regression for the confirmed initial-parse and cleaned-reification-retry
+  enforcement paths, which currently emit different messages for
+  `max_canonical_work`, proving their typed fields are identical.
 - Stable canonicalization detail keys for component count, largest component,
   refinement rounds, and charged work term.
 - Python-first unit/property tests followed by forced-native differential tests
@@ -43,6 +46,8 @@ subsequent algorithm and schema change.
   `as_diagnostic()` preserves the safe detail mapping.
 - Python/native equivalent failures compare equal on contractual fields;
   message wording can change without breaking a test or consumer classifier.
+- Equivalent failures compare equal across native call sites and reparses after
+  caller modification, not merely between backend names.
 - Native panics, protocol faults, and actual allocator failures retain their
   distinct public categories.
 - Telemetry is bounded by diagnostic/resource policy and does not include blank

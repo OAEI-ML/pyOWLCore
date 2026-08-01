@@ -26,6 +26,9 @@ generic mapping-report fields return to WP20 rather than forking that contract.
 - Stable reification diagnostic codes and bounded detail keys for reification
   subject, annotated source/property/target, target kind, and main-triple
   presence.
+- Total, retained-evidence, and suppressed counts bounded by
+  `max_diagnostics`, permitting reconciliation without treating examples as an
+  exhaustive parity oracle.
 - Equal Python/native evidence for absent, ambiguous, cyclic, and incomplete
   axiom/annotation reifications.
 - Negative fixtures distinguishing a malformed whole document from the same
@@ -39,6 +42,9 @@ generic mapping-report fields return to WP20 rather than forking that contract.
 - Missing/ambiguous metadata is represented by a stable code and absent fields,
   not placeholder or guessed values.
 - Forced Python/native tests compare contractual details and ignore prose.
+- The pinned FMA whole-document orphan case is auditable; the historical
+  107,588 chunk-caused removals cannot be cited as validated parity and vanish
+  from the WP23 one-document path.
 - No evidence field can bypass source excerpt, credential, IRI, diagnostic, or
   memory limits.
 

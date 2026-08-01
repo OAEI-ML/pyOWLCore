@@ -69,20 +69,21 @@ Names do not imply mutable “latest” downloads. SNOMED CT or other restricted
 ontologies may be a private optional lane only with documented license; release
 gates cannot depend exclusively on unavailable data.
 
-The model-schema-2 large-document incident gate adds a pinned, legally
-available NCIt artifact plus a redistributable/generated Functional Syntax
-component-scaling corpus. NCIt must load as one complete document with default
-limits; consumer-side RDF/XML chunking is outside the result. On the same
-machine and measurement tool, peak RSS must be below the recorded
-4,375,028-KiB chunked incident path. Counts/signature and an independent
-alpha-equivalence migration oracle must match a raised-limit model-schema-1
-baseline. A truncated digest is not a corpus pin.
+The model-schema-2 incident matrix adds pinned NCIt and FMA RDF/XML artifacts,
+licensed SNOMED RDF/XML and Functional Syntax private lanes, and a
+redistributable/generated Functional Syntax component-scaling corpus. Every
+available input loads as one complete document under default limits; consumer
+chunking is outside the result. Same-machine RSS ceilings, regression-only
+counts, exact checksums, and the distinction between public release and private
+incident closure are normative in `large-document-reliability.md`. Licensed
+inputs cannot be the sole public release evidence.
 
-A licensed 211,564,833-byte SNOMED Functional Syntax artifact is a private
-incident-closure lane when available. It cannot be the only release evidence.
-Raw phase telemetry identifies component partition, setup, refinement,
-candidate ordering, key derivation, and freeze separately. See
-`large-document-reliability.md`.
+Raw phase telemetry identifies structural component count/maximum size and
+root-order interval activity, partition setup, refinement, candidate ordering,
+key derivation, and freeze separately. It labels the XML-level SNOMED preflight
+as an over-approximation rather than structural-model evidence. Counts/
+signature and an independent alpha-equivalence migration oracle match a
+raised-limit model-schema-1 baseline where one can complete.
 
 Each required syntax has equivalent/representative inputs. RDF/XML and Turtle
 receive primary scale coverage; OWL/XML/Functional receive complete correctness

@@ -45,8 +45,12 @@ are frozen inputs.
 - A release ledger for package `0.2.0`, API `(0, 2)`, model 2, wire `(1, 2)`,
   adapter 1, and encoded schema 2; all metadata, docs, compatibility/migration,
   and consumer capability fixtures agree.
-- Pinned/licensed NCIt evidence and a redistributable/generated Functional
-  component-scaling gate; licensed SNOMED evidence is private/optional.
+- Pinned NCIt and FMA evidence, licensed SNOMED RDF/XML and Functional Syntax
+  private lanes, and a redistributable/generated Functional component-scaling
+  gate.
+- Structural `_blank_arcs` component count, maximum labels/arcs/roots/span, and
+  maximum open root intervals for all four incident inputs, explicitly
+  separated from PyMatcha's XML-level preflight.
 
 ## Acceptance
 
@@ -61,6 +65,10 @@ are frozen inputs.
 - The pinned NCIt artifact loads in one pass with default limits and lower
   same-machine peak RSS than the documented chunked incident, with counts,
   signature, and alpha-equivalence checked against a raised-limit baseline.
+- Pinned FMA loads in one pass below its chunked RSS baseline; its axiom and
+  declaration anchors are reported without being mislabeled as parity proof.
+- Both licensed SNOMED serializations load in one pass and below their incident
+  RSS observations when authorized data is available.
 - Public Functional Syntax scaling evidence is release-gating; unavailable
   licensed SNOMED is `not-run` and blocks only the private incident claim.
 - The package installs as `0.2.0`; stale model/schema caches fail closed or are
@@ -70,6 +78,6 @@ are frozen inputs.
 
 ## Non-goals
 
-No segmented/streaming document API, consumer chunker, strict-mapping
-relaxation, default limit increase, reasoner behavior, or unpinned performance
-claim.
+No segmented/streaming document API, consumer chunker, serialization-choice
+workaround, strict-mapping relaxation, default limit increase, reasoner
+behavior, or unpinned performance claim.
