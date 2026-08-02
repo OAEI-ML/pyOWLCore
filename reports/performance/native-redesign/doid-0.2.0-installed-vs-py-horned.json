@@ -1,0 +1,312 @@
+{
+  "schema": "pyowl-core/doid-installed-vs-py-horned-evidence/v2",
+  "scope": {
+    "corpus_id": "oaei-bioml-doid-2024",
+    "input_mode": "resident-bytes",
+    "process_modes": [
+      "fresh-process",
+      "steady-process"
+    ],
+    "lanes": [
+      "pyowl-native-wheel-common",
+      "py-horned-common"
+    ],
+    "warmups": 1,
+    "repetitions_per_lane_and_mode": 3,
+    "sample_count": 12,
+    "schedule_seed": 180643,
+    "ratio_direction": "pyowl-core native / py-horned",
+    "python_reference_included": false,
+    "formal_release_claim": false
+  },
+  "raw_artifact": {
+    "filename": "doid-21f4e41-two-lane.json",
+    "bytes": 86992371,
+    "sha256": "949ae3ef40908ec66882e385613e2b21f03929e146528589955cdd29d7e4cd6d",
+    "schema": "pyowl-core/comparator-baseline/v1",
+    "captured_utc": "2026-08-02T06:25:09.078116+00:00",
+    "contract_valid": false,
+    "contract_valid_false_only_because": "the user-scoped two-lane run omitted the Python common-contract reference",
+    "execution_errors": []
+  },
+  "source_identity": {
+    "git_commit": "21f4e418da005e260f6056dc9ce0ac4a8af4210d",
+    "git_tree": "d74e59c6ae8ae125fde5cf311505f4180f9f2b1e",
+    "git_dirty": false,
+    "runtime_source_sha256": "39f321d536ffc555bddb1e47079e4d011520db3a1071b1a8e9f1d9d31fec8c07",
+    "runtime_source_input_count": 202,
+    "runtime_source_bytes": 5937251,
+    "comparator_manifest_sha256": "2ba9015b7826dea6372e957cacc97203efdd387a86489a369945b4fa5e865e0a",
+    "corpus_manifest_sha256": "813a6a71060a6aa6bf0c89df7b7cfad0d278c97d33495acbb5ce7a8081108838"
+  },
+  "identities": {
+    "pyowl_core": {
+      "version": "0.2.0",
+      "api_version": [
+        0,
+        2
+      ],
+      "model_schema": 2,
+      "wire_format": [
+        1,
+        2
+      ],
+      "wheel": {
+        "artifact": "pyowl_core-0.2.0-cp312-cp312-macosx_14_0_x86_64.whl",
+        "bytes": 1765045,
+        "sha256": "f969d1fff70844660580b73915f65871d407d5d870e1af8c3498d23fd68a661e"
+      },
+      "extension": {
+        "artifact": "_native.cpython-312-darwin.so",
+        "bytes": 3295168,
+        "sha256": "226373ef1c8f83603ca1467515ea9c6502e982943777ca0b09cf8c1e506a8032"
+      }
+    },
+    "py_horned": {
+      "package": "py-horned-owl",
+      "version": "1.4.0",
+      "artifact": "py_horned_owl-1.4.0.tar.gz",
+      "artifact_sha256": "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d",
+      "runner_revision": "pyowl-core-py-horned-common-runner-v10",
+      "runner_sha256": "7b100ed9f751d6d1117d4fe43805551427277d8a6f09b0814129e47b7ab7c99f",
+      "pin_state": "complete"
+    },
+    "input": {
+      "bytes": 6687536,
+      "format": "rdfxml",
+      "sha256": "76f41cce3616ad1a9ba6353f469e96bde7addba5d43e541651a3ab703f9ba2bc"
+    }
+  },
+  "contract": {
+    "schema": "pyowl-core/comparator-common-contract/v1",
+    "sha256": "b2f861b0cf79b6b22a502441823d655cd7f6d76ff0ade3a248e75389d5793966",
+    "options_sha256": "fdfc954b7b8f0253c8e90ee4542170f506ca069ac6bd93744ac0ceabf04f8d2f",
+    "root_document_key": "d2:c4add243b31f4dd78f4b6218ba9cf6784431bc32607d23bd5729da50904d9935",
+    "model_schema": 2,
+    "complete_import_closure": true,
+    "counts": {
+      "axioms": 55687,
+      "signature": 8516,
+      "documents": 1,
+      "ontology_annotations": 0,
+      "extensions": 0,
+      "diagnostics": 0,
+      "origins": 55687
+    },
+    "fingerprints": {
+      "document": "e367170fbeca042df1f63af0525b5477d4a5976ff3d93bf88e16cb7d953e78db",
+      "logical": "dfd4cc74f0cdf1370ca247c8ef7932139274fca6d3c4680a6d10cea6b8ad1556",
+      "signature": "f62578ab4bb8597f177bd0d20257ecd85bdf4a7df1cae838cc1fc747b4fc5134",
+      "structural": "ef44186243b2049690230626a125f3b6cb561ac4bfd7762ceee09eba1c6539c4"
+    },
+    "all_twelve_sample_digests_equal": true,
+    "native_and_py_horned_equal": true,
+    "full_validation_inside_every_timed_envelope": true
+  },
+  "environment": {
+    "comparison_key": "a441e50f082dbba89bb465a141dc512becaae97008ab422ba9a4ae31258e939b",
+    "host_class": "shared concurrent development host",
+    "reference_machine_id": "shared-darwin25-x86_64",
+    "reference_machine_approval": "pending",
+    "reference_machine_matches": false,
+    "logical_cpu_count": 12,
+    "physical_memory_bytes": 34359738368,
+    "platform": "Darwin 25.5.0 x86_64",
+    "python": "CPython 3.12.3",
+    "storage": "resident bytes; exact device and cache state not attested",
+    "power_mode": "not measured"
+  },
+  "samples": [
+    {
+      "process_mode": "fresh-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 0,
+      "implementation_order": 0,
+      "load_ns": 2933689390,
+      "common_ready_wall_ns": 6061832893,
+      "rss_increment_bytes": 183611392,
+      "rss_maximum_sample_gap_ns": null
+    },
+    {
+      "process_mode": "fresh-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 1,
+      "implementation_order": 1,
+      "load_ns": 2730106078,
+      "common_ready_wall_ns": 5868639451,
+      "rss_increment_bytes": 177971200,
+      "rss_maximum_sample_gap_ns": null
+    },
+    {
+      "process_mode": "fresh-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 2,
+      "implementation_order": 1,
+      "load_ns": 2680150161,
+      "common_ready_wall_ns": 5653878334,
+      "rss_increment_bytes": 184459264,
+      "rss_maximum_sample_gap_ns": null
+    },
+    {
+      "process_mode": "fresh-process",
+      "lane": "py-horned-common",
+      "paired_block": 0,
+      "implementation_order": 1,
+      "load_ns": 829438913,
+      "common_ready_wall_ns": 58281392363,
+      "rss_increment_bytes": 204783616,
+      "rss_maximum_sample_gap_ns": null
+    },
+    {
+      "process_mode": "fresh-process",
+      "lane": "py-horned-common",
+      "paired_block": 1,
+      "implementation_order": 0,
+      "load_ns": 765251580,
+      "common_ready_wall_ns": 57383669213,
+      "rss_increment_bytes": 229027840,
+      "rss_maximum_sample_gap_ns": null
+    },
+    {
+      "process_mode": "fresh-process",
+      "lane": "py-horned-common",
+      "paired_block": 2,
+      "implementation_order": 0,
+      "load_ns": 769909866,
+      "common_ready_wall_ns": 58291842312,
+      "rss_increment_bytes": 215519232,
+      "rss_maximum_sample_gap_ns": null
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 0,
+      "implementation_order": 1,
+      "load_ns": 2708228990,
+      "common_ready_wall_ns": 4716576177,
+      "rss_increment_bytes": 73170944,
+      "rss_maximum_sample_gap_ns": 5894655
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 1,
+      "implementation_order": 0,
+      "load_ns": 2776614137,
+      "common_ready_wall_ns": 4596391675,
+      "rss_increment_bytes": 68538368,
+      "rss_maximum_sample_gap_ns": 4806368
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "pyowl-native-wheel-common",
+      "paired_block": 2,
+      "implementation_order": 1,
+      "load_ns": 2656935407,
+      "common_ready_wall_ns": 4480037113,
+      "rss_increment_bytes": 67076096,
+      "rss_maximum_sample_gap_ns": 45785725
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "py-horned-common",
+      "paired_block": 0,
+      "implementation_order": 0,
+      "load_ns": 693196815,
+      "common_ready_wall_ns": 57276497233,
+      "rss_increment_bytes": 122974208,
+      "rss_maximum_sample_gap_ns": 114553142
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "py-horned-common",
+      "paired_block": 1,
+      "implementation_order": 1,
+      "load_ns": 855019302,
+      "common_ready_wall_ns": 57454614651,
+      "rss_increment_bytes": 101900288,
+      "rss_maximum_sample_gap_ns": 57131591
+    },
+    {
+      "process_mode": "steady-process",
+      "lane": "py-horned-common",
+      "paired_block": 2,
+      "implementation_order": 0,
+      "load_ns": 696701792,
+      "common_ready_wall_ns": 57654898910,
+      "rss_increment_bytes": 102236160,
+      "rss_maximum_sample_gap_ns": 55729692
+    }
+  ],
+  "comparisons": {
+    "fresh_process": {
+      "raw_engine_load": {
+        "native_median_ns": 2730106078,
+        "py_horned_median_ns": 769909866,
+        "paired_ratio_median": 3.5369565425730154,
+        "confidence_interval_95": [
+          3.4811219849986963,
+          3.567592866649161
+        ],
+        "interpretation": "native-slower"
+      },
+      "common_contract_ready_wall": {
+        "native_median_ns": 5868639451,
+        "py_horned_median_ns": 58281392363,
+        "paired_ratio_median": 0.10227020215832569,
+        "confidence_interval_95": [
+          0.09699261697268553,
+          0.10400974731771097
+        ],
+        "upper_bound_threshold": 1.1,
+        "passed": true,
+        "py_horned_over_native": 9.778016847176428
+      },
+      "incremental_peak_rss": {
+        "paired_ratio_median": 0.8558830796130528,
+        "confidence_interval_95": [
+          0.777072341947599,
+          0.8966117289383151
+        ],
+        "upper_bound_threshold": 1.15,
+        "passed": true
+      }
+    },
+    "steady_process": {
+      "raw_engine_load": {
+        "native_median_ns": 2708228990,
+        "py_horned_median_ns": 696701792,
+        "paired_ratio_median": 3.8135906029074773,
+        "confidence_interval_95": [
+          3.2474286024948715,
+          3.9068687729039846
+        ],
+        "interpretation": "native-slower"
+      },
+      "common_contract_ready_wall": {
+        "native_median_ns": 4596391675,
+        "py_horned_median_ns": 57454614651,
+        "paired_ratio_median": 0.08000039166427513,
+        "confidence_interval_95": [
+          0.07770436160149016,
+          0.08234749687665138
+        ],
+        "upper_bound_threshold": 1.1,
+        "passed": true,
+        "py_horned_over_native": 12.499938802756916
+      },
+      "incremental_peak_rss": {
+        "evaluable": false,
+        "maximum_accepted_sample_gap_ns": 10000000,
+        "reason": "at least one paired sample exceeded the 10 ms RSS sampling-gap bound"
+      }
+    }
+  },
+  "interpretations": {
+    "common_contract_result": "pyowl-core native is faster than py-horned at the equal common-contract-ready boundary in both process modes",
+    "raw_parse_qualification": "py-horned reaches its engine model faster, but that boundary omits the structural mapping, canonicalization, fingerprints, provenance, diagnostics, validation, and publication included in the common contract",
+    "correctness": "all twelve native and py-horned samples produced the same model-schema-2 contract digest",
+    "steady_rss": "no decision because the fail-closed RSS sampling-gap contract rejected the steady measurement",
+    "portability": "single shared-host observation; no portable or formal release-performance claim"
+  }
+}

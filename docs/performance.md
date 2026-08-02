@@ -59,20 +59,29 @@ process RSS. These counters make the former document-global canonicalization
 cost auditable, but instrumentation and focused tests are not a performance
 pass.
 
-No current `0.2.0` corpus result is accepted yet. The release gate remains
-blocked until the final model-schema-2 native artifact records, on the selected
-machine and exact source revision:
+Current `0.2.0` evidence is partial and fail-closed:
 
-- one-pass default-limit loads and correctness anchors for the pinned NCIt and
-  FMA documents, including same-machine peak RSS against their documented
-  chunked incident baselines;
-- the redistributable/generated Functional component-scaling gate, proving
-  charged work scales with the sum of bounded component work;
-- the required fresh/steady resident/file comparison against pinned direct
-  Horned and py-horned contracts, with raw samples, confidence bounds, phase
-  profiles, peak RSS, and output equality; and
-- the checksum-bound delivered-wheel overhead and no-eager-materialization
-  evidence required by the native redesign.
+| Evidence | Result | Qualification |
+|---|---|---|
+| generated Functional `fixed-50000` | passed: 50,000 components, additive work 450,000, largest-component work 9 | functional scaling only; evidence SHA-256 `d950d8d2...`; no portable performance claim |
+| generated native one-document case | passed with the same schema-2 fingerprint | exact retained checkpoint artifact, not the final candidate |
+| pinned NCIt one-document/default-limit load | passed at an implementation checkpoint | model-schema-1 alpha/count reference, final-artifact retention, and same-machine RSS comparison remain open |
+| installed native versus py-horned on pinned DOID | all 12 common-contract digests equal; fresh/steady wall gates and fresh RSS gate passed | two-lane shared-host diagnostic; Python/direct-Horned lanes, approved host, and evaluable steady RSS were outside scope |
+
+At the equal common-contract-ready boundary, installed native measured a
+native/py-horned paired median ratio of 0.10227 fresh (95% CI
+0.09699–0.10401) and 0.08000 steady (0.07770–0.08235), or approximately 9.78
+and 12.50 times lower wall time respectively. Py-horned reached its raw engine
+model first: native/py-horned raw-load ratios were 3.54 fresh and 3.81 steady.
+The raw boundary excludes structural mapping, canonicalization, fingerprints,
+provenance, diagnostics, validation, and publication and is therefore not
+substituted for equal-contract readiness. Exact pins and samples are in
+[`doid-0.2.0-installed-vs-py-horned.json`](../reports/performance/native-redesign/doid-0.2.0-installed-vs-py-horned.json).
+
+The release-performance gate remains blocked pending FMA, NCIt final-artifact
+correctness/RSS closeout, and—if making the full normative reference-machine
+claim—the missing Python/direct-Horned/required-corpus/reference-machine and
+steady-RSS lanes plus delivered-wheel/direct-engine overhead evidence.
 
 Licensed SNOMED RDF/XML and Functional Syntax lanes remain `not-run` when the
 authorized inputs are unavailable and block only the private incident claim.

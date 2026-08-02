@@ -54,13 +54,22 @@ release gates below.
 
 ## Final corpus and native closeout
 
-The release-performance entry remains blocked until the final schema-2 native
-artifact completes the pinned NCIt and FMA one-pass runs, the public Functional
-component-scaling gate, and the required direct Horned/py-horned comparisons.
-Counts, fingerprints, alpha-equivalence where defined, phase telemetry, peak
-RSS, raw paired samples, and exact input/tool hashes must accompany the result.
-Licensed SNOMED lanes are reported as `not-run` when unavailable and do not
-become synthetic passes.
+The public Functional `fixed-50000` component-scaling gate has passed with
+checksum-bound additive-work evidence. A candidate NCIt observation completed
+one native/default-limit document load, but exact final-artifact retention, its
+model-schema-1 alpha/count reference, and same-machine RSS comparison remain
+open; FMA remains unrun. The scoped installed-native/py-horned DOID comparison
+also passed equality plus fresh/steady common-ready wall and fresh RSS gates.
+It remains non-formal because the Python/direct-Horned lanes, approved required
+corpus/reference machine, and evaluable steady RSS were outside that run.
+
+Accordingly `reference_performance` remains blocked until the remaining
+NCIt/FMA closeout and, for the complete normative claim, the missing comparator,
+reference-host, and delivered-wheel/direct-engine overhead evidence are bound
+to one final revision. Counts, fingerprints, alpha-equivalence where defined,
+phase telemetry, peak RSS, raw paired samples, and exact input/tool hashes must
+accompany each result. Licensed SNOMED lanes are reported as `not-run` when
+unavailable and do not become synthetic passes.
 
 The final native extension must also rerun the WP19-WP22 structured-limit,
 strict mapping, reification-evidence, and diagnostic-partial parity selections.

@@ -47,8 +47,8 @@
     {
       "id": "horned-wheel-common-contract",
       "status": "not-run",
-      "reason": "the installed-wheel and py-horned runners are pinned and pass development common-contract samples, but the approved paired representative wall-time, RSS, and facade-overhead matrix has not run",
-      "evidence": ["reports/workpackages/WP14.md", "benchmarks/comparators/comparators.toml"]
+      "reason": "the model-schema-2 installed-wheel and py-horned runners pass exact DOID equality plus fresh/steady common-ready wall and fresh RSS gates, but the scoped run omits the Python/direct lanes, approved required corpus/reference machine, evaluable steady RSS, and facade-overhead matrix",
+      "evidence": ["reports/workpackages/WP14.md", "benchmarks/comparators/comparators.toml", "reports/performance/native-redesign/doid-0.2.0-installed-vs-py-horned.json"]
     },
     {
       "id": "version-schema-consistency",

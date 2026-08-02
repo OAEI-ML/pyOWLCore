@@ -72,4 +72,5 @@ def test_docs_disclose_release_status_and_unsupported_performance_claims() -> No
     assert "No 2x parser claim" in " ".join(performance.split())
     assert "shared-host" in performance
     assert "reference" in performance
-    assert "No current `0.2.0` corpus result is accepted yet" in performance
+    assert "Current `0.2.0` evidence is partial and fail-closed" in performance
+    assert "no portable performance claim" in performance

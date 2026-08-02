@@ -25,7 +25,7 @@
       "status": "blocked"
     },
     "reference_performance": {
-      "evidence": "pending final model-schema-2 native evidence: pinned NCIt/FMA one-pass correctness and RSS, public Functional component scaling, and paired direct Horned/py-horned comparisons",
+      "evidence": "partial exact model-schema-2 native evidence: Functional fixed-50000 passes (d950d8d2...), NCIt one-document/default-limit candidate observation passes but final-artifact alpha/count and same-machine RSS remain open, and DOID installed-native/py-horned equality plus fresh/steady wall and fresh RSS pass in a non-formal two-lane shared-host run; pending FMA and the missing Python/direct-Horned/approved-host/steady-RSS/overhead closeout",
       "status": "blocked"
     },
     "release_owner_approval": {
