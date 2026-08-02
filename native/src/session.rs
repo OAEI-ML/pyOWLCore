@@ -100,13 +100,11 @@ impl<'a> Session<'a> {
             .work
             .checked_add(amount)
             .ok_or_else(|| NativeError::limit("native session work counter overflow"))?;
-        if self.work > self.limits.max_canonical_work {
-            return Err(self.limits.resource_limit(
-                LimitKey::MaxCanonicalWork,
-                self.work,
-                "native operation exceeds max_canonical_work",
-            ));
-        }
+        // This counter is operation-wide progress for cancellation and deadline
+        // polling.  It deliberately is not a canonical-work budget: anonymous
+        // canonicalization charges `max_canonical_work` independently for each
+        // connected component, while document-wide parser/index traversals are
+        // bounded by their term, memory, deadline, and cancellation limits.
         self.guard.check(self.work, false)
     }
 
@@ -206,5 +204,19 @@ mod tests {
             .reserve_temporary_bytes(1)
             .expect("failed reservation did not mutate either budget");
         assert_eq!(session.temporary_bytes, 1);
+    }
+
+    #[test]
+    fn operation_progress_is_not_charged_to_component_canonical_work() {
+        let mut limits = Limits::default();
+        limits.max_canonical_work = 1;
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(cancellation, limits.deadline, limits.cancellation_stride);
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+
+        session
+            .step(2)
+            .expect("document-wide progress is not a component work budget");
+        session.finish().expect("final deadline/cancellation check");
     }
 }

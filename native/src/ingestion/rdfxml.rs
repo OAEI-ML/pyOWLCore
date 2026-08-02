@@ -9459,7 +9459,7 @@ mod tests {
     }
 
     #[test]
-    fn reification_graph_index_enforces_work_and_memory_before_publication() {
+    fn reification_graph_index_does_not_charge_component_work_and_enforces_memory() {
         let triples = vec![
             Triple {
                 subject: Resource::Iri("urn:subject:0".to_owned()),
@@ -9482,13 +9482,10 @@ mod tests {
         );
         let mut work_session =
             Session::new(&mut work_guard, &work_limits, 0).expect("bounded work session");
-        let work_error = RdfGraphIndex::build(&triples, &mut work_session)
-            .expect_err("second indexed triple must exceed the work limit");
-        assert_eq!(work_error.code, "NATIVE_WIRE_LIMIT");
-        assert_eq!(
-            work_error.message,
-            "native operation exceeds max_canonical_work"
-        );
+        let graph_index = RdfGraphIndex::build(&triples, &mut work_session)
+            .expect("document-wide indexing is not component canonical work");
+        assert_eq!(graph_index.by_subject.len(), 2);
+        assert_eq!(graph_index.exact_triples.len(), 2);
 
         let mut memory_limits = Limits::default();
         memory_limits.max_memory_bytes = Some(1);
@@ -11785,19 +11782,15 @@ mod tests {
         );
         let mut work_session =
             Session::new(&mut work_guard, &work_limits, 0).expect("bounded session");
-        assert_eq!(
-            established_named_list(
-                &graph,
-                ListTerm::Blank("head"),
-                &kinds,
-                "class",
-                1,
-                &mut work_session,
-            )
-            .unwrap_err()
-            .code,
-            "NATIVE_WIRE_LIMIT",
-        );
+        assert!(established_named_list(
+            &graph,
+            ListTerm::Blank("head"),
+            &kinds,
+            "class",
+            1,
+            &mut work_session,
+        )
+        .expect("list precheck is not document-global canonical work"));
 
         let limits = Limits::default();
         let mut cancelled_guard = Guard::new(
@@ -11878,11 +11871,9 @@ mod tests {
         );
         let mut work_session =
             Session::new(&mut work_guard, &work_limits, 0).expect("bounded session");
-        assert_eq!(
+        assert!(
             established_facet_list(&graph, ListTerm::Blank("head"), &mut work_session)
-                .unwrap_err()
-                .code,
-            "NATIVE_WIRE_LIMIT",
+                .expect("facet-list precheck is not document-global canonical work")
         );
 
         let limits = Limits::default();
@@ -15480,7 +15471,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_mapping_evidence_charges_the_complete_selection_scan() {
+    fn partial_mapping_evidence_scan_is_not_component_canonical_work() {
         let triples = (0..4)
             .map(|index| Triple {
                 subject: Resource::Iri(format!("urn:subject:{index}")),
@@ -15490,17 +15481,18 @@ mod tests {
             .collect::<Vec<_>>();
         let consumed = [true, true, true, false];
         let mut limits = Limits::default();
-        limits.max_canonical_work = 3;
+        limits.max_canonical_work = 1;
         let mut guard = Guard::new(
             Cancellation::with_duration(None),
             limits.deadline,
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let error = mapping_evidence(&triples, &consumed, &mut session)
-            .expect_err("consumed-prefix scan must exhaust the work budget");
-        assert_eq!(error.code, "NATIVE_WIRE_LIMIT");
-        assert_eq!(error.message, "native operation exceeds max_canonical_work",);
+        let (consumed_count, evidence) = mapping_evidence(&triples, &consumed, &mut session)
+            .expect("document-wide evidence scan is not component canonical work");
+        assert_eq!(consumed_count, 3);
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].subject, "<urn:subject:3>");
     }
 
     #[test]

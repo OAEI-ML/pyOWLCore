@@ -2949,7 +2949,7 @@ mod tests {
     }
 
     #[test]
-    fn depth_literal_prefix_axiom_work_and_deadline_limits_are_exact() {
+    fn depth_literal_prefix_axiom_and_deadline_limits_are_exact() {
         let nested = ontology(
             r#"<SubClassOf><Class IRI="urn:C"/><ObjectComplementOf><Class IRI="urn:D"/></ObjectComplementOf></SubClassOf>"#,
         );
@@ -2992,16 +2992,12 @@ mod tests {
         );
 
         let work_limit = limits_with(LimitKey::MaxCanonicalWork, 1);
-        assert_eq!(
-            mapped_with(
-                ontology("").as_bytes(),
-                &work_limit,
-                Cancellation::with_duration(None)
-            )
-            .expect_err("work limit")
-            .code,
-            "NATIVE_WIRE_LIMIT"
-        );
+        mapped_with(
+            ontology("").as_bytes(),
+            &work_limit,
+            Cancellation::with_duration(None),
+        )
+        .expect("document-wide XML traversal is not component canonical work");
 
         let limits = Limits::default();
         assert_eq!(

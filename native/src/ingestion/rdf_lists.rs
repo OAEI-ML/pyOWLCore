@@ -589,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_and_work_limits_checkpoint_during_decode() {
+    fn cancellation_checkpoints_during_decode_without_global_component_charging() {
         let graph = [
             edge("h", RDF_FIRST, iri("urn:a")),
             edge("h", RDF_REST, iri(RDF_NIL)),
@@ -611,11 +611,7 @@ mod tests {
         );
 
         let bounded = limits_with(LimitKey::MaxCanonicalWork, 1);
-        assert_eq!(
-            decode_with_limits(&graph, bterm("h"), &bounded)
-                .unwrap_err()
-                .code,
-            "NATIVE_WIRE_LIMIT",
-        );
+        decode_with_limits(&graph, bterm("h"), &bounded)
+            .expect("RDF-list traversal is not document-global canonical work");
     }
 }

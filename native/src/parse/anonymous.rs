@@ -3009,7 +3009,7 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_and_retry_enforcement_share_typed_limit_fields() {
+    fn anonymous_and_permutation_enforcement_share_typed_limit_fields() {
         let mut limits = Limits::default();
         limits.max_canonical_work = 10;
         let anonymous = enforce_work(
@@ -3025,22 +3025,29 @@ mod tests {
         )
         .expect_err("anonymous enforcement must reject excess work");
 
-        let cancellation = Cancellation::with_duration(None);
-        let mut guard = Guard::new(cancellation, limits.deadline, limits.cancellation_stride);
-        let mut session = Session::new(&mut guard, &limits, 0).expect("retry session");
-        let retry = session
-            .step(11)
-            .expect_err("generic retry enforcement must reject excess work");
+        let permutation = permutation_count(
+            &[vec![0, 1, 2, 3]],
+            limits.max_canonical_work,
+            0,
+            NativeLimitDetails {
+                component_count: Some(1),
+                largest_component_labels: Some(4),
+                largest_component_arcs: Some(3),
+                refinement_rounds: Some(0),
+                work_term: Some("candidate_orders"),
+            },
+        )
+        .expect_err("candidate-order enforcement must reject excess work");
 
-        assert_ne!(anonymous.message, retry.message);
+        assert_eq!(anonymous.message, permutation.message);
         let NativeErrorPayload::ResourceLimit(anonymous_payload) = anonymous.payload else {
             panic!("anonymous enforcement omitted its typed payload");
         };
-        let NativeErrorPayload::ResourceLimit(retry_payload) = retry.payload else {
-            panic!("retry enforcement omitted its typed payload");
+        let NativeErrorPayload::ResourceLimit(permutation_payload) = permutation.payload else {
+            panic!("permutation enforcement omitted its typed payload");
         };
-        assert_eq!(anonymous_payload.limit, retry_payload.limit);
-        assert_eq!(anonymous_payload.observed, retry_payload.observed);
-        assert_eq!(anonymous_payload.allowed, retry_payload.allowed);
+        assert_eq!(anonymous_payload.limit, permutation_payload.limit);
+        assert_eq!(anonymous_payload.observed, permutation_payload.observed);
+        assert_eq!(anonymous_payload.allowed, permutation_payload.allowed);
     }
 }
