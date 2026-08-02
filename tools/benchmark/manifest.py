@@ -292,19 +292,28 @@ def prepare_corpus(
     cache_dir: Path,
     *,
     timeout_seconds: float = 60.0,
-    max_download_bytes: int = 512 * 1024 * 1024,
+    max_download_bytes: int | None = None,
     max_member_bytes: int = 512 * 1024 * 1024,
 ) -> Path:
-    """Explicitly prepare one pinned input; timed benchmarks never call this function."""
+    """Explicitly prepare one pinned input; timed benchmarks never call this function.
+
+    By default the immutable manifest's exact artifact size is the download
+    ceiling.  A caller-supplied ceiling can only tighten that lock.  This keeps
+    preparation bounded while allowing checksum-pinned corpora larger than an
+    unrelated fixed process-size threshold.
+    """
 
     mapping_payload: bytes | None = None
     if corpus.source == "generated":
         payload = generated_bytes(corpus)
     else:
         assert corpus.url is not None
-        artifact_limit = max_download_bytes
-        if corpus.artifact_bytes is not None:
-            artifact_limit = min(artifact_limit, corpus.artifact_bytes)
+        locked_artifact_bytes = (
+            corpus.counts.bytes if corpus.artifact_bytes is None else corpus.artifact_bytes
+        )
+        artifact_limit = locked_artifact_bytes
+        if max_download_bytes is not None:
+            artifact_limit = min(artifact_limit, max_download_bytes)
         artifact = _download(corpus.url, timeout_seconds, artifact_limit)
         if corpus.source == "archive-member":
             assert corpus.artifact_sha256 is not None
