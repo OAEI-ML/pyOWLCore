@@ -205,6 +205,7 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         "cp314t-pure-fallback",
         "pypy310-pure",
         "--ignore=tests/benchmark/comparators",
+        "--ignore=tests/benchmark/biomedical_gate",
         "--no-index",
         "*-py3-none-any.whl",
         "vswhere.exe",

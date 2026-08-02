@@ -133,9 +133,10 @@ jobs:
           pytest_args=()
           # PyPy lacks the non-reaping subprocess observation required by the
           # fail-closed benchmark harness. CPython and native-safety lanes
-          # retain complete comparator coverage.
+          # retain complete fresh-runner coverage.
           if [ "${{ matrix.python }}" = "pypy3.10" ]; then
             pytest_args+=(--ignore=tests/benchmark/comparators)
+            pytest_args+=(--ignore=tests/benchmark/biomedical_gate)
           fi
           python -m pytest -q "${pytest_args[@]}"
           python docs/examples/parse_once.py
