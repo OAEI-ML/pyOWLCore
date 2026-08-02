@@ -72,7 +72,11 @@ pub(crate) fn build_retained_signature_index_v1(
         .ok_or_else(|| NativeError::limit("retained signature root count overflow"))?;
     if entities.len() > usize::try_from(limits.value(LimitKey::MaxIndexRows)).unwrap_or(usize::MAX)
     {
-        return Err(NativeError::limit(
+        let observed = u64::try_from(entities.len())
+            .map_err(|_| NativeError::limit("retained signature entity count exceeds u64"))?;
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexRows,
+            observed,
             "retained signature entities exceed max_index_rows",
         ));
     }
@@ -461,7 +465,9 @@ fn step(guard: &mut Guard, work: &mut u64, limits: &Limits) -> NativeResult<()> 
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("retained signature work overflow"))?;
     if *work > limits.max_canonical_work {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxCanonicalWork,
+            *work,
             "retained signature build exceeds max_canonical_work",
         ));
     }
@@ -506,12 +512,16 @@ fn check_memory(
     let temporary_bytes = u64::try_from(temporary_bytes)
         .map_err(|_| NativeError::limit("retained signature workspace exceeds u64"))?;
     if retained_bytes > limits.value(LimitKey::MaxIndexBytes) {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexBytes,
+            retained_bytes,
             "retained signature buffers exceed max_index_bytes",
         ));
     }
     if temporary_bytes > limits.value(LimitKey::MaxTemporaryBytes) {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxTemporaryBytes,
+            temporary_bytes,
             "retained signature build exceeds max_temporary_bytes",
         ));
     }
@@ -524,11 +534,11 @@ fn check_memory(
         .and_then(|value| value.checked_add(retained_bytes))
         .and_then(|value| value.checked_add(temporary_bytes))
         .ok_or_else(|| NativeError::limit("retained signature memory overflow"))?;
-    if limits
-        .max_memory_bytes
-        .is_some_and(|maximum| peak > maximum)
-    {
-        return Err(NativeError::limit(
+    if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| peak > *maximum) {
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            peak,
+            maximum,
             "retained signature build exceeds max_memory_bytes",
         ));
     }

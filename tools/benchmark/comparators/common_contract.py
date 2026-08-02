@@ -434,7 +434,7 @@ def validate_common_contract_shape(value: Mapping[str, Any]) -> None:
             "digest",
         }:
             raise CommonContractError(f"{name} fingerprint evidence fields differ")
-        if evidence["algorithm"] != "sha256" or evidence["schema"] != 1:
+        if evidence["algorithm"] != "sha256" or evidence["schema"] != 2:
             raise CommonContractError(f"{name} fingerprint algorithm/schema differs")
         if (
             isinstance(evidence["preimage_bytes"], bool)
@@ -529,7 +529,7 @@ def _fingerprint_evidence(preimage: Iterable[bytes], expected: str) -> dict[str,
         )
     return {
         "algorithm": "sha256",
-        "schema": 1,
+        "schema": 2,
         "preimage_bytes": byte_count,
         "preimage_sha256": digest,
         "digest": expected,
@@ -543,7 +543,7 @@ def _encoded_fingerprint_evidence(preimage: DigestResult, expected: str) -> dict
         )
     return {
         "algorithm": "sha256",
-        "schema": 1,
+        "schema": 2,
         "preimage_bytes": preimage.byte_count,
         "preimage_sha256": preimage.sha256,
         "digest": expected,
@@ -612,7 +612,7 @@ def _native_summary_contract_components(
             )
         fingerprints[name] = {
             "algorithm": "sha256",
-            "schema": 1,
+            "schema": 2,
             "preimage_bytes": fingerprint_evidence.preimage_bytes,
             "preimage_sha256": observed,
             "digest": expected,
@@ -691,7 +691,7 @@ def _native_summary_contract_components(
 
 
 def _document_preimage_parts(document: OntologyDocument) -> Iterable[bytes]:
-    yield b"pyowl-core:document-fingerprint:v1\x00"
+    yield b"pyowl-core:document-fingerprint:v2\x00"
     ontology_id = document.ontology_id
     for iri in (ontology_id.ontology_iri, ontology_id.version_iri):
         yield b"0" if iri is None else b"1" + _frame(canonical_bytes(iri))
@@ -705,7 +705,7 @@ def _document_preimage_parts(document: OntologyDocument) -> Iterable[bytes]:
 
 
 def _structural_preimage_parts(snapshot: OntologySnapshot) -> Iterable[bytes]:
-    yield b"pyowl-core:snapshot-structural:v1\x00"
+    yield b"pyowl-core:snapshot-structural:v2\x00"
     yield _frame(snapshot.import_manifest.canonical_bytes())
     for record in snapshot.import_manifest.documents:
         key = record.document_key
@@ -731,7 +731,7 @@ def _logical_preimage_parts(
     extension_values = sorted(
         {canonical_bytes(_without_annotations(value)) for value in extensions}
     )
-    yield b"pyowl-core:snapshot-logical:v1\x00"
+    yield b"pyowl-core:snapshot-logical:v2\x00"
     yield b"datatype-policy:owl2-v1\x00"
     yield encode_varint(len(logical))
     for value in logical:
@@ -745,7 +745,7 @@ def _signature_preimage_parts(
     values: Iterable[Entity], *, include_builtins: bool
 ) -> Iterable[bytes]:
     members = sorted({canonical_bytes(value) for value in values})
-    yield b"pyowl-core:snapshot-signature:v1\x00"
+    yield b"pyowl-core:snapshot-signature:v2\x00"
     yield bytes((int(include_builtins),))
     yield encode_varint(len(members))
     for value in members:

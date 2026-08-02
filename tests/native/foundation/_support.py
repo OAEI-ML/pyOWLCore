@@ -8,7 +8,12 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
-from typing import Protocol, cast
+from typing import Protocol, TypeAlias, cast
+
+RetainedBindingMetadata: TypeAlias = tuple[
+    tuple[int, ...],
+    tuple[tuple[int, ...], tuple[int, ...], tuple[int]],
+]
 
 
 class NativeTestCancellation(Protocol):
@@ -90,7 +95,7 @@ class NativeTestExtension(Protocol):
         cancel: NativeTestCancellation | None = None,
         *,
         materialize_document: bool = False,
-    ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
+    ) -> tuple[bytes, object, RetainedBindingMetadata]: ...
 
     def _fork_parsed_structural_storage_v2(
         self,
@@ -231,7 +236,7 @@ class NativeTestExtension(Protocol):
         allow_swrl: bool,
         require_empty_imports: bool,
         cancel: NativeTestCancellation | None = None,
-    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+    ) -> tuple[bytes, object, RetainedBindingMetadata]: ...
 
     def _parse_turtle_retained_source_map_v2(
         self,
@@ -243,7 +248,7 @@ class NativeTestExtension(Protocol):
         allow_swrl: bool,
         require_empty_imports: bool,
         cancel: NativeTestCancellation | None = None,
-    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+    ) -> tuple[bytes, object, RetainedBindingMetadata]: ...
 
     def _retained_structural_bridge_allocation_probe_v2(
         self,

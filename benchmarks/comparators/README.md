@@ -80,14 +80,14 @@ Reproduce and authenticate the pinned Darwin x86_64 executable with:
 ```console
 PYTHONPATH=. python -m tools.benchmark.comparators.build_direct_runner --print-sha256
 printf '%s  %s\n' \
-  3013b122acd4f454901786bc19b56823bed5827a62cfc2356cd57d3c863a3316 \
+  89a9765cd6f2856841db1c6095fd23dddf7ad71eb78b1a7b02257b13484fbeb2 \
   benchmarks/comparators/runners/direct/target/release/pyowl-core-direct-comparator \
   | shasum -a 256 -c -
 export PYOWL_CORE_DIRECT_RUNNER="$PWD/benchmarks/comparators/runners/direct/target/release/pyowl-core-direct-comparator"
 PYTHONPATH=src:. python -m tools.benchmark.comparators.linkage_audit \
   --binary benchmarks/comparators/runners/direct/target/release/pyowl-core-direct-comparator \
   --expected-runner-sha256 \
-  3013b122acd4f454901786bc19b56823bed5827a62cfc2356cd57d3c863a3316 \
+  89a9765cd6f2856841db1c6095fd23dddf7ad71eb78b1a7b02257b13484fbeb2 \
   --output \
   reports/performance/redesign-baseline/dependency-audit-direct-linkage-darwin-x86_64.json
 ```
@@ -104,7 +104,7 @@ distinct checkout and target paths. Windows linkage CI keeps the path remaps but
 deliberately omits the POSIX Python wrapper, so it publishes linkage evidence
 rather than a cross-checkout reproducibility claim.
 
-Runner v8 verifies its embedded native `Cargo.lock`, executable hash, exact
+Runner v9 verifies its embedded native `Cargo.lock`, executable hash, exact
 semantic options, source/document identity, allocator, thread ceiling, lane,
 and boundary. Functional Syntax uses the retained parser arena and RDF/XML uses
 the streaming mapper's retained arena. Both construct and fully validate the
@@ -127,12 +127,12 @@ runner and authenticate it before selecting either lane:
 cd benchmarks/comparators/runners/horned
 cargo +1.97.1 build --locked --release
 printf '%s  %s\n' \
-  622c0655f8c66d8fca4024c2a050d13a56b9236f591959942c34e786baad840c \
+  5b8d08299c0424a70ef32d1143b3577848a3a8ede13020f78638f37c8f070a16 \
   target/release/pyowl-core-horned-comparator | shasum -a 256 -c -
 export PYOWL_CORE_HORNED_RUNNER="$PWD/target/release/pyowl-core-horned-comparator"
 ```
 
-Raw runner v5 and common runner v6 verify the embedded Horned 1.4.0 crates.io
+Raw runner v6 and common runner v7 verify the embedded Horned 1.4.0 crates.io
 checksum, their shared executable SHA-256, exact semantic options,
 source/document identity, allocator, thread ceiling, lane, and boundary before
 parsing. The raw boundary builds Horned's set, IRI, component-kind, and
@@ -180,13 +180,13 @@ freeze, fingerprint, inventory, and validation cost inside the timer. Version
 1.4.0 exposes Functional Syntax, OWL/XML, and RDF/XML readers but no Turtle
 reader selection. Turtle requests therefore return explicit `ineligible`
 evidence; they are never sent to the RDF/XML reader or counted as passes.
-For RDF/XML, runner v9 performs a bounded, timed preparse only when axiom
+For RDF/XML, runner v10 performs a bounded, timed preparse only when axiom
 reification is present. Equivalent anonymous or blank-node `owl:Axiom`
 occurrences are physically coalesced before py-horned sees them, so qualifier
 triples are unioned deterministically instead of depending on Horned's
 last-write traversal. Unsafe XML, ambiguous metadata, named axiom resources,
 and shapes that cannot be preserved exactly fail closed.
-Before either a fresh request or persistent handshake, runner v9 also requires
+Before either a fresh request or persistent handshake, runner v10 also requires
 distribution version 1.4.0, exact `direct_url.json` provenance for the pinned
 sdist SHA-256, and a byte-for-byte match for every SHA-256 entry in the
 installed distribution's RECORD. A renamed, editable, differently sourced, or
@@ -198,7 +198,8 @@ the deterministic runner JAR, launcher, 8 GiB fixed heap, G1GC with
 `AlwaysPreTouch`, and one active processor. Its complete reproduction and
 runtime-authentication procedure is in
 `runners/owlapi/README.md`. The independent Java mapper constructs and validates
-the complete model-schema/common-contract ledger inside the timer. Functional
+the complete model-schema-2 ledger inside the unchanged common-contract v1
+envelope inside the timer. Functional
 Syntax, OWL/XML, RDF/XML, and Turtle use explicit readers; anonymous-individual
 identity and any RDF occurrence ordering that cannot be recovered from OWLAPI
 semantics return `ineligible` instead of a reduced result.

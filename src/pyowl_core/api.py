@@ -134,7 +134,7 @@ def _validate_view(
             "view adapter protocol is incompatible",
             code="ADAPTER_PROTOCOL_MISMATCH",
         )
-    if capabilities.model_schema != 1:
+    if capabilities.model_schema != 2:
         raise AdapterCompatibilityError(
             "view model schema is incompatible",
             code="MODEL_SCHEMA_MISMATCH",
@@ -154,6 +154,11 @@ def _validate_view(
         return
     if not isinstance(options, LoadOptions):
         raise TypeError("options must be LoadOptions or None")
+    if options.allow_partial_rdf_mapping:
+        raise OptionConflictError(
+            "partial RDF mapping is diagnostic-only and cannot be applied to a snapshot view",
+            code="PARTIAL_RDF_MAPPING_SNAPSHOT_FORBIDDEN",
+        )
     snapshots = tuple(_leaf_snapshots(view))
     if snapshots:
         if any(

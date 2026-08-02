@@ -257,7 +257,7 @@ jobs:
           extension = Path(native.__file__).resolve()
           assert not package.is_relative_to(workspace)
           assert not extension.is_relative_to(workspace)
-          assert importlib.metadata.version("pyowl-core") == "0.1.1"
+          assert importlib.metadata.version("pyowl-core") == "0.2.0"
           native.self_test()
           digest = hashlib.sha256(extension.read_bytes()).hexdigest()
           with Path(os.environ["GITHUB_OUTPUT"]).open(

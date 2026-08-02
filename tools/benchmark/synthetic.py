@@ -80,6 +80,38 @@ def adversarial_deep_functional(depth: int = 64) -> bytes:
     return f"Ontology(SubClassOf(<{_BASE}#Root> {expression}))\n".encode()
 
 
+def anonymous_components_functional(components: int = 50_000) -> bytes:
+    """Generate many isomorphic disconnected blank components in Functional Syntax."""
+
+    if not isinstance(components, int) or isinstance(components, bool):
+        raise TypeError("components must be int")
+    if components < 1:
+        raise ValueError("components must be at least one")
+    class_iri = f"<{_BASE}#AnonymousComponent>"
+    assertions = "\n".join(
+        f"  ClassAssertion({class_iri} _:component{index:08d})" for index in range(components)
+    )
+    return (
+        f"Ontology(<{_BASE}/anonymous-components>\n"
+        f"  Declaration(Class({class_iri}))\n"
+        f"{assertions}\n"
+        ")\n"
+    ).encode()
+
+
+def anonymous_component_counts(components: int = 50_000) -> SyntheticCounts:
+    """Return exact declarative counts for the component-scaling generator."""
+
+    source = anonymous_components_functional(components)
+    return SyntheticCounts(
+        bytes=len(source),
+        triples=components + 2,
+        axioms=components + 1,
+        entities=1,
+        imports=0,
+    )
+
+
 def annotation_list_turtle(items: int = 128) -> bytes:
     """Generate an annotation-heavy RDF-list input without network dependencies."""
 
@@ -187,6 +219,8 @@ __all__ = [
     "SyntheticCounts",
     "adversarial_deep_functional",
     "annotation_list_turtle",
+    "anonymous_component_counts",
+    "anonymous_components_functional",
     "equivalent_counts",
     "equivalent_source",
     "import_diamond",

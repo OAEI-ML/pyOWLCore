@@ -20,7 +20,7 @@ use crate::cancel::{Cancellation, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
 use crate::index::{RetainedAxiomTypeIndexV1, RetainedSignatureIndexV1};
 use crate::limits::Limits;
-use crate::model::{EncodedStructuralColumnsV1, PreparedEncodedStructuralColumnsV1};
+use crate::model::{EncodedStructuralColumnsV2, PreparedEncodedStructuralColumnsV2};
 
 use super::records::Digest;
 use super::{
@@ -30,13 +30,15 @@ use super::{
 };
 
 pub(super) const PUBLICATION_VERSION_V2: u32 = 2;
+const ACTIVE_API_VERSION_V2: (u32, u32) = (0, 2);
+const ACTIVE_MODEL_SCHEMA_V2: u32 = 2;
 pub(super) const PUBLICATION_LEDGER_SHA256_V2: Digest = [
-    0x58, 0x87, 0x39, 0x15, 0x98, 0x80, 0xf3, 0xb0, 0x39, 0x1f, 0xb3, 0xe7, 0x0e, 0x80, 0x09, 0xa0,
-    0xbd, 0x86, 0x44, 0x4d, 0x35, 0x97, 0xec, 0x6e, 0xff, 0x44, 0xc3, 0x13, 0x68, 0x94, 0x27, 0x33,
+    0x58, 0x17, 0xdb, 0x73, 0x88, 0xf4, 0x10, 0x07, 0x82, 0xe2, 0x98, 0xa2, 0x94, 0x03, 0x98, 0xe2,
+    0x22, 0x1d, 0xfd, 0xbe, 0x5c, 0xd7, 0xc7, 0x3b, 0xdc, 0xdf, 0xaf, 0x41, 0xc8, 0x51, 0x16, 0x40,
 ];
 const FACADE_ACCESS_SCHEMA_SHA256_V2: Digest = [
-    0xc4, 0x5b, 0x65, 0x8c, 0x43, 0x57, 0x13, 0x1b, 0x09, 0xcc, 0x75, 0x09, 0x33, 0x0a, 0x70, 0xf2,
-    0x46, 0xa7, 0x1a, 0x2c, 0x37, 0x21, 0xb8, 0x9c, 0x34, 0x0c, 0xcf, 0x70, 0xad, 0x91, 0xd7, 0x0b,
+    0x0d, 0x34, 0x74, 0x6a, 0x20, 0x18, 0x2c, 0x54, 0xf4, 0x9e, 0x09, 0xdb, 0x01, 0x3a, 0x3c, 0xf1,
+    0x72, 0x02, 0x93, 0x43, 0x3d, 0x58, 0xc7, 0x88, 0x86, 0xd7, 0x8f, 0x27, 0x33, 0xa9, 0x63, 0x5b,
 ];
 const HANDOFF_MODULE: &str = "pyowl_core.backends.native_handoff_v2";
 const MAX_FIXTURE_TABLES: usize = 100_000;
@@ -1060,7 +1062,7 @@ impl PublicationStorageV2 {
         limits: &Limits,
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
-    ) -> NativeResult<EncodedStructuralColumnsV1> {
+    ) -> NativeResult<EncodedStructuralColumnsV2> {
         let columns = self
             .prepare_encoded_structural_columns(
                 scope,
@@ -1083,7 +1085,7 @@ impl PublicationStorageV2 {
         limits: &Limits,
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
-    ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'_>> {
+    ) -> NativeResult<PreparedEncodedStructuralColumnsV2<'_>> {
         let typed = self.typed_structural.as_deref().ok_or_else(|| {
             NativeError::protocol("native V2 publication has no typed structural owner")
         })?;
@@ -1108,7 +1110,7 @@ impl PublicationStorageV2 {
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
         fail_after: Option<u64>,
-    ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'_>> {
+    ) -> NativeResult<PreparedEncodedStructuralColumnsV2<'_>> {
         let typed = self.typed_structural.as_deref().ok_or_else(|| {
             NativeError::protocol("native V2 publication has no typed structural owner")
         })?;
@@ -2461,7 +2463,8 @@ impl PreparedTypedAuxiliaryV2 {
             || attestation.ledger_sha256 != PUBLICATION_LEDGER_SHA256_V2
             || attestation.facade_access_schema_sha256 != FACADE_ACCESS_SCHEMA_SHA256_V2
             || attestation.auxiliary_codec_schema_sha256 != AUXILIARY_CODEC_SCHEMA_SHA256_V2
-            || attestation.model_schema != 1
+            || attestation.api_version != ACTIVE_API_VERSION_V2
+            || attestation.model_schema != ACTIVE_MODEL_SCHEMA_V2
         {
             return Err(NativeError::protocol(
                 "typed V2 publication attestation schema differs",
@@ -2546,11 +2549,14 @@ impl PreparedTypedAuxiliaryV2 {
         initial[PEAK_BUILDER_BYTES] =
             initial[PEAK_BUILDER_BYTES].max(initial[RETAINED_OWNER_BYTES]);
         initial[PEAK_FREEZE_BYTES] = initial[PEAK_FREEZE_BYTES].max(initial[RETAINED_OWNER_BYTES]);
-        if typed_structural
+        if let Some(maximum) = typed_structural
             .max_memory_bytes()
-            .is_some_and(|maximum| initial[RETAINED_OWNER_BYTES] > maximum)
+            .filter(|maximum| initial[RETAINED_OWNER_BYTES] > *maximum)
         {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                initial[RETAINED_OWNER_BYTES],
+                maximum,
                 "typed V2 auxiliary attachment exceeds max_memory_bytes",
             ));
         }
@@ -3223,11 +3229,14 @@ fn typed_initial_counters(
         .retained_owner_bytes
         .checked_add(additional_metadata)
         .ok_or_else(|| NativeError::limit("typed V2 owner counter overflow"))?;
-    if storage
+    if let Some(maximum) = storage
         .max_memory_bytes()
-        .is_some_and(|maximum| retained_owner > maximum)
+        .filter(|maximum| retained_owner > *maximum)
     {
-        return Err(NativeError::limit(
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            retained_owner,
+            maximum,
             "typed V2 publication envelope exceeds max_memory_bytes",
         ));
     }
@@ -4476,8 +4485,8 @@ impl NativeSnapshotAttestationV2 {
             origin_entry_count: 0,
             rdf_mapping_report_count: 0,
             capability_bits: 7,
-            api_version: (0, 1),
-            model_schema: 1,
+            api_version: ACTIVE_API_VERSION_V2,
+            model_schema: ACTIVE_MODEL_SCHEMA_V2,
             backend: Box::from("native"),
             root_document_key: Box::from("d1:test"),
             owl2_dl_report_summary: None,
@@ -4551,6 +4560,8 @@ impl NativeSnapshotAttestationV2 {
             || self.ledger_sha256 != PUBLICATION_LEDGER_SHA256_V2
             || self.facade_access_schema_sha256 != FACADE_ACCESS_SCHEMA_SHA256_V2
             || self.auxiliary_codec_schema_sha256 != AUXILIARY_CODEC_SCHEMA_SHA256_V2
+            || self.api_version != ACTIVE_API_VERSION_V2
+            || self.model_schema != ACTIVE_MODEL_SCHEMA_V2
         {
             return Err(PyValueError::new_err(
                 "native V2 attestation schema constants diverge from Rust",

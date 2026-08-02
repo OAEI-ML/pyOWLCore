@@ -72,7 +72,16 @@ class DiagnosticTests(unittest.TestCase):
         for name in error_names:
             with self.subTest(name=name):
                 error_type = getattr(pyowl_core, name)
-                error = error_type("test")
+                error = (
+                    error_type(
+                        "test",
+                        limit="max_terms",
+                        observed=2,
+                        allowed=1,
+                    )
+                    if name == "ResourceLimitError"
+                    else error_type("test")
+                )
                 self.assertIsInstance(error, pyowl_core.PyOWLCoreError)
                 self.assertRegex(error.code, r"^[A-Z][A-Z0-9_]*$")
 
@@ -98,6 +107,25 @@ class DiagnosticTests(unittest.TestCase):
                 message="bad",
                 details={"object": object()},  # type: ignore[dict-item]
             )
+
+    def test_resource_limit_contract_is_typed_and_immutable(self) -> None:
+        details = {"component_count": 3, "work_term": "refinement"}
+        error = pyowl_core.ResourceLimitError(
+            "canonical work exceeded",
+            limit="max_canonical_work",
+            observed=11,
+            allowed=10,
+            details=details,
+        )
+        details["component_count"] = 99
+
+        self.assertEqual(error.limit, "max_canonical_work")
+        self.assertEqual(error.observed, 11)
+        self.assertEqual(error.allowed, 10)
+        self.assertEqual(error.details["component_count"], 3)
+        self.assertEqual(error.as_diagnostic().details, error.details)
+        with self.assertRaises(TypeError):
+            error.details["component_count"] = 4  # type: ignore[index]
 
 
 if __name__ == "__main__":

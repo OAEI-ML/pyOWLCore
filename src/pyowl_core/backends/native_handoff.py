@@ -1580,8 +1580,22 @@ def _diagnostics_manifest_sha256(
 
 
 def _load_options_bytes_v1(options: LoadOptions) -> bytes:
-    if tuple(item.name for item in fields(LoadOptions)) != NATIVE_LOAD_OPTION_FIELDS_V1:
+    option_fields = tuple(item.name for item in fields(LoadOptions))
+    v2_option_fields = (*NATIVE_LOAD_OPTION_FIELDS_V1, "allow_partial_rdf_mapping")
+    if option_fields not in {NATIVE_LOAD_OPTION_FIELDS_V1, v2_option_fields}:
         _fail("LoadOptions field ledger changed", "NATIVE_ATTESTATION_OPTIONS")
+    if option_fields == v2_option_fields:
+        allow_partial = options.allow_partial_rdf_mapping
+        if type(allow_partial) is not bool:
+            _fail(
+                "allow_partial_rdf_mapping must be an exact bool",
+                "NATIVE_ATTESTATION_OPTIONS",
+            )
+        if allow_partial:
+            _fail(
+                "partial RDF mapping cannot be encoded by the frozen V1 option ledger",
+                "NATIVE_ATTESTATION_OPTIONS",
+            )
     if tuple(item.name for item in fields(ParseLimits)) != NATIVE_PARSE_LIMIT_FIELDS_V1:
         _fail("ParseLimits field ledger changed", "NATIVE_ATTESTATION_OPTIONS")
     option_values: list[object] = []

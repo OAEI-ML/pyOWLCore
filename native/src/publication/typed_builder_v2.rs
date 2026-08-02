@@ -167,17 +167,25 @@ impl TypedFacadeBuilderV2 {
             .len()
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("typed V2 document count overflow"))?;
-        if u64::try_from(following).map_or(true, |count| count > self.limits.max_documents) {
-            return Err(NativeError::limit("typed V2 builder exceeds max_documents"));
+        let following = u64::try_from(following)
+            .map_err(|_| NativeError::limit("typed V2 document count exceeds u64"))?;
+        if following > self.limits.max_documents {
+            return Err(self.limits.resource_limit(
+                LimitKey::MaxDocuments,
+                following,
+                "typed V2 builder exceeds max_documents",
+            ));
         }
         check_input_count(
             ontology_annotations.len(),
-            self.limits.max_annotations,
+            &self.limits,
+            LimitKey::MaxAnnotations,
             "typed V2 document exceeds max_annotations",
         )?;
         check_input_count(
             axioms.len(),
-            self.limits.max_axioms,
+            &self.limits,
+            LimitKey::MaxAxioms,
             "typed V2 document exceeds max_axioms",
         )?;
         let ontology_annotations =
@@ -192,12 +200,14 @@ impl TypedFacadeBuilderV2 {
         {
             check_input_count(
                 effective_annotations.len(),
-                self.limits.max_annotations,
+                &self.limits,
+                LimitKey::MaxAnnotations,
                 "typed V2 effective document exceeds max_annotations",
             )?;
             check_input_count(
                 effective_axioms.len(),
-                self.limits.max_axioms,
+                &self.limits,
+                LimitKey::MaxAxioms,
                 "typed V2 effective document exceeds max_axioms",
             )?;
             Some((
@@ -481,12 +491,14 @@ impl TypedFacadeBuilderV2 {
             let flat = source.into_flat_document()?;
             check_input_count(
                 flat.1[0].len(),
-                limits.max_annotations,
+                &limits,
+                LimitKey::MaxAnnotations,
                 "native closure document exceeds max_annotations",
             )?;
             check_input_count(
                 flat.1[1].len(),
-                limits.max_axioms,
+                &limits,
+                LimitKey::MaxAxioms,
                 "native closure document exceeds max_axioms",
             )?;
             for (index, roots) in flat.2.iter().enumerate() {
@@ -495,10 +507,11 @@ impl TypedFacadeBuilderV2 {
                 };
                 check_input_count(
                     roots.len(),
+                    &limits,
                     if index == 0 {
-                        limits.max_annotations
+                        LimitKey::MaxAnnotations
                     } else {
-                        limits.max_axioms
+                        LimitKey::MaxAxioms
                     },
                     if index == 0 {
                         "native closure effective document exceeds max_annotations"
@@ -1017,7 +1030,9 @@ fn resolve_roots(
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("typed V2 root resolution work overflow"))?;
         if *work > limits.max_canonical_work {
-            return Err(NativeError::limit(
+            return Err(limits.resource_limit(
+                LimitKey::MaxCanonicalWork,
+                *work,
                 "typed V2 root resolution exceeds max_canonical_work",
             ));
         }
@@ -1051,8 +1066,12 @@ fn union_document_roots(
                 .checked_add(roots.len())
                 .ok_or_else(|| NativeError::limit("typed V2 effective root count overflow"))
         })?;
-        if u64::try_from(count).map_or(true, |value| value > limits.value(LimitKey::MaxIndexRows)) {
-            return Err(NativeError::limit(
+        let observed = u64::try_from(count)
+            .map_err(|_| NativeError::protocol("typed V2 effective root count exceeds u64"))?;
+        if observed > limits.value(LimitKey::MaxIndexRows) {
+            return Err(limits.resource_limit(
+                LimitKey::MaxIndexRows,
+                observed,
                 "typed V2 effective roots exceed max_index_rows",
             ));
         }
@@ -1289,7 +1308,9 @@ fn signature_step(guard: &mut Guard, work: &mut u64, limits: &Limits) -> NativeR
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("typed V2 signature work overflow"))?;
     if *work > limits.max_canonical_work {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxCanonicalWork,
+            *work,
             "typed V2 signature exceeds max_canonical_work",
         ));
     }
@@ -1561,9 +1582,16 @@ fn validate_ordinal_set(values: &[u64], document_count: usize) -> NativeResult<(
     Ok(())
 }
 
-fn check_input_count(count: usize, maximum: u64, message: &'static str) -> NativeResult<()> {
-    if u64::try_from(count).map_or(true, |value| value > maximum) {
-        return Err(NativeError::limit(message));
+fn check_input_count(
+    count: usize,
+    limits: &Limits,
+    key: LimitKey,
+    message: &'static str,
+) -> NativeResult<()> {
+    let observed =
+        u64::try_from(count).map_err(|_| NativeError::limit("typed V2 input count exceeds u64"))?;
+    if observed > limits.value(key) {
+        return Err(limits.resource_limit(key, observed, message));
     }
     Ok(())
 }
@@ -1747,7 +1775,7 @@ mod tests {
             .rows
     }
 
-    fn encoded_root_kinds(columns: &crate::model::EncodedStructuralColumnsV1) -> &[u8] {
+    fn encoded_root_kinds(columns: &crate::model::EncodedStructuralColumnsV2) -> &[u8] {
         columns
             .buffers()
             .named()
@@ -2618,12 +2646,10 @@ mod tests {
             0,
         )
         .expect("builder");
-        assert_eq!(
-            builder
-                .add_document(&[], &[declaration("class", "urn:builder:A")], &[])
-                .expect_err("expired deadline"),
-            NativeError::deadline()
-        );
+        let expired_error = builder
+            .add_document(&[], &[declaration("class", "urn:builder:A")], &[])
+            .expect_err("expired deadline");
+        assert_eq!(expired_error.code, "NATIVE_DEADLINE");
         assert_prevalidation_left_builder_unmutated(&builder);
         assert_eq!(
             builder

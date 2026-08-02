@@ -13,9 +13,12 @@ from .canonical import encode_varint
 from .primitives import IRI, AnonymousIndividual
 from .provenance import RescopeRecord
 
-_SCOPE_DOMAIN = b"pyowl-core:document-scope:v1\x00"
-_KEY_DOMAIN = b"pyowl-core:anonymous-key:v1\x00"
-_GRAPH_DOMAIN = b"pyowl-core:blank-graph:v1\x00"
+_SCOPE_DOMAIN = b"pyowl-core:document-scope:v2\x00"
+_KEY_DOMAIN = b"pyowl-core:anonymous-key:v2\x00"
+_GRAPH_DOMAIN = b"pyowl-core:blank-graph:v2\x00"
+_COLOR_DOMAIN = b"pyowl-core:blank-color:v2\x00"
+_COMPONENT_CLASS_DOMAIN = b"pyowl-core:blank-component-class:v2\x00"
+_COMPONENT_MANIFEST_DOMAIN = b"pyowl-core:blank-component-manifest:v2\x00"
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +140,61 @@ def canonical_document_scope(
     ).digest()
 
 
+def _canonical_component_manifest(component_graphs: Iterable[bytes]) -> bytes:
+    """Encode the sorted, multiplicity-preserving schema-2 component manifest."""
+
+    multiplicities: dict[bytes, int] = {}
+    for graph in component_graphs:
+        if not isinstance(graph, bytes):
+            raise TypeError("component_graphs must contain bytes")
+        if not graph:
+            raise ValueError("component graph bytes must be nonempty")
+        multiplicities[graph] = multiplicities.get(graph, 0) + 1
+    pieces = [_COMPONENT_MANIFEST_DOMAIN, encode_varint(len(multiplicities))]
+    for graph in sorted(multiplicities):
+        pieces.extend(
+            (
+                encode_varint(len(graph)),
+                graph,
+                encode_varint(multiplicities[graph]),
+            )
+        )
+    return b"".join(pieces)
+
+
+def _bind_component_blank_nodes(
+    canonicalization: AlphaCanonicalization,
+    document_scope: bytes,
+    *,
+    occurrence_ordinal: int,
+) -> AlphaCanonicalization:
+    """Bind a cached component order to one multiplicity-preserving output slot."""
+
+    if not isinstance(canonicalization, AlphaCanonicalization):
+        raise TypeError("canonicalization must be AlphaCanonicalization")
+    if not isinstance(document_scope, bytes) or len(document_scope) != 32:
+        raise StructuralConstraintError("document_scope must be exactly 32 bytes")
+    if (
+        isinstance(occurrence_ordinal, bool)
+        or not isinstance(occurrence_ordinal, int)
+        or occurrence_ordinal < 0
+    ):
+        raise ValueError("occurrence_ordinal must be a nonnegative integer")
+    order = tuple(binding.source_label for binding in canonicalization.bindings)
+    bindings = _bindings_for_order(
+        order,
+        document_scope,
+        canonicalization.canonical_graph,
+        occurrence_ordinal,
+    )
+    return AlphaCanonicalization(
+        bindings,
+        canonicalization.canonical_graph,
+        canonicalization.refinement_rounds,
+        canonicalization.permutations_examined,
+    )
+
+
 def alpha_canonicalize_blank_nodes(
     arcs: Iterable[BlankNodeArc],
     document_scope: bytes,
@@ -170,15 +228,39 @@ def alpha_canonicalize_blank_nodes(
             observed=terms,
             allowed=maximum_terms,
         )
-    work = len(ordered_labels) + 2 * len(arc_values)
-    _enforce_work(work, maximum)
+    setup_work = len(ordered_labels) + 2 * len(arc_values)
+    work = setup_work
+    _enforce_work(
+        work,
+        maximum,
+        details={
+            "component_count": 1,
+            "largest_component_labels": len(ordered_labels),
+            "largest_component_arcs": len(arc_values),
+            "refinement_rounds": 0,
+            "work_term": "setup",
+        },
+    )
     colors = _initial_colors(ordered_labels, arc_values)
     rounds = 0
+    refinement_work = 0
     while True:
         rounds += 1
         refined = _refine_colors(ordered_labels, arc_values, colors)
-        work += 2 * len(ordered_labels) + 2 * len(arc_values)
-        _enforce_work(work, maximum)
+        round_work = 2 * len(ordered_labels) + 2 * len(arc_values)
+        refinement_work += round_work
+        work += round_work
+        _enforce_work(
+            work,
+            maximum,
+            details={
+                "component_count": 1,
+                "largest_component_labels": len(ordered_labels),
+                "largest_component_arcs": len(arc_values),
+                "refinement_rounds": rounds,
+                "work_term": "refinement",
+            },
+        )
         if _same_partition(ordered_labels, colors, refined):
             colors = refined
             break
@@ -187,9 +269,23 @@ def alpha_canonicalize_blank_nodes(
             raise StructuralConstraintError("blank-node partition refinement did not converge")
 
     partitions = _partitions(ordered_labels, colors)
-    candidate_count = _bounded_permutation_count(partitions, maximum, work)
+    candidate_details: dict[str, str | int | bool] = {
+        "component_count": 1,
+        "largest_component_labels": len(ordered_labels),
+        "largest_component_arcs": len(arc_values),
+        "refinement_rounds": rounds,
+        "work_term": "candidate_orders",
+    }
+    candidate_count = _bounded_permutation_count(
+        partitions,
+        maximum,
+        work,
+        details=candidate_details,
+    )
     candidate_unit_work = max(1, len(ordered_labels) + len(arc_values))
-    _enforce_work(work + candidate_count * candidate_unit_work, maximum)
+    candidate_order_work = candidate_count * candidate_unit_work
+    final_work = work + candidate_order_work
+    _enforce_work(final_work, maximum, details=candidate_details)
 
     best_graph: bytes | None = None
     best_order: tuple[str, ...] | None = None
@@ -203,21 +299,11 @@ def alpha_canonicalize_blank_nodes(
     if best_graph is None or best_order is None:
         raise AssertionError("blank-node canonicalization produced no candidate")
 
-    bindings = tuple(
-        BlankNodeBinding(
-            source_label=label,
-            canonical_index=index,
-            individual=AnonymousIndividual(
-                document_scope,
-                hashlib.sha256(
-                    _KEY_DOMAIN
-                    + document_scope
-                    + hashlib.sha256(best_graph).digest()
-                    + encode_varint(index)
-                ).digest(),
-            ),
-        )
-        for index, label in enumerate(best_order)
+    bindings = _bindings_for_order(
+        best_order,
+        document_scope,
+        best_graph,
+        0,
     )
     return AlphaCanonicalization(bindings, best_graph, rounds, examined)
 
@@ -229,13 +315,19 @@ def _limit(limits: object | None, name: str, default: int) -> int:
     return value
 
 
-def _enforce_work(observed: int, maximum: int) -> None:
+def _enforce_work(
+    observed: int,
+    maximum: int,
+    *,
+    details: Mapping[str, str | int | bool],
+) -> None:
     if observed > maximum:
         raise ResourceLimitError(
             "resource limit max_canonical_work exceeded",
             limit="max_canonical_work",
             observed=observed,
             allowed=maximum,
+            details=details,
         )
 
 
@@ -243,13 +335,15 @@ def _bounded_permutation_count(
     partitions: tuple[tuple[str, ...], ...],
     maximum: int,
     consumed: int,
+    *,
+    details: Mapping[str, str | int | bool],
 ) -> int:
     count = 1
     remaining = max(0, maximum - consumed)
     for partition in partitions:
         for factor in range(2, len(partition) + 1):
             if count > remaining // factor:
-                _enforce_work(maximum + 1, maximum)
+                _enforce_work(maximum + 1, maximum, details=details)
             count *= factor
     return count
 
@@ -291,8 +385,7 @@ def _arc_signature(
 def _colors_from_signatures(signatures: Mapping[str, tuple[bytes, ...]]) -> dict[str, bytes]:
     return {
         label: hashlib.sha256(
-            b"pyowl-core:blank-color:v1\x00"
-            + b"".join(encode_varint(len(item)) + item for item in signature)
+            _COLOR_DOMAIN + b"".join(encode_varint(len(item)) + item for item in signature)
         ).digest()
         for label, signature in signatures.items()
     }
@@ -388,6 +481,34 @@ def _serialize_graph(order: tuple[str, ...], arcs: tuple[BlankNodeArc, ...]) -> 
         + encode_varint(len(order))
         + encode_varint(len(members))
         + b"".join(encode_varint(len(member)) + member for member in members)
+    )
+
+
+def _bindings_for_order(
+    order: tuple[str, ...],
+    document_scope: bytes,
+    canonical_graph: bytes,
+    occurrence_ordinal: int,
+) -> tuple[BlankNodeBinding, ...]:
+    component_class = hashlib.sha256(
+        _COMPONENT_CLASS_DOMAIN + encode_varint(len(canonical_graph)) + canonical_graph
+    ).digest()
+    return tuple(
+        BlankNodeBinding(
+            source_label=label,
+            canonical_index=index,
+            individual=AnonymousIndividual(
+                document_scope,
+                hashlib.sha256(
+                    _KEY_DOMAIN
+                    + document_scope
+                    + component_class
+                    + encode_varint(occurrence_ordinal)
+                    + encode_varint(index)
+                ).digest(),
+            ),
+        )
+        for index, label in enumerate(order)
     )
 
 

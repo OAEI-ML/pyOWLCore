@@ -58,17 +58,55 @@ struct NativePreparedStructuralClosureV2 {
     parser_bytes: u64,
 }
 
+type AnonymousShapeMetricsBinding = (u64, u64, u64, u64, u64, u64, u64, u64);
+type AnonymousWorkMetricsBinding = (u64, u64, u64, u64, u64, u64, u64);
+type AnonymousAllocationMetricsBinding = (u64,);
+type AnonymousMetricsBinding = (
+    AnonymousShapeMetricsBinding,
+    AnonymousWorkMetricsBinding,
+    AnonymousAllocationMetricsBinding,
+);
+type RetainedParseBindingMetadata = ((u64, u64, u64, u64), AnonymousMetricsBinding);
+type RetainedStructuralParseBindingMetadata = ((u64, u64, u64, u64, u64), AnonymousMetricsBinding);
+
 type RetainedParseBindingResult = (
     Py<PyBytes>,
     NativeParsedStructuralStorageV2,
-    (u64, u64, u64, u64),
+    RetainedParseBindingMetadata,
 );
 
 type RetainedStructuralParseBindingResult = (
     Py<PyBytes>,
     NativeParsedStructuralStorageV2,
-    (u64, u64, u64, u64, u64),
+    RetainedStructuralParseBindingMetadata,
 );
+
+fn anonymous_metrics_binding(
+    metrics: crate::parse::AnonymousCanonicalMetricsV2,
+) -> AnonymousMetricsBinding {
+    (
+        (
+            metrics.component_count,
+            metrics.total_labels,
+            metrics.total_arcs,
+            metrics.largest_component_labels,
+            metrics.largest_component_arcs,
+            metrics.largest_component_roots,
+            metrics.maximum_root_interval_span,
+            metrics.maximum_open_root_intervals,
+        ),
+        (
+            metrics.total_setup_work,
+            metrics.total_refinement_work,
+            metrics.total_candidate_order_work,
+            metrics.total_canonical_work,
+            metrics.largest_component_work,
+            metrics.maximum_refinement_rounds,
+            metrics.total_permutations_examined,
+        ),
+        (metrics.accounted_bytes,),
+    )
+}
 
 #[derive(Clone, Copy)]
 enum RetainedStructuralBindingSyntax {
@@ -723,11 +761,14 @@ fn parse_structural_retained_v2_with_allocations<'py>(
     crate::contain(|| limits.check_output_size(input_size, outcome.encoded.len()))
         .map_err(crate::python_error)?;
     let phases = (
-        outcome.phases.syntax_parse_ns,
-        outcome.mapping_ns,
-        outcome.phases.result_encode_ns,
-        outcome.phases.arena_construction_ns,
-        outcome.phases.freeze_ns,
+        (
+            outcome.phases.syntax_parse_ns,
+            outcome.mapping_ns,
+            outcome.phases.result_encode_ns,
+            outcome.phases.arena_construction_ns,
+            outcome.phases.freeze_ns,
+        ),
+        anonymous_metrics_binding(outcome.anonymous_metrics),
     );
     allocations.checkpoint()?;
     let encoded = PyBytes::new_with(py, outcome.encoded.len(), |buffer| {
@@ -883,10 +924,13 @@ fn parse_functional_retained_v2_with_allocations<'py>(
     crate::contain(|| limits.check_output_size(input_size, outcome.encoded.len()))
         .map_err(crate::python_error)?;
     let phases = (
-        outcome.phases.syntax_parse_ns,
-        outcome.phases.result_encode_ns,
-        outcome.phases.arena_construction_ns,
-        outcome.phases.freeze_ns,
+        (
+            outcome.phases.syntax_parse_ns,
+            outcome.phases.result_encode_ns,
+            outcome.phases.arena_construction_ns,
+            outcome.phases.freeze_ns,
+        ),
+        anonymous_metrics_binding(outcome.anonymous_metrics),
     );
     allocations.checkpoint()?;
     let encoded = PyBytes::new_with(py, outcome.encoded.len(), |buffer| {
@@ -2773,13 +2817,19 @@ fn enforce_retained_boundary(total_bytes: usize, limits: &Limits) -> PyResult<()
             "native retained boundary size exceeds u64",
         ))
     })?;
-    if total > limits.value(LimitKey::MaxTemporaryBytes)
-        || limits
-            .max_memory_bytes
-            .is_some_and(|maximum| total > maximum)
-    {
-        return Err(crate::python_error(NativeError::limit(
-            "native retained boundary exceeds configured memory limits",
+    if total > limits.value(LimitKey::MaxTemporaryBytes) {
+        return Err(crate::python_error(limits.resource_limit(
+            LimitKey::MaxTemporaryBytes,
+            total,
+            "native retained boundary exceeds max_temporary_bytes",
+        )));
+    }
+    if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| total > *maximum) {
+        return Err(crate::python_error(NativeError::resource_limit(
+            "max_memory_bytes",
+            total,
+            maximum,
+            "native retained boundary exceeds max_memory_bytes",
         )));
     }
     Ok(())
@@ -2788,13 +2838,19 @@ fn enforce_retained_boundary(total_bytes: usize, limits: &Limits) -> PyResult<()
 fn enforce_closure_aggregate_bytes(total_bytes: usize, limits: &Limits) -> NativeResult<()> {
     let total = u64::try_from(total_bytes)
         .map_err(|_| NativeError::limit("native closure aggregate size exceeds u64"))?;
-    if total > limits.value(LimitKey::MaxTemporaryBytes)
-        || limits
-            .max_memory_bytes
-            .is_some_and(|maximum| total > maximum)
-    {
-        return Err(NativeError::limit(
-            "native closure aggregate owners exceed configured memory limits",
+    if total > limits.value(LimitKey::MaxTemporaryBytes) {
+        return Err(limits.resource_limit(
+            LimitKey::MaxTemporaryBytes,
+            total,
+            "native closure aggregate owners exceed max_temporary_bytes",
+        ));
+    }
+    if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| total > *maximum) {
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            total,
+            maximum,
+            "native closure aggregate owners exceed max_memory_bytes",
         ));
     }
     Ok(())
@@ -2820,9 +2876,16 @@ fn owned_structural_documents(
             "native structural retention requires at least one document",
         ));
     }
-    if u64::try_from(documents.len()).map_or(true, |length| length > limits.max_documents) {
-        return Err(crate::python_error(NativeError::limit(
-            "native structural document count exceeds configured limits",
+    let document_count = u64::try_from(documents.len()).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native structural document count exceeds u64",
+        ))
+    })?;
+    if document_count > limits.max_documents {
+        return Err(crate::python_error(limits.resource_limit(
+            LimitKey::MaxDocuments,
+            document_count,
+            "native structural document count exceeds max_documents",
         )));
     }
     let mut owned = Vec::new();
@@ -2849,7 +2912,7 @@ fn owned_structural_documents(
         let annotations = owned_structural_rows(
             py,
             &document.get_item(0)?,
-            limits.max_annotations,
+            LimitKey::MaxAnnotations,
             limits,
             cancellation,
             &mut total_bytes,
@@ -2858,7 +2921,7 @@ fn owned_structural_documents(
         let axioms = owned_structural_rows(
             py,
             &document.get_item(1)?,
-            limits.max_axioms,
+            LimitKey::MaxAxioms,
             limits,
             cancellation,
             &mut total_bytes,
@@ -2867,7 +2930,7 @@ fn owned_structural_documents(
         let extensions = owned_structural_rows(
             py,
             &document.get_item(2)?,
-            limits.max_axioms,
+            LimitKey::MaxAxioms,
             limits,
             cancellation,
             &mut total_bytes,
@@ -2991,11 +3054,21 @@ fn owned_ordinal_tuple(
         ));
     }
     let values = value.cast::<PyTuple>()?;
-    if values.len() > document_count
-        || u64::try_from(values.len()).map_or(true, |length| length > limits.max_documents)
-    {
-        return Err(crate::python_error(NativeError::limit(
-            "native retained closure ordinal count exceeds configured limits",
+    if values.len() > document_count {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "native retained closure ordinal count exceeds the document table",
+        ));
+    }
+    let value_count = u64::try_from(values.len()).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native retained closure ordinal count exceeds u64",
+        ))
+    })?;
+    if value_count > limits.max_documents {
+        return Err(crate::python_error(limits.resource_limit(
+            LimitKey::MaxDocuments,
+            value_count,
+            "native retained closure ordinal count exceeds max_documents",
         )));
     }
     let mut owned = Vec::new();
@@ -3113,7 +3186,7 @@ fn closure_topology_bytes(
 fn owned_structural_rows(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
-    maximum_rows: u64,
+    limit: LimitKey,
     limits: &Limits,
     cancellation: &crate::cancel::Cancellation,
     total_bytes: &mut usize,
@@ -3125,8 +3198,15 @@ fn owned_structural_rows(
         ));
     }
     let rows = value.cast::<PyTuple>()?;
-    if u64::try_from(rows.len()).map_or(true, |length| length > maximum_rows) {
-        return Err(crate::python_error(NativeError::limit(
+    let row_count = u64::try_from(rows.len()).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native structural root count exceeds u64",
+        ))
+    })?;
+    if row_count > limits.value(limit) {
+        return Err(crate::python_error(limits.resource_limit(
+            limit,
+            row_count,
             "native structural root count exceeds configured limits",
         )));
     }
@@ -3170,13 +3250,19 @@ fn owned_structural_rows(
                 "native structural boundary size exceeds u64",
             ))
         })?;
-        if total > limits.value(LimitKey::MaxTemporaryBytes)
-            || limits
-                .max_memory_bytes
-                .is_some_and(|maximum| total > maximum)
-        {
-            return Err(crate::python_error(NativeError::limit(
-                "native structural boundary exceeds configured memory limits",
+        if total > limits.value(LimitKey::MaxTemporaryBytes) {
+            return Err(crate::python_error(limits.resource_limit(
+                LimitKey::MaxTemporaryBytes,
+                total,
+                "native structural boundary exceeds max_temporary_bytes",
+            )));
+        }
+        if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| total > *maximum) {
+            return Err(crate::python_error(NativeError::resource_limit(
+                "max_memory_bytes",
+                total,
+                maximum,
+                "native structural boundary exceeds max_memory_bytes",
             )));
         }
         let mut copied = Vec::new();
@@ -3206,9 +3292,14 @@ fn owned_origin_rows(
         ));
     }
     let rows = value.cast::<PyTuple>()?;
-    if u64::try_from(rows.len()).map_or(true, |length| length > limits.max_origin_entries) {
-        return Err(crate::python_error(NativeError::limit(
-            "native origin row count exceeds configured limits",
+    let row_count = u64::try_from(rows.len()).map_err(|_| {
+        crate::python_error(NativeError::limit("native origin row count exceeds u64"))
+    })?;
+    if row_count > limits.max_origin_entries {
+        return Err(crate::python_error(limits.resource_limit(
+            LimitKey::MaxOriginEntries,
+            row_count,
+            "native origin row count exceeds max_origin_entries",
         )));
     }
     let mut owned = Vec::new();
@@ -3247,13 +3338,19 @@ fn owned_origin_rows(
                 "native retained boundary size exceeds u64",
             ))
         })?;
-        if total > limits.value(LimitKey::MaxTemporaryBytes)
-            || limits
-                .max_memory_bytes
-                .is_some_and(|maximum| total > maximum)
-        {
-            return Err(crate::python_error(NativeError::limit(
-                "native retained boundary exceeds configured memory limits",
+        if total > limits.value(LimitKey::MaxTemporaryBytes) {
+            return Err(crate::python_error(limits.resource_limit(
+                LimitKey::MaxTemporaryBytes,
+                total,
+                "native retained boundary exceeds max_temporary_bytes",
+            )));
+        }
+        if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| total > *maximum) {
+            return Err(crate::python_error(NativeError::resource_limit(
+                "max_memory_bytes",
+                total,
+                maximum,
+                "native retained boundary exceeds max_memory_bytes",
             )));
         }
         let mut copied = Vec::new();
@@ -3313,8 +3410,10 @@ fn owned_origin_document_rows(
             })
     })?;
     if total_rows > limits.max_origin_entries {
-        return Err(crate::python_error(NativeError::limit(
-            "native origin row count exceeds configured limits",
+        return Err(crate::python_error(limits.resource_limit(
+            LimitKey::MaxOriginEntries,
+            total_rows,
+            "native origin row count exceeds max_origin_entries",
         )));
     }
     let mut owned = Vec::new();
@@ -3431,16 +3530,21 @@ fn owned_source_map_documents(
                 crate::python_error(NativeError::limit("native source-map entry count overflow"))
             })?;
         if total_entries > limits.max_source_map_entries {
-            return Err(crate::python_error(NativeError::limit(
-                "native source-map entry count exceeds configured limits",
+            return Err(crate::python_error(limits.resource_limit(
+                LimitKey::MaxSourceMapEntries,
+                total_entries,
+                "native source-map entry count exceeds max_source_map_entries",
             )));
         }
         let prefix_count = exact_auxiliary_tuple_len(py, &prefixes, "source-map prefixes")?;
-        if u64::try_from(prefix_count)
-            .map_or(true, |count| count > limits.value(LimitKey::MaxPrefixes))
-        {
-            return Err(crate::python_error(NativeError::limit(
-                "native source-prefix count exceeds configured limits",
+        let prefix_count = u64::try_from(prefix_count).map_err(|_| {
+            crate::python_error(NativeError::limit("native source-prefix count exceeds u64"))
+        })?;
+        if prefix_count > limits.value(LimitKey::MaxPrefixes) {
+            return Err(crate::python_error(limits.resource_limit(
+                LimitKey::MaxPrefixes,
+                prefix_count,
+                "native source-prefix count exceeds max_prefixes",
             )));
         }
         owned.push(crate::publication::TypedSourceMapRowsV2 {
@@ -3546,15 +3650,33 @@ fn owned_rdf_report_documents(
         let triple_count = exact_auxiliary_tuple_len(py, &triples, "RDF triples")?;
         let rule_count = exact_auxiliary_tuple_len(py, &rules, "RDF rules")?;
         let diagnostic_count = exact_auxiliary_tuple_len(py, &diagnostics, "RDF diagnostics")?;
-        if u64::try_from(triple_count)
-            .map_or(true, |count| count > limits.value(LimitKey::MaxTriples))
-            || u64::try_from(rule_count).map_or(true, |count| count > limits.max_wire_rows)
-            || u64::try_from(diagnostic_count)
-                .map_or(true, |count| count > limits.value(LimitKey::MaxDiagnostics))
-        {
-            return Err(crate::python_error(NativeError::limit(
-                "native RDF report rows exceed configured limits",
-            )));
+        for (count, key, message) in [
+            (
+                triple_count,
+                LimitKey::MaxTriples,
+                "native RDF report triples exceed max_triples",
+            ),
+            (
+                rule_count,
+                LimitKey::MaxWireRows,
+                "native RDF report rules exceed max_wire_rows",
+            ),
+            (
+                diagnostic_count,
+                LimitKey::MaxDiagnostics,
+                "native RDF report diagnostics exceed max_diagnostics",
+            ),
+        ] {
+            let observed = u64::try_from(count).map_err(|_| {
+                crate::python_error(NativeError::limit(
+                    "native RDF report row count exceeds u64",
+                ))
+            })?;
+            if observed > limits.value(key) {
+                return Err(crate::python_error(
+                    limits.resource_limit(key, observed, message),
+                ));
+            }
         }
         owned.push(Some(crate::publication::TypedRdfReportRowsV2 {
             header: owned_header,
@@ -3828,8 +3950,15 @@ fn owned_document_iri_with_allocations(
     }
     let value = value.cast::<PyString>()?;
     let maximum = limits.value(LimitKey::MaxIriBytes);
-    if u64::try_from(value.len()?).map_or(true, |size| size > maximum) {
-        return Err(crate::python_error(NativeError::limit(
+    let codepoint_size = u64::try_from(value.len()?).map_err(|_| {
+        crate::python_error(NativeError::limit(
+            "native RDF/XML document IRI codepoint count exceeds u64",
+        ))
+    })?;
+    if codepoint_size > maximum {
+        return Err(crate::python_error(limits.resource_limit(
+            LimitKey::MaxIriBytes,
+            codepoint_size,
             "native RDF/XML document IRI exceeds max_iri_bytes",
         )));
     }
@@ -3845,14 +3974,29 @@ fn owned_document_iri_with_allocations(
             "native RDF/XML document IRI accounting overflow",
         ))
     })?;
-    if size_u64 > maximum
-        || boundary_bytes > limits.value(LimitKey::MaxTemporaryBytes)
-        || limits
-            .max_memory_bytes
-            .is_some_and(|maximum| boundary_bytes > maximum)
+    if size_u64 > maximum {
+        return Err(crate::python_error(limits.resource_limit(
+            LimitKey::MaxIriBytes,
+            size_u64,
+            "native RDF/XML document IRI exceeds max_iri_bytes",
+        )));
+    }
+    if boundary_bytes > limits.value(LimitKey::MaxTemporaryBytes) {
+        return Err(crate::python_error(limits.resource_limit(
+            LimitKey::MaxTemporaryBytes,
+            boundary_bytes,
+            "native RDF/XML document IRI exceeds max_temporary_bytes",
+        )));
+    }
+    if let Some(maximum) = limits
+        .max_memory_bytes
+        .filter(|maximum| boundary_bytes > *maximum)
     {
-        return Err(crate::python_error(NativeError::limit(
-            "native RDF/XML document IRI exceeds configured resource limits",
+        return Err(crate::python_error(NativeError::resource_limit(
+            "max_memory_bytes",
+            boundary_bytes,
+            maximum,
+            "native RDF/XML document IRI exceeds max_memory_bytes",
         )));
     }
     let mut result = String::new();
@@ -3895,15 +4039,36 @@ fn contain_source_size(
     let transient = source_transient
         .checked_add(iri_transient)
         .ok_or_else(|| NativeError::limit("native RDF/XML transient size overflow"))?;
-    if size > limits.value(LimitKey::MaxSourceBytes)
-        || size > limits.value(LimitKey::MaxTotalSourceBytes)
-        || transient > limits.value(LimitKey::MaxTemporaryBytes)
-        || limits
-            .max_memory_bytes
-            .is_some_and(|maximum| transient > maximum)
+    for (key, observed, message) in [
+        (
+            LimitKey::MaxSourceBytes,
+            size,
+            "native RDF/XML source exceeds max_source_bytes",
+        ),
+        (
+            LimitKey::MaxTotalSourceBytes,
+            size,
+            "native RDF/XML source exceeds max_total_source_bytes",
+        ),
+        (
+            LimitKey::MaxTemporaryBytes,
+            transient,
+            "native RDF/XML source exceeds max_temporary_bytes",
+        ),
+    ] {
+        if observed > limits.value(key) {
+            return Err(limits.resource_limit(key, observed, message));
+        }
+    }
+    if let Some(maximum) = limits
+        .max_memory_bytes
+        .filter(|maximum| transient > *maximum)
     {
-        return Err(NativeError::limit(
-            "native RDF/XML source exceeds configured resource limits",
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            transient,
+            maximum,
+            "native RDF/XML source exceeds max_memory_bytes",
         ));
     }
     Ok(())

@@ -21,7 +21,7 @@ use crate::source::SourceRequest;
 const FUNCTIONAL_SEED_MAGIC: &[u8; 8] = b"PYNFRS2\0";
 const RDFXML_SEED_MAGIC: &[u8; 8] = b"PYNRRS2\0";
 const SEED_SCHEMA: u16 = 1;
-const DOCUMENT_KEY_DOMAIN: &[u8] = b"pyowl-core:document-key:v1\0";
+const DOCUMENT_KEY_DOMAIN: &[u8] = b"pyowl-core:document-key:v2\0";
 const RESOLVER_DOMAIN: &[u8] = b"pyowl-core:resolver-configuration:v1\0";
 const IMPORT_MANIFEST_DOMAIN: &[u8] = b"pyowl-core:import-manifest:v1\0";
 
@@ -463,7 +463,7 @@ fn document_key(
     let mut hasher = Sha256::new();
     hasher.update(DOCUMENT_KEY_DOMAIN);
     hasher.update(&payload);
-    Ok(format!("d1:{}", hex(hasher.finish())))
+    Ok(format!("d2:{}", hex(hasher.finish())))
 }
 
 fn import_free_manifest(
@@ -723,7 +723,7 @@ mod tests {
         assert_eq!(result.inventories[1].count, 1);
         assert_eq!(result.root_count, 1);
         assert_eq!(result.origins.len(), 1);
-        assert!(result.document_key.starts_with("d1:"));
+        assert!(result.document_key.starts_with("d2:"));
         assert!(result
             .fingerprints
             .iter()
@@ -766,6 +766,6 @@ mod tests {
         assert_eq!(result.inventories[1].count, 1);
         assert_eq!(result.root_count, 1);
         assert_eq!(result.origins.len(), 1);
-        assert!(result.document_key.starts_with("d1:"));
+        assert!(result.document_key.starts_with("d2:"));
     }
 }

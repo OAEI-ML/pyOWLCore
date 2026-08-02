@@ -134,12 +134,20 @@ impl ScanBudget {
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("canonical term counter overflow"))?;
         if depth > self.max_depth {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_nesting_depth",
+                u64::from(depth),
+                u64::from(self.max_depth),
                 "canonical model row exceeds max_nesting_depth",
             ));
         }
         if self.terms > self.max_terms {
-            return Err(NativeError::limit("canonical model row exceeds max_terms"));
+            return Err(NativeError::resource_limit(
+                "max_terms",
+                self.terms,
+                self.max_terms,
+                "canonical model row exceeds max_terms",
+            ));
         }
         Ok(())
     }
@@ -165,8 +173,13 @@ fn scan_canonical_observing(
     budget: &mut ScanBudget,
     target_tag: Option<u64>,
 ) -> NativeResult<(Category, bool)> {
-    if u64::try_from(data.len()).map_or(true, |size| size > budget.max_canonical_work) {
-        return Err(NativeError::limit(
+    let size = u64::try_from(data.len())
+        .map_err(|_| NativeError::limit("canonical model row size exceeds u64"))?;
+    if size > budget.max_canonical_work {
+        return Err(NativeError::resource_limit(
+            "max_canonical_work",
+            size,
+            budget.max_canonical_work,
             "canonical model row exceeds max_canonical_work",
         ));
     }
@@ -261,8 +274,18 @@ fn scan_node<'a>(
                 if count < minimum {
                     return Err(NativeError::corrupt("canonical set has too few members"));
                 }
-                if count > budget.max_sequence_arity || count > remaining_frames(offset, end) {
-                    return Err(NativeError::limit("canonical set arity exceeds limits"));
+                if count > budget.max_sequence_arity {
+                    return Err(NativeError::resource_limit(
+                        "max_sequence_arity",
+                        count,
+                        budget.max_sequence_arity,
+                        "canonical set arity exceeds max_sequence_arity",
+                    ));
+                }
+                if count > remaining_frames(offset, end) {
+                    return Err(NativeError::corrupt(
+                        "canonical set arity exceeds remaining input",
+                    ));
                 }
                 let mut previous: Option<&[u8]> = None;
                 for _ in 0..count {
@@ -314,9 +337,17 @@ fn scan_node<'a>(
                         "canonical sequence has too few members",
                     ));
                 }
-                if count > budget.max_sequence_arity || count > (end - offset) as u64 {
-                    return Err(NativeError::limit(
-                        "canonical sequence arity exceeds limits",
+                if count > budget.max_sequence_arity {
+                    return Err(NativeError::resource_limit(
+                        "max_sequence_arity",
+                        count,
+                        budget.max_sequence_arity,
+                        "canonical sequence arity exceeds max_sequence_arity",
+                    ));
+                }
+                if count > (end - offset) as u64 {
+                    return Err(NativeError::corrupt(
+                        "canonical sequence arity exceeds remaining input",
                     ));
                 }
                 for _ in 0..count {
@@ -629,7 +660,12 @@ fn validate_local<'a>(
                 return Err(NativeError::protocol("IRI field ledger mismatch"));
             };
             if iri.len() as u64 > budget.max_iri_bytes {
-                return Err(NativeError::limit("canonical IRI exceeds max_iri_bytes"));
+                return Err(NativeError::resource_limit(
+                    "max_iri_bytes",
+                    iri.len() as u64,
+                    budget.max_iri_bytes,
+                    "canonical IRI exceeds max_iri_bytes",
+                ));
             }
             validate_iri(iri)?;
             meta.iri = Some(iri);
@@ -677,7 +713,12 @@ fn validate_local<'a>(
                 return Err(NativeError::protocol("SWRL rule ledger mismatch"));
             };
             if body > budget.max_rule_atoms || head > budget.max_rule_atoms {
-                return Err(NativeError::limit("SWRL rule exceeds max_rule_atoms"));
+                return Err(NativeError::resource_limit(
+                    "max_rule_atoms",
+                    body.max(head),
+                    budget.max_rule_atoms,
+                    "SWRL rule exceeds max_rule_atoms",
+                ));
             }
         }
         _ => {}
@@ -699,7 +740,10 @@ fn validate_literal(values: &[Option<FieldValue<'_>>; 4], budget: &ScanBudget) -
         return Err(NativeError::protocol("literal lexical ledger mismatch"));
     };
     if lexical.len() as u64 > budget.max_literal_bytes {
-        return Err(NativeError::limit(
+        return Err(NativeError::resource_limit(
+            "max_literal_bytes",
+            lexical.len() as u64,
+            budget.max_literal_bytes,
             "canonical literal exceeds max_literal_bytes",
         ));
     }

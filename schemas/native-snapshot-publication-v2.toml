@@ -3,7 +3,7 @@ schema = 2
 name = "NativeSnapshotPublicationV2"
 domain = "pyowl-core:native-snapshot-publication-ledger:v2"
 ledger_canonicalization = "typed-toml-tree-v1"
-ledger_sha256 = "588739159880f3b0391fb3e70e8009a0bd86444d3597ec6eff44c31368942733"
+ledger_sha256 = "5817db7388f4100782e298a2940398e2221dfdbe5cd7c73bdcdfaf41c8511640"
 amends = "NativeSnapshotPublicationV1"
 amendment_reason = "version 1 omitted the ledgered bounded scalar query surface required by its lazy facade capability"
 extension_policy = "any semantic change requires publication version 3"
@@ -170,7 +170,7 @@ v1 = "legacy-metadata-only+never-facade-dispatchable"
 
 [access_protocol]
 domain = "pyowl-core:native-facade-access-schema:v2"
-collections = [{ name = "ontology-annotations", row_codec = "model-canonical-v1", scopes = ["document", "closure"] }, { name = "axioms", row_codec = "model-canonical-v1", scopes = ["document", "closure"] }, { name = "extensions", row_codec = "model-canonical-v1", scopes = ["document", "closure"] }, { name = "signature", row_codec = "model-canonical-v1", scopes = ["document", "closure"] }, { name = "source-map-entries", row_codec = "source-map-entries-v2", scopes = ["document"] }, { name = "source-map-prefixes", row_codec = "source-map-prefixes-v2", scopes = ["document"] }, { name = "origin-entries", row_codec = "origin-entries-v2", scopes = ["document", "closure"] }, { name = "rdf-report-header", row_codec = "rdf-report-header-v2", scopes = ["document"] }, { name = "rdf-unconsumed-triples", row_codec = "rdf-unconsumed-triples-v2", scopes = ["document"] }, { name = "rdf-rule-ids", row_codec = "rdf-rule-ids-v2", scopes = ["document"] }, { name = "rdf-diagnostics", row_codec = "rdf-diagnostics-v2", scopes = ["document"] }, { name = "owl2-dl-structural-issues", row_codec = "owl2-dl-structural-issues-v2", scopes = ["closure"] }, { name = "owl2-dl-issues", row_codec = "owl2-dl-issues-v2", scopes = ["closure"] }, { name = "owl2-dl-role-properties", row_codec = "model-canonical-v1", scopes = ["closure"] }, { name = "owl2-dl-role-hierarchy", row_codec = "owl2-dl-role-hierarchy-v2", scopes = ["closure"] }, { name = "owl2-dl-role-composite", row_codec = "model-canonical-v1", scopes = ["closure"] }, { name = "owl2-dl-role-non-simple", row_codec = "model-canonical-v1", scopes = ["closure"] }]
+collections = [{ name = "ontology-annotations", row_codec = "model-canonical-v2", scopes = ["document", "closure"] }, { name = "axioms", row_codec = "model-canonical-v2", scopes = ["document", "closure"] }, { name = "extensions", row_codec = "model-canonical-v2", scopes = ["document", "closure"] }, { name = "signature", row_codec = "model-canonical-v2", scopes = ["document", "closure"] }, { name = "source-map-entries", row_codec = "source-map-entries-v2", scopes = ["document"] }, { name = "source-map-prefixes", row_codec = "source-map-prefixes-v2", scopes = ["document"] }, { name = "origin-entries", row_codec = "origin-entries-v2", scopes = ["document", "closure"] }, { name = "rdf-report-header", row_codec = "rdf-report-header-v2", scopes = ["document"] }, { name = "rdf-unconsumed-triples", row_codec = "rdf-unconsumed-triples-v2", scopes = ["document"] }, { name = "rdf-rule-ids", row_codec = "rdf-rule-ids-v2", scopes = ["document"] }, { name = "rdf-diagnostics", row_codec = "rdf-diagnostics-v2", scopes = ["document"] }, { name = "owl2-dl-structural-issues", row_codec = "owl2-dl-structural-issues-v2", scopes = ["closure"] }, { name = "owl2-dl-issues", row_codec = "owl2-dl-issues-v2", scopes = ["closure"] }, { name = "owl2-dl-role-properties", row_codec = "model-canonical-v2", scopes = ["closure"] }, { name = "owl2-dl-role-hierarchy", row_codec = "owl2-dl-role-hierarchy-v2", scopes = ["closure"] }, { name = "owl2-dl-role-composite", row_codec = "model-canonical-v2", scopes = ["closure"] }, { name = "owl2-dl-role-non-simple", row_codec = "model-canonical-v2", scopes = ["closure"] }]
 scopes = ["document", "closure"]
 signature_kinds = ["all", "class", "datatype", "object_property", "data_property", "annotation_property", "named_individual"]
 page_request_fields = [{ ordinal = 0, name = "collection", type = "NativeFacadeCollectionV2", cardinality = "one" }, { ordinal = 1, name = "scope", type = "NativeFacadeScopeV2", cardinality = "one" }, { ordinal = 2, name = "document_ordinal", type = "u64|None", cardinality = "scope-dependent" }, { ordinal = 3, name = "start", type = "u64", cardinality = "one" }, { ordinal = 4, name = "max_rows", type = "u32", cardinality = "one" }, { ordinal = 5, name = "max_bytes", type = "u64", cardinality = "one" }, { ordinal = 6, name = "max_row_bytes", type = "u64", cardinality = "publication-bound" }, { ordinal = 7, name = "signature_kind", type = "NativeSignatureKindV2", cardinality = "one" }, { ordinal = 8, name = "include_builtins", type = "bool", cardinality = "one" }, { ordinal = 9, name = "digest_filter", type = "bytes32|None", cardinality = "optional" }]
@@ -186,7 +186,7 @@ row_bound_meaning = "positive-actual-maximum-retained-encoded-row"
 terminal = "next-cursor-none-iff-start+rows-equals-total-count"
 normal_page = "nonempty-unless-terminal+rows<=max_rows+bytes<=max_bytes"
 oversized_first_row = "one-sole-row-may-exceed-max_bytes-up-to-attestation.max_facade_row_bytes"
-contains = "axioms-only+exact-canonical-model-v1-bytes+bound-ParseLimits"
+contains = "axioms-only+exact-canonical-model-v2-bytes+bound-ParseLimits"
 traversal_validation = "role-specific-attested-total+coordinate-total-pin+owner-role-specific-contiguous-page-boundary-order"
 signature_validation = "exact-kind+canonical-builtins-policy"
 optional_collections = "capability-bit-and-configured-limit-gated-before-owner-call"
@@ -269,7 +269,7 @@ rdf_diagnostic = [{ ordinal = 0, name = "diagnostic", type = "NativeDiagnosticPu
 diagnostic_reference_kinds = [{ ordinal = 0, name = "document_reference_kind", type = "NativeDiagnosticReferenceKindV2|None", cardinality = "optional" }, { ordinal = 1, name = "import_chain_kinds", type = "tuple[NativeDiagnosticReferenceKindV2]", cardinality = "ordered" }]
 owl2_dl_report_summary = [{ ordinal = 0, name = "structural_values_checked", type = "u64", cardinality = "one" }, { ordinal = 1, name = "structural_complete", type = "bool", cardinality = "one" }, { ordinal = 2, name = "report_complete", type = "bool", cardinality = "one" }, { ordinal = 3, name = "structural_issue_count", type = "u64", cardinality = "one" }, { ordinal = 4, name = "issue_count", type = "u64", cardinality = "one" }, { ordinal = 5, name = "role_property_count", type = "u64", cardinality = "one" }, { ordinal = 6, name = "role_hierarchy_count", type = "u64", cardinality = "one" }, { ordinal = 7, name = "role_composite_count", type = "u64", cardinality = "one" }, { ordinal = 8, name = "role_non_simple_count", type = "u64", cardinality = "one" }]
 owl2_dl_issue = [{ ordinal = 0, name = "code", type = "str", cardinality = "one" }, { ordinal = 1, name = "severity", type = "ValidationSeverity", cardinality = "one" }, { ordinal = 2, name = "message", type = "str", cardinality = "one" }, { ordinal = 3, name = "constructor", type = "str|None", cardinality = "optional" }]
-owl2_dl_role_edge = [{ ordinal = 0, name = "sub_property", type = "model-canonical-v1-bytes", cardinality = "one" }, { ordinal = 1, name = "super_property", type = "model-canonical-v1-bytes", cardinality = "one" }]
+owl2_dl_role_edge = [{ ordinal = 0, name = "sub_property", type = "model-canonical-v2-bytes", cardinality = "one" }, { ordinal = 1, name = "super_property", type = "model-canonical-v2-bytes", cardinality = "one" }]
 
 [auxiliary_codecs.duplicate_policy]
 canonical-unique = "structural+source-prefix-key+rdf-rule-id+owl2-dl-role-hierarchy+effective-document-origin+effective-closure-origin"
@@ -294,7 +294,7 @@ owl2-dl-role-non-simple = "model-canonical-ascending-unique"
 [content_manifests]
 hash = "sha256(ascii-domain+0x00+body)"
 document_order = "document-key-strict-utf8-ascending-unique"
-structural_rows = "model-canonical-v1-bytes-ascending-unique"
+structural_rows = "model-canonical-v2-bytes-ascending-unique"
 auxiliary_rows = "exact-v2-codec-bytes-in-collection-order"
 facade_cardinalities = "all-owner-role-whole-collection-counts-cross-checked-against-exact-rows"
 ownership = "computed-by-native-owner-during-freeze-never-caller-echoed"
@@ -337,10 +337,10 @@ logical = 3
 signature = 4
 
 [content_manifests.fingerprint_inputs.authoritative_domains]
-document = "pyowl-core:document-fingerprint:v1"
-structural = "pyowl-core:snapshot-structural:v1"
-logical = "pyowl-core:snapshot-logical:v1"
-signature = "pyowl-core:snapshot-signature:v1"
+document = "pyowl-core:document-fingerprint:v2"
+structural = "pyowl-core:snapshot-structural:v2"
+logical = "pyowl-core:snapshot-logical:v2"
+signature = "pyowl-core:snapshot-signature:v2"
 
 [content_manifests.source]
 manifest_domain = "pyowl-core:native-source-manifest:v2"

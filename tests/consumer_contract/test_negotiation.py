@@ -15,6 +15,8 @@ from pyowl_core.adapters import (
     require_compatible_view,
 )
 
+CURRENT_CORE = CoreContract("0.2.0", (0, 2), 1, 2, (1, 2))
+
 
 def requirement(**changes: object) -> AdapterRequirement:
     baseline = AdapterRequirement(
@@ -31,18 +33,18 @@ def test_current_snapshot_negotiates_and_preserves_identity() -> None:
         b"Ontology(<urn:adapter> Declaration(Class(<urn:adapter#A>)))",
         options=pyowl_core.LoadOptions(backend=pyowl_core.BackendPreference.PYTHON),
     )
-    report = negotiate_view(snapshot, requirement())
+    report = negotiate_view(snapshot, requirement(), core=CURRENT_CORE)
 
     assert report.compatible
     assert report.issues == ()
-    assert require_compatible_view(snapshot, requirement()) is snapshot
+    assert require_compatible_view(snapshot, requirement(), core=CURRENT_CORE) is snapshot
     assert dict(snapshot.capabilities.encoded_view_schemas) == {
-        "pyowl-core/structural-columns": 1,
+        "pyowl-core/structural-columns": 2,
     }
     assert report.to_dict()["view"] == {
         "adapter_protocol": 1,
-        "model_schema": 1,
-        "wire_format": [1, 1],
+        "model_schema": 2,
+        "wire_format": [1, 2],
         "features": sorted(snapshot.capabilities.features),
         "encoded_view_schemas": dict(snapshot.capabilities.encoded_view_schemas),
         "backend": "python",
@@ -58,22 +60,19 @@ def test_negotiation_reports_every_independent_mismatch() -> None:
         encoded_view_schemas={"bulk": 1},
         backend="foreign",
     )
-    core = CoreContract("0.2.0", (0, 2), 1, 1, (1, 1))
     selected = requirement(
         minimum_wire_minor=2,
         required_features=frozenset({"owl2-structural", "import-manifest", "source-map"}),
         required_encoded_view_schemas={"bulk": 2, "columns": 1},
     )
 
-    report = negotiate_capabilities(capabilities, selected, core=core)
+    report = negotiate_capabilities(capabilities, selected, core=CURRENT_CORE)
     codes = [issue.code for issue in report.issues]
 
     assert not report.compatible
     assert codes.count("MISSING_FEATURE") == 2
     assert set(codes) == {
         "ADAPTER_PROTOCOL_MISMATCH",
-        "CORE_API_MISMATCH",
-        "CORE_PACKAGE_API_MISMATCH",
         "CORE_VIEW_ADAPTER_DIVERGENCE",
         "CORE_VIEW_MODEL_DIVERGENCE",
         "CORE_VIEW_WIRE_DIVERGENCE",
@@ -94,7 +93,7 @@ def test_negotiation_reports_every_independent_mismatch() -> None:
 
 
 def test_malformed_capabilities_fail_without_duck_typed_fallback() -> None:
-    report = negotiate_capabilities(object(), requirement())
+    report = negotiate_capabilities(object(), requirement(), core=CURRENT_CORE)
 
     assert [issue.code for issue in report.issues] == ["ADAPTER_CAPABILITIES_TYPE"]
     with pytest.raises(pyowl_core.AdapterCompatibilityError, match="1 issue"):

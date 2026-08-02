@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use crate::cancel::{Cancellation, Guard, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
-use crate::limits::Limits;
+use crate::limits::{LimitKey, Limits};
 
 use super::canonical::{canonical_field_count, scan_canonical, Category, ScanBudget};
 
@@ -159,11 +159,14 @@ impl ComponentWork {
     ) -> NativeResult<Self> {
         let external_bytes = u64::try_from(external_bytes)
             .map_err(|_| NativeError::limit("native external allocation exceeds u64"))?;
-        if limits
+        if let Some(maximum) = limits
             .max_memory_bytes
-            .is_some_and(|maximum| external_bytes > maximum)
+            .filter(|maximum| external_bytes > *maximum)
         {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                external_bytes,
+                maximum,
                 "native external allocation exceeds max_memory_bytes",
             ));
         }
@@ -199,7 +202,10 @@ impl ComponentWork {
             .checked_add(amount)
             .ok_or_else(|| NativeError::limit("native component work counter overflow"))?;
         if self.used > self.maximum {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_canonical_work",
+                self.used,
+                self.maximum,
                 "native component work exceeds max_canonical_work",
             ));
         }
@@ -330,8 +336,11 @@ impl ComponentTables {
             (Some(value), None) | (None, Some(value)) => Some(value),
             (None, None) => None,
         };
-        if maximum_memory.is_some_and(|maximum| memory_peak > maximum) {
-            return Err(NativeError::limit(
+        if let Some(maximum) = maximum_memory.filter(|maximum| memory_peak > *maximum) {
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                memory_peak,
+                maximum,
                 "native component encoding exceeds max_memory_bytes",
             ));
         }
@@ -358,7 +367,10 @@ impl ComponentTables {
         work.checkpoint(true)?;
         let encoded_len = self.encoded_node_len(identifier, 0, work)?;
         if encoded_len > self.max_encoded_bytes {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_canonical_work",
+                encoded_len,
+                self.max_encoded_bytes,
                 "native component encoding exceeds max_canonical_work",
             ));
         }
@@ -382,7 +394,10 @@ impl ComponentTables {
             length = checked_add_u64(length, self.encoded_value_len(*value, depth, work)?)?;
         }
         if length > self.max_encoded_bytes {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_canonical_work",
+                length,
+                self.max_encoded_bytes,
                 "native component encoding exceeds max_canonical_work",
             ));
         }
@@ -479,8 +494,12 @@ impl ComponentTables {
     }
 
     fn check_encode_depth(&self, depth: u32, work: &ComponentWork) -> NativeResult<()> {
-        if depth > self.max_nesting_depth.min(work.max_nesting_depth).min(1024) {
-            return Err(NativeError::limit(
+        let maximum = self.max_nesting_depth.min(work.max_nesting_depth).min(1024);
+        if depth > maximum {
+            return Err(NativeError::resource_limit(
+                "max_nesting_depth",
+                u64::from(depth),
+                u64::from(maximum),
                 "native component encoding nesting exceeds configured limits",
             ));
         }
@@ -925,7 +944,10 @@ impl NativeComponentArena {
         work: &mut ComponentWork,
     ) -> NativeResult<Ordering> {
         if work.max_nesting_depth < 1 {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_nesting_depth",
+                1_u64,
+                u64::from(work.max_nesting_depth),
                 "native component encoding nesting exceeds configured limits",
             ));
         }
@@ -1121,8 +1143,10 @@ impl NativeComponentArena {
     ) -> NativeResult<()> {
         let workspace_bytes = u64::try_from(workspace_bytes)
             .map_err(|_| NativeError::limit("native component sort workspace exceeds u64"))?;
-        if workspace_bytes > limits.value(crate::limits::LimitKey::MaxTemporaryBytes) {
-            return Err(NativeError::limit(
+        if workspace_bytes > limits.value(LimitKey::MaxTemporaryBytes) {
+            return Err(limits.resource_limit(
+                LimitKey::MaxTemporaryBytes,
+                workspace_bytes,
                 "native component sort exceeds max_temporary_bytes",
             ));
         }
@@ -1134,11 +1158,11 @@ impl NativeComponentArena {
             .checked_add(external_bytes)
             .and_then(|value| value.checked_add(workspace_bytes))
             .ok_or_else(|| NativeError::limit("native component sort memory overflow"))?;
-        if limits
-            .max_memory_bytes
-            .is_some_and(|maximum| live > maximum)
-        {
-            return Err(NativeError::limit(
+        if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| live > *maximum) {
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                live,
+                maximum,
                 "native component sort exceeds max_memory_bytes",
             ));
         }
@@ -1703,12 +1727,15 @@ impl NativeComponentBuilder {
             .checked_add(self.transient_bytes)
             .and_then(|value| value.checked_add(external_bytes))
             .ok_or_else(|| NativeError::limit("native component memory accounting overflow"))?;
-        if self
+        if let Some(maximum) = self
             .limits
             .max_memory_bytes
-            .is_some_and(|maximum| peak > maximum)
+            .filter(|maximum| peak > *maximum)
         {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                peak,
+                maximum,
                 "native external allocation exceeds max_memory_bytes",
             ));
         }
@@ -1792,12 +1819,15 @@ impl NativeComponentBuilder {
             .checked_add(work.external_bytes)
             .and_then(|value| value.checked_add(workspace_bytes))
             .ok_or_else(|| NativeError::limit("native freeze memory accounting overflow"))?;
-        if self
+        if let Some(maximum) = self
             .limits
             .max_memory_bytes
-            .is_some_and(|maximum| frozen_peak > maximum)
+            .filter(|maximum| frozen_peak > *maximum)
         {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                frozen_peak,
+                maximum,
                 "native frozen arena exceeds max_memory_bytes",
             ));
         }
@@ -2004,7 +2034,10 @@ impl NativeComponentBuilder {
             6 | 7 => {
                 let (count, mut cursor) = decode_u64_varint(data, offset, end)?;
                 if count > self.limits.max_sequence_arity {
-                    return Err(NativeError::limit(
+                    return Err(NativeError::resource_limit(
+                        "max_sequence_arity",
+                        count,
+                        self.limits.max_sequence_arity,
                         "native component sequence arity exceeds limits",
                     ));
                 }
@@ -2102,7 +2135,8 @@ impl NativeComponentBuilder {
         }
         check_count(
             self.strings.len(),
-            self.limits.max_strings,
+            &self.limits,
+            LimitKey::MaxStrings,
             "native string table exceeds limits",
         )?;
         let identifier = StringId(DenseId::try_from_index(
@@ -2485,7 +2519,9 @@ impl NativeComponentBuilder {
             .and_then(|value| value.checked_add(1))
             .ok_or_else(|| NativeError::limit(message))?;
         if following > self.limits.max_terms {
-            return Err(NativeError::limit(message));
+            return Err(self
+                .limits
+                .resource_limit(LimitKey::MaxTerms, following, message));
         }
         Ok(())
     }
@@ -2495,18 +2531,17 @@ impl NativeComponentBuilder {
         category: ComponentCategory,
         current: usize,
     ) -> NativeResult<()> {
-        let (maximum, message) = match category {
+        let (key, message) = match category {
             ComponentCategory::Annotation => (
-                self.limits.max_annotations,
+                LimitKey::MaxAnnotations,
                 "native annotation table exceeds max_annotations",
             ),
-            ComponentCategory::Axiom => (
-                self.limits.max_axioms,
-                "native axiom table exceeds max_axioms",
-            ),
+            ComponentCategory::Axiom => {
+                (LimitKey::MaxAxioms, "native axiom table exceeds max_axioms")
+            }
             _ => return Ok(()),
         };
-        check_count(current, maximum, message)
+        check_count(current, &self.limits, key, message)
     }
 
     fn drop_interners(&mut self) {
@@ -2687,12 +2722,15 @@ impl NativeComponentBuilder {
             .checked_add(external_bytes)
             .and_then(|value| value.checked_add(bytes))
             .ok_or_else(|| NativeError::limit("native freeze memory accounting overflow"))?;
-        if self
+        if let Some(maximum) = self
             .limits
             .max_memory_bytes
-            .is_some_and(|maximum| peak > maximum)
+            .filter(|maximum| peak > *maximum)
         {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                peak,
+                maximum,
                 "native freeze workspace exceeds max_memory_bytes",
             ));
         }
@@ -2773,12 +2811,15 @@ impl NativeComponentBuilder {
             .checked_add(self.transient_bytes)
             .and_then(|value| value.checked_add(self.external_bytes().ok()?))
             .ok_or_else(|| NativeError::limit("native component memory accounting overflow"))?;
-        if self
+        if let Some(maximum) = self
             .limits
             .max_memory_bytes
-            .is_some_and(|maximum| peak > maximum)
+            .filter(|maximum| peak > *maximum)
         {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                peak,
+                maximum,
                 "native component allocation exceeds max_memory_bytes",
             ));
         }
@@ -2805,12 +2846,15 @@ impl NativeComponentBuilder {
             .checked_add(remaining)
             .and_then(|value| value.checked_add(self.external_bytes().ok()?))
             .ok_or_else(|| NativeError::limit("native component memory accounting overflow"))?;
-        if self
+        if let Some(maximum) = self
             .limits
             .max_memory_bytes
-            .is_some_and(|maximum| peak > maximum)
+            .filter(|maximum| peak > *maximum)
         {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                peak,
+                maximum,
                 "native component allocation exceeds max_memory_bytes",
             ));
         }
@@ -2832,12 +2876,15 @@ impl NativeComponentBuilder {
             .checked_add(following)
             .and_then(|value| value.checked_add(self.external_bytes().ok()?))
             .ok_or_else(|| NativeError::limit("native component memory accounting overflow"))?;
-        if self
+        if let Some(maximum) = self
             .limits
             .max_memory_bytes
-            .is_some_and(|maximum| peak > maximum)
+            .filter(|maximum| peak > *maximum)
         {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                peak,
+                maximum,
                 "native transient allocation exceeds max_memory_bytes",
             ));
         }
@@ -3872,12 +3919,20 @@ fn vector_allocation_bytes<T>(capacity: usize) -> NativeResult<usize> {
         .ok_or_else(|| NativeError::limit("native retained vector size overflow"))
 }
 
-fn check_count(current: usize, maximum: u64, message: &'static str) -> NativeResult<()> {
+fn check_count(
+    current: usize,
+    limits: &Limits,
+    key: LimitKey,
+    message: &'static str,
+) -> NativeResult<()> {
     let following = u64::try_from(current)
         .map_err(|_| NativeError::limit(message))?
         .checked_add(1)
         .ok_or_else(|| NativeError::limit(message))?;
-    if following > maximum || current >= u32::MAX as usize {
+    if following > limits.value(key) {
+        return Err(limits.resource_limit(key, following, message));
+    }
+    if current >= u32::MAX as usize {
         return Err(NativeError::limit(message));
     }
     Ok(())
@@ -4305,12 +4360,10 @@ mod tests {
             0,
         )
         .expect("expired builder");
-        assert_eq!(
-            expired
-                .intern_validated_canonical(&row)
-                .expect_err("validated seam must keep forced checkpoint"),
-            NativeError::deadline()
-        );
+        let expired_error = expired
+            .intern_validated_canonical(&row)
+            .expect_err("validated seam must keep forced checkpoint");
+        assert_eq!(expired_error.code, "NATIVE_DEADLINE");
         assert_eq!(expired.counters().node_requests, 0);
         assert_eq!(expired.counters().unique_nodes, 0);
     }
@@ -4807,12 +4860,14 @@ mod tests {
         assert_eq!(builder.intern_canonical(&row).expect("repeat"), root);
         assert_eq!(builder.counters.unique_nodes, 3);
         assert_eq!(builder.counters.unique_sequences, 1);
-        assert_eq!(
-            builder
-                .intern_canonical(&declaration("urn:overflow"))
-                .expect_err("global max_terms"),
-            NativeError::limit("native component count exceeds max_terms")
-        );
+        let term_error = builder
+            .intern_canonical(&declaration("urn:overflow"))
+            .expect_err("global max_terms");
+        let crate::error::NativeErrorPayload::ResourceLimit(payload) = term_error.payload else {
+            panic!("configured max_terms failure omitted its typed payload");
+        };
+        assert_eq!(payload.limit, "max_terms");
+        assert_eq!(payload.allowed, crate::error::NativeNumber::Integer(4));
         assert!(builder.freeze().is_err(), "failed mutation poisons freeze");
 
         let mut axiom_limits = Limits::default();

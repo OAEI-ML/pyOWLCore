@@ -10,7 +10,7 @@
     "validation": "tests/unit/model/test_validation.py and constructor __post_init__",
     "wire": "tests/conformance/test_constructor_coverage.py::test_every_constructor_crosses_canonical_wire_and_independent_reader"
   },
-  "model_schema": 1,
+  "model_schema": 2,
   "required_evidence_columns": [
     "canonical",
     "formats",

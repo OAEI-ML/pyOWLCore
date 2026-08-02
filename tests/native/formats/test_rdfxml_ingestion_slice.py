@@ -4896,7 +4896,7 @@ def test_nested_annotation_reification_limit_matches_python(
 """,
     ),
 )
-def test_malformed_or_unclaimed_reification_rejection_matches_python(
+def test_malformed_or_unclaimed_reification_is_unsupported_and_matches_native(
     extension: NativeTestExtension,
     body: str,
 ) -> None:
@@ -4907,7 +4907,7 @@ def test_malformed_or_unclaimed_reification_rejection_matches_python(
  xmlns:e='urn:'>
 {body}</rdf:RDF>""".encode()
 
-    with pytest.raises(OntologySyntaxError) as python_error:
+    with pytest.raises(UnsupportedSyntaxError) as python_error:
         parse_rdfxml(source, limits=ParseLimits(), document_iri=None)
     assert python_error.value.code == "RDF_AXIOM_REIFICATION"
     with pytest.raises(extension._NativeError) as native_error:

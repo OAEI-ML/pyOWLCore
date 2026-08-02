@@ -34,7 +34,7 @@ from pyowl_core import (
 )
 from pyowl_core.backends import native
 from pyowl_core.cancellation import CancellationSource
-from pyowl_core.exceptions import OperationCancelledError
+from pyowl_core.exceptions import OperationCancelledError, ResourceLimitError
 from tests.generated.model.fixtures import model_fixtures
 from tests.native.foundation._support import NativeTestExtension, load_extension
 from tests.unit.wire.conftest import snapshot
@@ -55,7 +55,7 @@ class NativeWireParityTests(unittest.TestCase):
     def test_empty_golden_and_independent_reader_are_byte_identical(self) -> None:
         encoded = encode_snapshot(snapshot())
         golden = json.loads(
-            (Path(__file__).parents[2] / "unit" / "wire" / "goldens" / "empty-v1.json").read_text(
+            (Path(__file__).parents[2] / "unit" / "wire" / "goldens" / "empty-v2.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -115,8 +115,8 @@ class NativeWireParityTests(unittest.TestCase):
         # For every constructor eligible for the raw/effective/closure alias,
         # prove that column-derived tables are byte-identical to scalar tables.
         from pyowl_core.backends.native_views import (
-            _encoded_structural_wire_rows_v1,
-            produce_encoded_structural_view_v1,
+            _encoded_structural_wire_rows_v2,
+            produce_encoded_structural_view_v2,
         )
         from pyowl_core.document.snapshot import AxiomScope
         from pyowl_core.wire._binary import Guard
@@ -150,13 +150,13 @@ class NativeWireParityTests(unittest.TestCase):
             ),
         )
         limits = eligible_snapshot.load_options.limits
-        publication = produce_encoded_structural_view_v1(
+        publication = produce_encoded_structural_view_v2(
             eligible_snapshot,
             scope=AxiomScope.CLOSURE,
             limits=limits,
             materialize_segments=True,
         )
-        structural = _encoded_structural_wire_rows_v1(publication, limits)
+        structural = _encoded_structural_wire_rows_v2(publication, limits)
         origins = tuple(
             _NativeWireOrigin(digest, item.document_key, item.occurrence, item.span)
             for digest, occurrences in eligible_snapshot.origin_index.entries.items()
@@ -217,14 +217,14 @@ class NativeWireParityTests(unittest.TestCase):
         with self.assertRaises(WireError):
             native.roundtrip_wire(hostile)
 
-    def test_view_provenance_minor_one_is_validated_without_materialization(self) -> None:
+    def test_view_provenance_current_minor_is_validated_without_materialization(self) -> None:
         source = replace(
             snapshot("A"),
             diagnostics=(Diagnostic("NATIVE_IDENTITY_TEST", Severity.INFO, "test"),),
         )
         encoded = encode_snapshot(source)
         image = read_wire(encoded)
-        self.assertEqual(image.minor, 1)
+        self.assertEqual(image.minor, 2)
         self.assertEqual(native.roundtrip_wire(encoded), encoded)
 
         sections = dict(image.sections)
@@ -242,7 +242,7 @@ class NativeWireParityTests(unittest.TestCase):
     def test_encoded_structural_section_framing_and_columns_are_validated(self) -> None:
         encoded = encode_snapshot(snapshot("A"))
         image = read_wire(encoded)
-        kind = int(SectionKind.ENCODED_STRUCTURAL_V1)
+        kind = int(SectionKind.ENCODED_STRUCTURAL_V2)
         self.assertIn(kind, image.sections)
         self.assertEqual(native.roundtrip_wire(encoded), encoded)
 
@@ -301,19 +301,19 @@ class NativeWireParityTests(unittest.TestCase):
     def test_limits_cancellation_and_owned_mutable_buffer_publish_no_partial_result(self) -> None:
         source = snapshot(*(f"C{index}" for index in range(2_000)))
         encoded = encode_snapshot(source)
-        with self.assertRaises(WireError):
+        with self.assertRaises(ResourceLimitError):
             native.roundtrip_wire(
                 encoded,
                 limits=ParseLimits(max_wire_bytes=len(encoded) - 1),
             )
-        with self.assertRaises(WireError):
+        with self.assertRaises(ResourceLimitError):
             native.validate_wire(
                 encoded,
                 limits=ParseLimits(max_memory_bytes=len(encoded) + 76),
             )
-        with self.assertRaises(WireError):
+        with self.assertRaises(ResourceLimitError):
             native.validate_wire(encoded, limits=ParseLimits(max_strings=1))
-        with self.assertRaises(WireError):
+        with self.assertRaises(ResourceLimitError):
             native.validate_wire(encoded, limits=ParseLimits(max_axioms=1))
 
         mutable = bytearray(encoded)

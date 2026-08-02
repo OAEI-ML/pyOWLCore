@@ -16,18 +16,19 @@ const MAGIC: &[u8; 8] = b"PYOCORE\0";
 const HEADER_BYTES: usize = 96;
 const DIRECTORY_BYTES: usize = 72;
 const WIRE_MAJOR: u16 = 1;
-const MODEL_SCHEMA: u32 = 1;
+const MODEL_SCHEMA: u32 = 2;
 const CANONICAL_PROFILE: u32 = 1;
 const FEATURE_SWRL: u32 = 1;
 const SECTION_REQUIRED: u16 = 1;
 const SECTION_OPTIONAL: u16 = 2;
 const SWRL_KIND: u16 = 0x8001;
 const VIEW_PROVENANCE_KIND: u16 = 0x8002;
-const ENCODED_STRUCTURAL_KIND: u16 = 0x8003;
-const ENCODED_STRUCTURAL_MAGIC: &[u8; 8] = b"PYOCEV1\0";
-const ENCODED_STRUCTURAL_DESCRIPTOR_SHA256: [u8; 32] = [
-    0x9a, 0xd2, 0x9d, 0xb6, 0xa7, 0xe6, 0x16, 0xf6, 0x5c, 0xea, 0x29, 0x57, 0xbc, 0x5b, 0xa8, 0xd1,
-    0xf9, 0xb9, 0x9e, 0xf0, 0xeb, 0x1f, 0xe1, 0x43, 0x2c, 0x09, 0xbe, 0x25, 0x78, 0x62, 0x67, 0xb5,
+const ENCODED_STRUCTURAL_V1_KIND: u16 = 0x8003;
+const ENCODED_STRUCTURAL_V2_KIND: u16 = 0x8004;
+const ENCODED_STRUCTURAL_V2_MAGIC: &[u8; 8] = b"PYOCEV2\0";
+const ENCODED_STRUCTURAL_V2_DESCRIPTOR_SHA256: [u8; 32] = [
+    0xc5, 0x1d, 0x0e, 0xb7, 0xec, 0xf6, 0xf2, 0x9a, 0xd3, 0x49, 0x5f, 0xe7, 0xc4, 0x0a, 0x2e, 0xa6,
+    0x74, 0x1c, 0xf0, 0x3a, 0x7c, 0xf1, 0x94, 0xd5, 0x14, 0x17, 0xbb, 0x81, 0x0d, 0xf9, 0x0f, 0x51,
 ];
 const NONE_U64: u64 = u64::MAX;
 const HASH_CHUNK: usize = 64 * 1024;
@@ -268,7 +269,11 @@ fn validate_with_allocations(
         ));
     }
     if u64::from(section_count) > limits.max_wire_rows {
-        return Err(NativeError::limit("wire section count exceeds limits"));
+        return Err(limits.resource_limit(
+            LimitKey::MaxWireRows,
+            u64::from(section_count),
+            "wire section count exceeds max_wire_rows",
+        ));
     }
     let expected_directory = u64::from(section_count)
         .checked_mul(DIRECTORY_BYTES as u64)
@@ -340,18 +345,33 @@ fn validate_with_allocations(
                 "required PYOCORE section is marked optional",
             ));
         }
-        if (required_kind
+        let supported_schema = if required_kind
             || matches!(
                 kind,
-                SWRL_KIND | VIEW_PROVENANCE_KIND | ENCODED_STRUCTURAL_KIND
-            ))
-            && schema != 1
-        {
+                SWRL_KIND | VIEW_PROVENANCE_KIND | ENCODED_STRUCTURAL_V1_KIND
+            ) {
+            Some(1)
+        } else if kind == ENCODED_STRUCTURAL_V2_KIND {
+            Some(2)
+        } else {
+            None
+        };
+        if supported_schema.is_some_and(|supported| schema != supported) {
             return Err(NativeError::version("unsupported PYOCORE section schema"));
         }
-        if matches!(kind, VIEW_PROVENANCE_KIND | ENCODED_STRUCTURAL_KIND) && minor < 1 {
+        if matches!(kind, VIEW_PROVENANCE_KIND | ENCODED_STRUCTURAL_V1_KIND) && minor < 1 {
             return Err(NativeError::version(
                 "optional PYOCORE section requires minor 1",
+            ));
+        }
+        if kind == ENCODED_STRUCTURAL_V2_KIND && minor < 2 {
+            return Err(NativeError::version(
+                "ENCODED_STRUCTURAL_V2 requires PYOCORE minor 2",
+            ));
+        }
+        if kind == ENCODED_STRUCTURAL_V1_KIND {
+            return Err(NativeError::version(
+                "ENCODED_STRUCTURAL_V1 is incompatible with model schema 2",
             ));
         }
         if decoded_length != stored_length {
@@ -373,8 +393,17 @@ fn validate_with_allocations(
         if entry.end()? > total_length {
             return Err(NativeError::corrupt("PYOCORE section exceeds file bounds"));
         }
-        if row_count > limits.max_wire_rows || row_count > u64::from(u32::MAX) {
-            return Err(NativeError::limit("PYOCORE row count exceeds limits"));
+        if row_count > limits.max_wire_rows {
+            return Err(limits.resource_limit(
+                LimitKey::MaxWireRows,
+                row_count,
+                "PYOCORE row count exceeds max_wire_rows",
+            ));
+        }
+        if row_count > u64::from(u32::MAX) {
+            return Err(NativeError::corrupt(
+                "PYOCORE row count exceeds the wire ID space",
+            ));
         }
         total_rows = total_rows
             .checked_add(row_count)
@@ -414,10 +443,10 @@ fn validate_with_allocations(
     }
 
     let mut tables = Vec::new();
-    memory.reserve::<Table>(16)?;
+    memory.reserve::<Table>(17)?;
     allocations.checkpoint()?;
     tables
-        .try_reserve_exact(16)
+        .try_reserve_exact(17)
         .map_err(|_| NativeError::limit("wire table ledger allocation failed"))?;
     for entry in &entries {
         let section = data
@@ -430,7 +459,7 @@ fn validate_with_allocations(
         if (1..=14).contains(&entry.kind)
             || matches!(
                 entry.kind,
-                SWRL_KIND | VIEW_PROVENANCE_KIND | ENCODED_STRUCTURAL_KIND
+                SWRL_KIND | VIEW_PROVENANCE_KIND | ENCODED_STRUCTURAL_V2_KIND
             )
         {
             tables.push(validate_table(data, *entry, guard, &mut work)?);
@@ -555,15 +584,25 @@ fn validate_semantics(
     let annotations = required_table(tables, 7)?;
     let axioms = required_table(tables, 9)?;
     if strings.count > limits.max_strings {
-        return Err(NativeError::limit("STRINGS count exceeds max_strings"));
+        return Err(limits.resource_limit(
+            LimitKey::MaxStrings,
+            strings.count,
+            "STRINGS count exceeds max_strings",
+        ));
     }
     if annotations.count > limits.max_annotations {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxAnnotations,
+            annotations.count,
             "ANNOTATIONS count exceeds max_annotations",
         ));
     }
     if axioms.count > limits.max_axioms {
-        return Err(NativeError::limit("AXIOMS count exceeds max_axioms"));
+        return Err(limits.resource_limit(
+            LimitKey::MaxAxioms,
+            axioms.count,
+            "AXIOMS count exceeds max_axioms",
+        ));
     }
     for index in 0..strings.count {
         checkpoint(work, guard)?;
@@ -676,7 +715,11 @@ fn validate_sequences(
         }
         let count = reader.u64()?;
         if count > limits.max_sequence_arity {
-            return Err(NativeError::limit("SEQUENCES arity exceeds limits"));
+            return Err(limits.resource_limit(
+                LimitKey::MaxSequenceArity,
+                count,
+                "SEQUENCES arity exceeds max_sequence_arity",
+            ));
         }
         let bytes = count
             .checked_mul(32)
@@ -708,7 +751,11 @@ fn validate_documents(
 ) -> NativeResult<Documents> {
     let table = required_table(tables, 10)?;
     if table.count > limits.max_documents {
-        return Err(NativeError::limit("DOCUMENTS count exceeds limits"));
+        return Err(limits.resource_limit(
+            LimitKey::MaxDocuments,
+            table.count,
+            "DOCUMENTS count exceeds max_documents",
+        ));
     }
     let strings = required_table(tables, 1)?;
     let iris = required_table(tables, 2)?;
@@ -753,7 +800,9 @@ fn validate_documents(
         enum_u8(reader.u8()?, 1, 2)?;
         let byte_length = reader.u64()?;
         if byte_length > limits.max_source_bytes {
-            return Err(NativeError::limit(
+            return Err(limits.resource_limit(
+                LimitKey::MaxSourceBytes,
+                byte_length,
                 "DOCUMENTS source exceeds max_source_bytes",
             ));
         }
@@ -780,19 +829,31 @@ fn validate_documents(
                 "DOCUMENTS model schema is unsupported",
             ));
         }
-        read_refs(&mut reader, limits.max_wire_rows, iris.count)?;
-        read_refs(&mut reader, limits.max_annotations, annotations.count)?;
-        read_refs(&mut reader, limits.max_axioms, axioms.count)?;
-        read_refs(&mut reader, limits.max_wire_rows, extensions)?;
-        read_refs(&mut reader, limits.max_annotations, annotations.count)?;
-        read_refs(&mut reader, limits.max_axioms, axioms.count)?;
-        read_refs(&mut reader, limits.max_wire_rows, extensions)?;
+        read_refs(&mut reader, limits, LimitKey::MaxWireRows, iris.count)?;
+        read_refs(
+            &mut reader,
+            limits,
+            LimitKey::MaxAnnotations,
+            annotations.count,
+        )?;
+        read_refs(&mut reader, limits, LimitKey::MaxAxioms, axioms.count)?;
+        read_refs(&mut reader, limits, LimitKey::MaxWireRows, extensions)?;
+        read_refs(
+            &mut reader,
+            limits,
+            LimitKey::MaxAnnotations,
+            annotations.count,
+        )?;
+        read_refs(&mut reader, limits, LimitKey::MaxAxioms, axioms.count)?;
+        read_refs(&mut reader, limits, LimitKey::MaxWireRows, extensions)?;
         reader.finish()?;
         total_source_bytes = total_source_bytes
             .checked_add(byte_length)
             .ok_or_else(|| NativeError::limit("DOCUMENTS source byte count overflow"))?;
         if total_source_bytes > limits.max_total_source_bytes {
-            return Err(NativeError::limit(
+            return Err(limits.resource_limit(
+                LimitKey::MaxTotalSourceBytes,
+                total_source_bytes,
                 "DOCUMENTS sources exceed max_total_source_bytes",
             ));
         }
@@ -850,9 +911,16 @@ fn validate_imports(
     reader.boolean()?;
     reader.take(32)?;
     let count = reader.u64()?;
-    if count > limits.max_wire_rows || count > (reader.remaining() / 21) as u64 {
-        return Err(NativeError::limit(
-            "IMPORTS edge count exceeds limits/bounds",
+    if count > limits.max_wire_rows {
+        return Err(limits.resource_limit(
+            LimitKey::MaxWireRows,
+            count,
+            "IMPORTS edge count exceeds max_wire_rows",
+        ));
+    }
+    if count > (reader.remaining() / 21) as u64 {
+        return Err(NativeError::corrupt(
+            "IMPORTS edge count exceeds row bounds",
         ));
     }
     let mut previous: Option<(u32, u32, u8, u32)> = None;
@@ -924,7 +992,11 @@ fn validate_view(
     let context_tag = reader.u8()?;
     let context_count = u64::from(reader.u32()?);
     if context_count > limits.max_composite_members {
-        return Err(NativeError::limit("VIEW context count exceeds limits"));
+        return Err(limits.resource_limit(
+            LimitKey::MaxCompositeMembers,
+            context_count,
+            "VIEW context count exceeds max_composite_members",
+        ));
     }
     if !matches!((context_tag, context_count), (0, 0) | (1, 1) | (2, 2..)) {
         return Err(NativeError::corrupt("VIEW structural context is invalid"));
@@ -938,18 +1010,34 @@ fn validate_view(
         read_fingerprint(&mut reader)?,
     ];
     let document_count = reader.u64()?;
-    if document_count != documents.key_ids.len() as u64 || document_count > limits.max_documents {
+    if document_count > limits.max_documents {
+        return Err(limits.resource_limit(
+            LimitKey::MaxDocuments,
+            document_count,
+            "VIEW document count exceeds max_documents",
+        ));
+    }
+    if document_count != documents.key_ids.len() as u64 {
         return Err(NativeError::corrupt(
             "VIEW document count disagrees with DOCUMENTS",
         ));
     }
     let effective_axiom_count = reader.u64()?;
     if effective_axiom_count > limits.max_axioms {
-        return Err(NativeError::limit("VIEW axiom count exceeds limits"));
+        return Err(limits.resource_limit(
+            LimitKey::MaxAxioms,
+            effective_axiom_count,
+            "VIEW axiom count exceeds max_axioms",
+        ));
     }
-    read_refs(&mut reader, limits.max_annotations, annotations.count)?;
-    let axiom_postings = read_refs(&mut reader, limits.max_axioms, axioms.count)?;
-    read_refs(&mut reader, limits.max_wire_rows, extensions)?;
+    read_refs(
+        &mut reader,
+        limits,
+        LimitKey::MaxAnnotations,
+        annotations.count,
+    )?;
+    let axiom_postings = read_refs(&mut reader, limits, LimitKey::MaxAxioms, axioms.count)?;
+    read_refs(&mut reader, limits, LimitKey::MaxWireRows, extensions)?;
     reader.finish()?;
     if axiom_postings != effective_axiom_count {
         return Err(NativeError::corrupt(
@@ -980,7 +1068,9 @@ fn validate_view_provenance(
     reader.take(32)?;
     let count = reader.u64()?;
     if count > limits.value(LimitKey::MaxIndexRows) {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexRows,
+            count,
             "VIEW_PROVENANCE document count exceeds max_index_rows",
         ));
     }
@@ -1014,12 +1104,12 @@ fn validate_view_provenance(
 }
 
 fn validate_encoded_structural(data: &[u8], tables: &[Table], limits: &Limits) -> NativeResult<()> {
-    let Some(table) = find_table(tables, ENCODED_STRUCTURAL_KIND) else {
+    let Some(table) = find_table(tables, ENCODED_STRUCTURAL_V2_KIND) else {
         return Ok(());
     };
     if table.count != 1 {
         return Err(NativeError::corrupt(
-            "ENCODED_STRUCTURAL_V1 must contain exactly one row",
+            "ENCODED_STRUCTURAL_V2 must contain exactly one row",
         ));
     }
     let row = table.row(data, 0)?;
@@ -1029,14 +1119,14 @@ fn validate_encoded_structural(data: &[u8], tables: &[Table], limits: &Limits) -
     const PREFIX_BYTES: usize = HEADER_BYTES + BUFFER_COUNT * DIRECTORY_BYTES;
     const WIDTHS: [usize; BUFFER_COUNT] = [1, 4, 2, 8, 1, 8, 8, 1, 8, 8, 1];
     if row.len() < PREFIX_BYTES
-        || row.get(..8) != Some(ENCODED_STRUCTURAL_MAGIC)
-        || u16_at(row, 8)? != 1
-        || u16_at(row, 10)? != 1
+        || row.get(..8) != Some(ENCODED_STRUCTURAL_V2_MAGIC)
+        || u16_at(row, 8)? != 2
+        || u16_at(row, 10)? != 2
         || u32_at(row, 12)? != BUFFER_COUNT as u32
-        || row.get(16..48) != Some(&ENCODED_STRUCTURAL_DESCRIPTOR_SHA256)
+        || row.get(16..48) != Some(&ENCODED_STRUCTURAL_V2_DESCRIPTOR_SHA256)
     {
         return Err(NativeError::corrupt(
-            "ENCODED_STRUCTURAL_V1 descriptor metadata is invalid",
+            "ENCODED_STRUCTURAL_V2 descriptor metadata is invalid",
         ));
     }
     let mut buffers: [&[u8]; BUFFER_COUNT] = [&[]; BUFFER_COUNT];
@@ -1060,7 +1150,7 @@ fn validate_encoded_structural(data: &[u8], tables: &[Table], limits: &Limits) -
                 .is_none_or(|padding| padding.iter().any(|byte| *byte != 0))
         {
             return Err(NativeError::corrupt(
-                "ENCODED_STRUCTURAL_V1 buffer directory is invalid",
+                "ENCODED_STRUCTURAL_V2 buffer directory is invalid",
             ));
         }
         buffers[index] = row
@@ -1073,11 +1163,15 @@ fn validate_encoded_structural(data: &[u8], tables: &[Table], limits: &Limits) -
     }
     if cursor != row.len() {
         return Err(NativeError::corrupt(
-            "ENCODED_STRUCTURAL_V1 row has trailing bytes",
+            "ENCODED_STRUCTURAL_V2 row has trailing bytes",
         ));
     }
     if total_bytes > limits.value(LimitKey::MaxIndexBytes) {
-        return Err(NativeError::limit("encoded columns exceed max_index_bytes"));
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexBytes,
+            total_bytes,
+            "encoded columns exceed max_index_bytes",
+        ));
     }
     validate_encoded_column_shapes(buffers, limits)
 }
@@ -1099,8 +1193,19 @@ fn validate_encoded_column_shapes(buffers: [&[u8]; 11], limits: &Limits) -> Nati
         ));
     }
     let maximum_rows = root_count.max(node_count).max(field_count).max(item_count) as u64;
-    if node_count as u64 > limits.max_terms || maximum_rows > limits.value(LimitKey::MaxIndexRows) {
-        return Err(NativeError::limit("encoded structural rows exceed limits"));
+    if node_count as u64 > limits.max_terms {
+        return Err(limits.resource_limit(
+            LimitKey::MaxTerms,
+            node_count as u64,
+            "encoded structural nodes exceed max_terms",
+        ));
+    }
+    if maximum_rows > limits.value(LimitKey::MaxIndexRows) {
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexRows,
+            maximum_rows,
+            "encoded structural rows exceed max_index_rows",
+        ));
     }
     if u64_at(buffers[3], 0)? != 0 || u64_at(buffers[3], node_count * 8)? != field_count as u64 {
         return Err(NativeError::corrupt(
@@ -1218,7 +1323,9 @@ fn read_identity_iri(reader: &mut Reader<'_>, limits: &Limits) -> NativeResult<b
     }
     let value = read_identity_text(reader)?;
     if value.len() as u64 > limits.max_iri_bytes {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxIriBytes,
+            value.len() as u64,
             "VIEW_PROVENANCE IRI exceeds max_iri_bytes",
         ));
     }
@@ -1251,11 +1358,22 @@ fn validate_origins(
         total = total
             .checked_add(count)
             .ok_or_else(|| NativeError::limit("ORIGINS count overflow"))?;
-        if total > limits.max_origin_entries
-            || total > limits.max_source_map_entries
-            || count > (reader.remaining() / 60) as u64
-        {
-            return Err(NativeError::limit("ORIGINS entries exceed limits/bounds"));
+        if total > limits.max_origin_entries {
+            return Err(limits.resource_limit(
+                LimitKey::MaxOriginEntries,
+                total,
+                "ORIGINS entries exceed max_origin_entries",
+            ));
+        }
+        if total > limits.max_source_map_entries {
+            return Err(limits.resource_limit(
+                LimitKey::MaxSourceMapEntries,
+                total,
+                "ORIGINS entries exceed max_source_map_entries",
+            ));
+        }
+        if count > (reader.remaining() / 60) as u64 {
+            return Err(NativeError::corrupt("ORIGINS entries exceed row bounds"));
         }
         let mut previous: Option<(u32, u64, [u64; 6])> = None;
         for _ in 0..count {
@@ -1320,11 +1438,23 @@ fn validate_footer(data: &[u8], tables: &[Table], view: &View) -> NativeResult<(
     reader.finish()
 }
 
-fn read_refs(reader: &mut Reader<'_>, maximum: u64, target_rows: u64) -> NativeResult<u64> {
+fn read_refs(
+    reader: &mut Reader<'_>,
+    limits: &Limits,
+    key: LimitKey,
+    target_rows: u64,
+) -> NativeResult<u64> {
     let count = reader.u64()?;
-    if count > maximum || count > (reader.remaining() / 4) as u64 {
-        return Err(NativeError::limit(
-            "wire reference count exceeds limits/bounds",
+    if count > limits.value(key) {
+        return Err(limits.resource_limit(
+            key,
+            count,
+            "wire reference count exceeds its configured limit",
+        ));
+    }
+    if count > (reader.remaining() / 4) as u64 {
+        return Err(NativeError::corrupt(
+            "wire reference count exceeds row bounds",
         ));
     }
     let mut previous = 0_u32;

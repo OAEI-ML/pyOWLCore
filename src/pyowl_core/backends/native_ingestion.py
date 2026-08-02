@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from pyowl_core.exceptions import (
     BackendProtocolError,
     ResourceLimitError,
-    WireLimitError,
 )
 
 from . import native
@@ -74,10 +73,14 @@ def _remaining_closure_limits_v2(
         return limits
     remaining = context.deadline_at - time.monotonic()
     if remaining <= 0:
+        allowed = limits.deadline_seconds
+        if allowed is None:
+            raise AssertionError("closure deadline has no configured resource limit")
         raise ResourceLimitError(
             "resource limit deadline_seconds exceeded",
             limit="deadline_seconds",
-            allowed=limits.deadline_seconds,
+            observed=allowed - remaining,
+            allowed=allowed,
         )
     return replace(limits, deadline_seconds=remaining)
 
@@ -92,27 +95,28 @@ def _closure_publication_checkpoint_v2(
 
 
 def _closure_resource_limit_v2(
-    error: WireLimitError,
+    error: ResourceLimitError,
     context: _ParsedStructuralClosureContextV2,
     cancellation_token: CancellationToken | None,
 ) -> ResourceLimitError | None:
     """Normalize native closure budgets while preserving caller deadlines."""
 
-    if error.code == "NATIVE_DEADLINE":
+    if error.limit == "deadline_seconds":
         _closure_publication_checkpoint_v2(cancellation_token)
+        allowed = context.load_options.limits.deadline_seconds
+        if allowed is None or context.deadline_at is None:
+            return None
+        remaining = context.deadline_at - time.monotonic()
         return ResourceLimitError(
             "resource limit deadline_seconds exceeded",
             limit="deadline_seconds",
-            allowed=context.load_options.limits.deadline_seconds,
+            observed=allowed - min(remaining, 0.0),
+            allowed=allowed,
+            details=error.details,
             code=error.code,
         )
-    if error.code == "NATIVE_WIRE_LIMIT" and "max_terms" in str(error):
-        return ResourceLimitError(
-            "resource limit max_terms exceeded",
-            limit="max_terms",
-            allowed=context.load_options.limits.max_terms,
-            code=error.code,
-        )
+    if error.limit == "max_terms":
+        return error
     return None
 
 
@@ -154,7 +158,7 @@ def _snapshot_anonymous_scope_targets_v2(
     return tuple(
         (
             hashlib.sha256(
-                b"pyowl-core:snapshot-document-scope:v1\x00"
+                b"pyowl-core:snapshot-document-scope:v2\x00"
                 + record.document_fingerprint.digest
                 + encode_varint(scope_ordinal)
             ).digest()
@@ -191,7 +195,7 @@ def _manifest_anonymous_scope_candidates_v2(
     return tuple(
         (
             hashlib.sha256(
-                b"pyowl-core:snapshot-document-scope:v1\x00"
+                b"pyowl-core:snapshot-document-scope:v2\x00"
                 + record.document_fingerprint.digest
                 + encode_varint(scope_ordinal)
             ).digest()
@@ -669,7 +673,7 @@ def _fingerprint_preimages_v2(
     import_rows = tuple(row for row, _iri in scanned.imports)
     document = b"".join(
         (
-            b"pyowl-core:document-fingerprint:v1\x00",
+            b"pyowl-core:document-fingerprint:v2\x00",
             *optional_identifiers,
             _collection_preimage_v2(import_rows),
             *(_collection_preimage_v2(rows) for rows in scanned.rows),
@@ -677,7 +681,7 @@ def _fingerprint_preimages_v2(
     )
     structural = b"".join(
         (
-            b"pyowl-core:snapshot-structural:v1\x00",
+            b"pyowl-core:snapshot-structural:v2\x00",
             _frame_v2(manifest.canonical_bytes()),
             _frame_v2(document_key.encode("ascii")),
             *(_collection_preimage_v2(rows) for rows in scanned.rows),
@@ -685,7 +689,7 @@ def _fingerprint_preimages_v2(
     )
     logical = b"".join(
         (
-            b"pyowl-core:snapshot-logical:v1\x00",
+            b"pyowl-core:snapshot-logical:v2\x00",
             b"datatype-policy:owl2-v1\x00",
             encode_varint(len(scanned.logical_axioms)),
             *(_frame_v2(row) for row in scanned.logical_axioms),
@@ -695,7 +699,7 @@ def _fingerprint_preimages_v2(
     )
     signature = b"".join(
         (
-            b"pyowl-core:snapshot-signature:v1\x00",
+            b"pyowl-core:snapshot-signature:v2\x00",
             b"\x01",
             encode_varint(len(scanned.signature_entities)),
             *(_frame_v2(row) for row in scanned.signature_entities),
@@ -718,14 +722,14 @@ def _document_key_v2(
             else ("version", ontology_iri.value, version_iri.value)
         )
         payload = b"named" + b"".join(_frame_v2(item.encode("utf-8")) for item in identity)
-    digest = hashlib.sha256(b"pyowl-core:document-key:v1\x00" + payload).hexdigest()
-    return f"d1:{digest}"
+    digest = hashlib.sha256(b"pyowl-core:document-key:v2\x00" + payload).hexdigest()
+    return f"d2:{digest}"
 
 
 def _structural_digest_v2(row: bytes) -> bytes:
     from pyowl_core.model import encode_varint
 
-    return hashlib.sha256(b"pyowl-core:structural-value:v1\x00" + encode_varint(1) + row).digest()
+    return hashlib.sha256(b"pyowl-core:structural-value:v1\x00" + encode_varint(2) + row).digest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1378,11 +1382,13 @@ def publish_retained_rdfxml_snapshot_v2(
             "retained RDF/XML parser storage outlived its compatible extension",
             code="NATIVE_INGESTION_REGISTRATION",
         )
-    return _publish_retained_snapshot_v2(
+    snapshot = _publish_retained_snapshot_v2(
         summary,
         seed=decoded.structural,
         rdf_total_triples=decoded.total_triples,
-        allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+        # Native strict parsing retained the same bounded report in one pass.
+        # Permit that internal publication, then enforce the public mode below.
+        allow_partial_rdf_mapping=True,
         expected_format="rdfxml",
         extension=extension,
         parsed_native_storage=parsed_native_storage,
@@ -1396,6 +1402,10 @@ def publish_retained_rdfxml_snapshot_v2(
         cancellation_token=cancellation_token,
         load_started=load_started,
         root_parse_started=root_parse_started,
+    )
+    return _enforce_public_rdf_mapping_mode_v2(
+        snapshot,
+        allow_partial_rdf_mapping=allow_partial_rdf_mapping,
     )
 
 
@@ -1427,11 +1437,11 @@ def publish_retained_turtle_snapshot_v2(
             "retained Turtle parser storage outlived its compatible extension",
             code="NATIVE_INGESTION_REGISTRATION",
         )
-    return _publish_retained_snapshot_v2(
+    snapshot = _publish_retained_snapshot_v2(
         summary,
         seed=decoded.structural,
         rdf_total_triples=decoded.total_triples,
-        allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+        allow_partial_rdf_mapping=True,
         expected_format="turtle",
         extension=extension,
         parsed_native_storage=parsed_native_storage,
@@ -1445,6 +1455,34 @@ def publish_retained_turtle_snapshot_v2(
         cancellation_token=cancellation_token,
         load_started=load_started,
         root_parse_started=root_parse_started,
+    )
+    return _enforce_public_rdf_mapping_mode_v2(
+        snapshot,
+        allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+    )
+
+
+def _enforce_public_rdf_mapping_mode_v2(
+    snapshot: OntologySnapshot,
+    *,
+    allow_partial_rdf_mapping: bool,
+) -> OntologySnapshot:
+    """Return a diagnostic document owner or raise with its one-pass report."""
+
+    report = snapshot.root.rdf_mapping_report
+    if report is None:
+        raise BackendProtocolError(
+            "native RDF parser did not publish its mapping report",
+            code="NATIVE_RDF_REPORT",
+        )
+    if report.conformant or allow_partial_rdf_mapping:
+        return snapshot
+    from pyowl_core.exceptions import UnsupportedSyntaxError
+
+    raise UnsupportedSyntaxError(
+        "RDF graph is not completely mappable to OWL 2 structure",
+        code="RDF_MAPPING_INCOMPLETE",
+        rdf_mapping_report=report,
     )
 
 
@@ -1604,7 +1642,7 @@ def _publish_retained_snapshot_v2(
             code="NATIVE_PARSE_MODEL",
         ) from error
     ontology_id = OntologyID(ontology_iri, version_iri)
-    document_fingerprint = Fingerprint("sha256", 1, seed.document_fingerprint.digest)
+    document_fingerprint = Fingerprint("sha256", 2, seed.document_fingerprint.digest)
     document_key = _document_key_v2(
         ontology_iri,
         version_iri,
@@ -1715,7 +1753,7 @@ def _publish_retained_snapshot_v2(
             "native retained RDF report diverges from parser metadata",
             code="NATIVE_RDF_REPORT",
         )
-    fingerprints = tuple(Fingerprint("sha256", 1, item.digest) for item in prepared.fingerprints)
+    fingerprints = tuple(Fingerprint("sha256", 2, item.digest) for item in prepared.fingerprints)
     try:
         inventory_rows = tuple(
             _NativeCommonContractRecordInventoryV1(
@@ -1798,8 +1836,8 @@ def _publish_retained_snapshot_v2(
     )
     report = NativeLoadReportPublicationV1(
         backend="native",
-        api_version=(0, 1),
-        model_schema=1,
+        api_version=(0, 2),
+        model_schema=2,
         document_count=1,
         total_source_bytes=payload.byte_length,
         effective_axiom_count=seed.rows[1],
@@ -2685,7 +2723,7 @@ def _publish_parsed_structural_closure_snapshot_v2(
                     ),
                 ),
             )
-    except WireLimitError as error:
+    except ResourceLimitError as error:
         translated = _closure_resource_limit_v2(error, context, cancellation_token)
         if translated is None:
             raise
@@ -2713,10 +2751,10 @@ def _publish_parsed_structural_closure_snapshot_v2(
     )
     _closure_publication_checkpoint_v2(cancellation_token)
     document_fingerprints = tuple(
-        Fingerprint("sha256", 1, document.fingerprint.digest) for document in prepared.documents
+        Fingerprint("sha256", 2, document.fingerprint.digest) for document in prepared.documents
     )
     global_fingerprints = tuple(
-        Fingerprint("sha256", 1, evidence.digest) for evidence in prepared.fingerprints
+        Fingerprint("sha256", 2, evidence.digest) for evidence in prepared.fingerprints
     )
     document_counts = tuple(
         (
@@ -2807,8 +2845,8 @@ def _publish_parsed_structural_closure_snapshot_v2(
     timings["native_closure_publication_prepare_seconds"] = prepared.prepare_seconds
     report = NativeLoadReportPublicationV1(
         backend="native",
-        api_version=(0, 1),
-        model_schema=1,
+        api_version=(0, 2),
+        model_schema=2,
         document_count=len(frozen_documents),
         total_source_bytes=sum(document.provenance.byte_length for document in source_documents),
         effective_axiom_count=prepared.closure_counts[1],
@@ -2909,7 +2947,7 @@ def _publish_parsed_structural_closure_snapshot_v2(
                 )
 
             raw_owner = native._call(extension, checked_finalize)
-    except WireLimitError as error:
+    except ResourceLimitError as error:
         translated = _closure_resource_limit_v2(error, context, cancellation_token)
         if translated is None:
             raise

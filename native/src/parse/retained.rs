@@ -13,7 +13,7 @@ use crate::error::{NativeError, NativeResult};
 use crate::hash::Sha256;
 use crate::limits::{LimitKey, Limits};
 use crate::model::{
-    canonical_contains_tag, canonical_field_count, structural_digest_v1, ScanBudget,
+    canonical_contains_tag, canonical_field_count, structural_digest_v2, ScanBudget,
 };
 use crate::publication::{
     TypedFacadeCollectionV2, TypedFacadeScopeV2, TypedFacadeStorageV2, TypedRdfReportRowsV2,
@@ -28,11 +28,11 @@ pub(crate) const RETAINED_PREPARED_MAGIC_V2: &[u8; 8] = b"PYNFPP2\0";
 const RETAINED_SEED_SCHEMA_V2: u16 = 1;
 const RETAINED_PREPARED_SCHEMA_V2: u16 = 3;
 
-const DOCUMENT_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:document-fingerprint:v1\0";
-const STRUCTURAL_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:snapshot-structural:v1\0";
-const LOGICAL_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:snapshot-logical:v1\0";
+const DOCUMENT_FINGERPRINT_DOMAIN_V2: &[u8] = b"pyowl-core:document-fingerprint:v2\0";
+const STRUCTURAL_FINGERPRINT_DOMAIN_V2: &[u8] = b"pyowl-core:snapshot-structural:v2\0";
+const LOGICAL_FINGERPRINT_DOMAIN_V2: &[u8] = b"pyowl-core:snapshot-logical:v2\0";
 const LOGICAL_POLICY_V1: &[u8] = b"datatype-policy:owl2-v1\0";
-const SIGNATURE_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:snapshot-signature:v1\0";
+const SIGNATURE_FINGERPRINT_DOMAIN_V2: &[u8] = b"pyowl-core:snapshot-signature:v2\0";
 const RECORD_INVENTORY_DOMAIN_V1: &[u8] = b"pyowl-core:comparator-record-inventory:v1\0";
 
 const ROOT_TABLE_MANIFEST_DOMAIN_V2: &[u8] = b"pyowl-core:native-root-table-manifest:v2";
@@ -100,12 +100,17 @@ struct RetainedRdfMappingEvidenceV2 {
 }
 
 type StructuralRowsV2 = [Vec<Vec<u8>>; 3];
-type MaterializedStructuralRowsV2 = (StructuralRowsV2, Option<StructuralRowsV2>);
+type MaterializedStructuralRowsV2 = (
+    StructuralRowsV2,
+    Option<StructuralRowsV2>,
+    super::AnonymousCanonicalMetricsV2,
+);
 type RetainedSeedV2 = (
     Vec<u8>,
     RetainedParseMetadataV2,
     StructuralRowsV2,
     Option<StructuralRowsV2>,
+    super::AnonymousCanonicalMetricsV2,
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -376,11 +381,12 @@ impl RetainedParseMetadataV2 {
                         NativeError::limit("native closure origin workspace overflow")
                     })?,
             )?;
-            if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
-                return Err(NativeError::limit(
-                    "native retained closure origin row exceeds max_wire_bytes",
-                ));
-            }
+            enforce_usize_limit(
+                row.len(),
+                limits,
+                LimitKey::MaxWireBytes,
+                "native retained closure origin row exceeds max_wire_bytes",
+            )?;
             payload_bytes = payload_bytes
                 .checked_add(row.capacity())
                 .ok_or_else(|| NativeError::limit("native closure origin payload overflow"))?;
@@ -415,11 +421,12 @@ impl RetainedParseMetadataV2 {
                             NativeError::limit("native closure origin workspace overflow")
                         })?,
                 )?;
-                if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
-                    return Err(NativeError::limit(
-                        "native retained closure origin row exceeds max_wire_bytes",
-                    ));
-                }
+                enforce_usize_limit(
+                    row.len(),
+                    limits,
+                    LimitKey::MaxWireBytes,
+                    "native retained closure origin row exceeds max_wire_bytes",
+                )?;
                 payload_bytes = payload_bytes
                     .checked_add(row.capacity())
                     .ok_or_else(|| NativeError::limit("native closure origin payload overflow"))?;
@@ -506,7 +513,17 @@ impl RetainedParseMetadataV2 {
         };
         for triple in &mut mapping.unconsumed {
             if triple.object_requires_repr {
-                triple.object = render(&triple.object)?;
+                let mut rendered = render(&triple.object)?;
+                const MAX_RDF_EVIDENCE_BYTES: usize = 4_096;
+                if rendered.len() > MAX_RDF_EVIDENCE_BYTES {
+                    let mut end = MAX_RDF_EVIDENCE_BYTES - 3;
+                    while !rendered.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    rendered.truncate(end);
+                    rendered.push_str("...");
+                }
+                triple.object = rendered;
                 triple.object_requires_repr = false;
             }
         }
@@ -873,7 +890,11 @@ pub(crate) fn materialized_structural_rows(
         occurrence_root_rows(parsed.extensions),
     ];
     if !scope_anonymous {
-        return Ok((occurrence_rows.map(canonicalize_root_rows), None));
+        return Ok((
+            occurrence_rows.map(canonicalize_root_rows),
+            None,
+            super::AnonymousCanonicalMetricsV2::default(),
+        ));
     }
     parsed
         .imports
@@ -893,7 +914,7 @@ pub(crate) fn materialized_structural_rows(
         session,
         cancellation,
     )?;
-    Ok((scoped.raw, Some(scoped.effective)))
+    Ok((scoped.raw, Some(scoped.effective), scoped.anonymous_metrics))
 }
 
 pub(crate) fn build_seed(
@@ -935,7 +956,7 @@ pub(crate) fn build_seed(
         occurrence_root_rows(axioms),
         occurrence_root_rows(extensions),
     ];
-    let (rows, effective_rows, scoped_roots) = if scope_anonymous {
+    let (rows, effective_rows, scoped_roots, anonymous_metrics) = if scope_anonymous {
         let scoped = super::anonymous::scope_functional_anonymous_rows_v2(
             &ontology_iri,
             &version_iri,
@@ -953,9 +974,19 @@ pub(crate) fn build_seed(
             occurrence_count,
             &scoped.source_occurrence_digests,
         )?;
-        (scoped.raw, Some(scoped.effective), true)
+        (
+            scoped.raw,
+            Some(scoped.effective),
+            true,
+            scoped.anonymous_metrics,
+        )
     } else {
-        (occurrence_rows.map(canonicalize_root_rows), None, false)
+        (
+            occurrence_rows.map(canonicalize_root_rows),
+            None,
+            false,
+            super::AnonymousCanonicalMetricsV2::default(),
+        )
     };
     let ontology = ontology_iri
         .as_ref()
@@ -1031,6 +1062,7 @@ pub(crate) fn build_seed(
         },
         rows,
         effective_rows,
+        anonymous_metrics,
     ))
 }
 
@@ -1078,15 +1110,22 @@ pub(crate) fn prepare_publication(
                 )
                 .ok_or_else(|| NativeError::limit("native retained origin count overflow"))?;
             if effective_origin_count > limits.max_origin_entries {
-                return Err(NativeError::limit(
+                return Err(limits.resource_limit(
+                    LimitKey::MaxOriginEntries,
+                    effective_origin_count,
                     "native retained publication exceeds max_origin_entries",
                 ));
             }
         }
-        if preserve_source_map && source_map_row_count(metadata)? > limits.max_source_map_entries {
-            return Err(NativeError::limit(
-                "native retained publication exceeds max_source_map_entries",
-            ));
+        if preserve_source_map {
+            let source_map_rows = source_map_row_count(metadata)?;
+            if source_map_rows > limits.max_source_map_entries {
+                return Err(limits.resource_limit(
+                    LimitKey::MaxSourceMapEntries,
+                    source_map_rows,
+                    "native retained publication exceeds max_source_map_entries",
+                ));
+            }
         }
     } else if !metadata.occurrences.is_empty() {
         return Err(NativeError::protocol(
@@ -1116,7 +1155,7 @@ pub(crate) fn prepare_publication(
     raw_document.text64(document_key)?;
     effective_document.text64(document_key)?;
     let mut structural = MeasuredSha256::new();
-    structural.update(STRUCTURAL_FINGERPRINT_DOMAIN_V1)?;
+    structural.update(STRUCTURAL_FINGERPRINT_DOMAIN_V2)?;
     structural.frame_varint(manifest)?;
     structural.frame_varint(document_key.as_bytes())?;
     let mut logical_axioms = Vec::new();
@@ -1320,7 +1359,9 @@ pub(crate) fn prepare_publication(
         .checked_add(encoded_row_workspace)
         .ok_or_else(|| NativeError::limit("native retained fingerprint workspace overflow"))?;
     if temporary_workspace > limits.value(LimitKey::MaxTemporaryBytes) {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxTemporaryBytes,
+            temporary_workspace,
             "native retained fingerprint workspace exceeds max_temporary_bytes",
         ));
     }
@@ -1328,11 +1369,14 @@ pub(crate) fn prepare_publication(
     let peak_live_bytes = retained_owner_bytes
         .checked_add(temporary_workspace)
         .ok_or_else(|| NativeError::limit("native retained publication memory overflow"))?;
-    if limits
+    if let Some(maximum) = limits
         .max_memory_bytes
-        .is_some_and(|maximum| peak_live_bytes > maximum)
+        .filter(|maximum| peak_live_bytes > *maximum)
     {
-        return Err(NativeError::limit(
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            peak_live_bytes,
+            maximum,
             "native retained publication exceeds max_memory_bytes",
         ));
     }
@@ -1345,7 +1389,7 @@ pub(crate) fn prepare_publication(
     cancellation.checkpoint()?;
 
     let mut logical = MeasuredSha256::new();
-    logical.update(LOGICAL_FINGERPRINT_DOMAIN_V1)?;
+    logical.update(LOGICAL_FINGERPRINT_DOMAIN_V2)?;
     logical.update(LOGICAL_POLICY_V1)?;
     logical
         .varint(u64::try_from(logical_axioms.len()).map_err(|_| {
@@ -1374,7 +1418,7 @@ pub(crate) fn prepare_publication(
         false,
     )?;
     let mut signature = MeasuredSha256::new();
-    signature.update(SIGNATURE_FINGERPRINT_DOMAIN_V1)?;
+    signature.update(SIGNATURE_FINGERPRINT_DOMAIN_V2)?;
     signature.update(&[1])?;
     signature.varint(signature_count)?;
     let mut signature_inventory = MeasuredSha256::new();
@@ -1565,7 +1609,7 @@ fn document_fingerprint_slices(
     rows: [&[Vec<u8>]; 3],
 ) -> NativeResult<FingerprintEvidenceV2> {
     let mut hasher = MeasuredSha256::new();
-    hasher.update(DOCUMENT_FINGERPRINT_DOMAIN_V1)?;
+    hasher.update(DOCUMENT_FINGERPRINT_DOMAIN_V2)?;
     for value in [ontology_iri.as_ref(), version_iri.as_ref()] {
         match value {
             Some(node) => {
@@ -1648,8 +1692,8 @@ fn retained_occurrences(
         .enumerate()
     {
         result.push(RetainedOccurrenceV2 {
-            digest: structural_digest_v1(value.node.as_bytes()),
-            effective_digest: structural_digest_v1(value.node.as_bytes()),
+            digest: structural_digest_v2(value.node.as_bytes()),
+            effective_digest: structural_digest_v2(value.node.as_bytes()),
             span: Some(value.span),
             source_order: u64::try_from(source_order)
                 .map_err(|_| NativeError::limit("native occurrence ordinal exceeds u64"))?,
@@ -1709,7 +1753,9 @@ fn attach_language_details(
     let mut source_rows = u64::try_from(occurrences.len())
         .map_err(|_| NativeError::limit("native source-map count exceeds u64"))?;
     if source_rows > limits.max_source_map_entries {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxSourceMapEntries,
+            source_rows,
             "native retained publication exceeds max_source_map_entries",
         ));
     }
@@ -1734,7 +1780,9 @@ fn attach_language_details(
                 .checked_add(1)
                 .ok_or_else(|| NativeError::limit("native source-map count overflow"))?;
             if source_rows > limits.max_source_map_entries {
-                return Err(NativeError::limit(
+                return Err(limits.resource_limit(
+                    LimitKey::MaxSourceMapEntries,
+                    source_rows,
                     "native retained publication exceeds max_source_map_entries",
                 ));
             }
@@ -1768,11 +1816,12 @@ fn canonical_lexical_nodes<'a>(
     terms: &mut u64,
     collect_blank_labels: bool,
 ) -> NativeResult<CanonicalLexicalNodes<'a>> {
-    if u64::try_from(row.len()).map_or(true, |size| size > limits.max_canonical_work) {
-        return Err(NativeError::limit(
-            "native source-map scan exceeds max_canonical_work",
-        ));
-    }
+    enforce_usize_limit(
+        row.len(),
+        limits,
+        LimitKey::MaxCanonicalWork,
+        "native source-map scan exceeds max_canonical_work",
+    )?;
     let mut language_literals = Vec::new();
     let mut blank_labels = Vec::new();
     let end = scan_lexical_node(
@@ -1815,8 +1864,19 @@ fn scan_lexical_node<'a>(
     *terms = terms
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("native source-map term count overflow"))?;
-    if depth > limits.max_nesting_depth.min(1024) || *terms > limits.max_terms {
-        return Err(NativeError::limit(
+    let maximum_depth = limits.max_nesting_depth.min(1024);
+    if depth > maximum_depth {
+        return Err(NativeError::resource_limit(
+            "max_nesting_depth",
+            u64::from(depth),
+            u64::from(maximum_depth),
+            "native source-map canonical scan exceeds model limits",
+        ));
+    }
+    if *terms > limits.max_terms {
+        return Err(limits.resource_limit(
+            LimitKey::MaxTerms,
+            *terms,
             "native source-map canonical scan exceeds model limits",
         ));
     }
@@ -1893,7 +1953,9 @@ fn scan_lexical_node<'a>(
             6 => {
                 let (count, after_count) = read_varint(data, offset)?;
                 if count > limits.max_sequence_arity {
-                    return Err(NativeError::limit(
+                    return Err(limits.resource_limit(
+                        LimitKey::MaxSequenceArity,
+                        count,
                         "canonical source-map set exceeds max_sequence_arity",
                     ));
                 }
@@ -1924,7 +1986,9 @@ fn scan_lexical_node<'a>(
             7 => {
                 let (count, after_count) = read_varint(data, offset)?;
                 if count > limits.max_sequence_arity {
-                    return Err(NativeError::limit(
+                    return Err(limits.resource_limit(
+                        LimitKey::MaxSequenceArity,
+                        count,
                         "canonical source-map sequence exceeds max_sequence_arity",
                     ));
                 }
@@ -1976,7 +2040,7 @@ fn scan_lexical_node<'a>(
         language_literals
             .try_reserve(1)
             .map_err(|_| NativeError::limit("native language literal allocation failed"))?;
-        language_literals.push((structural_digest_v1(&data[start..offset]), language));
+        language_literals.push((structural_digest_v2(&data[start..offset]), language));
     }
     if collect_blank_labels && tag == 3 {
         let scope = anonymous_scope.ok_or_else(|| {
@@ -2081,7 +2145,7 @@ fn rdfxml_retained_occurrences(
         }
     }
     for (source_order, row) in rows.iter().enumerate() {
-        let provisional = structural_digest_v1(&row.row);
+        let provisional = structural_digest_v2(&row.row);
         let (digest, effective_digest) = scoped_digests
             .map(|values| values[source_order])
             .unwrap_or((provisional, provisional));
@@ -2269,22 +2333,24 @@ fn encode_origin_rows(
             value.effective_digest
         };
         let row = encode_origin_row(digest, selected_document_key, occurrence, value.span)?;
-        if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
-            return Err(NativeError::limit(
-                "native retained origin row exceeds max_wire_bytes",
-            ));
-        }
+        enforce_usize_limit(
+            row.len(),
+            limits,
+            LimitKey::MaxWireBytes,
+            "native retained origin row exceeds max_wire_bytes",
+        )?;
         keyed.push((digest, occurrence, row));
     }
     if !raw_owner_role {
         for (digest, occurrence) in &metadata.effective_origin_fallbacks {
             cancellation.checkpoint()?;
             let row = encode_origin_row(*digest, document_key, *occurrence, None)?;
-            if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
-                return Err(NativeError::limit(
-                    "native retained origin row exceeds max_wire_bytes",
-                ));
-            }
+            enforce_usize_limit(
+                row.len(),
+                limits,
+                LimitKey::MaxWireBytes,
+                "native retained origin row exceeds max_wire_bytes",
+            )?;
             keyed.push((*digest, *occurrence, row));
         }
     }
@@ -2360,11 +2426,12 @@ fn encode_source_map_rows(
         }
         root_lexical.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
         let row = encode_source_map_row(value.digest, occurrence, value.span, &root_lexical)?;
-        if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
-            return Err(NativeError::limit(
-                "native retained source-map row exceeds max_wire_bytes",
-            ));
-        }
+        enforce_usize_limit(
+            row.len(),
+            limits,
+            LimitKey::MaxWireBytes,
+            "native retained source-map row exceeds max_wire_bytes",
+        )?;
         keyed.push((value.digest, producer_order, row));
         producer_order = producer_order
             .checked_add(1)
@@ -2372,11 +2439,12 @@ fn encode_source_map_rows(
         for detail in &value.language_details {
             let lexical = [("language-tag".to_owned(), detail.spelling.as_str())];
             let row = encode_source_map_row(detail.digest, occurrence, value.span, &lexical)?;
-            if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
-                return Err(NativeError::limit(
-                    "native retained source-map row exceeds max_wire_bytes",
-                ));
-            }
+            enforce_usize_limit(
+                row.len(),
+                limits,
+                LimitKey::MaxWireBytes,
+                "native retained source-map row exceeds max_wire_bytes",
+            )?;
             keyed.push((detail.digest, producer_order, row));
             producer_order = producer_order
                 .checked_add(1)
@@ -2407,11 +2475,12 @@ fn encode_source_map_rows(
         }
         previous = Some(prefix.as_bytes());
         let row = encode_source_prefix_row(prefix, iri)?;
-        if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
-            return Err(NativeError::limit(
-                "native retained source-prefix row exceeds max_wire_bytes",
-            ));
-        }
+        enforce_usize_limit(
+            row.len(),
+            limits,
+            LimitKey::MaxWireBytes,
+            "native retained source-prefix row exceeds max_wire_bytes",
+        )?;
         prefixes.push(row);
     }
     Ok(TypedSourceMapRowsV2 { entries, prefixes })
@@ -2553,11 +2622,12 @@ fn encode_source_map_rows_bounded(
                 .and_then(|total| total.checked_add(row.capacity()))
                 .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
         )?;
-        if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
-            return Err(NativeError::limit(
-                "native retained source-map row exceeds max_wire_bytes",
-            ));
-        }
+        enforce_usize_limit(
+            row.len(),
+            limits,
+            LimitKey::MaxWireBytes,
+            "native retained source-map row exceeds max_wire_bytes",
+        )?;
         payload_bytes = payload_bytes
             .checked_add(row.capacity())
             .ok_or_else(|| NativeError::limit("native source-map payload overflow"))?;
@@ -2592,11 +2662,12 @@ fn encode_source_map_rows_bounded(
                     .and_then(|total| total.checked_add(row.capacity()))
                     .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
             )?;
-            if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
-                return Err(NativeError::limit(
-                    "native retained source-map row exceeds max_wire_bytes",
-                ));
-            }
+            enforce_usize_limit(
+                row.len(),
+                limits,
+                LimitKey::MaxWireBytes,
+                "native retained source-map row exceeds max_wire_bytes",
+            )?;
             payload_bytes = payload_bytes
                 .checked_add(row.capacity())
                 .ok_or_else(|| NativeError::limit("native source-map payload overflow"))?;
@@ -2688,11 +2759,12 @@ fn encode_source_map_rows_bounded(
                 .and_then(|total| total.checked_add(row.capacity()))
                 .ok_or_else(|| NativeError::limit("native source-map workspace overflow"))?,
         )?;
-        if u64::try_from(row.len()).map_or(true, |size| size > limits.max_wire_bytes) {
-            return Err(NativeError::limit(
-                "native retained source-prefix row exceeds max_wire_bytes",
-            ));
-        }
+        enforce_usize_limit(
+            row.len(),
+            limits,
+            LimitKey::MaxWireBytes,
+            "native retained source-prefix row exceeds max_wire_bytes",
+        )?;
         payload_bytes = payload_bytes
             .checked_add(row.capacity())
             .ok_or_else(|| NativeError::limit("native source-map payload overflow"))?;
@@ -2885,7 +2957,7 @@ fn root_manifest_digest(
     document_digest: [u8; 32],
 ) -> NativeResult<[u8; 32]> {
     let mut hasher = MeasuredSha256::domain(domain)?;
-    hasher.u32_le(1)?;
+    hasher.u32_le(2)?;
     hasher.u64_le(1)?;
     hasher.text64(document_key)?;
     for count in counts {
@@ -2903,7 +2975,7 @@ fn fingerprint_inputs_digest(
     signature: FingerprintEvidenceV2,
 ) -> NativeResult<[u8; 32]> {
     let mut hasher = MeasuredSha256::domain(FINGERPRINT_INPUTS_MANIFEST_DOMAIN_V2)?;
-    hasher.u32_le(1)?;
+    hasher.u32_le(2)?;
     hasher.text64(document_key)?;
     hasher.u64_le(1)?;
     for (tag, key, evidence) in [
@@ -2917,7 +2989,7 @@ fn fingerprint_inputs_digest(
             hasher.text64(value)?;
         }
         hasher.u64_le(evidence.preimage_bytes)?;
-        hasher.u32_le(1)?;
+        hasher.u32_le(2)?;
         hasher.update(&evidence.digest)?;
     }
     Ok(hasher.finish().digest)
@@ -3013,12 +3085,16 @@ fn prepare_rdf_report(
         .ok_or_else(|| NativeError::protocol("native RDF consumed count exceeds total"))?;
     let evidence_count = u64::try_from(mapping.unconsumed.len())
         .map_err(|_| NativeError::limit("native RDF evidence count exceeds u64"))?;
-    if (remaining == 0) != mapping.unconsumed.is_empty()
-        || evidence_count > remaining
-        || evidence_count > limits.value(crate::limits::LimitKey::MaxDiagnostics)
-    {
+    if (remaining == 0) != mapping.unconsumed.is_empty() || evidence_count > remaining {
         return Err(NativeError::protocol(
             "native RDF report evidence diverges from mapping counts",
+        ));
+    }
+    if evidence_count > limits.value(LimitKey::MaxDiagnostics) {
+        return Err(limits.resource_limit(
+            LimitKey::MaxDiagnostics,
+            evidence_count,
+            "native RDF report evidence exceeds max_diagnostics",
         ));
     }
     let conformant = remaining == 0;
@@ -3099,12 +3175,16 @@ fn prepare_rdf_report_bounded(
         .ok_or_else(|| NativeError::protocol("native RDF consumed count exceeds total"))?;
     let evidence_count = u64::try_from(mapping.unconsumed.len())
         .map_err(|_| NativeError::limit("native RDF evidence count exceeds u64"))?;
-    if (remaining == 0) != mapping.unconsumed.is_empty()
-        || evidence_count > remaining
-        || evidence_count > limits.value(crate::limits::LimitKey::MaxDiagnostics)
-    {
+    if (remaining == 0) != mapping.unconsumed.is_empty() || evidence_count > remaining {
         return Err(NativeError::protocol(
             "native RDF report evidence diverges from mapping counts",
+        ));
+    }
+    if evidence_count > limits.value(LimitKey::MaxDiagnostics) {
+        return Err(limits.resource_limit(
+            LimitKey::MaxDiagnostics,
+            evidence_count,
+            "native RDF report evidence exceeds max_diagnostics",
         ));
     }
     let conformant = remaining == 0;
@@ -3285,6 +3365,13 @@ fn rdf_triple_evidence_size(
             "native RDF evidence contains empty text",
         ));
     }
+    if !matches!(triple.object_kind, "iri" | "blank" | "literal")
+        || (triple.object_requires_repr && triple.object_kind != "literal")
+    {
+        return Err(NativeError::protocol(
+            "native RDF evidence contains an invalid object kind",
+        ));
+    }
     let size = [&triple.subject, &triple.predicate, &triple.object]
         .into_iter()
         .try_fold(0_usize, |total, value| {
@@ -3322,12 +3409,12 @@ fn rdf_rule_id_size(value: &str, limits: &Limits) -> NativeResult<usize> {
 }
 
 fn ensure_rdf_auxiliary_row_size(size: usize, limits: &Limits) -> NativeResult<()> {
-    if u64::try_from(size).map_or(true, |size| size > limits.max_wire_bytes) {
-        return Err(NativeError::limit(
-            "native RDF report row exceeds max_wire_bytes",
-        ));
-    }
-    Ok(())
+    enforce_usize_limit(
+        size,
+        limits,
+        LimitKey::MaxWireBytes,
+        "native RDF report row exceeds max_wire_bytes",
+    )
 }
 
 fn effective_origin_manifest_digest(
@@ -3644,6 +3731,20 @@ fn checked_add(left: u64, right: u64, message: &'static str) -> NativeResult<u64
         .ok_or_else(|| NativeError::limit(message))
 }
 
+fn enforce_usize_limit(
+    value: usize,
+    limits: &Limits,
+    key: LimitKey,
+    message: &'static str,
+) -> NativeResult<()> {
+    let observed = u64::try_from(value)
+        .map_err(|_| NativeError::limit("native configured-limit observation exceeds u64"))?;
+    if observed > limits.value(key) {
+        return Err(limits.resource_limit(key, observed, message));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3764,7 +3865,7 @@ mod tests {
         .expect("canonical values");
         let expected_digests = values
             .iter()
-            .map(|value| structural_digest_v1(value.as_bytes()))
+            .map(|value| structural_digest_v2(value.as_bytes()))
             .collect::<Vec<_>>();
         let root = Node::build(24, vec![Field::Set(values)]).expect("data enumeration");
         let span = Span {
@@ -3788,8 +3889,8 @@ mod tests {
             language_spellings: Vec::new(),
         };
         let mut occurrences = vec![RetainedOccurrenceV2 {
-            digest: structural_digest_v1(root.as_bytes()),
-            effective_digest: structural_digest_v1(root.as_bytes()),
+            digest: structural_digest_v2(root.as_bytes()),
+            effective_digest: structural_digest_v2(root.as_bytes()),
             span: Some(span),
             source_order: 0,
             language_details: Vec::new(),

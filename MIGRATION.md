@@ -1,5 +1,38 @@
 # Migration to pyowl-core
 
+## Updating from 0.1.x to 0.2.0
+
+`0.2.0` is a coordinated model and capability transition, not a drop-in patch.
+The active contract is package `0.2.0`, API `(0,2)`, model schema `2`, wire
+`(1,2)`, adapter protocol `1`, and encoded structural schema `2`.
+
+Before widening a consumer dependency to `pyowl-core>=0.2,<0.3`:
+
+1. Regenerate every persisted snapshot, fingerprint, model cache, encoded-view
+   cache, and consumer-compiled cache from its original ontology inputs. Do not
+   rename or reinterpret model-schema-1 or encoded-schema-1 data.
+2. Negotiate `pyowl-core/structural-columns` schema `2` and validate the exact
+   v2 descriptor digest before using bulk buffers. A consumer that does not
+   support v2 must use scalar traversal or fail explicitly; it must not request
+   schema 1 from a model-schema-2 runtime.
+3. Expect anonymous-individual scopes, keys, and dependent fingerprints to
+   change. The v2 component scheme preserves repeated isomorphic components as
+   distinct occurrences while remaining invariant to labels and input order.
+4. Update API-version checks to `(0,2)` and wire-version checks to `(1,2)`.
+   Adapter protocol `1` is unchanged. Wire major `1` remains the compatibility
+   family, but an image carrying model schema 1 is not a model-schema-2 cache.
+5. Re-run the consumer's semantic and zero-reparse fixtures before publishing
+   the widened dependency range. The checked-in `0.1.x` matrix is historical
+   evidence and does not establish compatibility with `0.2.0`.
+
+Strict RDF mapping remains the default. Consumers that need to inspect loss may
+set `allow_partial_rdf_mapping=True` only for one explicitly selected RDF/XML
+or Turtle document passed to `parse_document`. The resulting nonconformant
+document is diagnostic evidence only and cannot enter a snapshot, cache, wire,
+or reasoner route. Strict mapping and malformed reification failures now carry
+bounded structured evidence; branch on stable codes and fields, never message
+text.
+
 ## Updating from 0.1.0 to 0.1.1
 
 No public API, model, wire, adapter, or encoded-view migration is required.
@@ -79,8 +112,10 @@ None of these migrations moves reasoner or projector IR into core.
 
 ## Compatibility and removal policy
 
-The current tested workspace line requires `pyowl-core>=0.1,<0.2`, API `(0,1)`,
-model schema `1`, wire major `1`, and adapter protocol `1`. Compatibility
+The active `0.2.0` contract uses API `(0,2)`, model schema `2`, wire `(1,2)`,
+adapter protocol `1`, and encoded structural schema `2`. The recorded workspace
+matrix remains a historical `pyowl-core>=0.1,<0.2`, API `(0,1)`, model-schema-1
+run until every consumer is rerun and records a widened range. Compatibility
 adapters live in consumers, convert once, warn with a removal version, and must
 report loss rather than silently dropping constructs. Java/OWLAPI conversion
 is not shipped in the Java-free runtime.

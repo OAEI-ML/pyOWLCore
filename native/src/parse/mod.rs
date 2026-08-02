@@ -8,7 +8,8 @@ mod retained;
 
 #[cfg(not(fuzzing))]
 pub(crate) use anonymous::{
-    rescope_anonymous_rows_v2, scope_rdfxml_anonymous_rows_v2, ScopedAnonymousRowsV2,
+    rescope_anonymous_rows_v2, scope_rdfxml_anonymous_rows_v2, AnonymousCanonicalMetricsV2,
+    ScopedAnonymousRowsV2,
 };
 #[cfg(not(fuzzing))]
 pub(crate) use retained::{
@@ -72,6 +73,7 @@ pub(crate) struct RetainedParseOutcome {
     pub(crate) storage: TypedFacadeStorageV2,
     pub(crate) metadata: Option<RetainedParseMetadataV2>,
     pub(crate) phases: RetainedParsePhases,
+    pub(crate) anonymous_metrics: AnonymousCanonicalMetricsV2,
 }
 
 #[cfg(not(fuzzing))]
@@ -87,10 +89,12 @@ impl ParsedDocument {
     pub(crate) fn encode(&self, session: &mut Session<'_>) -> NativeResult<Vec<u8>> {
         self.validate(session)?;
         let output_size = self.encoded_size()?;
-        if u64::try_from(output_size).map_or(true, |value| {
-            value > session.limits().value(LimitKey::MaxTemporaryBytes)
-        }) {
-            return Err(NativeError::limit(
+        let observed = u64::try_from(output_size)
+            .map_err(|_| NativeError::limit("native parser result size exceeds u64"))?;
+        if observed > session.limits().value(LimitKey::MaxTemporaryBytes) {
+            return Err(session.limits().resource_limit(
+                LimitKey::MaxTemporaryBytes,
+                observed,
                 "native parser result exceeds max_temporary_bytes",
             ));
         }
@@ -240,19 +244,19 @@ pub(crate) fn parse_retained(
         || (require_empty_imports && !parsed.imports.is_empty())
         || materialize_document;
     let encode_started = Instant::now();
-    let (encoded, metadata, rows, effective_rows) = if requires_full_result {
+    let (encoded, metadata, rows, effective_rows, anonymous_metrics) = if requires_full_result {
         let encoded = parsed.encode(session)?;
-        let (rows, effective_rows) = retained::materialized_structural_rows(
+        let (rows, effective_rows, anonymous_metrics) = retained::materialized_structural_rows(
             parsed,
             contains_anonymous,
             &cancellation,
             session,
         )?;
         session.finish()?;
-        (encoded, None, rows, effective_rows)
+        (encoded, None, rows, effective_rows, anonymous_metrics)
     } else {
         parsed.validate(session)?;
-        let (encoded, metadata, rows, effective_rows) = retained::build_seed(
+        let (encoded, metadata, rows, effective_rows, anonymous_metrics) = retained::build_seed(
             parsed,
             collect_provenance,
             preserve_source_map,
@@ -262,7 +266,13 @@ pub(crate) fn parse_retained(
             contains_anonymous,
         )?;
         session.finish()?;
-        (encoded, Some(metadata), rows, effective_rows)
+        (
+            encoded,
+            Some(metadata),
+            rows,
+            effective_rows,
+            anonymous_metrics,
+        )
     };
     let result_encode_ns = elapsed_ns(encode_started)?;
     let metadata_bytes = metadata
@@ -305,6 +315,7 @@ pub(crate) fn parse_retained(
             arena_construction_ns,
             freeze_ns,
         },
+        anonymous_metrics,
     })
 }
 

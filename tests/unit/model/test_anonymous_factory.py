@@ -30,7 +30,7 @@ class AnonymousAndFactoryTests(unittest.TestCase):
         )
         self.assertEqual(
             first.canonical_graph.hex(),
-            "70796f776c2d636f72653a626c616e6b2d67726170683a7631000202100004656467650101077061796c6f6164100104656467650100077061796c6f6164",
+            "70796f776c2d636f72653a626c616e6b2d67726170683a7632000202100004656467650101077061796c6f6164100104656467650100077061796c6f6164",
         )
 
     def test_cross_document_scopes_standardize_anonymous_values_apart(self) -> None:

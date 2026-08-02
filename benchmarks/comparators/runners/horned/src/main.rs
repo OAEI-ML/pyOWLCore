@@ -39,9 +39,10 @@ const ENGINE_ARTIFACT: &str = "crates.io horned-owl-1.4.0.crate";
 const ENGINE_SHA256: &str = "877f6118b6f5823bb135d04e36fe2c2d3a2b4493feca8ac09b5fa6e91b9fff9e";
 const ALLOCATOR: &str = "Rust system allocator";
 const THREAD_CEILING: u64 = 1;
-const RAW_RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v5";
-const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v6";
-const RUNNER_FEATURES: &[&str] = &["default", "independent-common-contract-v1"];
+const RAW_RUNNER_REVISION: &str = "pyowl-core-horned-raw-runner-v6";
+const COMMON_RUNNER_REVISION: &str = "pyowl-core-horned-common-runner-v7";
+const RAW_RUNNER_FEATURES: &[&str] = &["default", "raw-inventory-v1"];
+const COMMON_RUNNER_FEATURES: &[&str] = &["default", "independent-common-contract-v2"];
 
 const ADAPTER_REQUEST_SCHEMA: &str = "pyowl-core/comparator-adapter-request/v2";
 const ADAPTER_RESULT_SCHEMA: &str = "pyowl-core/comparator-adapter-result/v1";
@@ -227,7 +228,10 @@ impl Lane {
     }
 
     fn features(self) -> &'static [&'static str] {
-        RUNNER_FEATURES
+        match self {
+            Self::Raw => RAW_RUNNER_FEATURES,
+            Self::Common => COMMON_RUNNER_FEATURES,
+        }
     }
 
     fn runner_revision(self) -> &'static str {

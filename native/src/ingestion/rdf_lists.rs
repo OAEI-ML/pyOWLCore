@@ -242,12 +242,16 @@ impl<'graph, 'data> RdfListDecoder<'graph, 'data> {
 fn enforce_length(value: usize, session: &Session<'_>) -> NativeResult<()> {
     let value = usize_as_u64(value, "native RDF list length exceeds u64")?;
     if value > session.limits().value(LimitKey::MaxRdfListLength) {
-        return Err(NativeError::limit(
+        return Err(session.limits().resource_limit(
+            LimitKey::MaxRdfListLength,
+            value,
             "native RDF list exceeds max_rdf_list_length",
         ));
     }
     if value > session.limits().value(LimitKey::MaxSequenceArity) {
-        return Err(NativeError::limit(
+        return Err(session.limits().resource_limit(
+            LimitKey::MaxSequenceArity,
+            value,
             "native RDF list exceeds max_sequence_arity",
         ));
     }

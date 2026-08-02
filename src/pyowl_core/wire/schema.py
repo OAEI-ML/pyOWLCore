@@ -11,8 +11,8 @@ from enum import IntEnum
 
 MAGIC = b"PYOCORE\x00"
 WIRE_MAJOR = 1
-WIRE_MINOR = 1
-MODEL_SCHEMA = 1
+WIRE_MINOR = 2
+MODEL_SCHEMA = 2
 CANONICAL_PROFILE = 1
 HEADER_SIZE = 96
 DIRECTORY_ENTRY_SIZE = 72
@@ -51,6 +51,7 @@ class SectionKind(IntEnum):
     SWRL = 0x8001
     VIEW_PROVENANCE = 0x8002
     ENCODED_STRUCTURAL_V1 = 0x8003
+    ENCODED_STRUCTURAL_V2 = 0x8004
 
 
 REQUIRED_SECTIONS = tuple(SectionKind(value) for value in range(1, 15))
@@ -59,10 +60,19 @@ KNOWN_OPTIONAL_SECTIONS = frozenset(
         SectionKind.SWRL,
         SectionKind.VIEW_PROVENANCE,
         SectionKind.ENCODED_STRUCTURAL_V1,
+        SectionKind.ENCODED_STRUCTURAL_V2,
     )
 )
 
-SECTION_SCHEMAS = {kind: 1 for kind in (*REQUIRED_SECTIONS, *KNOWN_OPTIONAL_SECTIONS)}
+SECTION_SCHEMAS = {kind: 1 for kind in REQUIRED_SECTIONS}
+SECTION_SCHEMAS.update(
+    {
+        SectionKind.SWRL: 1,
+        SectionKind.VIEW_PROVENANCE: 1,
+        SectionKind.ENCODED_STRUCTURAL_V1: 1,
+        SectionKind.ENCODED_STRUCTURAL_V2: 2,
+    }
+)
 
 
 __all__ = [

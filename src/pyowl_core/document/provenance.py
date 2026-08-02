@@ -38,8 +38,8 @@ class DocumentProvenance:
     expected_sha256: bytes | None = None
     parser: str = "pyowl_core.backends.python"
     backend: str = "python"
-    api_version: tuple[int, int] = (0, 1)
-    model_schema: int = 1
+    api_version: tuple[int, int] = (0, 2)
+    model_schema: int = 2
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_sha256, bytes) or len(self.source_sha256) != 32:
@@ -166,6 +166,15 @@ class RDFTripleEvidence:
     subject: str
     predicate: str
     object: str
+    object_kind: str = "literal"
+
+    def __post_init__(self) -> None:
+        for name in ("subject", "predicate", "object"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a nonempty string")
+        if self.object_kind not in {"iri", "blank", "literal"}:
+            raise ValueError("object_kind must be 'iri', 'blank', or 'literal'")
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +186,12 @@ class RDFMappingReport:
     rule_ids: tuple[str, ...] = ()
     diagnostics: tuple[Diagnostic, ...] = ()
 
+    @property
+    def dropped_triples(self) -> int:
+        """Return the exact number of graph statements omitted by mapping."""
+
+        return self.total_triples - self.consumed_triples
+
     def __post_init__(self) -> None:
         for name in ("consumed_triples", "total_triples"):
             value = getattr(self, name)
@@ -184,6 +199,8 @@ class RDFMappingReport:
                 raise ValueError(f"{name} must be a nonnegative integer")
         if self.consumed_triples > self.total_triples:
             raise ValueError("consumed_triples cannot exceed total_triples")
+        if self.conformant != (self.consumed_triples == self.total_triples):
+            raise ValueError("conformant must agree with the mapping counts")
         unconsumed = tuple(self.unconsumed)
         rules = tuple(self.rule_ids)
         diagnostics = tuple(self.diagnostics)

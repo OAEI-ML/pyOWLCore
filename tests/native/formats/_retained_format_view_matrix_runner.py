@@ -42,8 +42,8 @@ def main() -> None:
     )
     from pyowl_core.backends import native
     from pyowl_core.backends.native_views import (
-        ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
-        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
     )
     from pyowl_core.index import index_cache_report
     from pyowl_core.model import canonical_bytes
@@ -79,9 +79,9 @@ def main() -> None:
         raise AssertionError("installed native ingestion capability partition is incomplete")
     if not set(expected_ingestion_features).issubset(probe.features):
         raise AssertionError("installed native feature ledger omits an ingestion capability")
-    expected_view_features = (ENCODED_STRUCTURAL_SCHEMA_NAME_V1,)
+    expected_view_features = (ENCODED_STRUCTURAL_SCHEMA_NAME_V2,)
     expected_view_schemas = {
-        ENCODED_STRUCTURAL_SCHEMA_NAME_V1: ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V2: ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
     }
     if expected_view_features != extension.VIEW_FEATURES:
         raise AssertionError("installed native view capability partition is incomplete")

@@ -16,12 +16,12 @@ use crate::index::{
 };
 use crate::limits::{LimitKey, Limits};
 #[cfg(feature = "test-hooks")]
-use crate::model::prepare_encoded_structural_columns_from_tables_with_allocation_probe_v1;
+use crate::model::prepare_encoded_structural_columns_from_tables_with_allocation_probe_v2;
 use crate::model::{
-    prepare_encoded_structural_columns_from_tables_v1, scan_canonical, structural_digest_v1,
-    Category, ComponentCounters, ComponentId, EncodedRootKindV1, EncodedRootTableV1,
-    EncodedStructuralColumnsV1, NativeComponentArena, NativeComponentDigestIndex,
-    PreparedEncodedStructuralColumnsV1, ScanBudget,
+    prepare_encoded_structural_columns_from_tables_v2, scan_canonical, structural_digest_v2,
+    Category, ComponentCounters, ComponentId, EncodedRootKindV2, EncodedRootTableV2,
+    EncodedStructuralColumnsV2, NativeComponentArena, NativeComponentDigestIndex,
+    PreparedEncodedStructuralColumnsV2, ScanBudget,
 };
 
 const MAX_TYPED_FACADE_TABLES_V2: usize = 100_000;
@@ -333,7 +333,9 @@ impl TypedFacadeStorageV2 {
     ) -> NativeResult<Self> {
         cancellation.checkpoint()?;
         if document_count > limits.max_documents {
-            return Err(NativeError::limit(
+            return Err(limits.resource_limit(
+                LimitKey::MaxDocuments,
+                document_count,
                 "typed V2 publication exceeds max_documents",
             ));
         }
@@ -355,7 +357,9 @@ impl TypedFacadeStorageV2 {
 
         let retained_root_rows = root_count(&effective_tables, &raw_document_tables)?;
         if retained_root_rows > limits.value(LimitKey::MaxIndexRows) {
-            return Err(NativeError::limit(
+            return Err(limits.resource_limit(
+                LimitKey::MaxIndexRows,
+                retained_root_rows,
                 "typed V2 root tables exceed max_index_rows",
             ));
         }
@@ -471,11 +475,14 @@ impl TypedFacadeStorageV2 {
             .and_then(|value| value.checked_add(peak_ordering_workspace_bytes))
             .ok_or_else(|| NativeError::limit("typed V2 ordering memory peak overflow"))?;
         let temporary_peak = publication_peak.max(ordering_peak);
-        if limits
+        if let Some(maximum) = limits
             .max_memory_bytes
-            .is_some_and(|maximum| temporary_peak > maximum)
+            .filter(|maximum| temporary_peak > *maximum)
         {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                temporary_peak,
+                maximum,
                 "typed V2 freeze exceeds max_memory_bytes",
             ));
         }
@@ -756,7 +763,7 @@ impl TypedFacadeStorageV2 {
             return Ok(false);
         };
         let mut encode_requests = 0_u64;
-        for identifier in index.matching_ids(structural_digest_v1(canonical)) {
+        for identifier in index.matching_ids(structural_digest_v2(canonical)) {
             let encoded = self.arena.encode(
                 identifier,
                 &self.limits,
@@ -834,7 +841,7 @@ impl TypedFacadeStorageV2 {
         limits: &Limits,
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
-    ) -> NativeResult<EncodedStructuralColumnsV1> {
+    ) -> NativeResult<EncodedStructuralColumnsV2> {
         self.prepare_encoded_structural_columns(
             scope,
             document_ordinal,
@@ -857,10 +864,10 @@ impl TypedFacadeStorageV2 {
         limits: &Limits,
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
-    ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'_>> {
+    ) -> NativeResult<PreparedEncodedStructuralColumnsV2<'_>> {
         let tables =
             self.encoded_structural_root_tables(scope, document_ordinal, raw_document_owner)?;
-        prepare_encoded_structural_columns_from_tables_v1(
+        prepare_encoded_structural_columns_from_tables_v2(
             &self.arena,
             &tables,
             limits,
@@ -881,10 +888,10 @@ impl TypedFacadeStorageV2 {
         cancellation: Cancellation,
         interrupt: Option<InterruptSlot>,
         fail_after: Option<u64>,
-    ) -> NativeResult<PreparedEncodedStructuralColumnsV1<'_>> {
+    ) -> NativeResult<PreparedEncodedStructuralColumnsV2<'_>> {
         let tables =
             self.encoded_structural_root_tables(scope, document_ordinal, raw_document_owner)?;
-        prepare_encoded_structural_columns_from_tables_with_allocation_probe_v1(
+        prepare_encoded_structural_columns_from_tables_with_allocation_probe_v2(
             &self.arena,
             &tables,
             limits,
@@ -900,7 +907,7 @@ impl TypedFacadeStorageV2 {
         scope: TypedFacadeScopeV2,
         document_ordinal: Option<u64>,
         raw_document_owner: bool,
-    ) -> NativeResult<[EncodedRootTableV1<'_>; 3]> {
+    ) -> NativeResult<[EncodedRootTableV2<'_>; 3]> {
         let annotations = self.structural_roots(
             TypedFacadeCollectionV2::OntologyAnnotations,
             scope,
@@ -920,9 +927,9 @@ impl TypedFacadeStorageV2 {
             raw_document_owner,
         )?;
         let tables = [
-            EncodedRootTableV1::new(EncodedRootKindV1::OntologyAnnotation, annotations),
-            EncodedRootTableV1::new(EncodedRootKindV1::Axiom, axioms),
-            EncodedRootTableV1::new(EncodedRootKindV1::Extension, extensions),
+            EncodedRootTableV2::new(EncodedRootKindV2::OntologyAnnotation, annotations),
+            EncodedRootTableV2::new(EncodedRootKindV2::Axiom, axioms),
+            EncodedRootTableV2::new(EncodedRootKindV2::Extension, extensions),
         ];
         Ok(tables)
     }
@@ -1302,12 +1309,17 @@ impl TypedFacadeStorageV2 {
             .retained_bytes
             .checked_add(external)
             .ok_or_else(|| NativeError::limit("typed V2 page memory accounting overflow"))?;
-        if self
+        if let Some(maximum) = self
             .limits
             .max_memory_bytes
-            .is_some_and(|maximum| live > maximum)
+            .filter(|maximum| live > *maximum)
         {
-            return Err(NativeError::limit("typed V2 page exceeds max_memory_bytes"));
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                live,
+                maximum,
+                "typed V2 page exceeds max_memory_bytes",
+            ));
         }
         Ok(())
     }
@@ -1401,16 +1413,32 @@ fn preflight_parser_fork_memory_v2(
 }
 
 fn validate_page_bounds(max_rows: u32, max_bytes: u64, limits: &Limits) -> NativeResult<()> {
-    if !(1..=MAX_FACADE_PAGE_ROWS_V2).contains(&max_rows)
-        || u64::from(max_rows) > limits.max_wire_rows
-    {
-        return Err(NativeError::limit(
-            "typed V2 page max_rows is zero or exceeds its bound",
+    if max_rows == 0 {
+        return Err(NativeError::protocol(
+            "typed V2 page max_rows must be nonzero",
         ));
     }
-    if !(1..=MAX_FACADE_PAGE_BYTES_V2).contains(&max_bytes) || max_bytes > limits.max_wire_bytes {
-        return Err(NativeError::limit(
-            "typed V2 page max_bytes is zero or exceeds its bound",
+    let allowed_rows = limits.max_wire_rows.min(u64::from(MAX_FACADE_PAGE_ROWS_V2));
+    if u64::from(max_rows) > allowed_rows {
+        return Err(NativeError::resource_limit(
+            "max_wire_rows",
+            u64::from(max_rows),
+            allowed_rows,
+            "typed V2 page max_rows exceeds its bound",
+        ));
+    }
+    if max_bytes == 0 {
+        return Err(NativeError::protocol(
+            "typed V2 page max_bytes must be nonzero",
+        ));
+    }
+    let allowed_bytes = limits.max_wire_bytes.min(MAX_FACADE_PAGE_BYTES_V2);
+    if max_bytes > allowed_bytes {
+        return Err(NativeError::resource_limit(
+            "max_wire_bytes",
+            max_bytes,
+            allowed_bytes,
+            "typed V2 page max_bytes exceeds its bound",
         ));
     }
     Ok(())
@@ -1597,7 +1625,9 @@ fn attach_axiom_indexes(
         )?;
         *retained_index_bytes = checked_add(*retained_index_bytes, index.retained_bytes())?;
         if *retained_index_bytes > limits.value(LimitKey::MaxIndexBytes) {
-            return Err(NativeError::limit(
+            return Err(limits.resource_limit(
+                LimitKey::MaxIndexBytes,
+                *retained_index_bytes,
                 "typed V2 axiom indexes exceed max_index_bytes",
             ));
         }
@@ -1619,7 +1649,9 @@ fn component_roots_equal(
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("typed V2 axiom index sharing work overflow"))?;
     if *work > limits.max_canonical_work {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxCanonicalWork,
+            *work,
             "typed V2 axiom index sharing exceeds max_canonical_work",
         ));
     }
@@ -1632,7 +1664,9 @@ fn component_roots_equal(
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("typed V2 axiom index sharing work overflow"))?;
         if *work > limits.max_canonical_work {
-            return Err(NativeError::limit(
+            return Err(limits.resource_limit(
+                LimitKey::MaxCanonicalWork,
+                *work,
                 "typed V2 axiom index sharing exceeds max_canonical_work",
             ));
         }
@@ -1658,11 +1692,11 @@ fn check_temporary_limit(
         .checked_add(external_bytes)
         .and_then(|value| value.checked_add(workspace_bytes))
         .ok_or_else(|| NativeError::limit("typed V2 temporary memory overflow"))?;
-    if limits
-        .max_memory_bytes
-        .is_some_and(|maximum| live > maximum)
-    {
-        return Err(NativeError::limit(
+    if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| live > *maximum) {
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            live,
+            maximum,
             "typed V2 temporary workspace exceeds max_memory_bytes",
         ));
     }
@@ -1741,11 +1775,14 @@ fn check_retained_limit(
         .checked_add(external)
         .and_then(|value| value.checked_add(index))
         .ok_or_else(|| NativeError::limit("typed V2 retained owner size overflow"))?;
-    if limits
+    if let Some(maximum) = limits
         .max_memory_bytes
-        .is_some_and(|maximum| retained > maximum)
+        .filter(|maximum| retained > *maximum)
     {
-        return Err(NativeError::limit(
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            retained,
+            maximum,
             "typed V2 owner exceeds max_memory_bytes",
         ));
     }
@@ -2391,7 +2428,7 @@ mod tests {
                 )
                 .expect_err("zero rows")
                 .code,
-            "NATIVE_WIRE_LIMIT"
+            "NATIVE_PROTOCOL"
         );
         assert_eq!(
             storage

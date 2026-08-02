@@ -19,6 +19,7 @@ from pathlib import Path
 
 _NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _NAMESPACE = re.compile(r"^[a-z][a-z0-9_]*$")
+_DOMAIN_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 _STATUSES = {"active", "retired"}
 _MAX_TAG = 2**32 - 1
 
@@ -49,9 +50,10 @@ class TagLedger:
     namespace: str
     tags: tuple[Tag, ...]
     schema: int = 1
+    canonical_domains: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
-        if self.schema != 1:
+        if isinstance(self.schema, bool) or not isinstance(self.schema, int) or self.schema < 1:
             raise SchemaError(f"unsupported tag-ledger schema: {self.schema!r}")
         if not _NAMESPACE.fullmatch(self.namespace):
             raise SchemaError(f"invalid namespace: {self.namespace!r}")
@@ -64,11 +66,23 @@ class TagLedger:
                 raise SchemaError(f"duplicate tag value: {tag.value}")
             names.add(tag.name)
             values.add(tag.value)
+        domain_names: set[str] = set()
+        for name, value in self.canonical_domains:
+            if not _DOMAIN_NAME.fullmatch(name):
+                raise SchemaError(f"invalid canonical domain name: {name!r}")
+            if name in domain_names:
+                raise SchemaError(f"duplicate canonical domain name: {name}")
+            if not isinstance(value, str) or not value:
+                raise SchemaError(f"canonical domain {name} must be a nonempty string")
+            domain_names.add(name)
+        if self.canonical_domains and self.schema < 2:
+            raise SchemaError("canonical domains require tag-ledger schema 2")
 
     @classmethod
     def parse(cls, text: str) -> TagLedger:
         root: dict[str, object] = {}
         raw_tags: list[dict[str, object]] = []
+        raw_domains: dict[str, object] = {}
         current: dict[str, object] | None = None
         for number, original in enumerate(text.splitlines(), 1):
             line = _strip_comment(original).strip()
@@ -78,6 +92,11 @@ class TagLedger:
                 current = {}
                 raw_tags.append(current)
                 continue
+            if line == "[canonical_domains]":
+                current = raw_domains
+                continue
+            if line.startswith("["):
+                raise SchemaError(f"line {number}: unsupported table {line!r}")
             if "=" not in line:
                 raise SchemaError(f"line {number}: expected key = value")
             key, raw_value = (part.strip() for part in line.split("=", 1))
@@ -115,6 +134,10 @@ class TagLedger:
             schema=_expect_int(root["schema"], "schema"),
             namespace=_expect_type(root["namespace"], str, "namespace"),
             tags=tuple(tags),
+            canonical_domains=tuple(
+                (name, _expect_type(value, str, f"canonical domain {name}"))
+                for name, value in raw_domains.items()
+            ),
         )
 
     @classmethod
@@ -133,6 +156,9 @@ class TagLedger:
                     f"status = {tag.status!r}",
                 ]
             )
+        if self.canonical_domains:
+            lines.extend(["", "[canonical_domains]"])
+            lines.extend(f"{name} = {value!r}" for name, value in self.canonical_domains)
         return "\n".join(lines) + "\n"
 
     def render_python(self) -> str:

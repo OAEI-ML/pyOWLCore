@@ -11,19 +11,21 @@ use crate::cancel::Cancellation;
 #[cfg(test)]
 use crate::canonical::iri;
 use crate::canonical::{Node, LEXICAL_KEY, PROVISIONAL_SCOPE};
-use crate::error::{NativeError, NativeResult};
+use crate::error::{NativeError, NativeLimitDetails, NativeResult};
 use crate::hash::{sha256, Sha256};
-use crate::limits::Limits;
+use crate::limits::{LimitKey, Limits};
 use crate::model::{canonical_field_count, scan_canonical, ScanBudget};
 use crate::session::Session;
 
 use super::retained::{functional_document_fingerprint, rdfxml_document_fingerprint};
 
-const DOCUMENT_SCOPE_DOMAIN: &[u8] = b"pyowl-core:document-scope:v1\0";
-const SNAPSHOT_SCOPE_DOMAIN: &[u8] = b"pyowl-core:snapshot-document-scope:v1\0";
-const ANONYMOUS_KEY_DOMAIN: &[u8] = b"pyowl-core:anonymous-key:v1\0";
-const BLANK_GRAPH_DOMAIN: &[u8] = b"pyowl-core:blank-graph:v1\0";
-const BLANK_COLOR_DOMAIN: &[u8] = b"pyowl-core:blank-color:v1\0";
+const DOCUMENT_SCOPE_DOMAIN: &[u8] = b"pyowl-core:document-scope:v2\0";
+const SNAPSHOT_SCOPE_DOMAIN: &[u8] = b"pyowl-core:snapshot-document-scope:v2\0";
+const ANONYMOUS_KEY_DOMAIN: &[u8] = b"pyowl-core:anonymous-key:v2\0";
+const BLANK_GRAPH_DOMAIN: &[u8] = b"pyowl-core:blank-graph:v2\0";
+const BLANK_COLOR_DOMAIN: &[u8] = b"pyowl-core:blank-color:v2\0";
+const COMPONENT_CLASS_DOMAIN: &[u8] = b"pyowl-core:blank-component-class:v2\0";
+const COMPONENT_MANIFEST_DOMAIN: &[u8] = b"pyowl-core:blank-component-manifest:v2\0";
 
 #[derive(Debug)]
 pub(crate) struct ScopedAnonymousRowsV2 {
@@ -37,6 +39,33 @@ pub(crate) struct ScopedAnonymousRowsV2 {
     /// source maps and provenance retain this order even when canonical root
     /// sets sort or deduplicate the corresponding values.
     pub(crate) source_occurrence_digests: Vec<([u8; 32], [u8; 32])>,
+    /// Bounded schema-2 component/work/allocation-accounting counters retained for incident
+    /// benchmarks and structured limit diagnostics. No source labels or
+    /// ontology-sized payloads enter this summary.
+    pub(crate) anonymous_metrics: AnonymousCanonicalMetricsV2,
+}
+
+/// Bounded component/work telemetry plus the exact monotonic `Session` byte
+/// charge added while the anonymous scoping phase runs. The byte charge is not
+/// allocator-live memory or a peak; those remain RSS/external-allocator evidence.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AnonymousCanonicalMetricsV2 {
+    pub(crate) component_count: u64,
+    pub(crate) total_labels: u64,
+    pub(crate) total_arcs: u64,
+    pub(crate) largest_component_labels: u64,
+    pub(crate) largest_component_arcs: u64,
+    pub(crate) largest_component_roots: u64,
+    pub(crate) maximum_root_interval_span: u64,
+    pub(crate) maximum_open_root_intervals: u64,
+    pub(crate) total_setup_work: u64,
+    pub(crate) total_refinement_work: u64,
+    pub(crate) total_candidate_order_work: u64,
+    pub(crate) total_canonical_work: u64,
+    pub(crate) largest_component_work: u64,
+    pub(crate) maximum_refinement_rounds: u64,
+    pub(crate) total_permutations_examined: u64,
+    pub(crate) accounted_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -70,12 +99,19 @@ enum CanonicalField<'a> {
     Sequence(Vec<CanonicalNode<'a>>),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct BlankArc {
     source: usize,
     role: String,
     target: Option<usize>,
     payload: usize,
+}
+
+#[derive(Debug)]
+struct BlankComponent {
+    global_labels: Vec<usize>,
+    arcs: Vec<BlankArc>,
+    alpha: AlphaResult,
 }
 
 /// Freeze provisional RDF/XML blank labels into exact raw document identities
@@ -157,6 +193,7 @@ fn scope_anonymous_rows_v2<F>(
 where
     F: FnOnce([&[Vec<u8>]; 3]) -> NativeResult<super::retained::FingerprintEvidenceV2>,
 {
+    let accounted_before = session.accounted_bytes();
     let limits = *session.limits();
     let mut parsed = [Vec::new(), Vec::new(), Vec::new()];
     for (target, source) in parsed.iter_mut().zip(rows) {
@@ -184,7 +221,20 @@ where
         ));
     }
     let (arcs, payloads) = blank_arcs(&parsed, &labels, &limits, cancellation, session)?;
-    let alpha = alpha_order(
+    let total_terms = checked_add_u64(
+        labels.len(),
+        arcs.len(),
+        "native blank document term count overflow",
+    )?;
+    if total_terms > limits.max_terms {
+        return Err(NativeError::resource_limit(
+            "max_terms",
+            total_terms,
+            limits.max_terms,
+            "native anonymous canonicalization exceeds max_terms",
+        ));
+    }
+    let components = canonical_components(
         labels.len(),
         &arcs,
         &payloads,
@@ -192,17 +242,11 @@ where
         cancellation,
         session,
     )?;
-
-    let document_scope =
-        framed_digest(DOCUMENT_SCOPE_DOMAIN, &ontology_key, &alpha.graph, session)?;
-    let graph_digest = sha256(&alpha.graph);
-    let raw_identities = identities_for_order(
-        labels.len(),
-        &alpha.order,
-        document_scope,
-        graph_digest,
-        session,
-    )?;
+    let mut anonymous_metrics = anonymous_metrics(&components, labels.len(), arcs.len(), session)?;
+    let manifest = component_manifest(&components, session)?;
+    let document_scope = framed_digest(DOCUMENT_SCOPE_DOMAIN, &ontology_key, &manifest, session)?;
+    let raw_identities =
+        identities_for_components(labels.len(), &components, document_scope, session)?;
 
     let mut raw = encode_collections(
         &parsed,
@@ -213,6 +257,7 @@ where
                     .binary_search(&value)
                     .ok()
                     .and_then(|index| raw_identities.get(index))
+                    .and_then(Option::as_ref)
                     .cloned()
             }))
         },
@@ -248,6 +293,7 @@ where
                     .binary_search(&label)
                     .ok()
                     .and_then(|index| raw_identities.get(index))
+                    .and_then(Option::as_ref)
                     .map(|value| Identity {
                         scope: &value.scope,
                         key: &value.key,
@@ -293,18 +339,427 @@ where
             ));
         }
     }
+    anonymous_metrics.accounted_bytes = session
+        .accounted_bytes()
+        .checked_sub(accounted_before)
+        .ok_or_else(|| NativeError::protocol("native anonymous memory accounting regressed"))?;
     Ok(ScopedAnonymousRowsV2 {
         raw,
         effective,
         effective_occurrence_digests,
         source_occurrence_digests,
+        anonymous_metrics,
     })
+}
+
+fn canonical_components(
+    label_count: usize,
+    arcs: &[BlankArc],
+    payloads: &[Vec<u8>],
+    limits: &Limits,
+    cancellation: &Cancellation,
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<BlankComponent>> {
+    let label_index_slots = label_count
+        .checked_mul(5)
+        .ok_or_else(|| NativeError::limit("native blank component index count overflow"))?;
+    reserve_items::<usize>(session, label_index_slots)?;
+    let mut parents = Vec::new();
+    parents
+        .try_reserve_exact(label_count)
+        .map_err(|_| NativeError::limit("native blank component allocation failed"))?;
+    parents.extend(0..label_count);
+    let mut sizes = Vec::new();
+    sizes
+        .try_reserve_exact(label_count)
+        .map_err(|_| NativeError::limit("native blank component allocation failed"))?;
+    sizes.resize(label_count, 1_usize);
+    for arc in arcs {
+        cancellation.checkpoint()?;
+        if let Some(target) = arc.target {
+            union_component_labels(&mut parents, &mut sizes, arc.source, target)?;
+        }
+    }
+
+    let mut root_components = Vec::new();
+    root_components
+        .try_reserve_exact(label_count)
+        .map_err(|_| NativeError::limit("native blank component allocation failed"))?;
+    root_components.resize(label_count, usize::MAX);
+    let mut label_components = Vec::new();
+    label_components
+        .try_reserve_exact(label_count)
+        .map_err(|_| NativeError::limit("native blank component allocation failed"))?;
+    label_components.resize(label_count, usize::MAX);
+    let mut local_indexes = Vec::new();
+    local_indexes
+        .try_reserve_exact(label_count)
+        .map_err(|_| NativeError::limit("native blank component allocation failed"))?;
+    local_indexes.resize(label_count, usize::MAX);
+    reserve_items::<Vec<usize>>(session, label_count)?;
+    let mut component_labels: Vec<Vec<usize>> = Vec::new();
+    component_labels
+        .try_reserve_exact(label_count)
+        .map_err(|_| NativeError::limit("native blank component allocation failed"))?;
+    for label in 0..label_count {
+        let root = find_component_root(&mut parents, label);
+        let component = if root_components[root] == usize::MAX {
+            let index = component_labels.len();
+            root_components[root] = index;
+            component_labels.push(Vec::new());
+            index
+        } else {
+            root_components[root]
+        };
+        let selected = component_labels
+            .get_mut(component)
+            .ok_or_else(|| NativeError::protocol("native blank component index is invalid"))?;
+        reserve_items::<usize>(session, 1)?;
+        selected
+            .try_reserve(1)
+            .map_err(|_| NativeError::limit("native blank component allocation failed"))?;
+        local_indexes[label] = selected.len();
+        label_components[label] = component;
+        selected.push(label);
+    }
+
+    reserve_items::<Vec<BlankArc>>(session, component_labels.len())?;
+    let mut component_arcs: Vec<Vec<BlankArc>> = Vec::new();
+    component_arcs
+        .try_reserve_exact(component_labels.len())
+        .map_err(|_| NativeError::limit("native blank component allocation failed"))?;
+    component_arcs.resize_with(component_labels.len(), Vec::new);
+    for arc in arcs {
+        cancellation.checkpoint()?;
+        let component = *label_components
+            .get(arc.source)
+            .ok_or_else(|| NativeError::protocol("native blank arc source is invalid"))?;
+        let target =
+            match arc.target {
+                None => None,
+                Some(target) => {
+                    if label_components.get(target).copied() != Some(component) {
+                        return Err(NativeError::protocol(
+                            "native blank arc crosses canonical components",
+                        ));
+                    }
+                    Some(*local_indexes.get(target).ok_or_else(|| {
+                        NativeError::protocol("native blank arc target is invalid")
+                    })?)
+                }
+            };
+        let role = owned_text(&arc.role, session)?;
+        let localized = BlankArc {
+            source: *local_indexes
+                .get(arc.source)
+                .ok_or_else(|| NativeError::protocol("native blank arc source is invalid"))?,
+            role,
+            target,
+            payload: arc.payload,
+        };
+        let selected = component_arcs
+            .get_mut(component)
+            .ok_or_else(|| NativeError::protocol("native blank component is invalid"))?;
+        reserve_items::<BlankArc>(session, 1)?;
+        selected
+            .try_reserve(1)
+            .map_err(|_| NativeError::limit("native blank component arc allocation failed"))?;
+        selected.push(localized);
+    }
+
+    let limit_details = NativeLimitDetails {
+        component_count: Some(usize_u64(
+            component_labels.len(),
+            "native blank component count exceeds u64",
+        )?),
+        largest_component_labels: Some(
+            component_labels
+                .iter()
+                .map(Vec::len)
+                .max()
+                .map_or(Ok(0), |value| {
+                    usize_u64(value, "native blank component label count exceeds u64")
+                })?,
+        ),
+        largest_component_arcs: Some(
+            component_arcs
+                .iter()
+                .map(Vec::len)
+                .max()
+                .map_or(Ok(0), |value| {
+                    usize_u64(value, "native blank component arc count exceeds u64")
+                })?,
+        ),
+        refinement_rounds: None,
+        work_term: None,
+    };
+    reserve_items::<BlankComponent>(session, component_labels.len())?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(component_labels.len())
+        .map_err(|_| NativeError::limit("native blank component allocation failed"))?;
+    for (global_labels, local_arcs) in component_labels.into_iter().zip(component_arcs) {
+        cancellation.checkpoint()?;
+        let alpha = alpha_order(
+            global_labels.len(),
+            &local_arcs,
+            payloads,
+            limits,
+            limit_details,
+            cancellation,
+            session,
+        )?;
+        result.push(BlankComponent {
+            global_labels,
+            arcs: local_arcs,
+            alpha,
+        });
+    }
+    Ok(result)
+}
+
+fn anonymous_metrics(
+    components: &[BlankComponent],
+    total_labels: usize,
+    total_arcs: usize,
+    session: &mut Session<'_>,
+) -> NativeResult<AnonymousCanonicalMetricsV2> {
+    let mut metrics = AnonymousCanonicalMetricsV2 {
+        component_count: usize_u64(components.len(), "native blank component count exceeds u64")?,
+        total_labels: usize_u64(total_labels, "native blank label count exceeds u64")?,
+        total_arcs: usize_u64(total_arcs, "native blank arc count exceeds u64")?,
+        ..AnonymousCanonicalMetricsV2::default()
+    };
+    let event_count = components
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| NativeError::limit("native blank interval count overflow"))?;
+    reserve_items::<(usize, i8)>(session, event_count)?;
+    let mut events = Vec::new();
+    events
+        .try_reserve_exact(event_count)
+        .map_err(|_| NativeError::limit("native blank interval allocation failed"))?;
+    for component in components {
+        let labels = usize_u64(
+            component.global_labels.len(),
+            "native blank component label count exceeds u64",
+        )?;
+        let arcs = usize_u64(
+            component.arcs.len(),
+            "native blank component arc count exceeds u64",
+        )?;
+        metrics.largest_component_labels = metrics.largest_component_labels.max(labels);
+        metrics.largest_component_arcs = metrics.largest_component_arcs.max(arcs);
+        metrics.total_setup_work = metrics
+            .total_setup_work
+            .checked_add(component.alpha.setup_work)
+            .ok_or_else(|| NativeError::limit("native blank setup work overflow"))?;
+        metrics.total_refinement_work = metrics
+            .total_refinement_work
+            .checked_add(component.alpha.refinement_work)
+            .ok_or_else(|| NativeError::limit("native blank refinement work overflow"))?;
+        metrics.total_candidate_order_work = metrics
+            .total_candidate_order_work
+            .checked_add(component.alpha.candidate_order_work)
+            .ok_or_else(|| NativeError::limit("native blank candidate work overflow"))?;
+        let component_work = component
+            .alpha
+            .setup_work
+            .checked_add(component.alpha.refinement_work)
+            .and_then(|value| value.checked_add(component.alpha.candidate_order_work))
+            .ok_or_else(|| NativeError::limit("native blank component work overflow"))?;
+        metrics.largest_component_work = metrics.largest_component_work.max(component_work);
+        metrics.maximum_refinement_rounds = metrics
+            .maximum_refinement_rounds
+            .max(component.alpha.refinement_rounds);
+        metrics.total_permutations_examined = metrics
+            .total_permutations_examined
+            .checked_add(component.alpha.permutations_examined)
+            .ok_or_else(|| NativeError::limit("native blank permutation count overflow"))?;
+
+        let mut first_root = None;
+        let mut previous_root = None;
+        let mut root_count = 0_u64;
+        for arc in &component.arcs {
+            if previous_root.is_some_and(|previous| arc.payload < previous) {
+                return Err(NativeError::protocol(
+                    "native blank component roots are not in document order",
+                ));
+            }
+            if previous_root != Some(arc.payload) {
+                root_count = root_count
+                    .checked_add(1)
+                    .ok_or_else(|| NativeError::limit("native blank root count overflow"))?;
+                first_root.get_or_insert(arc.payload);
+                previous_root = Some(arc.payload);
+            }
+        }
+        let first_root = first_root.ok_or_else(|| {
+            NativeError::protocol("native blank component contains no structural root")
+        })?;
+        let last_root = previous_root.expect("a blank component has one structural root");
+        let span = last_root
+            .checked_sub(first_root)
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| NativeError::limit("native blank root interval overflow"))?;
+        metrics.largest_component_roots = metrics.largest_component_roots.max(root_count);
+        metrics.maximum_root_interval_span = metrics
+            .maximum_root_interval_span
+            .max(usize_u64(span, "native blank root interval exceeds u64")?);
+        events.push((first_root, 1));
+        events.push((
+            last_root
+                .checked_add(1)
+                .ok_or_else(|| NativeError::limit("native blank root interval overflow"))?,
+            -1,
+        ));
+    }
+    metrics.total_canonical_work = metrics
+        .total_setup_work
+        .checked_add(metrics.total_refinement_work)
+        .and_then(|value| value.checked_add(metrics.total_candidate_order_work))
+        .ok_or_else(|| NativeError::limit("native blank total canonical work overflow"))?;
+    events.sort_unstable_by_key(|event| event.0);
+    let mut active = 0_i64;
+    let mut maximum_active = 0_i64;
+    let mut offset = 0_usize;
+    while offset < events.len() {
+        let position = events[offset].0;
+        let mut delta = 0_i64;
+        while offset < events.len() && events[offset].0 == position {
+            delta = delta
+                .checked_add(i64::from(events[offset].1))
+                .ok_or_else(|| NativeError::limit("native blank interval activity overflow"))?;
+            offset += 1;
+        }
+        active = active
+            .checked_add(delta)
+            .ok_or_else(|| NativeError::limit("native blank interval activity overflow"))?;
+        if active < 0 {
+            return Err(NativeError::protocol(
+                "native blank interval activity became negative",
+            ));
+        }
+        maximum_active = maximum_active.max(active);
+    }
+    if active != 0 {
+        return Err(NativeError::protocol(
+            "native blank interval activity ledger is incomplete",
+        ));
+    }
+    metrics.maximum_open_root_intervals = u64::try_from(maximum_active)
+        .map_err(|_| NativeError::limit("native blank interval activity exceeds u64"))?;
+    Ok(metrics)
+}
+
+fn find_component_root(parents: &mut [usize], mut value: usize) -> usize {
+    let mut root = value;
+    while parents[root] != root {
+        root = parents[root];
+    }
+    while parents[value] != value {
+        let next = parents[value];
+        parents[value] = root;
+        value = next;
+    }
+    root
+}
+
+fn union_component_labels(
+    parents: &mut [usize],
+    sizes: &mut [usize],
+    left: usize,
+    right: usize,
+) -> NativeResult<()> {
+    let mut left_root = find_component_root(parents, left);
+    let mut right_root = find_component_root(parents, right);
+    if left_root == right_root {
+        return Ok(());
+    }
+    if sizes[left_root] < sizes[right_root] {
+        std::mem::swap(&mut left_root, &mut right_root);
+    }
+    parents[right_root] = left_root;
+    sizes[left_root] = sizes[left_root]
+        .checked_add(sizes[right_root])
+        .ok_or_else(|| NativeError::limit("native blank component size overflow"))?;
+    Ok(())
+}
+
+fn sorted_component_indexes(
+    components: &[BlankComponent],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<usize>> {
+    reserve_items::<usize>(session, components.len())?;
+    let mut indexes = Vec::new();
+    indexes
+        .try_reserve_exact(components.len())
+        .map_err(|_| NativeError::limit("native blank component order allocation failed"))?;
+    indexes.extend(0..components.len());
+    indexes.sort_unstable_by(|left, right| {
+        components[*left]
+            .alpha
+            .graph
+            .cmp(&components[*right].alpha.graph)
+            .then_with(|| {
+                components[*left]
+                    .global_labels
+                    .cmp(&components[*right].global_labels)
+            })
+    });
+    Ok(indexes)
+}
+
+fn component_manifest(
+    components: &[BlankComponent],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<u8>> {
+    let indexes = sorted_component_indexes(components, session)?;
+    let distinct = indexes
+        .iter()
+        .enumerate()
+        .filter(|(offset, index)| {
+            *offset == 0
+                || components[**index].alpha.graph != components[indexes[*offset - 1]].alpha.graph
+        })
+        .count();
+    let mut manifest = Vec::new();
+    append_bytes(&mut manifest, COMPONENT_MANIFEST_DOMAIN, session)?;
+    append_varint(
+        &mut manifest,
+        usize_u64(distinct, "native blank component count exceeds u64")?,
+        session,
+    )?;
+    let mut start = 0_usize;
+    while start < indexes.len() {
+        let graph = &components[indexes[start]].alpha.graph;
+        let mut end = start + 1;
+        while end < indexes.len() && components[indexes[end]].alpha.graph == *graph {
+            end += 1;
+        }
+        append_frame(&mut manifest, graph, session)?;
+        append_varint(
+            &mut manifest,
+            usize_u64(
+                end - start,
+                "native blank component multiplicity exceeds u64",
+            )?,
+            session,
+        )?;
+        start = end;
+    }
+    Ok(manifest)
 }
 
 #[derive(Debug)]
 struct AlphaResult {
     order: Vec<usize>,
     graph: Vec<u8>,
+    setup_work: u64,
+    refinement_work: u64,
+    candidate_order_work: u64,
+    refinement_rounds: u64,
+    permutations_examined: u64,
 }
 
 fn alpha_order(
@@ -312,25 +767,38 @@ fn alpha_order(
     arcs: &[BlankArc],
     payloads: &[Vec<u8>],
     limits: &Limits,
+    limit_details: NativeLimitDetails,
     cancellation: &Cancellation,
     session: &mut Session<'_>,
 ) -> NativeResult<AlphaResult> {
     let terms = checked_add_u64(label_count, arcs.len(), "native blank term count overflow")?;
     if terms > limits.max_terms {
-        return Err(NativeError::limit(
+        return Err(NativeError::resource_limit(
+            "max_terms",
+            terms,
+            limits.max_terms,
             "native anonymous canonicalization exceeds max_terms",
         ));
     }
     let label_count_u64 = usize_u64(label_count, "native blank label count exceeds u64")?;
     let arc_count = usize_u64(arcs.len(), "native blank arc count exceeds u64")?;
-    let mut work = label_count_u64
+    let setup_work = label_count_u64
         .checked_add(
             arc_count
                 .checked_mul(2)
                 .ok_or_else(|| NativeError::limit("native blank work overflow"))?,
         )
         .ok_or_else(|| NativeError::limit("native blank work overflow"))?;
-    enforce_work(work, limits)?;
+    let mut work = setup_work;
+    enforce_work(
+        work,
+        limits,
+        NativeLimitDetails {
+            refinement_rounds: Some(0),
+            work_term: Some("setup"),
+            ..limit_details
+        },
+    )?;
     let mut colors = colors_from_signatures(
         neighborhoods(label_count, arcs, payloads, None, cancellation, session)?,
         session,
@@ -373,7 +841,18 @@ fn alpha_order(
                     .ok_or_else(|| NativeError::limit("native blank work overflow"))?,
             )
             .ok_or_else(|| NativeError::limit("native blank work overflow"))?;
-        enforce_work(work, limits)?;
+        enforce_work(
+            work,
+            limits,
+            NativeLimitDetails {
+                refinement_rounds: Some(usize_u64(
+                    rounds,
+                    "native blank refinement rounds exceed u64",
+                )?),
+                work_term: Some("refinement"),
+                ..limit_details
+            },
+        )?;
         if same_partition(&colors, &refined, session)? {
             colors = refined;
             break;
@@ -387,9 +866,31 @@ fn alpha_order(
     }
 
     let partitions = partitions(&colors, session)?;
-    let candidates = permutation_count(&partitions, limits.max_canonical_work, work)?;
-    let unit = label_count_u64.saturating_add(arc_count).max(1);
-    enforce_work(work.saturating_add(candidates.saturating_mul(unit)), limits)?;
+    let candidate_details = NativeLimitDetails {
+        refinement_rounds: Some(usize_u64(
+            rounds,
+            "native blank refinement rounds exceed u64",
+        )?),
+        work_term: Some("candidate_orders"),
+        ..limit_details
+    };
+    let candidates = permutation_count(
+        &partitions,
+        limits.max_canonical_work,
+        work,
+        candidate_details,
+    )?;
+    let unit = label_count_u64
+        .checked_add(arc_count)
+        .ok_or_else(|| NativeError::limit("native blank work overflow"))?
+        .max(1);
+    let candidate_order_work = candidates
+        .checked_mul(unit)
+        .ok_or_else(|| NativeError::limit("native blank work overflow"))?;
+    let final_work = work
+        .checked_add(candidate_order_work)
+        .ok_or_else(|| NativeError::limit("native blank work overflow"))?;
+    enforce_work(final_work, limits, candidate_details)?;
 
     let mut choices = clone_partitions(&partitions, session)?;
     let mut best_graph: Option<Vec<u8>> = None;
@@ -418,6 +919,13 @@ fn alpha_order(
         graph: best_graph.ok_or_else(|| {
             NativeError::protocol("native blank canonicalization produced no graph")
         })?,
+        setup_work,
+        refinement_work: work
+            .checked_sub(setup_work)
+            .ok_or_else(|| NativeError::protocol("native blank work accounting regressed"))?,
+        candidate_order_work,
+        refinement_rounds: usize_u64(rounds, "native blank refinement rounds exceed u64")?,
+        permutations_examined: candidates,
     })
 }
 
@@ -613,14 +1121,23 @@ fn clone_partitions(
     Ok(result)
 }
 
-fn permutation_count(partitions: &[Vec<usize>], maximum: u64, consumed: u64) -> NativeResult<u64> {
+fn permutation_count(
+    partitions: &[Vec<usize>],
+    maximum: u64,
+    consumed: u64,
+    details: NativeLimitDetails,
+) -> NativeResult<u64> {
     let remaining = maximum.saturating_sub(consumed);
     let mut count = 1_u64;
     for partition in partitions {
         for factor in 2..=partition.len() {
             let factor = usize_u64(factor, "native blank permutation factor exceeds u64")?;
             if count > remaining / factor {
-                return Err(NativeError::limit(
+                return Err(NativeError::resource_limit_with_details(
+                    "max_canonical_work",
+                    maximum.saturating_add(1),
+                    maximum,
+                    details,
                     "native anonymous canonicalization exceeds max_canonical_work",
                 ));
             }
@@ -740,8 +1257,16 @@ fn blank_arcs(
     for root in roots.iter().flatten() {
         cancellation.checkpoint()?;
         let skeleton = skeleton_node(root, session)?;
-        if usize_u64(skeleton.len(), "blank skeleton exceeds u64")? > limits.max_canonical_work {
-            return Err(NativeError::limit(
+        let skeleton_work = usize_u64(skeleton.len(), "blank skeleton exceeds u64")?;
+        if skeleton_work > limits.max_canonical_work {
+            return Err(NativeError::resource_limit_with_details(
+                "max_canonical_work",
+                skeleton_work,
+                limits.max_canonical_work,
+                NativeLimitDetails {
+                    work_term: Some("setup"),
+                    ..NativeLimitDetails::default()
+                },
                 "native blank skeleton exceeds max_canonical_work",
             ));
         }
@@ -770,8 +1295,16 @@ fn blank_arcs(
                     .and_then(|pairs| value.checked_add(pairs / 2))
             })
             .ok_or_else(|| NativeError::limit("native blank arc count overflow"))?;
-        if usize_u64(following, "native blank arc count exceeds u64")? > limits.max_terms {
-            return Err(NativeError::limit(
+        let following_terms = checked_add_u64(
+            labels.len(),
+            following,
+            "native blank document term count overflow",
+        )?;
+        if following_terms > limits.max_terms {
+            return Err(NativeError::resource_limit(
+                "max_terms",
+                following_terms,
+                limits.max_terms,
                 "native anonymous canonicalization exceeds max_terms",
             ));
         }
@@ -868,7 +1401,7 @@ fn blank_occurrences(
                         .then_with(|| left.1.original.cmp(right.1.original))
                 });
                 for (skeleton, value) in grouped {
-                    let marker = first_hex16(sha256(&skeleton), session)?;
+                    let marker = full_hex(sha256(&skeleton), session)?;
                     blank_occurrences(
                         value,
                         joined_path(&field_path, &set_marker(&marker, session)?, session)?,
@@ -1154,9 +1687,20 @@ fn parse_node<'a>(
     *terms = terms
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("native anonymous term count overflow"))?;
-    if *terms > limits.max_terms || depth > limits.max_nesting_depth.min(1024) {
-        return Err(NativeError::limit(
-            "native anonymous canonical scan exceeds model limits",
+    if *terms > limits.max_terms {
+        return Err(limits.resource_limit(
+            LimitKey::MaxTerms,
+            *terms,
+            "native anonymous canonical scan exceeds max_terms",
+        ));
+    }
+    let maximum_depth = limits.max_nesting_depth.min(1024);
+    if depth > maximum_depth {
+        return Err(NativeError::resource_limit(
+            "max_nesting_depth",
+            u64::from(depth),
+            u64::from(maximum_depth),
+            "native anonymous canonical scan exceeds max_nesting_depth",
         ));
     }
     let (tag, mut offset) = read_varint(data, start, bound)?;
@@ -1350,11 +1894,76 @@ fn provisional_label(identity: Identity<'_>) -> NativeResult<Option<&str>> {
         .map_err(|_| NativeError::protocol("native blank label is not UTF-8"))
 }
 
+fn identities_for_components(
+    label_count: usize,
+    components: &[BlankComponent],
+    scope: [u8; 32],
+    session: &mut Session<'_>,
+) -> NativeResult<Vec<Option<OwnedIdentity>>> {
+    reserve_items::<Option<OwnedIdentity>>(session, label_count)?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(label_count)
+        .map_err(|_| NativeError::limit("native blank identity allocation failed"))?;
+    result.resize_with(label_count, || None);
+    let indexes = sorted_component_indexes(components, session)?;
+    let mut start = 0_usize;
+    while start < indexes.len() {
+        let graph = &components[indexes[start]].alpha.graph;
+        let component_class = component_class(graph, session)?;
+        let mut end = start + 1;
+        while end < indexes.len() && components[indexes[end]].alpha.graph == *graph {
+            end += 1;
+        }
+        for (ordinal, component_index) in indexes[start..end].iter().copied().enumerate() {
+            let component = &components[component_index];
+            let local = identities_for_order(
+                component.global_labels.len(),
+                &component.alpha.order,
+                scope,
+                component_class,
+                ordinal,
+                session,
+            )?;
+            for (local_index, global_label) in component.global_labels.iter().copied().enumerate() {
+                let identity = local.get(local_index).cloned().ok_or_else(|| {
+                    NativeError::protocol("native blank component identity is missing")
+                })?;
+                let selected = result.get_mut(global_label).ok_or_else(|| {
+                    NativeError::protocol("native blank component label is invalid")
+                })?;
+                if selected.replace(identity).is_some() {
+                    return Err(NativeError::protocol(
+                        "native blank component identity is duplicated",
+                    ));
+                }
+            }
+        }
+        start = end;
+    }
+    if result.iter().any(Option::is_none) {
+        return Err(NativeError::protocol(
+            "native blank component identity ledger is incomplete",
+        ));
+    }
+    Ok(result)
+}
+
+fn component_class(graph: &[u8], session: &mut Session<'_>) -> NativeResult<[u8; 32]> {
+    let mut frame = Vec::new();
+    append_frame(&mut frame, graph, session)?;
+    let mut hasher = Sha256::new();
+    hasher.update(COMPONENT_CLASS_DOMAIN);
+    hasher.update(&frame);
+    Ok(hasher.finish())
+}
+
 fn identities_for_order(
     count: usize,
     order: &[usize],
     scope: [u8; 32],
-    graph_digest: [u8; 32],
+    component_class: [u8; 32],
+    occurrence_ordinal: usize,
     session: &mut Session<'_>,
 ) -> NativeResult<Vec<OwnedIdentity>> {
     reserve_items::<usize>(session, count)?;
@@ -1377,8 +1986,16 @@ fn identities_for_order(
         let mut hasher = Sha256::new();
         hasher.update(ANONYMOUS_KEY_DOMAIN);
         hasher.update(&scope);
-        hasher.update(&graph_digest);
+        hasher.update(&component_class);
         let mut encoded = Vec::new();
+        append_varint(
+            &mut encoded,
+            usize_u64(
+                occurrence_ordinal,
+                "native blank component ordinal exceeds u64",
+            )?,
+            session,
+        )?;
         append_varint(
             &mut encoded,
             usize_u64(index, "native blank canonical index exceeds u64")?,
@@ -1482,7 +2099,7 @@ fn snapshot_scope(document_fingerprint: [u8; 32]) -> [u8; 32] {
 fn structural_digest(row: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"pyowl-core:structural-value:v1\0");
-    hasher.update(&[1]); // encode_varint(model schema=1)
+    hasher.update(&[2]); // encode_varint(model schema=2)
     hasher.update(row);
     hasher.finish()
 }
@@ -1751,14 +2368,14 @@ fn joined_path(prefix: &str, suffix: &str, session: &mut Session<'_>) -> NativeR
     Ok(result)
 }
 
-fn first_hex16(digest: [u8; 32], session: &mut Session<'_>) -> NativeResult<String> {
+fn full_hex(digest: [u8; 32], session: &mut Session<'_>) -> NativeResult<String> {
     use std::fmt::Write;
-    reserve_bytes(session, 16)?;
+    reserve_bytes(session, 64)?;
     let mut output = String::new();
     output
-        .try_reserve_exact(16)
+        .try_reserve_exact(64)
         .map_err(|_| NativeError::limit("native blank marker allocation failed"))?;
-    for byte in &digest[..8] {
+    for byte in digest {
         write!(output, "{byte:02x}").expect("writing to String cannot fail");
     }
     Ok(output)
@@ -1933,9 +2550,13 @@ fn decimal_index(value: usize, session: &mut Session<'_>) -> NativeResult<String
     Ok(output)
 }
 
-fn enforce_work(work: u64, limits: &Limits) -> NativeResult<()> {
+fn enforce_work(work: u64, limits: &Limits, details: NativeLimitDetails) -> NativeResult<()> {
     if work > limits.max_canonical_work {
-        return Err(NativeError::limit(
+        return Err(NativeError::resource_limit_with_details(
+            "max_canonical_work",
+            work,
+            limits.max_canonical_work,
+            details,
             "native anonymous canonicalization exceeds max_canonical_work",
         ));
     }
@@ -1957,6 +2578,17 @@ mod tests {
     use super::*;
     use crate::cancel::Guard;
     use crate::canonical::{anonymous, entity, Field, Node};
+    use crate::error::{NativeErrorPayload, NativeNumber};
+
+    fn hex(value: &[u8]) -> String {
+        use std::fmt::Write;
+
+        let mut output = String::with_capacity(value.len().saturating_mul(2));
+        for byte in value {
+            write!(output, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        output
+    }
 
     fn scope(
         ontology_iri: Option<&str>,
@@ -1976,6 +2608,42 @@ mod tests {
             .sum();
         let mut session = Session::new(&mut guard, &limits, input_bytes)?;
         scope_rdfxml_anonymous_rows_v2(ontology_iri, None, &[], rows, &mut session, &cancellation)
+    }
+
+    fn scope_with_accounting(
+        rows: [&[Vec<u8>]; 3],
+    ) -> NativeResult<(AnonymousCanonicalMetricsV2, u64)> {
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let input_bytes = rows
+            .iter()
+            .flat_map(|values| values.iter())
+            .map(Vec::len)
+            .sum();
+        let mut session = Session::new(&mut guard, &limits, input_bytes)?;
+        let before = session.accounted_bytes();
+        let result = scope_anonymous_rows_v2(
+            rows,
+            b"ontology-key".to_vec(),
+            &mut session,
+            &cancellation,
+            |_| {
+                Ok(super::super::retained::FingerprintEvidenceV2 {
+                    preimage_bytes: 0,
+                    digest: sha256(b"document"),
+                })
+            },
+        )?;
+        let delta = session
+            .accounted_bytes()
+            .checked_sub(before)
+            .expect("session accounting is monotonic");
+        Ok((result.anonymous_metrics, delta))
     }
 
     #[test]
@@ -2004,6 +2672,30 @@ mod tests {
             result.source_occurrence_digests[0].1,
             structural_digest(&result.effective[1][0]),
         );
+    }
+
+    #[test]
+    fn anonymous_accounting_is_the_exact_deterministic_session_delta() {
+        let axiom = Node::build(
+            112,
+            vec![
+                Field::Node(entity("class", iri("urn:C".to_owned()).unwrap()).unwrap()),
+                Field::Node(anonymous("person").unwrap()),
+                Field::Set(Vec::new()),
+            ],
+        )
+        .unwrap()
+        .into_bytes();
+
+        let (first, first_delta) =
+            scope_with_accounting([&[], &[axiom.clone()], &[]]).expect("first scope");
+        let (second, second_delta) =
+            scope_with_accounting([&[], &[axiom], &[]]).expect("second scope");
+
+        assert!(first.accounted_bytes > 0);
+        assert_eq!(first.accounted_bytes, first_delta);
+        assert_eq!(second.accounted_bytes, second_delta);
+        assert_eq!(first.accounted_bytes, second.accounted_bytes);
     }
 
     #[test]
@@ -2079,5 +2771,276 @@ mod tests {
             scan_canonical(&result.raw[1][0], &mut budget).expect("scoped row"),
             crate::model::Category::Axiom,
         );
+    }
+
+    #[test]
+    fn component_manifest_and_scope_match_the_schema_two_ledger() {
+        assert_eq!(
+            sha256(b"pyowl-core:provisional-document-scope:v2\0"),
+            PROVISIONAL_SCOPE,
+        );
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(cancellation, limits.deadline, limits.cancellation_stride);
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let components = [
+            BlankComponent {
+                global_labels: vec![0],
+                arcs: Vec::new(),
+                alpha: AlphaResult {
+                    order: vec![0],
+                    graph: b"beta".to_vec(),
+                    setup_work: 0,
+                    refinement_work: 0,
+                    candidate_order_work: 0,
+                    refinement_rounds: 0,
+                    permutations_examined: 1,
+                },
+            },
+            BlankComponent {
+                global_labels: vec![1],
+                arcs: Vec::new(),
+                alpha: AlphaResult {
+                    order: vec![0],
+                    graph: b"alpha".to_vec(),
+                    setup_work: 0,
+                    refinement_work: 0,
+                    candidate_order_work: 0,
+                    refinement_rounds: 0,
+                    permutations_examined: 1,
+                },
+            },
+            BlankComponent {
+                global_labels: vec![2],
+                arcs: Vec::new(),
+                alpha: AlphaResult {
+                    order: vec![0],
+                    graph: b"alpha".to_vec(),
+                    setup_work: 0,
+                    refinement_work: 0,
+                    candidate_order_work: 0,
+                    refinement_rounds: 0,
+                    permutations_examined: 1,
+                },
+            },
+        ];
+        let manifest = component_manifest(&components, &mut session).expect("component manifest");
+        assert_eq!(
+            hex(&manifest),
+            "70796f776c2d636f72653a626c616e6b2d636f6d706f6e656e742d6d616e69666573743a7632000205616c70686102046265746101",
+        );
+        let scope = framed_digest(
+            DOCUMENT_SCOPE_DOMAIN,
+            b"ontology-key",
+            &manifest,
+            &mut session,
+        )
+        .expect("document scope");
+        assert_eq!(
+            hex(&scope),
+            "f07f564a417f771c6ca7a28eca28677a6769cd5e6de976dba0493523c7ea5a5c",
+        );
+    }
+
+    #[test]
+    fn repeated_component_keys_and_work_match_the_schema_two_ledger() {
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let payloads = vec![b"payload".to_vec(), b"payload".to_vec()];
+        let first_arc = BlankArc {
+            source: 0,
+            role: "edge".to_owned(),
+            target: Some(1),
+            payload: 0,
+        };
+        let second_arc = BlankArc {
+            payload: 1,
+            ..first_arc.clone()
+        };
+        let first = alpha_order(
+            2,
+            std::slice::from_ref(&first_arc),
+            &payloads,
+            &limits,
+            NativeLimitDetails {
+                component_count: Some(2),
+                largest_component_labels: Some(2),
+                largest_component_arcs: Some(1),
+                refinement_rounds: None,
+                work_term: None,
+            },
+            &cancellation,
+            &mut session,
+        )
+        .expect("first component");
+        assert_eq!(
+            hex(&first.graph),
+            "70796f776c2d636f72653a626c616e6b2d67726170683a7632000201100004656467650101077061796c6f6164",
+        );
+        assert_eq!(
+            (
+                first.setup_work,
+                first.refinement_work,
+                first.candidate_order_work,
+                first.setup_work + first.refinement_work + first.candidate_order_work,
+                first.refinement_rounds,
+                first.permutations_examined,
+            ),
+            (4, 6, 3, 13, 1, 1),
+        );
+        let second = alpha_order(
+            2,
+            std::slice::from_ref(&second_arc),
+            &payloads,
+            &limits,
+            NativeLimitDetails {
+                component_count: Some(2),
+                largest_component_labels: Some(2),
+                largest_component_arcs: Some(1),
+                refinement_rounds: None,
+                work_term: None,
+            },
+            &cancellation,
+            &mut session,
+        )
+        .expect("second component");
+        let components = [
+            BlankComponent {
+                global_labels: vec![0, 1],
+                arcs: vec![first_arc],
+                alpha: first,
+            },
+            BlankComponent {
+                global_labels: vec![2, 3],
+                arcs: vec![second_arc],
+                alpha: second,
+            },
+        ];
+        let manifest = component_manifest(&components, &mut session).expect("component manifest");
+        let scope = framed_digest(
+            DOCUMENT_SCOPE_DOMAIN,
+            b"ontology-key",
+            &manifest,
+            &mut session,
+        )
+        .expect("document scope");
+        assert_eq!(
+            hex(&scope),
+            "8d1c3f2c1068788506082f3c597048d2d934dfad530d6c864d708bb5b8c0c0a9",
+        );
+        let identities = identities_for_components(4, &components, scope, &mut session)
+            .expect("component identities");
+        let keys: Vec<String> = identities
+            .iter()
+            .map(|identity| hex(&identity.as_ref().expect("bound identity").key))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "b22b8089f9ef61ea37d482f355e714bae2c0cf3dd3e6738bfb70c7d3c69c8c73",
+                "193b7a5768e93a443b8fca99d386985997d3a1dd0b83f84d76bd1725a4f5236b",
+                "71d226d29151745d047295d1573b190764da7c9ae38af5678fae7e05c2855a3e",
+                "bdac8436947fc21f5b4aa132835300787003bba6914114624f69578a80751373",
+            ],
+        );
+        let metrics = anonymous_metrics(&components, 4, 2, &mut session).expect("metrics");
+        assert_eq!(metrics.component_count, 2);
+        assert_eq!(metrics.largest_component_labels, 2);
+        assert_eq!(metrics.largest_component_arcs, 1);
+        assert_eq!(metrics.largest_component_roots, 1);
+        assert_eq!(metrics.maximum_root_interval_span, 1);
+        assert_eq!(metrics.maximum_open_root_intervals, 1);
+        assert_eq!(metrics.total_setup_work, 8);
+        assert_eq!(metrics.total_refinement_work, 12);
+        assert_eq!(metrics.total_candidate_order_work, 6);
+        assert_eq!(metrics.total_canonical_work, 26);
+    }
+
+    #[test]
+    fn component_work_failure_carries_typed_global_context() {
+        let mut limits = Limits::default();
+        limits.max_canonical_work = 3;
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(
+            cancellation.clone(),
+            limits.deadline,
+            limits.cancellation_stride,
+        );
+        let mut session = Session::new(&mut guard, &limits, 0).expect("session");
+        let arc = BlankArc {
+            source: 0,
+            role: "edge".to_owned(),
+            target: Some(1),
+            payload: 0,
+        };
+        let error = alpha_order(
+            2,
+            &[arc],
+            &[b"payload".to_vec()],
+            &limits,
+            NativeLimitDetails {
+                component_count: Some(17),
+                largest_component_labels: Some(2),
+                largest_component_arcs: Some(1),
+                refinement_rounds: None,
+                work_term: None,
+            },
+            &cancellation,
+            &mut session,
+        )
+        .expect_err("setup work exceeds the configured component budget");
+        let NativeErrorPayload::ResourceLimit(payload) = error.payload else {
+            panic!("configured work failure has no typed payload");
+        };
+        assert_eq!(payload.limit, "max_canonical_work");
+        assert_eq!(payload.observed, NativeNumber::Integer(4));
+        assert_eq!(payload.allowed, NativeNumber::Integer(3));
+        assert_eq!(payload.details.component_count, Some(17));
+        assert_eq!(payload.details.largest_component_labels, Some(2));
+        assert_eq!(payload.details.largest_component_arcs, Some(1));
+        assert_eq!(payload.details.refinement_rounds, Some(0));
+        assert_eq!(payload.details.work_term, Some("setup"));
+    }
+
+    #[test]
+    fn anonymous_and_retry_enforcement_share_typed_limit_fields() {
+        let mut limits = Limits::default();
+        limits.max_canonical_work = 10;
+        let anonymous = enforce_work(
+            11,
+            &limits,
+            NativeLimitDetails {
+                component_count: Some(1),
+                largest_component_labels: Some(2),
+                largest_component_arcs: Some(1),
+                refinement_rounds: Some(0),
+                work_term: Some("setup"),
+            },
+        )
+        .expect_err("anonymous enforcement must reject excess work");
+
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(cancellation, limits.deadline, limits.cancellation_stride);
+        let mut session = Session::new(&mut guard, &limits, 0).expect("retry session");
+        let retry = session
+            .step(11)
+            .expect_err("generic retry enforcement must reject excess work");
+
+        assert_ne!(anonymous.message, retry.message);
+        let NativeErrorPayload::ResourceLimit(anonymous_payload) = anonymous.payload else {
+            panic!("anonymous enforcement omitted its typed payload");
+        };
+        let NativeErrorPayload::ResourceLimit(retry_payload) = retry.payload else {
+            panic!("retry enforcement omitted its typed payload");
+        };
+        assert_eq!(anonymous_payload.limit, retry_payload.limit);
+        assert_eq!(anonymous_payload.observed, retry_payload.observed);
+        assert_eq!(anonymous_payload.allowed, retry_payload.allowed);
     }
 }

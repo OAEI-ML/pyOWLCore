@@ -10,11 +10,12 @@ are not public contracts.
 
 | Name | Current value | Changes when |
 |---|---:|---|
-| `__version__` | `0.1.1` | package/API release changes |
-| `API_VERSION` | `(0, 1)` | public contract line changes |
-| `MODEL_SCHEMA_VERSION` | `1` | equality/canonical/fingerprint semantics change |
-| `WIRE_FORMAT_VERSION` | `(1, 1)` | wire compatibility changes |
+| `__version__` | `0.2.0` | package/API release changes |
+| `API_VERSION` | `(0, 2)` | public contract line changes |
+| `MODEL_SCHEMA_VERSION` | `2` | equality/canonical/fingerprint semantics change |
+| `WIRE_FORMAT_VERSION` | `(1, 2)` | wire compatibility changes |
 | `ADAPTER_PROTOCOL_VERSION` | `1` | provider/plugin handshake changes |
+| Encoded structural schema | `pyowl-core/structural-columns` v2 | bulk-column meaning changes |
 
 Do not compare package versions lexically. Persisted consumer cache keys also
 include the consumer compiler schema and semantic options.
@@ -42,6 +43,14 @@ identity, not RDF node identity, a reasoner ID, or object address.
 `DocumentSource`, `DocumentInput`, and `OntologyInput` are typing aliases, not
 runtime base classes. A plain string is a path, never ontology text or a URL.
 
+`LoadOptions.allow_partial_rdf_mapping` defaults to `False`. Setting it to
+`True` is a diagnostic-only, one-document mode for explicitly selected RDF/XML
+or Turtle input: `parse_document` may then return a document whose
+`rdf_mapping_report.conformant` is false and whose `dropped_triples` count is
+nonzero. The option is rejected for format autodetection and non-RDF formats.
+It is also rejected by `load_snapshot` and `coerce_snapshot`; a nonconformant
+diagnostic document cannot enter snapshot, cache, wire, or reasoner routes.
+
 ## Views and changes
 
 - `OntologyView` is the read-only consumer protocol.
@@ -64,16 +73,19 @@ reasoner-owned.
 
 ## Bulk structural handoff
 
-`EncodedStructuralView` is the public request type for the frozen structural-
-columns schema. Consumers can key compatibility and provenance without building
-a view by reading either
-`pyowl_core.ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1` or the identical
-`EncodedStructuralView.DESCRIPTOR_SHA256` immutable 32-byte digest.
+`EncodedStructuralView` is the public request type for the advertised v2
+structural-columns schema. Consumers can key compatibility and provenance
+without building a view by reading either
+`pyowl_core.ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2` or the identical
+`EncodedStructuralView.DESCRIPTOR_SHA256` immutable 32-byte digest. Generic
+v2 requests use `EncodedStructuralViewV2`.
 
-The exported digest is schema metadata, not a capability advertisement.
-Consumers still negotiate `CoreCapabilities.encoded_view_schemas`; absence is
-the normal scalar-fallback case while the candidate schema remains
-`frozen-unadvertised`.
+The exported digest is schema metadata, not proof that a particular view can
+produce buffers. Consumers negotiate
+`CoreCapabilities.encoded_view_schemas["pyowl-core/structural-columns"] >= 2`;
+absence is the normal scalar-fallback case. The v1 descriptor remains exported
+for historical inspection, but a model-schema-2 runtime rejects v1 publication
+instead of reinterpreting those columns.
 
 ## Wire and caches
 
@@ -92,6 +104,18 @@ imports/resolvers, access/integrity, limits/cancellation, model/profile,
 snapshot lifecycle, delta/options, adapters/backends, and wire versions or
 corruption. `Diagnostic` carries stable severity/code/message and optional
 source spans/details. Do not branch on message text.
+
+Strict `RDF_MAPPING_INCOMPLETE` failures expose the bounded first-pass report as
+`UnsupportedSyntaxError.rdf_mapping_report`; consumers do not need a second
+partial parse. Each unconsumed `RDFTripleEvidence` includes an `object_kind` of
+`"iri"`, `"blank"`, or `"literal"`. Reification failures remain strict and
+carry bounded structural fields in `error.as_diagnostic().details`, including
+`main_triple_present=False` when the asserted main triple is absent. Their
+bounded examples are available as the immutable `error.reification_evidence`
+tuple. `reification_issue_count`, `reification_evidence_count`, and
+`reification_suppressed_count` reconcile the complete issue count with the
+examples retained under `max_diagnostics` and the aggregate evidence-size
+bound.
 
 ## Native fallback
 

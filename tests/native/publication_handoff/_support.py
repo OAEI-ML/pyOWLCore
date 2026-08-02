@@ -56,7 +56,7 @@ def publication_fields() -> dict[str, object]:
     ontology_iri = IRI("urn:handoff:ontology")
     ontology_id = OntologyID(ontology_iri)
     source_digest = hashlib.sha256(b"native handoff source").digest()
-    fingerprint = Fingerprint("sha256", 1, hashlib.sha256(b"document").digest())
+    fingerprint = Fingerprint("sha256", 2, hashlib.sha256(b"document").digest())
     provenance = freeze_native_provenance_publication_v1(
         DocumentProvenance(
             source_digest,
@@ -120,8 +120,8 @@ def publication_fields() -> dict[str, object]:
     )
     report = NativeLoadReportPublicationV1(
         backend="native",
-        api_version=(0, 1),
-        model_schema=1,
+        api_version=(0, 2),
+        model_schema=2,
         document_count=1,
         total_source_bytes=21,
         effective_axiom_count=1,
@@ -129,9 +129,9 @@ def publication_fields() -> dict[str, object]:
         acquisition_cache_hits=0,
         document_cache_hits=0,
         timings=(("freeze_seconds", 0.001),),
-        structural_fingerprint=Fingerprint("sha256", 1, hashlib.sha256(b"structural").digest()),
-        logical_fingerprint=Fingerprint("sha256", 1, hashlib.sha256(b"logical").digest()),
-        signature_fingerprint=Fingerprint("sha256", 1, hashlib.sha256(b"signature").digest()),
+        structural_fingerprint=Fingerprint("sha256", 2, hashlib.sha256(b"structural").digest()),
+        logical_fingerprint=Fingerprint("sha256", 2, hashlib.sha256(b"logical").digest()),
+        signature_fingerprint=Fingerprint("sha256", 2, hashlib.sha256(b"signature").digest()),
         owl2_dl_validated=False,
         owl2_dl_conforms=None,
         owl2_dl_report_sha256=None,

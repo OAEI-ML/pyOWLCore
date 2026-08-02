@@ -39,6 +39,7 @@ class LoadOptions:
     collect_provenance: bool = True
     validate_owl2_dl: bool = False
     deterministic: bool = True
+    allow_partial_rdf_mapping: bool = False
 
     def __post_init__(self) -> None:
         if self.format is not None and not isinstance(self.format, DocumentFormat):
@@ -55,6 +56,7 @@ class LoadOptions:
             "collect_provenance",
             "validate_owl2_dl",
             "deterministic",
+            "allow_partial_rdf_mapping",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be bool")

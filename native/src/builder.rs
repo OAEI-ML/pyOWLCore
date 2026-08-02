@@ -67,7 +67,12 @@ impl AllocationBudget {
             .checked_add(additional)
             .ok_or_else(|| NativeError::limit("native arena memory accounting overflow"))?;
         if self.maximum.is_some_and(|maximum| next > maximum) {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                next,
+                self.maximum.ok_or_else(|| {
+                    NativeError::protocol("native arena memory limit disappeared")
+                })?,
                 "native arena allocation exceeds max_memory_bytes",
             ));
         }
@@ -186,6 +191,7 @@ impl NativeArenaBuilder {
         check_next_count(
             self.rows.len(),
             self.limits.max_rows,
+            "max_terms",
             "native canonical row count exceeds limits",
         )?;
         let identifier = CanonicalRowId::try_from_index(self.rows.len())?;
@@ -252,7 +258,12 @@ impl NativeArenaBuilder {
         let arity = u64::try_from(elements.len())
             .map_err(|_| NativeError::limit("native sequence arity exceeds u64"))?;
         if arity > self.limits.max_sequence_arity {
-            return Err(NativeError::limit("native sequence arity exceeds limits"));
+            return Err(NativeError::resource_limit(
+                "max_sequence_arity",
+                arity,
+                self.limits.max_sequence_arity,
+                "native sequence arity exceeds limits",
+            ));
         }
         for identifier in elements {
             self.row_draft(*identifier)?;
@@ -295,6 +306,7 @@ impl NativeArenaBuilder {
         check_next_count(
             self.sequences.len(),
             self.limits.max_sequences,
+            "max_terms",
             "native sequence count exceeds limits",
         )?;
         let identifier = SequenceId::try_from_index(self.sequences.len())?;
@@ -376,6 +388,7 @@ impl NativeArenaBuilder {
         check_next_count(
             self.documents.len(),
             self.limits.max_documents,
+            "max_documents",
             "native document count exceeds limits",
         )?;
         let identifier = DocumentId::try_from_index(self.documents.len())?;
@@ -408,7 +421,10 @@ impl NativeArenaBuilder {
         let local_size = u64::try_from(local_key.len())
             .map_err(|_| NativeError::limit("native anonymous local key exceeds u64"))?;
         if local_size > self.limits.max_local_key_bytes {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_canonical_work",
+                local_size,
+                self.limits.max_local_key_bytes,
                 "native anonymous local key exceeds limits",
             ));
         }
@@ -434,6 +450,7 @@ impl NativeArenaBuilder {
         check_next_count(
             self.anonymous.len(),
             self.limits.max_anonymous,
+            "max_terms",
             "native anonymous count exceeds limits",
         )?;
         let identifier = AnonymousId::try_from_index(self.anonymous.len())?;
@@ -675,12 +692,21 @@ impl NativeArenaBuilder {
     }
 }
 
-fn check_next_count(current: usize, maximum: u64, message: &'static str) -> NativeResult<()> {
+fn check_next_count(
+    current: usize,
+    maximum: u64,
+    limit: &'static str,
+    message: &'static str,
+) -> NativeResult<()> {
     let next = current
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("native arena count overflow"))?;
-    if u64::try_from(next).map_or(true, |value| value > maximum) {
-        return Err(NativeError::limit(message));
+    let observed =
+        u64::try_from(next).map_err(|_| NativeError::limit("native arena count exceeds u64"))?;
+    if observed > maximum {
+        return Err(NativeError::resource_limit(
+            limit, observed, maximum, message,
+        ));
     }
     Ok(())
 }

@@ -52,11 +52,12 @@ def test_pin_ledger_covers_normative_lanes_and_exact_phases() -> None:
         "source_url",
         "artifact",
         "artifact_sha256",
-        "features",
         "allocator",
         "thread_ceiling",
     ):
         assert getattr(raw, field) == getattr(common, field)
+    assert raw.features == ("default", "raw-inventory-v1")
+    assert common.features == ("default", "independent-common-contract-v2")
 
     for pin in manifest.comparators:
         if pin.boundary == COMMON_BOUNDARY:
@@ -90,34 +91,34 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     py_horned = manifest.by_id("py-horned-common")
     runner = Path("benchmarks/comparators/runners/py_horned_common.py")
     assert py_horned.runner_pin_state == "complete"
-    assert py_horned.runner_revision == "pyowl-core-py-horned-common-runner-v9"
+    assert py_horned.runner_revision == "pyowl-core-py-horned-common-runner-v10"
     assert py_horned.runner_sha256 == hashlib.sha256(runner.read_bytes()).hexdigest()
     assert py_horned.artifact_is_runnable is True
 
     raw_horned = manifest.by_id("horned-owl-raw")
     assert raw_horned.runner_pin_state == "complete"
-    assert raw_horned.runner_revision == "pyowl-core-horned-raw-runner-v5"
+    assert raw_horned.runner_revision == "pyowl-core-horned-raw-runner-v6"
     assert raw_horned.runner_sha256 == (
-        "622c0655f8c66d8fca4024c2a050d13a56b9236f591959942c34e786baad840c"
+        "5b8d08299c0424a70ef32d1143b3577848a3a8ede13020f78638f37c8f070a16"
     )
     assert raw_horned.artifact_is_runnable is True
 
     common_horned = manifest.by_id("horned-owl-common")
     assert common_horned.runner_pin_state == "complete"
-    assert common_horned.runner_revision == "pyowl-core-horned-common-runner-v6"
+    assert common_horned.runner_revision == "pyowl-core-horned-common-runner-v7"
     assert common_horned.runner_sha256 == raw_horned.runner_sha256
     assert common_horned.artifact_is_runnable is True
 
     direct = manifest.by_id("pyowl-direct-rust-common")
     assert direct.runner_pin_state == "complete"
-    assert direct.runner_revision == "pyowl-core-direct-rust-common-runner-v8"
+    assert direct.runner_revision == "pyowl-core-direct-rust-common-runner-v9"
     assert direct.features == (
         "direct-rust-engine",
-        "common-contract-v1",
+        "common-contract-v2",
         "python-runtime-unlinked",
     )
     assert direct.runner_sha256 == (
-        "3013b122acd4f454901786bc19b56823bed5827a62cfc2356cd57d3c863a3316"
+        "89a9765cd6f2856841db1c6095fd23dddf7ad71eb78b1a7b02257b13484fbeb2"
     )
     assert direct.artifact_is_runnable is True
 
@@ -125,7 +126,7 @@ def test_external_runners_are_fail_closed_except_completed_pins() -> None:
     owlapi_runner = Path("benchmarks/comparators/runners/owlapi/launcher.sh")
     assert owlapi.artifact_sha256 == OWLAPI_5_5_1_SHA256
     assert owlapi.runner_pin_state == "complete"
-    assert owlapi.runner_revision == "pyowl-core-owlapi-common-runner-v6"
+    assert owlapi.runner_revision == "pyowl-core-owlapi-common-runner-v7"
     assert owlapi.runner_sha256 == hashlib.sha256(owlapi_runner.read_bytes()).hexdigest()
     assert owlapi.artifact_is_runnable is True
 
@@ -181,7 +182,7 @@ def test_external_runner_requires_its_own_complete_hash_before_runnable(
     missing_hash_source = _replace_in_lane(
         source,
         "horned-owl-raw",
-        'runner_sha256 = "622c0655f8c66d8fca4024c2a050d13a56b9236f591959942c34e786baad840c"',
+        'runner_sha256 = "5b8d08299c0424a70ef32d1143b3577848a3a8ede13020f78638f37c8f070a16"',
         "",
     )
     missing_hash = _write_manifest(tmp_path, "missing-runner-hash.toml", missing_hash_source)
@@ -192,8 +193,8 @@ def test_external_runner_requires_its_own_complete_hash_before_runnable(
     complete_path = _write_manifest(tmp_path, "complete-runner.toml", source)
     raw = load_comparator_manifest(complete_path).by_id("horned-owl-raw")
 
-    assert raw.runner_revision == "pyowl-core-horned-raw-runner-v5"
-    assert raw.runner_sha256 == ("622c0655f8c66d8fca4024c2a050d13a56b9236f591959942c34e786baad840c")
+    assert raw.runner_revision == "pyowl-core-horned-raw-runner-v6"
+    assert raw.runner_sha256 == ("5b8d08299c0424a70ef32d1143b3577848a3a8ede13020f78638f37c8f070a16")
     assert raw.artifact_is_runnable is True
 
 

@@ -50,4 +50,4 @@ jobs:
       - run: python -m tools.audit.java dist
       - run: python -m venv /tmp/pyowl-core-smoke
       - run: PIP_NO_INDEX=1 /tmp/pyowl-core-smoke/bin/pip install --no-deps dist/*.whl
-      - run: /tmp/pyowl-core-smoke/bin/python -I -c "import pyowl_core; assert pyowl_core.__version__ == '0.1.1'"
+      - run: /tmp/pyowl-core-smoke/bin/python -I -c "import pyowl_core; assert pyowl_core.__version__ == '0.2.0'"

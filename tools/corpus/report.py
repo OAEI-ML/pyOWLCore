@@ -73,7 +73,7 @@ def build_report() -> dict[str, object]:
             "lock_sha256": _sha256(DATA / "external-oracles.toml"),
             "normal_lane_requires_external_oracle": False,
         },
-        "model_schema": 1,
+        "model_schema": 2,
         "python": ["3.10", "3.12"],
         "schema": 1,
         "status": "no-unexplained-deviations",

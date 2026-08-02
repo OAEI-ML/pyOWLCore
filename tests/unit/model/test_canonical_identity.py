@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -31,6 +32,12 @@ class CanonicalIdentityTests(unittest.TestCase):
         self.assertEqual(m.canonical_bytes(class_value), expected)
         self.assertEqual(
             m.structural_hexdigest(class_value),
+            "f707f6da3af9c5229ebe815213055808a62990ccebab2d3885ebdfa851249b74",
+        )
+        self.assertEqual(
+            hashlib.sha256(
+                b"pyowl-core:structural-value:v1\x00\x01" + expected
+            ).hexdigest(),
             "a552215a1bbdd4fc7e477d2af737482fe35ca0b5af0f19986b859656278ecf8f",
         )
 

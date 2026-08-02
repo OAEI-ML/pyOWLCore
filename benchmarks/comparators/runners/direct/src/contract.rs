@@ -79,7 +79,7 @@ pub(crate) fn build_contract(
     });
     let mut payload = json!({
         "schema": COMMON_CONTRACT_SCHEMA,
-        "model_schema": 1,
+        "model_schema": 2,
         "corpus_id": corpus_id,
         "source_sha256": source_sha256,
         "options_sha256": options_sha256,
@@ -126,7 +126,7 @@ pub(crate) fn validate_contract(value: &Value) -> Result<(), ContractError> {
         return Err(ContractError::new("common contract fields differ"));
     }
     if object.get("schema").and_then(Value::as_str) != Some(COMMON_CONTRACT_SCHEMA)
-        || object.get("model_schema").and_then(Value::as_u64) != Some(1)
+        || object.get("model_schema").and_then(Value::as_u64) != Some(2)
         || object
             .get("complete_import_closure")
             .and_then(Value::as_bool)
@@ -350,7 +350,7 @@ fn fingerprint(value: ComparatorFingerprintEvidence) -> Value {
     let digest = hex(value.sha256);
     json!({
         "algorithm": "sha256",
-        "schema": 1,
+        "schema": 2,
         "preimage_bytes": value.preimage_bytes,
         "preimage_sha256": digest,
         "digest": digest,
@@ -412,7 +412,7 @@ fn validate_fingerprints(value: Option<&Value>) -> Result<(), ContractError> {
             "common contract fingerprint",
         )?;
         if row.get("algorithm").and_then(Value::as_str) != Some("sha256")
-            || row.get("schema").and_then(Value::as_u64) != Some(1)
+            || row.get("schema").and_then(Value::as_u64) != Some(2)
             || row.get("preimage_bytes").and_then(Value::as_u64) == Some(0)
             || !row
                 .get("preimage_sha256")

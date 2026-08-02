@@ -1099,7 +1099,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("native parser depth overflow"))?;
         if self.depth > self.session.limits().value(LimitKey::MaxNestingDepth) {
-            return Err(NativeError::limit(
+            return Err(self.session.limits().resource_limit(
+                LimitKey::MaxNestingDepth,
+                self.depth,
                 "native parser exceeds max_nesting_depth",
             ));
         }
@@ -1355,8 +1357,10 @@ fn enforce(
     observed: usize,
     message: &'static str,
 ) -> NativeResult<()> {
-    if u64::try_from(observed).map_or(true, |value| value > session.limits().value(key)) {
-        return Err(NativeError::limit(message));
+    let observed = u64::try_from(observed)
+        .map_err(|_| NativeError::limit("native parser counter exceeds u64"))?;
+    if observed > session.limits().value(key) {
+        return Err(session.limits().resource_limit(key, observed, message));
     }
     Ok(())
 }

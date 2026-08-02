@@ -79,11 +79,11 @@ class AdapterRequirement:
     consumer: str
     consumer_version: str
     consumer_api: str
-    package_api: tuple[int, int] = (0, 1)
+    package_api: tuple[int, int] = (0, 2)
     adapter_protocol: int = 1
-    model_schema: int = 1
+    model_schema: int = 2
     wire_major: int = 1
-    minimum_wire_minor: int = 0
+    minimum_wire_minor: int = 2
     required_features: frozenset[str] = frozenset()
     required_encoded_view_schemas: Mapping[str, int] = field(default_factory=FrozenMap)
 

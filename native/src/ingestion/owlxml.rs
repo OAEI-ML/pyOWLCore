@@ -429,7 +429,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                         NativeError::limit("native OWL/XML element count exceeds u64")
                     })?;
                     if self.element_count > self.session.limits().value(LimitKey::MaxTerms) {
-                        return Err(NativeError::limit(
+                        return Err(self.session.limits().resource_limit(
+                            LimitKey::MaxTerms,
+                            self.element_count,
                             "native OWL/XML element count exceeds max_terms",
                         ));
                     }
@@ -700,7 +702,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("native OWL/XML root member count exceeds u64"))?;
         if self.root_member_count > self.session.limits().value(LimitKey::MaxTerms) {
-            return Err(NativeError::limit(
+            return Err(self.session.limits().resource_limit(
+                LimitKey::MaxTerms,
+                self.root_member_count,
                 "native OWL/XML root member count exceeds max_terms",
             ));
         }
@@ -1788,12 +1792,19 @@ fn split_qname(value: &str) -> NativeResult<(&str, &str)> {
 fn check_source(source: &[u8], session: &Session<'_>) -> NativeResult<()> {
     let size = u64::try_from(source.len())
         .map_err(|_| NativeError::limit("native OWL/XML source length exceeds u64"))?;
-    if size > session.limits().value(LimitKey::MaxSourceBytes)
-        || size > session.limits().value(LimitKey::MaxTotalSourceBytes)
-    {
-        return Err(NativeError::limit(
-            "native OWL/XML source exceeds configured resource limits",
-        ));
+    for (key, message) in [
+        (
+            LimitKey::MaxSourceBytes,
+            "native OWL/XML source exceeds max_source_bytes",
+        ),
+        (
+            LimitKey::MaxTotalSourceBytes,
+            "native OWL/XML source exceeds max_total_source_bytes",
+        ),
+    ] {
+        if size > session.limits().value(key) {
+            return Err(session.limits().resource_limit(key, size, message));
+        }
     }
     Ok(())
 }
@@ -1804,8 +1815,10 @@ fn enforce(
     observed: usize,
     message: &'static str,
 ) -> NativeResult<()> {
-    if u64::try_from(observed).map_or(true, |value| value > session.limits().value(key)) {
-        Err(NativeError::limit(message))
+    let observed = u64::try_from(observed)
+        .map_err(|_| NativeError::limit("native OWL/XML observation exceeds u64"))?;
+    if observed > session.limits().value(key) {
+        Err(session.limits().resource_limit(key, observed, message))
     } else {
         Ok(())
     }

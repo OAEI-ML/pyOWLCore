@@ -99,7 +99,9 @@ impl RetainedAxiomTypeIndexV1 {
             ));
         }
         if max_bytes > limits.value(LimitKey::MaxTemporaryBytes) {
-            return Err(NativeError::limit(
+            return Err(limits.resource_limit(
+                LimitKey::MaxTemporaryBytes,
+                max_bytes,
                 "retained axiom-type page exceeds max_temporary_bytes",
             ));
         }
@@ -178,10 +180,12 @@ impl RetainedAxiomTypeIndexV1 {
             let temporary_bytes = outer_bytes
                 .checked_add(retained_payload_bytes)
                 .ok_or_else(|| NativeError::limit("retained axiom-type page memory overflow"))?;
-            if u64::try_from(temporary_bytes).map_or(true, |value| {
-                value > limits.value(LimitKey::MaxTemporaryBytes)
-            }) {
-                return Err(NativeError::limit(
+            let observed = u64::try_from(temporary_bytes)
+                .map_err(|_| NativeError::limit("retained axiom-type page memory exceeds u64"))?;
+            if observed > limits.value(LimitKey::MaxTemporaryBytes) {
+                return Err(limits.resource_limit(
+                    LimitKey::MaxTemporaryBytes,
+                    observed,
                     "retained axiom-type page exceeds max_temporary_bytes",
                 ));
             }
@@ -222,9 +226,18 @@ pub(crate) fn build_retained_axiom_type_index_v1(
     let size_interrupt = interrupt.clone();
     let root_rows = u64::try_from(roots.len())
         .map_err(|_| NativeError::limit("retained axiom-type row count exceeds u64"))?;
-    if root_rows > limits.max_axioms || root_rows > limits.value(LimitKey::MaxIndexRows) {
-        return Err(NativeError::limit(
-            "retained axiom-type rows exceed configured limits",
+    if root_rows > limits.max_axioms {
+        return Err(limits.resource_limit(
+            LimitKey::MaxAxioms,
+            root_rows,
+            "retained axiom-type rows exceed max_axioms",
+        ));
+    }
+    if root_rows > limits.value(LimitKey::MaxIndexRows) {
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexRows,
+            root_rows,
+            "retained axiom-type rows exceed max_index_rows",
         ));
     }
     let mut guard = match interrupt {
@@ -299,7 +312,9 @@ pub(crate) fn build_retained_axiom_type_index_v1(
         )
         .ok_or_else(|| NativeError::limit("retained axiom-type work overflow"))?;
     if work > limits.max_canonical_work {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxCanonicalWork,
+            work,
             "retained axiom-type build exceeds max_canonical_work",
         ));
     }
@@ -352,7 +367,9 @@ pub(crate) fn build_retained_axiom_type_index_v1(
         )
         .ok_or_else(|| NativeError::limit("retained axiom-type work overflow"))?;
     if work > limits.max_canonical_work {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxCanonicalWork,
+            work,
             "retained axiom-type build exceeds max_canonical_work",
         ));
     }
@@ -473,7 +490,9 @@ fn step(guard: &mut Guard, work: &mut u64, limits: &Limits) -> NativeResult<()> 
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("retained axiom-type work overflow"))?;
     if *work > limits.max_canonical_work {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxCanonicalWork,
+            *work,
             "retained axiom-type build exceeds max_canonical_work",
         ));
     }
@@ -537,7 +556,9 @@ fn check_memory(
     let buffer_bytes = u64::try_from(buffer_bytes)
         .map_err(|_| NativeError::limit("retained axiom-type bytes exceed u64"))?;
     if buffer_bytes > limits.value(LimitKey::MaxIndexBytes) {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexBytes,
+            buffer_bytes,
             "retained axiom-type buffers exceed max_index_bytes",
         ));
     }
@@ -549,11 +570,11 @@ fn check_memory(
         .checked_add(caller_external_bytes)
         .and_then(|value| value.checked_add(buffer_bytes))
         .ok_or_else(|| NativeError::limit("retained axiom-type memory overflow"))?;
-    if limits
-        .max_memory_bytes
-        .is_some_and(|maximum| peak > maximum)
-    {
-        return Err(NativeError::limit(
+    if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| peak > *maximum) {
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            peak,
+            maximum,
             "retained axiom-type build exceeds max_memory_bytes",
         ));
     }

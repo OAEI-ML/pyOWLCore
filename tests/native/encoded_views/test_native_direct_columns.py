@@ -24,6 +24,9 @@ def extension() -> NativeTestExtension:
         "_encoded_structural_fixture_v1",
         "_encoded_structural_columns_v1",
         "_encoded_structural_document_columns_v1",
+        "_encoded_structural_fixture_v2",
+        "_encoded_structural_columns_v2",
+        "_encoded_structural_document_columns_v2",
     )
     if any(not hasattr(selected, name) for name in required):
         pytest.skip("selected native artifact lacks the WP17 direct-column hooks")
@@ -66,14 +69,37 @@ def _assert_direct_buffers(buffers: object, counters: object) -> None:
     assert observed["complete_root_encode_calls"] == 0
 
 
+def test_schema_v1_direct_entrypoints_fail_closed(
+    extension: NativeTestExtension,
+) -> None:
+    selected = cast(Any, extension)
+    handle = selected._encoded_structural_fixture_v2()
+    document = handle._publication_document_v2(0)
+    operations = (
+        selected._encoded_structural_fixture_v1,
+        lambda: selected._encoded_structural_columns_v1(
+            handle, "closure", None, _config()
+        ),
+        lambda: selected._encoded_structural_document_columns_v1(document, _config()),
+    )
+    for operation in operations:
+        with pytest.raises(extension._NativeError) as raised:
+            operation()
+        assert raised.value.args == (
+            "NATIVE_WIRE_VERSION",
+            "encoded structural schema 1 is frozen and not valid for model schema 2",
+        )
+    handle._publication_close_v2()
+
+
 def test_direct_snapshot_and_document_columns_share_one_python_owner(
     extension: NativeTestExtension,
 ) -> None:
     selected = cast(Any, extension)
-    handle = selected._encoded_structural_fixture_v1()
+    handle = selected._encoded_structural_fixture_v2()
     before = handle._publication_counters_v2()
 
-    buffers, counters = selected._encoded_structural_columns_v1(
+    buffers, counters = selected._encoded_structural_columns_v2(
         handle, "closure", None, _config()
     )
     _assert_direct_buffers(buffers, counters)
@@ -81,7 +107,7 @@ def test_direct_snapshot_and_document_columns_share_one_python_owner(
     assert decode_root_canonical_bytes(buffers) == ((2, expected),)
 
     document = handle._publication_document_v2(0)
-    document_buffers, document_counters = selected._encoded_structural_document_columns_v1(
+    document_buffers, document_counters = selected._encoded_structural_document_columns_v2(
         document, _config()
     )
     _assert_direct_buffers(document_buffers, document_counters)
@@ -98,30 +124,30 @@ def test_direct_columns_fail_closed_for_coordinates_and_lifecycle(
     extension: NativeTestExtension,
 ) -> None:
     selected = cast(Any, extension)
-    handle = selected._encoded_structural_fixture_v1()
+    handle = selected._encoded_structural_fixture_v2()
     before = handle._publication_counters_v2().encoded_view_requests
 
     with pytest.raises(ValueError, match="scope and document ordinal disagree"):
-        selected._encoded_structural_columns_v1(handle, "closure", 0, _config())
+        selected._encoded_structural_columns_v2(handle, "closure", 0, _config())
     with pytest.raises(TypeError, match="exact str"):
-        selected._encoded_structural_columns_v1(handle, _Scope("closure"), None, _config())
+        selected._encoded_structural_columns_v2(handle, _Scope("closure"), None, _config())
     assert handle._publication_counters_v2().encoded_view_requests == before
 
     handle._publication_close_v2()
     with pytest.raises(ClosedSnapshotError):
-        selected._encoded_structural_columns_v1(handle, "closure", None, _config())
+        selected._encoded_structural_columns_v2(handle, "closure", None, _config())
 
 
 def test_direct_bridge_allocation_checkpoints_fail_before_publication(
     extension: NativeTestExtension,
 ) -> None:
-    probe = getattr(extension, "_encoded_structural_bridge_allocation_probe_v1", None)
+    probe = getattr(extension, "_encoded_structural_bridge_allocation_probe_v2", None)
     if not callable(probe):
         if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
             pytest.fail("selected native test-hooks artifact lacks the encoded bridge probe")
         pytest.skip("selected native artifact lacks the encoded bridge allocation hook")
     invoke = cast(Any, probe)
-    handle = cast(Any, extension)._encoded_structural_fixture_v1()
+    handle = cast(Any, extension)._encoded_structural_fixture_v2()
     before = handle._publication_counters_v2().encoded_view_requests
 
     buffers, counters, allocations = invoke(handle, "closure", None, _config(), None)
@@ -160,7 +186,7 @@ def test_direct_document_bridge_allocations_fail_before_publication(
 ) -> None:
     probe = getattr(
         extension,
-        "_encoded_structural_document_bridge_allocation_probe_v1",
+        "_encoded_structural_document_bridge_allocation_probe_v2",
         None,
     )
     if not callable(probe):
@@ -170,7 +196,7 @@ def test_direct_document_bridge_allocations_fail_before_publication(
             )
         pytest.skip("selected native artifact lacks the document bridge allocation hook")
     invoke = cast(Any, probe)
-    handle = cast(Any, extension)._encoded_structural_fixture_v1()
+    handle = cast(Any, extension)._encoded_structural_fixture_v2()
     document = handle._publication_document_v2(0)
     before = handle._publication_counters_v2().encoded_view_requests
 
@@ -208,13 +234,13 @@ def test_direct_document_bridge_allocations_fail_before_publication(
 def test_direct_workspace_allocation_checkpoints_fail_before_publication(
     extension: NativeTestExtension,
 ) -> None:
-    probe = getattr(extension, "_encoded_structural_workspace_allocation_probe_v1", None)
+    probe = getattr(extension, "_encoded_structural_workspace_allocation_probe_v2", None)
     if not callable(probe):
         if os.environ.get("PYOWL_CORE_TEST_HOOKS_REQUIRED") == "1":
             pytest.fail("selected native test-hooks artifact lacks the encoded workspace probe")
         pytest.skip("selected native artifact lacks the encoded workspace allocation hook")
     invoke = cast(Any, probe)
-    handle = cast(Any, extension)._encoded_structural_fixture_v1()
+    handle = cast(Any, extension)._encoded_structural_fixture_v2()
     before = handle._publication_counters_v2().encoded_view_requests
 
     buffers, counters, allocations = invoke(handle, "closure", None, _config(), None)

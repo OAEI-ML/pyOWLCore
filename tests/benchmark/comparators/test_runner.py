@@ -350,6 +350,15 @@ def test_runtime_source_identity_binds_all_new_evidence_and_native_schema_inputs
         "tools/benchmark/report.py",
         "schemas/encoded-view-v1.json",
         "schemas/encoded-view-v1.toml",
+        "schemas/encoded-view-v2.json",
+        "schemas/encoded-view-v2.toml",
+        "schemas/model-v1.toml",
+        "schemas/model-v2.toml",
+        "schemas/native-snapshot-publication-v1.toml",
+        "schemas/native-snapshot-publication-v2.toml",
+        "schemas/version-decision-v1.toml",
+        "schemas/version-decision-v2.toml",
+        "schemas/wire-v1.toml",
     }
 
     assert expected_paths <= set(inputs)

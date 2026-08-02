@@ -192,7 +192,7 @@ final class Canonical {
     static byte[] structuralDigest(byte[] value) {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         output.writeBytes("pyowl-core:structural-value:v1\0".getBytes(StandardCharsets.UTF_8));
-        varint(output, 1);
+        varint(output, 2);
         output.writeBytes(value);
         return sha256(output.toByteArray());
     }

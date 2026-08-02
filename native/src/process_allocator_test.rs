@@ -9,9 +9,9 @@ use crate::index::{
 };
 use crate::limits::Limits;
 use crate::model::{
-    prepare_encoded_structural_columns_from_tables_v1, Category, ComponentFieldRef, ComponentId,
-    EncodedRootKindV1, EncodedRootTableV1, FrozenComponentBuild, NativeComponentArena,
-    NativeComponentBuilder, NativeComponentDigestIndex, PreparedEncodedStructuralColumnsV1,
+    prepare_encoded_structural_columns_from_tables_v2, Category, ComponentFieldRef, ComponentId,
+    EncodedRootKindV2, EncodedRootTableV2, FrozenComponentBuild, NativeComponentArena,
+    NativeComponentBuilder, NativeComponentDigestIndex, PreparedEncodedStructuralColumnsV2,
 };
 use crate::publication::{
     TypedFacadeBuilderV2, TypedFacadeCollectionV2, TypedFacadeCoordinateV2,
@@ -481,11 +481,11 @@ impl ComponentEncodingFixture {
     /// The returned one-shot fixture isolates the production publication
     /// allocation from its already validated discovery/sort workspace.
     pub fn prepare_encoded_columns(&self) -> Result<EncodedColumnPublicationFixture<'_>, Failure> {
-        let tables = [EncodedRootTableV1::new(
-            EncodedRootKindV1::Axiom,
+        let tables = [EncodedRootTableV2::new(
+            EncodedRootKindV2::Axiom,
             &self.identifiers,
         )];
-        let prepared = prepare_encoded_structural_columns_from_tables_v1(
+        let prepared = prepare_encoded_structural_columns_from_tables_v2(
             self.frozen.arena(),
             &tables,
             &Limits::default(),
@@ -883,7 +883,7 @@ impl TypedFacadeIndexFixture {
 /// One prepared encoded-column result whose eleven production buffers have
 /// not yet been allocated.
 pub struct EncodedColumnPublicationFixture<'arena> {
-    prepared: PreparedEncodedStructuralColumnsV1<'arena>,
+    prepared: PreparedEncodedStructuralColumnsV2<'arena>,
 }
 
 impl EncodedColumnPublicationFixture<'_> {

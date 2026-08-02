@@ -1,0 +1,184 @@
+{
+  "contract": {
+    "backend": "python",
+    "imports": "ignore",
+    "max_diagnostics": 32,
+    "parse_entrypoint_calls": 1,
+    "strict_rdf_mapping": true
+  },
+  "implementation": {
+    "api_version": [
+      0,
+      2
+    ],
+    "model_schema": 2,
+    "pyowl_core_version": "0.2.0",
+    "source_sha256": {
+      "src/pyowl_core/api.py": "83f7c57a0b6644bcf77897c5e63eec92ca86077ea718c384c46fa102672bbad7",
+      "src/pyowl_core/backends/python/parser.py": "a0129c51ec14b0b34b53a064a80b83fdeab84dfbdfb24b74e09c0301dd911d3c",
+      "src/pyowl_core/config.py": "87fda504e3e3b37c944189c5a6a3954a9cd2f4727bd880ad87bfb60803bdddb3",
+      "src/pyowl_core/document/provenance.py": "6f1deb7dc6208dace6c659452e4546ac6f26e824d66c7f84a2fcde1f42e65892",
+      "src/pyowl_core/exceptions.py": "53bf1629eeed8e04379fcce4fe7dfdfc88bb76d4e3f96552f7c2fa4bebfa0555",
+      "src/pyowl_core/io/formats/rdf.py": "86ff9abc2506dbe00d527ad62f8618fdd6657233a0a28ec9dcd99725da3e1225",
+      "src/pyowl_core/io/formats/rdfxml.py": "64df0dd34b63ec026986218f621fefa011ad969ec492165d46c56a4e491e93f6"
+    }
+  },
+  "measurement": {
+    "formal_performance_claim": false,
+    "peak_rss_bytes": 643796992,
+    "rss_semantics": "fresh-process resource.getrusage(RUSAGE_SELF) high-water bytes",
+    "sample_count": 1,
+    "wall_clock": "time.perf_counter_ns",
+    "wall_ns": 144114441172
+  },
+  "result": {
+    "exception": {
+      "code": "RDF_MAPPING_INCOMPLETE",
+      "diagnostic_attached": false,
+      "rdf_mapping_report_attached": true,
+      "reification_evidence_count": 0,
+      "reification_issue_count": null,
+      "reification_suppressed_count": null,
+      "type": "UnsupportedSyntaxError"
+    },
+    "mapping_report": {
+      "conformant": false,
+      "consumed_triples": 305901,
+      "diagnostics_count": 0,
+      "dropped_triples": 18,
+      "evidence_sha256": "95977283a0092a1a8557536ade6bbf28e11b91ecdf609929fc7e7b0b2fe8ca79",
+      "object_kinds": [
+        "literal"
+      ],
+      "predicates": [
+        "http://purl.obolibrary.org/obo/OBI_9991118",
+        "http://www.geneontology.org/formats/oboInOwl#created_by"
+      ],
+      "retained_unconsumed_count": 18,
+      "rule_ids": [
+        "OWL2-RDF-REVERSE"
+      ],
+      "suppressed_unconsumed_count": 0,
+      "total_triples": 305919,
+      "unconsumed": [
+        {
+          "object": "'infectious disease'",
+          "object_kind": "literal",
+          "predicate": "http://purl.obolibrary.org/obo/OBI_9991118",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0050117>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061238>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061239>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061240>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061241>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061242>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061243>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061244>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061245>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061246>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061247>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061248>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061249>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061250>"
+        },
+        {
+          "object": "'claudiasbj'",
+          "object_kind": "literal",
+          "predicate": "http://www.geneontology.org/formats/oboInOwl#created_by",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_0061251>"
+        },
+        {
+          "object": "'allergic disease'",
+          "object_kind": "literal",
+          "predicate": "http://purl.obolibrary.org/obo/OBI_9991118",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_1205>"
+        },
+        {
+          "object": "'neoplasm'",
+          "object_kind": "literal",
+          "predicate": "http://purl.obolibrary.org/obo/OBI_9991118",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_14566>"
+        },
+        {
+          "object": "'autoimmune disease'",
+          "object_kind": "literal",
+          "predicate": "http://purl.obolibrary.org/obo/OBI_9991118",
+          "subject": "<http://purl.obolibrary.org/obo/DOID_417>"
+        }
+      ]
+    }
+  },
+  "schema": "pyowl-core/doid-rdf-mapping-source-evidence/v1",
+  "source": {
+    "bytes": 28385948,
+    "corpus_id": "oaei-bioml-doid-2026",
+    "format": "rdfxml",
+    "revision": "OAEI-ML/bio-ml@2026/ontologies/DOID-611355c44553-doid.owl",
+    "sha256": "611355c445537fcf4bae2c519f1b3598af5a8fea793274316e35525b7d05e945"
+  },
+  "status": "pass"
+}

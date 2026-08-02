@@ -7,15 +7,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import NoReturn, Protocol, cast
 
-from pyowl_core.backends.native_views import validate_encoded_structural_view_v1
+from pyowl_core.backends.native_views import validate_encoded_structural_view_v2
 from pyowl_core.document.snapshot import AxiomScope, OntologyView
 from pyowl_core.limits import ParseLimits
 
 _SCHEMA_NAME = "pyowl-core/structural-columns"
-_SCHEMA_VERSION = 1
-_MODEL_SCHEMA = 1
+_SCHEMA_VERSION = 2
+_MODEL_SCHEMA = 2
 _DESCRIPTOR_SHA256 = bytes.fromhex(
-    "9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5"
+    "c51d0eb7ecf6f29ad3495fe7c40a2ea6741cf03a7cf194d51417bb810df90f51"
 )
 
 _BUFFER_WIDTHS = {
@@ -256,7 +256,7 @@ def _validate_buffer(name: str, value: object) -> memoryview:
 
 def _columns(buffers: Mapping[str, memoryview]) -> dict[str, _Column | memoryview]:
     if set(buffers) != set(_BUFFER_WIDTHS):
-        _fail("encoded buffer names do not match schema v1", "INDEPENDENT_COLUMNS")
+        _fail("encoded buffer names do not match schema v2", "INDEPENDENT_COLUMNS")
     result: dict[str, _Column | memoryview] = {}
     for name, width in _BUFFER_WIDTHS.items():
         value = _validate_buffer(name, buffers[name])
@@ -344,7 +344,7 @@ def _decode_local_roots(buffers: Mapping[str, memoryview]) -> tuple[_LocalRoot, 
             integer = int.from_bytes(payload, "little")
             return _DecodedComponent(b"\x04" + _varint(integer), ())
         if kind not in {_SET, _SEQUENCE}:
-            _fail("component kind is not in schema v1", "INDEPENDENT_COLUMNS")
+            _fail("component kind is not in schema v2", "INDEPENDENT_COLUMNS")
         end = value + length
         if end < value or end > len(item_kinds):
             _fail("component item range exceeds item columns", "INDEPENDENT_COLUMNS")
@@ -392,15 +392,11 @@ def _decode_local_roots(buffers: Mapping[str, memoryview]) -> tuple[_LocalRoot, 
                 fields.append(decoded)
                 field_starts.append(len(output))
                 output.extend(decoded.canonical)
-                anonymous.extend(
-                    _shift_anonymous(decoded.anonymous_identities, field_starts[-1])
-                )
+                anonymous.extend(_shift_anonymous(decoded.anonymous_identities, field_starts[-1]))
             if tags[index] == 3:
                 document_scope = fields[0].scalar_payload if len(fields) == 2 else None
                 local_key = fields[1].scalar_payload if len(fields) == 2 else None
-                scope_payload_offset = (
-                    fields[0].scalar_payload_offset if len(fields) == 2 else None
-                )
+                scope_payload_offset = fields[0].scalar_payload_offset if len(fields) == 2 else None
                 if (
                     len(fields) != 2
                     or document_scope is None
@@ -418,9 +414,7 @@ def _decode_local_roots(buffers: Mapping[str, memoryview]) -> tuple[_LocalRoot, 
                         field_starts[0] + scope_payload_offset,
                     )
                 )
-            decoded_node = _DecodedComponent(
-                bytes(output), _deduplicate_anonymous(anonymous)
-            )
+            decoded_node = _DecodedComponent(bytes(output), _deduplicate_anonymous(anonymous))
             memo[node_id] = decoded_node
             return decoded_node
         finally:
@@ -436,7 +430,7 @@ def _decode_local_roots(buffers: Mapping[str, memoryview]) -> tuple[_LocalRoot, 
 def decode_root_canonical_bytes(
     buffers: Mapping[str, memoryview],
 ) -> tuple[tuple[int, bytes], ...]:
-    """Decode only the documented columns into canonical-model-v1 root bytes."""
+    """Decode only the documented columns into canonical-model-v2 root bytes."""
 
     return tuple((root.root_kind, root.canonical) for root in _decode_local_roots(buffers))
 
@@ -464,7 +458,7 @@ def _view_metadata(view: _View) -> tuple[bytes, str, str | None]:
         or type(descriptor) is not bytes
         or hashlib.sha256(descriptor).digest() != _DESCRIPTOR_SHA256
     ):
-        _fail("encoded view does not match frozen schema v1", "INDEPENDENT_DESCRIPTOR")
+        _fail("encoded view does not match frozen schema v2", "INDEPENDENT_DESCRIPTOR")
     try:
         algorithm = fingerprint.algorithm
         fingerprint_schema = fingerprint.schema
@@ -476,7 +470,7 @@ def _view_metadata(view: _View) -> tuple[bytes, str, str | None]:
     if (
         algorithm != "sha256"
         or type(fingerprint_schema) is not int
-        or fingerprint_schema != 1
+        or fingerprint_schema != 2
         or type(digest) is not bytes
         or len(digest) != 32
     ):
@@ -569,14 +563,12 @@ def _apply_postings(
         return tuple(
             root
             for root in roots
-            if root.origin_view_id == id(source)
-            and root.located.locator.local_root_id in selected
+            if root.origin_view_id == id(source) and root.located.locator.local_root_id in selected
         )
     return tuple(
         root
         for root in roots
-        if root.origin_view_id != id(source)
-        or root.located.locator.local_root_id not in selected
+        if root.origin_view_id != id(source) or root.located.locator.local_root_id not in selected
     )
 
 
@@ -592,8 +584,7 @@ def _apply_scope_map(
     mapped: list[_ResolvedRoot] = []
     for root in roots:
         if not any(
-            occurrence.document_scope in replacements
-            for occurrence in root.anonymous_occurrences
+            occurrence.document_scope in replacements for occurrence in root.anonymous_occurrences
         ):
             mapped.append(root)
             continue
@@ -771,9 +762,7 @@ def _resolve(view: _View, state: _DecodeState, *, referenced: bool) -> tuple[_Re
         local_roots = tuple(
             _ResolvedRoot(
                 IndependentLocatedRoot(
-                    locator := IndependentRootLocator(
-                        (), digest, scope, document_key, index
-                    ),
+                    locator := IndependentRootLocator((), digest, scope, document_key, index),
                     (locator,),
                     root.root_kind,
                     root.canonical,
@@ -825,9 +814,7 @@ def _resolve(view: _View, state: _DecodeState, *, referenced: bool) -> tuple[_Re
                 _fail("overlay base segment is invalid", "INDEPENDENT_SEGMENTS")
             resolved.extend(
                 _apply_postings(
-                    _apply_scope_map(
-                        _resolve(source, state, referenced=True), scope_map
-                    ),
+                    _apply_scope_map(_resolve(source, state, referenced=True), scope_map),
                     source,
                     mode,
                     postings,
@@ -877,9 +864,7 @@ def _resolve(view: _View, state: _DecodeState, *, referenced: bool) -> tuple[_Re
                     _fail("composite member segment is invalid", "INDEPENDENT_SEGMENTS")
                 tokens.append(token)
                 selected = _apply_postings(
-                    _apply_scope_map(
-                        _resolve(source, state, referenced=True), scope_map
-                    ),
+                    _apply_scope_map(_resolve(source, state, referenced=True), scope_map),
                     source,
                     mode,
                     postings,
@@ -913,7 +898,7 @@ def _resolve(view: _View, state: _DecodeState, *, referenced: bool) -> tuple[_Re
 
 
 def _decode_segmented_root_canonical_bytes(view: object) -> IndependentSegmentDecode:
-    """Resolve a core-validated or synthetic V1 segment graph.
+    """Resolve a core-validated or synthetic V2 segment graph.
 
     INCLUDE and EXCLUDE address only roots local to the referenced source view.
     Nested referenced roots survive EXCLUDE and are omitted by INCLUDE. Composite
@@ -951,7 +936,7 @@ def decode_segmented_root_canonical_bytes(
     returned validated graph.
     """
 
-    validated = validate_encoded_structural_view_v1(
+    validated = validate_encoded_structural_view_v2(
         candidate,
         expected_owner=expected_owner,
         expected_scope=expected_scope,

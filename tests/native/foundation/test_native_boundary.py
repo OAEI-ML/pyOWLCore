@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from pyowl_core import ParseLimits, canonical_bytes
 from pyowl_core.backends import native
-from pyowl_core.exceptions import PyOWLCoreError, WireCorruptionError, WireError, WireLimitError
+from pyowl_core.exceptions import PyOWLCoreError, ResourceLimitError, WireCorruptionError, WireError
 from pyowl_core.extensions.swrl import Variable
 from pyowl_core.model import (
     IRI,
@@ -40,8 +40,8 @@ class NativeBoundaryTests(unittest.TestCase):
     def test_exact_versions_features_and_self_test(self) -> None:
         extension = self.extension
         self.assertEqual(extension.ABI_VERSION, 3)
-        self.assertEqual(extension.MODEL_SCHEMA_VERSION, 1)
-        self.assertEqual(extension.WIRE_FORMAT_VERSION, (1, 1))
+        self.assertEqual(extension.MODEL_SCHEMA_VERSION, 2)
+        self.assertEqual(extension.WIRE_FORMAT_VERSION, (1, 2))
         self.assertEqual(extension.FEATURES, tuple(sorted(set(extension.FEATURES))))
         self.assertEqual(
             extension.INGESTION_FEATURES,
@@ -61,18 +61,25 @@ class NativeBoundaryTests(unittest.TestCase):
         self.assertEqual(native._CONFIG.unpack(config)[0:4], (b"PYNCONF\0", 1, 1, 0))
 
         iri = canonical_bytes(IRI("urn:native-limit"))
-        with self.assertRaises(WireLimitError):
+        with self.assertRaises(ResourceLimitError) as iri_error:
             native.validate_canonical(iri, limits=ParseLimits(max_iri_bytes=4))
+        self.assertEqual(
+            (iri_error.exception.limit, iri_error.exception.allowed),
+            ("max_iri_bytes", 4),
+        )
+        self.assertGreater(iri_error.exception.observed, iri_error.exception.allowed)
 
         literal = canonical_bytes(Literal("native-limit", RDF_PLAIN_LITERAL))
-        with self.assertRaises(WireLimitError):
+        with self.assertRaises(ResourceLimitError) as literal_error:
             native.validate_canonical(literal, limits=ParseLimits(max_literal_bytes=4))
+        self.assertEqual(literal_error.exception.limit, "max_literal_bytes")
 
-        with self.assertRaises(WireLimitError):
+        with self.assertRaises(ResourceLimitError) as work_error:
             native.validate_canonical(
                 iri,
                 limits=ParseLimits(max_canonical_work=len(iri) - 1),
             )
+        self.assertEqual(work_error.exception.limit, "max_canonical_work")
 
     def test_every_model_constructor_has_canonical_byte_parity(self) -> None:
         fixtures = model_fixtures()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Final
+from typing import Final, TypeAlias
 
 from .backends.native_handoff import NativeSnapshotAttestationV1
 from .backends.native_handoff_v2 import (
@@ -23,6 +23,23 @@ MODEL_SCHEMA_VERSION: Final[int]
 WIRE_FORMAT_VERSION: Final[tuple[int, int]]
 FEATURES: Final[tuple[str, ...]]
 INGESTION_FEATURES: Final[tuple[str, ...]]
+
+_AnonymousShapeMetrics: TypeAlias = tuple[int, int, int, int, int, int, int, int]
+_AnonymousWorkMetrics: TypeAlias = tuple[int, int, int, int, int, int, int]
+_AnonymousAllocationMetrics: TypeAlias = tuple[int]
+_AnonymousMetrics: TypeAlias = tuple[
+    _AnonymousShapeMetrics,
+    _AnonymousWorkMetrics,
+    _AnonymousAllocationMetrics,
+]
+_RetainedFunctionalMetadata: TypeAlias = tuple[
+    tuple[int, int, int, int],
+    _AnonymousMetrics,
+]
+_RetainedStructuralMetadata: TypeAlias = tuple[
+    tuple[int, int, int, int, int],
+    _AnonymousMetrics,
+]
 VIEW_FEATURES: Final[tuple[str, ...]]
 
 class _NativeError(Exception): ...
@@ -56,7 +73,6 @@ class _NativeSnapshotHandle:
     def _publication_document_v2(self, document_ordinal: int) -> _NativeDocumentHandle: ...
 
 class _NativeParsedStructuralStorageV2: ...
-
 class _NativePreparedStructuralClosureV2: ...
 
 class _NativeRetainedAxiomTypeIndexV1:
@@ -134,14 +150,21 @@ def _encoded_structural_columns_v1(
     config: object,
     cancel: _Cancellation | None = None,
 ) -> tuple[dict[str, memoryview], dict[str, int]]: ...
-def _encoded_structural_bridge_allocation_probe_v1(
+def _encoded_structural_columns_v2(
+    handle: _NativeSnapshotHandle,
+    scope: object,
+    document_ordinal: int | None,
+    config: object,
+    cancel: _Cancellation | None = None,
+) -> tuple[dict[str, memoryview], dict[str, int]]: ...
+def _encoded_structural_bridge_allocation_probe_v2(
     handle: _NativeSnapshotHandle,
     scope: object,
     document_ordinal: int | None,
     config: object,
     fail_after: int | None = None,
 ) -> tuple[dict[str, memoryview], dict[str, int], int]: ...
-def _encoded_structural_document_bridge_allocation_probe_v1(
+def _encoded_structural_document_bridge_allocation_probe_v2(
     handle: _NativeDocumentHandle,
     config: object,
     fail_after: int | None = None,
@@ -187,7 +210,7 @@ def _retained_document_handle_bridge_allocation_probe_v1(
     document_ordinal: int,
     fail_after: int | None = None,
 ) -> tuple[_NativeDocumentHandle, int]: ...
-def _encoded_structural_workspace_allocation_probe_v1(
+def _encoded_structural_workspace_allocation_probe_v2(
     handle: _NativeSnapshotHandle,
     scope: object,
     document_ordinal: int | None,
@@ -254,6 +277,11 @@ def _foundation_bridge_allocation_probe_v1(
     fail_after: int | None = None,
 ) -> tuple[bytes, int]: ...
 def _encoded_structural_document_columns_v1(
+    handle: _NativeDocumentHandle,
+    config: object,
+    cancel: _Cancellation | None = None,
+) -> tuple[dict[str, memoryview], dict[str, int]]: ...
+def _encoded_structural_document_columns_v2(
     handle: _NativeDocumentHandle,
     config: object,
     cancel: _Cancellation | None = None,
@@ -458,7 +486,7 @@ def _parse_functional_retained_v2(
     cancel: _Cancellation | None = None,
     *,
     materialize_document: bool = False,
-) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int]]: ...
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, _RetainedFunctionalMetadata]: ...
 def _parse_rdfxml_retained_v2(
     source: object,
     document_iri: str | None,
@@ -468,7 +496,7 @@ def _parse_rdfxml_retained_v2(
     allow_swrl: bool,
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
-) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, _RetainedStructuralMetadata]: ...
 def _parse_rdfxml_retained_source_map_v2(
     source: object,
     document_iri: str | None,
@@ -478,7 +506,7 @@ def _parse_rdfxml_retained_source_map_v2(
     allow_swrl: bool,
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
-) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, _RetainedStructuralMetadata]: ...
 def _parse_turtle_retained_v2(
     source: object,
     document_iri: str | None,
@@ -488,7 +516,7 @@ def _parse_turtle_retained_v2(
     allow_swrl: bool,
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
-) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, _RetainedStructuralMetadata]: ...
 def _parse_turtle_retained_source_map_v2(
     source: object,
     document_iri: str | None,
@@ -498,7 +526,7 @@ def _parse_turtle_retained_source_map_v2(
     allow_swrl: bool,
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
-) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, _RetainedStructuralMetadata]: ...
 def _parse_owlxml_retained_v2(
     source: object,
     document_iri: str | None,
@@ -507,7 +535,7 @@ def _parse_owlxml_retained_v2(
     allow_swrl: bool,
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
-) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, _RetainedStructuralMetadata]: ...
 def _parse_owlxml_retained_source_map_v2(
     source: object,
     document_iri: str | None,
@@ -516,7 +544,7 @@ def _parse_owlxml_retained_source_map_v2(
     allow_swrl: bool,
     require_empty_imports: bool,
     cancel: _Cancellation | None = None,
-) -> tuple[bytes, _NativeParsedStructuralStorageV2, tuple[int, int, int, int, int]]: ...
+) -> tuple[bytes, _NativeParsedStructuralStorageV2, _RetainedStructuralMetadata]: ...
 def _prepare_parsed_structural_snapshot_v2(
     parsed: _NativeParsedStructuralStorageV2,
     manifest: bytes,
@@ -548,6 +576,19 @@ def _finalize_parsed_structural_bridge_allocation_probe_v2(
 def _work_probe(iterations: int, config: object, cancel: _Cancellation | None = None) -> int: ...
 def _panic_probe() -> None: ...
 def _encoded_structural_fixture_v1() -> _NativeSnapshotHandle: ...
+def _encoded_structural_fixture_v2() -> _NativeSnapshotHandle: ...
+def _encoded_view_schema_v1(
+    schema_name: str,
+    schema_version: int,
+    model_schema: int,
+    descriptor_sha256: bytes,
+) -> tuple[str, int, int, bytes, bytes, str, bool]: ...
+def _encoded_view_schema_v2(
+    schema_name: str,
+    schema_version: int,
+    model_schema: int,
+    descriptor_sha256: bytes,
+) -> tuple[str, int, int, bytes, bytes, str, bool]: ...
 def _publication_fixture_v2(
     attestation: NativeSnapshotAttestationV2,
     collections: Mapping[tuple[object, ...], Sequence[bytes]],

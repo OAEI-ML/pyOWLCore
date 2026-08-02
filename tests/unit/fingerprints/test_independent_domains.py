@@ -43,7 +43,7 @@ def _fingerprint_bytes(value) -> bytes:  # type: ignore[no-untyped-def]
 
 
 def _independent_document(document) -> bytes:  # type: ignore[no-untyped-def]
-    pieces = [b"pyowl-core:document-fingerprint:v1\x00"]
+    pieces = [b"pyowl-core:document-fingerprint:v2\x00"]
     for iri in (document.ontology_id.ontology_iri, document.ontology_id.version_iri):
         pieces.append(b"0" if iri is None else b"1" + _frame(canonical_bytes(iri)))
     for values in (
@@ -58,7 +58,7 @@ def _independent_document(document) -> bytes:  # type: ignore[no-untyped-def]
 
 def _independent_snapshot(snapshot) -> bytes:  # type: ignore[no-untyped-def]
     pieces = [
-        b"pyowl-core:snapshot-structural:v1\x00",
+        b"pyowl-core:snapshot-structural:v2\x00",
         _frame(snapshot.import_manifest.canonical_bytes()),
     ]
     for record in snapshot.import_manifest.documents:
@@ -79,7 +79,7 @@ def _independent_snapshot(snapshot) -> bytes:  # type: ignore[no-untyped-def]
 def _context_bytes(context) -> bytes:  # type: ignore[no-untyped-def]
     fingerprints = context.fingerprints
     pieces = [
-        b"pyowl-core:view-structure-context:v1\x00",
+        b"pyowl-core:view-structure-context:v2\x00",
         _frame(context.kind.value.encode("ascii")),
         encode_varint(len(fingerprints)),
     ]
@@ -90,8 +90,8 @@ def _context_bytes(context) -> bytes:  # type: ignore[no-untyped-def]
 def _independent_effective(view) -> bytes:  # type: ignore[no-untyped-def]
     context = view.structural_context
     domain = {
-        StructuralContextKind.OVERLAY: b"pyowl-core:overlay-structural:v1\x00",
-        StructuralContextKind.COMPOSITE: b"pyowl-core:composite-structural:v1\x00",
+        StructuralContextKind.OVERLAY: b"pyowl-core:overlay-structural:v2\x00",
+        StructuralContextKind.COMPOSITE: b"pyowl-core:composite-structural:v2\x00",
     }[context.kind]
     pieces = [domain, _frame(_context_bytes(context))]
     pieces.append(_collection(view.ontology_annotations()))
@@ -120,7 +120,7 @@ def _independent_logical(view) -> bytes:  # type: ignore[no-untyped-def]
         {canonical_bytes(_without_annotations(item)) for item in view.iter_extensions()}
     )
     pieces = [
-        b"pyowl-core:snapshot-logical:v1\x00",
+        b"pyowl-core:snapshot-logical:v2\x00",
         b"datatype-policy:owl2-v1\x00",
         encode_varint(len(axioms)),
         *(_frame(item) for item in axioms),
@@ -133,7 +133,7 @@ def _independent_logical(view) -> bytes:  # type: ignore[no-untyped-def]
 def _independent_signature(view) -> bytes:  # type: ignore[no-untyped-def]
     values = tuple(view.signature())
     pieces = [
-        b"pyowl-core:snapshot-signature:v1\x00",
+        b"pyowl-core:snapshot-signature:v2\x00",
         b"\x01",
         encode_varint(len(values)),
         *(_frame(canonical_bytes(item)) for item in values),
@@ -176,6 +176,10 @@ def test_document_and_snapshot_domains_match_independent_encoder() -> None:
     )
     document = snapshot.root
 
+    assert document.document_fingerprint.schema == 2
+    assert snapshot.structural_fingerprint.schema == 2
+    assert snapshot.logical_fingerprint.schema == 2
+    assert snapshot.signature_fingerprint.schema == 2
     assert document.document_fingerprint.digest == _independent_document(document)
     assert snapshot.structural_fingerprint.digest == _independent_snapshot(snapshot)
     assert snapshot.logical_fingerprint.digest == _independent_logical(snapshot)

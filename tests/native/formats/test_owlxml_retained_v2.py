@@ -151,9 +151,7 @@ def _guarded_public(
         return loader(
             cast(Any, source),
             document_iri=DOCUMENT_IRI,
-            options=(
-                _public_options(BackendPreference.NATIVE) if options is None else options
-            ),
+            options=(_public_options(BackendPreference.NATIVE) if options is None else options),
         )
 
 
@@ -224,7 +222,7 @@ def test_private_owlxml_owner_is_non_rdf_and_matches_python_fingerprints(
         assert parsed.parsed is None
         assert type(parsed.storage) is extension._NativeParsedStructuralStorageV2
         assert seed.rows == (1, 1, 0)
-        assert tuple(name for name, _value in parsed.phase_timings) == (
+        assert tuple(name for name, _value in parsed.phase_timings)[:5] == (
             "native_owlxml_syntax_parse_seconds",
             "native_owlxml_structural_mapping_seconds",
             "native_result_encode_seconds",
@@ -287,10 +285,7 @@ def test_guarded_public_owlxml_routes_through_the_retained_owner(loader: Any) ->
             selected_document.provenance.source_sha256
             == reference_document.provenance.source_sha256
         )
-        assert (
-            selected_document.provenance.digest_kind
-            is reference_document.provenance.digest_kind
-        )
+        assert selected_document.provenance.digest_kind is reference_document.provenance.digest_kind
         assert (
             selected_document.provenance.decoded_codepoint_length
             == reference_document.provenance.decoded_codepoint_length
@@ -382,10 +377,7 @@ def test_guarded_public_owlxml_content_detection_routes_to_retained_owner() -> N
     try:
         assert type(selected).__name__ == "_NativeOntologySnapshot"
         assert selected.root.provenance.format is DocumentFormat.OWL_XML
-        assert (
-            selected.root.provenance.detection_basis
-            is reference.root.provenance.detection_basis
-        )
+        assert selected.root.provenance.detection_basis is reference.root.provenance.detection_basis
         assert selected.root.source_map == reference.root.source_map
         assert selected.structural_fingerprint == reference.structural_fingerprint
     finally:
@@ -458,9 +450,7 @@ def test_guarded_public_owlxml_every_constructor_is_owner_first() -> None:
         assert selected.logical_fingerprint == reference.logical_fingerprint
         assert selected.signature_fingerprint == reference.signature_fingerprint
         assert encode_snapshot(selected) == encode_snapshot(reference)
-        counters = (
-            selected._native_snapshot_state.owner.handle._owner_v2._publication_counters_v2()
-        )
+        counters = selected._native_snapshot_state.owner.handle._owner_v2._publication_counters_v2()
         assert counters.parser_bytes == len(source)
         assert counters.publication_structural_rows_copied == 0
         assert counters.publication_structural_bytes_copied == 0
@@ -687,8 +677,7 @@ def test_guarded_owlxml_mixed_format_import_closure_merges_retained_owners(
         assert encode_snapshot(selected) == encode_snapshot(reference)
         assert len(selected.documents) == 4
         assert all(
-            type(document).__name__ == "_NativeOntologyDocument"
-            for document in selected.documents
+            type(document).__name__ == "_NativeOntologyDocument" for document in selected.documents
         )
         assert tuple(document.source_map for document in selected.documents) == tuple(
             document.source_map for document in reference.documents
@@ -700,9 +689,7 @@ def test_guarded_owlxml_mixed_format_import_closure_merges_retained_owners(
             DocumentFormat.TURTLE,
         }
         assert all(document.provenance.backend == "native" for document in selected.documents)
-        counters = (
-            selected._native_snapshot_state.owner.handle._owner_v2._publication_counters_v2()
-        )
+        counters = selected._native_snapshot_state.owner.handle._owner_v2._publication_counters_v2()
         assert counters.parser_bytes == sum(
             map(
                 len,

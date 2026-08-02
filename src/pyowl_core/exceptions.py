@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+import math
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, ClassVar
 
-from .diagnostics import Diagnostic, Severity, validate_diagnostic_code
+from ._immutable import freeze_mapping
+from .diagnostics import (
+    Diagnostic,
+    DiagnosticScalar,
+    Severity,
+    validate_diagnostic_code,
+)
+
+if TYPE_CHECKING:
+    from .document.provenance import RDFMappingReport
 
 
 class PyOWLCoreError(Exception):
@@ -63,6 +74,54 @@ class OntologySyntaxError(ParseError):
 class UnsupportedSyntaxError(ParseError):
     DEFAULT_CODE = "UNSUPPORTED_SYNTAX"
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        rdf_mapping_report: RDFMappingReport | None = None,
+        reification_evidence: tuple[Diagnostic, ...] = (),
+        reification_issue_count: int | None = None,
+        code: str | None = None,
+        diagnostic: Diagnostic | None = None,
+    ) -> None:
+        if rdf_mapping_report is not None:
+            from .document.provenance import RDFMappingReport
+
+            if not isinstance(rdf_mapping_report, RDFMappingReport):
+                raise TypeError("rdf_mapping_report must be RDFMappingReport or None")
+        evidence = tuple(reification_evidence)
+        if not all(isinstance(item, Diagnostic) for item in evidence):
+            raise TypeError("reification_evidence must contain only Diagnostic values")
+        if reification_issue_count is not None and (
+            isinstance(reification_issue_count, bool)
+            or not isinstance(reification_issue_count, int)
+            or reification_issue_count < len(evidence)
+        ):
+            raise ValueError(
+                "reification_issue_count must be a nonnegative integer at least as large "
+                "as the retained evidence count"
+            )
+        self.rdf_mapping_report = rdf_mapping_report
+        self.reification_evidence = evidence
+        self.reification_issue_count = reification_issue_count
+        self.reification_evidence_count = len(evidence)
+        self.reification_suppressed_count = (
+            None if reification_issue_count is None else reification_issue_count - len(evidence)
+        )
+        super().__init__(message, code=code, diagnostic=diagnostic)
+        if rdf_mapping_report is not None and self.code != "RDF_MAPPING_INCOMPLETE":
+            raise ValueError("rdf_mapping_report is valid only for RDF_MAPPING_INCOMPLETE")
+        if (evidence or reification_issue_count is not None) and self.code != (
+            "RDF_AXIOM_REIFICATION"
+        ):
+            raise ValueError("reification evidence is valid only for RDF_AXIOM_REIFICATION")
+        if any(item.code != "RDF_AXIOM_REIFICATION" for item in evidence):
+            raise ValueError("reification evidence diagnostics must use RDF_AXIOM_REIFICATION")
+        if evidence and diagnostic != evidence[0]:
+            raise ValueError(
+                "the primary diagnostic must equal the first retained reification evidence"
+            )
+
 
 class ImportResolutionError(PyOWLCoreError):
     DEFAULT_CODE = "IMPORT_RESOLUTION"
@@ -101,16 +160,41 @@ class ResourceLimitError(PyOWLCoreError):
         self,
         message: str,
         *,
-        limit: str | None = None,
-        observed: int | float | None = None,
-        allowed: int | float | None = None,
+        limit: str,
+        observed: int | float,
+        allowed: int | float,
+        details: Mapping[str, DiagnosticScalar] | None = None,
         code: str | None = None,
         diagnostic: Diagnostic | None = None,
     ) -> None:
+        if not isinstance(limit, str) or not limit:
+            raise ValueError("limit must be a nonempty string")
+        for name, value in (("observed", observed), ("allowed", allowed)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be an integer or float")
+            if value < 0 or not math.isfinite(value):
+                raise ValueError(f"{name} must be nonnegative and finite")
+        selected_details: dict[str, DiagnosticScalar] = (
+            {} if diagnostic is None else dict(diagnostic.details)
+        )
+        if details is not None:
+            for key, detail_value in details.items():
+                if not isinstance(key, str) or not key:
+                    raise TypeError("resource-limit detail keys must be nonempty strings")
+                if not isinstance(detail_value, (str, int, bool)):
+                    raise TypeError("resource-limit detail values must be str, int, or bool")
+                selected_details[key] = detail_value
         self.limit = limit
         self.observed = observed
         self.allowed = allowed
+        self.details = freeze_mapping(selected_details)
         super().__init__(message, code=code, diagnostic=diagnostic)
+
+    def as_diagnostic(self, *, severity: Severity = Severity.ERROR) -> Diagnostic:
+        diagnostic = super().as_diagnostic(severity=severity)
+        if diagnostic.details == self.details:
+            return diagnostic
+        return diagnostic.with_details(**dict(self.details))
 
 
 class OperationCancelledError(PyOWLCoreError):

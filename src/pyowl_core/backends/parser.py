@@ -153,7 +153,11 @@ class _NativeBackendDriver:
             limits=limits,
             collect_provenance=collect_provenance,
             preserve_source_map=preserve_source_map,
-            allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+            # The public strict boundary needs the mapper's already-computed
+            # bounded report.  Native parsing therefore retains diagnostic
+            # evidence in the same pass; publication below decides whether to
+            # return the diagnostic document or raise with that report.
+            allow_partial_rdf_mapping=True,
             allow_swrl=allow_swrl,
             require_empty_imports=require_empty_imports,
             cancellation_token=cancellation_token,
@@ -191,7 +195,7 @@ class _NativeBackendDriver:
             limits=limits,
             collect_provenance=collect_provenance,
             preserve_source_map=preserve_source_map,
-            allow_partial_rdf_mapping=allow_partial_rdf_mapping,
+            allow_partial_rdf_mapping=True,
             allow_swrl=allow_swrl,
             require_empty_imports=require_empty_imports,
             cancellation_token=cancellation_token,

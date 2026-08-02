@@ -10,12 +10,14 @@ import re
 import struct
 import sysconfig
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, TypeVar, cast
 
+from pyowl_core._evidence import bounded_evidence_text
 from pyowl_core.cancellation import CancellationToken
+from pyowl_core.diagnostics import Diagnostic, Severity
 from pyowl_core.exceptions import (
     BackendProtocolError,
     BackendUnavailableError,
@@ -24,7 +26,6 @@ from pyowl_core.exceptions import (
     ResourceLimitError,
     UnsupportedSyntaxError,
     WireCorruptionError,
-    WireLimitError,
     WireVersionError,
 )
 from pyowl_core.limits import ParseLimits
@@ -35,13 +36,18 @@ if TYPE_CHECKING:
     from pyowl_core.model.axioms import AxiomNode
 
 _ABI_VERSION = 3
-_MODEL_SCHEMA_VERSION = 1
-_WIRE_FORMAT_VERSION = (1, 1)
+_MODEL_SCHEMA_VERSION = 2
+_WIRE_FORMAT_VERSION = (1, 2)
 _CONFIG = struct.Struct("<8sHHI37Q")
 _RECEIPT = struct.Struct("<8sIIHHIQ32sIQ")
 _CONFIG_MAGIC = b"PYNCONF\0"
 _RECEIPT_MAGIC = b"PYNVAL1\0"
 _PARSE_REQUEST = struct.Struct("<8sHHQ")
+
+_RetainedBindingMetadata: TypeAlias = tuple[
+    tuple[int, ...],
+    tuple[tuple[int, ...], tuple[int, ...]],
+]
 _PARSE_RESULT_HEADER = struct.Struct("<8sHHQ")
 _PARSE_REQUEST_MAGIC = b"PYNFSS1\0"
 _PARSE_RESULT_MAGIC = b"PYNFSSR1"
@@ -55,10 +61,15 @@ _INDEX_SOURCE_MAGIC = b"PYNIDXS1"
 _INDEX_REQUEST_MAGIC = b"PYNIDXQ1"
 _INDEX_RESULT_MAGIC = b"PYNIDXR1"
 _CODE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_LIMIT_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_LIMIT_DETAIL_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_RDF_REIFICATION_ERROR_MAGIC = b"PYNRFE2\0"
+_MAX_RDF_EVIDENCE_BYTES = 4_096
+_MAX_RDF_REIFICATION_PAYLOAD_BYTES = 32 * 1_024
 _EXTENSION_NAME = "pyowl_core._native"
 _FOUNDATION_FEATURES = frozenset(
     {
-        "canonical-model-v1",
+        "canonical-model-v2",
         "cancellation",
         "deadlines",
         "gil-release",
@@ -175,7 +186,7 @@ class _Extension(Protocol):
         cancel: _NativeCancellation | None = None,
         *,
         materialize_document: bool = False,
-    ) -> tuple[bytes, object, tuple[int, int, int, int]]: ...
+    ) -> tuple[bytes, object, _RetainedBindingMetadata]: ...
 
     def _parse_rdfxml_retained_v2(
         self,
@@ -187,7 +198,7 @@ class _Extension(Protocol):
         allow_swrl: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
-    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+    ) -> tuple[bytes, object, _RetainedBindingMetadata]: ...
 
     def _parse_rdfxml_retained_source_map_v2(
         self,
@@ -199,7 +210,7 @@ class _Extension(Protocol):
         allow_swrl: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
-    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+    ) -> tuple[bytes, object, _RetainedBindingMetadata]: ...
 
     def _parse_turtle_retained_v2(
         self,
@@ -211,7 +222,7 @@ class _Extension(Protocol):
         allow_swrl: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
-    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+    ) -> tuple[bytes, object, _RetainedBindingMetadata]: ...
 
     def _parse_turtle_retained_source_map_v2(
         self,
@@ -223,7 +234,7 @@ class _Extension(Protocol):
         allow_swrl: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
-    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+    ) -> tuple[bytes, object, _RetainedBindingMetadata]: ...
 
     def _parse_owlxml_retained_v2(
         self,
@@ -234,7 +245,7 @@ class _Extension(Protocol):
         allow_swrl: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
-    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+    ) -> tuple[bytes, object, _RetainedBindingMetadata]: ...
 
     def _parse_owlxml_retained_source_map_v2(
         self,
@@ -245,7 +256,7 @@ class _Extension(Protocol):
         allow_swrl: bool,
         require_empty_imports: bool,
         cancel: _NativeCancellation | None = None,
-    ) -> tuple[bytes, object, tuple[int, int, int, int, int]]: ...
+    ) -> tuple[bytes, object, _RetainedBindingMetadata]: ...
 
     def _fork_parsed_structural_storage_v2(
         self,
@@ -343,6 +354,85 @@ class _NativeRetainedFunctionalParseV2:
     summary: bytes | None = None
 
 
+_ANONYMOUS_SHAPE_TIMING_NAMES = (
+    "native_anonymous_component_count",
+    "native_anonymous_total_labels",
+    "native_anonymous_total_arcs",
+    "native_anonymous_largest_component_labels",
+    "native_anonymous_largest_component_arcs",
+    "native_anonymous_largest_component_roots",
+    "native_anonymous_maximum_root_interval_span",
+    "native_anonymous_maximum_open_root_intervals",
+)
+_ANONYMOUS_WORK_TIMING_NAMES = (
+    "native_anonymous_total_setup_work",
+    "native_anonymous_total_refinement_work",
+    "native_anonymous_total_candidate_order_work",
+    "native_anonymous_total_canonical_work",
+    "native_anonymous_largest_component_work",
+    "native_anonymous_maximum_refinement_rounds",
+    "native_anonymous_total_permutations_examined",
+)
+_ANONYMOUS_ALLOCATION_TIMING_NAMES = ("native_anonymous_accounted_bytes",)
+_MAX_EXACT_FLOAT_INTEGER = 1 << 53
+
+
+def _retained_phase_timings(
+    metadata: object,
+    phase_names: tuple[str, ...],
+    *,
+    label: str,
+) -> tuple[tuple[str, float], ...]:
+    if type(metadata) is not tuple or len(metadata) != 2:
+        raise BackendProtocolError(
+            f"native retained {label} parser returned invalid phase metadata",
+            code="NATIVE_RESULT_TYPE",
+        )
+    phases, anonymous = metadata
+    if (
+        type(phases) is not tuple
+        or len(phases) != len(phase_names)
+        or not all(type(value) is int and value >= 0 for value in phases)
+        or type(anonymous) is not tuple
+        or len(anonymous) != 3
+    ):
+        raise BackendProtocolError(
+            f"native retained {label} parser returned invalid phase metadata",
+            code="NATIVE_RESULT_TYPE",
+        )
+    shape, work, allocation = anonymous
+    if (
+        type(shape) is not tuple
+        or len(shape) != len(_ANONYMOUS_SHAPE_TIMING_NAMES)
+        or type(work) is not tuple
+        or len(work) != len(_ANONYMOUS_WORK_TIMING_NAMES)
+        or type(allocation) is not tuple
+        or len(allocation) != len(_ANONYMOUS_ALLOCATION_TIMING_NAMES)
+    ):
+        raise BackendProtocolError(
+            f"native retained {label} parser returned invalid anonymous metrics",
+            code="NATIVE_RESULT_TYPE",
+        )
+    metrics = shape + work + allocation
+    if not all(type(value) is int and 0 <= value <= _MAX_EXACT_FLOAT_INTEGER for value in metrics):
+        raise BackendProtocolError(
+            f"native retained {label} parser returned inexact anonymous metrics",
+            code="NATIVE_RESULT_TYPE",
+        )
+    return tuple(
+        (name, value / 1_000_000_000) for name, value in zip(phase_names, phases, strict=True)
+    ) + tuple(
+        (name, float(value))
+        for name, value in zip(
+            _ANONYMOUS_SHAPE_TIMING_NAMES
+            + _ANONYMOUS_WORK_TIMING_NAMES
+            + _ANONYMOUS_ALLOCATION_TIMING_NAMES,
+            metrics,
+            strict=True,
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _CachedRuntime:
     key: tuple[int, int]
@@ -405,7 +495,7 @@ def validate_canonical(
     limits: ParseLimits | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> bytes:
-    extension = require("canonical-model-v1")
+    extension = require("canonical-model-v2")
     selected = _coerce_limits(limits)
     config = _encode_config(selected, cancellation_token, verify=True)
     with _relay(extension, selected, cancellation_token) as cancel:
@@ -588,23 +678,16 @@ def _parse_functional_retained_v2(
             "native retained parser returned an invalid storage owner",
             code="NATIVE_RESULT_TYPE",
         )
-    if (
-        type(phases) is not tuple
-        or len(phases) != 4
-        or not all(type(value) is int and value >= 0 for value in phases)
-    ):
-        raise BackendProtocolError(
-            "native retained parser returned invalid phase counters",
-            code="NATIVE_RESULT_TYPE",
-        )
     names = (
         "native_syntax_parse_seconds",
         "native_result_encode_seconds",
         "native_arena_construction_seconds",
         "native_freeze_seconds",
     )
-    phase_timings = tuple(
-        (name, value / 1_000_000_000) for name, value in zip(names, phases, strict=True)
+    phase_timings = _retained_phase_timings(
+        phases,
+        names,
+        label="Functional",
     )
     if framing.startswith(_PARSE_RESULT_MAGIC):
         return _NativeRetainedFunctionalParseV2(
@@ -806,19 +889,8 @@ def _parse_structural_retained_v2(
             f"native retained {label} parser returned invalid result members",
             code="NATIVE_RESULT_TYPE",
         )
-    if (
-        type(phases) is not tuple
-        or len(phases) != 5
-        or not all(type(value) is int and value >= 0 for value in phases)
-    ):
-        raise BackendProtocolError(
-            f"native retained {label} parser returned invalid phase counters",
-            code="NATIVE_RESULT_TYPE",
-        )
     expected_magic = (
-        _RETAINED_FUNCTIONAL_SEED_MAGIC_V2
-        if syntax == "owlxml"
-        else _RETAINED_RDFXML_SEED_MAGIC_V2
+        _RETAINED_FUNCTIONAL_SEED_MAGIC_V2 if syntax == "owlxml" else _RETAINED_RDFXML_SEED_MAGIC_V2
     )
     if not framing.startswith(expected_magic):
         raise BackendProtocolError(
@@ -836,10 +908,15 @@ def _parse_structural_retained_v2(
         "native_arena_construction_seconds",
         "native_freeze_seconds",
     )
+    phase_timings = _retained_phase_timings(
+        phases,
+        names,
+        label=label,
+    )
     return _NativeRetainedFunctionalParseV2(
         None,
         storage,
-        tuple((name, value / 1_000_000_000) for name, value in zip(names, phases, strict=True)),
+        phase_timings,
         summary=framing,
     )
 
@@ -1325,8 +1402,7 @@ def _retained_signature_counts_v1(
         or type(effective_root_table_sha256) is not bytes
         or len(effective_root_table_sha256) != 32
         or root_table_sha256 != getattr(attestation, "root_table_sha256", None)
-        or effective_root_table_sha256
-        != getattr(attestation, "effective_root_table_sha256", None)
+        or effective_root_table_sha256 != getattr(attestation, "effective_root_table_sha256", None)
     ):
         raise BackendProtocolError(
             "native retained signature belongs to a foreign publication",
@@ -1355,8 +1431,10 @@ def _retained_signature_counts_v1(
         "canonical_work",
         "complete_root_encode_calls",
     }
-    if type(counters) is not dict or set(counters) != expected_counter_names or any(
-        type(value) is not int or value < 0 for value in counters.values()
+    if (
+        type(counters) is not dict
+        or set(counters) != expected_counter_names
+        or any(type(value) is not int or value < 0 for value in counters.values())
     ):
         raise BackendProtocolError(
             "native retained signature returned invalid counters",
@@ -1369,15 +1447,11 @@ def _retained_signature_counts_v1(
         or any(value == 0 for value in referenced)
         or any(
             nonannotation_value > referenced_value
-            for referenced_value, nonannotation_value in zip(
-                referenced, nonannotation, strict=True
-            )
+            for referenced_value, nonannotation_value in zip(referenced, nonannotation, strict=True)
         )
         or any(
             declaration_value > referenced_value
-            for referenced_value, declaration_value in zip(
-                referenced, declarations, strict=True
-            )
+            for referenced_value, declaration_value in zip(referenced, declarations, strict=True)
         )
         or counters["referenced_links"] != sum(referenced)
         or counters["nonannotation_links"] != sum(nonannotation)
@@ -1447,11 +1521,14 @@ def _retained_ontology_identity_index_owner_v1(
     if (
         type(expected_root) is not str
         or not expected_root
-        or any(type(value) is not bytes or len(value) != 32 for value in (
-            expected_metadata,
-            expected_diagnostics,
-            expected_report,
-        ))
+        or any(
+            type(value) is not bytes or len(value) != 32
+            for value in (
+                expected_metadata,
+                expected_diagnostics,
+                expected_report,
+            )
+        )
         or any(type(value) is not int or value < 0 for value in expected_counts.values())
     ):
         raise BackendProtocolError(
@@ -1482,11 +1559,14 @@ def _retained_ontology_identity_index_owner_v1(
     if (
         type(root_document_key) is not str
         or not root_document_key
-        or any(type(value) is not bytes or len(value) != 32 for value in (
-            metadata_digest,
-            diagnostic_digest,
-            report_digest,
-        ))
+        or any(
+            type(value) is not bytes or len(value) != 32
+            for value in (
+                metadata_digest,
+                diagnostic_digest,
+                report_digest,
+            )
+        )
         or type(counters) is not dict
         or set(counters) != expected_counter_names
         or any(type(value) is not int or value < 0 for value in counters.values())
@@ -1632,16 +1712,12 @@ def _validate_metadata(extension: _Extension) -> tuple[str, ...]:
     features = extension.FEATURES
     if (
         type(features) is not tuple
-        or not all(
-            type(value) is str and value and value.isascii() for value in features
-        )
+        or not all(type(value) is str and value and value.isascii() for value in features)
         or tuple(sorted(set(features))) != features
         or not _FOUNDATION_FEATURES.issubset(features)
     ):
         raise ValueError("native feature ledger is invalid")
-    ingestion = _validate_feature_partition(
-        "ingestion", extension.INGESTION_FEATURES, features
-    )
+    ingestion = _validate_feature_partition("ingestion", extension.INGESTION_FEATURES, features)
     views = _validate_feature_partition("view", extension.VIEW_FEATURES, features)
     ingestion_set = set(ingestion)
     view_set = set(views)
@@ -1861,7 +1937,7 @@ def _call(extension: _Extension, operation: Callable[[], T]) -> T:
         if code == "NATIVE_CANCELLED":
             raise OperationCancelledError(message, code=code) from error
         if code in {"NATIVE_DEADLINE", "NATIVE_WIRE_LIMIT"}:
-            raise WireLimitError(message, code=code) from error
+            raise _native_resource_limit_error(extension, error, message, code) from error
         if code == "NATIVE_WIRE_VERSION":
             raise WireVersionError(message, code=code) from error
         if code == "NATIVE_WIRE_CORRUPTION":
@@ -1887,7 +1963,7 @@ def _call_parse_value(extension: _Extension, operation: Callable[[], object]) ->
         if code == "NATIVE_CANCELLED":
             raise OperationCancelledError(message, code=code) from error
         if code in {"NATIVE_DEADLINE", "NATIVE_WIRE_LIMIT"}:
-            raise ResourceLimitError(message, code=code) from error
+            raise _native_resource_limit_error(extension, error, message, code) from error
         if code in {
             "NATIVE_FORMAT_ENCODING",
             "NATIVE_FORMAT_SYNTAX",
@@ -1903,12 +1979,30 @@ def _call_parse_value(extension: _Extension, operation: Callable[[], object]) ->
             "NATIVE_XML_FORBIDDEN_CONSTRUCT",
         }:
             raise OntologySyntaxError(message, code=code.removeprefix("NATIVE_")) from error
+        if code == "NATIVE_RDF_AXIOM_REIFICATION":
+            decoded = _private_reification_diagnostics(extension, error, message)
+            if len(error.args) == 3 and decoded is None:
+                raise BackendProtocolError(
+                    "native RDF reification error payload is invalid",
+                    code="NATIVE_ERROR_PAYLOAD",
+                ) from error
+            evidence: tuple[Diagnostic, ...] = ()
+            issue_count: int | None = None
+            diagnostic: Diagnostic | None = None
+            if decoded is not None:
+                evidence, issue_count, diagnostic = decoded
+            raise UnsupportedSyntaxError(
+                message,
+                code="RDF_AXIOM_REIFICATION",
+                diagnostic=diagnostic,
+                reification_evidence=evidence,
+                reification_issue_count=issue_count,
+            ) from error
         if code in {
             "NATIVE_EXTENSION_DISABLED",
             "NATIVE_RDFXML_RETAINED_UNSUPPORTED",
             "NATIVE_TURTLE_RETAINED_UNSUPPORTED",
             "NATIVE_OWLXML_RETAINED_UNSUPPORTED",
-            "NATIVE_RDF_AXIOM_REIFICATION",
             "NATIVE_RDF_MAPPING_CARDINALITY",
             "NATIVE_RDF_MAPPING_INCOMPLETE",
             "NATIVE_RDF_MAPPING_TYPE",
@@ -1951,7 +2045,7 @@ def _call_index_value(extension: _Extension, operation: Callable[[], T]) -> T:
         if code == "NATIVE_CANCELLED":
             raise OperationCancelledError(message, code=code) from error
         if code in {"NATIVE_DEADLINE", "NATIVE_WIRE_LIMIT"}:
-            raise ResourceLimitError(message, code=code) from error
+            raise _native_resource_limit_error(extension, error, message, code) from error
         if code == "NATIVE_CAPABILITY_UNAVAILABLE":
             raise BackendUnavailableError(message, code=code) from error
         raise BackendProtocolError(message, code=code) from error
@@ -2277,17 +2371,269 @@ def _decode_axiom_partition(
 
 
 def _private_error_code(extension: _Extension, error: Exception) -> str | None:
-    if not isinstance(error, extension._NativeError) or len(error.args) != 2:
+    if not isinstance(error, extension._NativeError) or len(error.args) not in {2, 3}:
+        return None
+    if len(error.args) == 3 and type(error.args[2]) is not dict:
         return None
     code = error.args[0]
     return code if isinstance(code, str) and _CODE.fullmatch(code) else None
 
 
 def _private_error_message(error: Exception) -> str:
-    message = error.args[1] if len(error.args) == 2 else None
+    message = error.args[1] if len(error.args) in {2, 3} else None
     if not isinstance(message, str) or not message or len(message) > 200:
         return "native backend reported an invalid error payload"
     return "".join(character if character.isprintable() else "?" for character in message)
+
+
+def _private_reification_diagnostics(
+    extension: _Extension,
+    error: Exception,
+    message: str,
+) -> tuple[tuple[Diagnostic, ...], int, Diagnostic] | None:
+    """Decode bounded structural evidence from native reification failures."""
+
+    if not isinstance(error, extension._NativeError) or len(error.args) != 3:
+        return None
+    raw = error.args[2]
+    if type(raw) is not dict or set(raw) != {"kind", "data"}:
+        return None
+    if raw["kind"] != "rdf_reification_v2" or type(raw["data"]) is not bytes:
+        return None
+    data = raw["data"]
+    if (
+        not data.startswith(_RDF_REIFICATION_ERROR_MAGIC)
+        or len(data) > _MAX_RDF_REIFICATION_PAYLOAD_BYTES
+    ):
+        return None
+    offset = len(_RDF_REIFICATION_ERROR_MAGIC)
+    if offset + 12 > len(data):
+        return None
+    issue_count = int.from_bytes(data[offset : offset + 8], "little")
+    retained_count = int.from_bytes(data[offset + 8 : offset + 12], "little")
+    offset += 12
+    if issue_count < 1 or retained_count > issue_count:
+        return None
+    evidence_count = retained_count
+    suppressed_count = issue_count - evidence_count
+    diagnostics: list[Diagnostic] = []
+
+    for _ in range(retained_count):
+        if offset >= len(data) or data[offset] not in {0, 1, 2}:
+            return None
+        presence = data[offset]
+        offset += 1
+
+        fields: list[tuple[int, str]] = []
+        for _ in range(5):
+            if offset + 5 > len(data):
+                return None
+            kind = data[offset]
+            length = int.from_bytes(data[offset + 1 : offset + 5], "little")
+            offset += 5
+            if length > _MAX_RDF_EVIDENCE_BYTES or offset + length > len(data):
+                return None
+            try:
+                text = data[offset : offset + length].decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+            offset += length
+            fields.append((kind, text))
+        diagnostic = _private_reification_record_diagnostic(
+            fields,
+            presence=presence,
+            message=message,
+            issue_count=issue_count,
+            evidence_count=evidence_count,
+            suppressed_count=suppressed_count,
+        )
+        if diagnostic is None:
+            return None
+        diagnostics.append(diagnostic)
+    if offset != len(data):
+        return None
+    evidence = tuple(diagnostics)
+    primary = (
+        evidence[0]
+        if evidence
+        else Diagnostic(
+            code="RDF_AXIOM_REIFICATION",
+            severity=Severity.ERROR,
+            message=message,
+            details={
+                "reification_issue_count": issue_count,
+                "reification_evidence_count": 0,
+                "reification_suppressed_count": issue_count,
+            },
+        )
+    )
+    return evidence, issue_count, primary
+
+
+def _private_reification_record_diagnostic(
+    fields: list[tuple[int, str]],
+    *,
+    presence: int,
+    message: str,
+    issue_count: int,
+    evidence_count: int,
+    suppressed_count: int,
+) -> Diagnostic | None:
+    reason_kind, reason = fields[0]
+    if reason_kind != 4 or reason not in {
+        "ANNOTATION_CYCLE",
+        "MAIN_TRIPLE_ABSENT",
+        "METADATA_AMBIGUOUS",
+        "METADATA_INCOMPLETE",
+        "METADATA_TYPE_INVALID",
+        "NODE_KIND_CONFLICT",
+        "UNCLAIMED_MAIN_TRIPLE",
+    }:
+        return None
+    node = _decode_reification_resource(fields[1])
+    source = _decode_reification_resource(fields[2])
+    property_value = _decode_reification_text(fields[3])
+    target = _decode_reification_term(fields[4])
+    if any(value is _INVALID_RDF_ERROR_FIELD for value in (node, source, property_value, target)):
+        return None
+
+    details: dict[str, str | int | bool] = {
+        "reification_error": reason,
+        "reification_issue_count": issue_count,
+        "reification_evidence_count": evidence_count,
+        "reification_suppressed_count": suppressed_count,
+    }
+    if isinstance(node, tuple):
+        details["reification_subject"] = node[0]
+    if isinstance(source, tuple):
+        details["annotated_source"] = source[0]
+    if isinstance(property_value, str):
+        details["annotated_property"] = property_value
+    if isinstance(target, tuple):
+        details["annotated_target"] = target[0]
+        details["annotated_target_kind"] = target[1]
+    if presence:
+        details["main_triple_present"] = presence == 2
+
+    return Diagnostic(
+        code="RDF_AXIOM_REIFICATION",
+        severity=Severity.ERROR,
+        message=message,
+        details=details,
+    )
+
+
+_INVALID_RDF_ERROR_FIELD = object()
+
+
+def _decode_reification_resource(value: tuple[int, str]) -> object:
+    kind, text = value
+    if kind == 0 and not text:
+        return None
+    if kind == 1 and text:
+        rendered = f"<{text}>"
+        return (_bounded_rdf_error_text(rendered), "iri")
+    if kind == 2 and text:
+        return (_bounded_rdf_error_text("_:" + text), "blank")
+    return _INVALID_RDF_ERROR_FIELD
+
+
+def _decode_reification_term(value: tuple[int, str]) -> object:
+    kind, text = value
+    if kind in {0, 1, 2}:
+        return _decode_reification_resource(value)
+    if kind == 3:
+        return (_bounded_rdf_error_text(repr(text)), "literal")
+    return _INVALID_RDF_ERROR_FIELD
+
+
+def _decode_reification_text(value: tuple[int, str]) -> object:
+    kind, text = value
+    if kind == 0 and not text:
+        return None
+    if kind == 4 and text:
+        return _bounded_rdf_error_text(text)
+    return _INVALID_RDF_ERROR_FIELD
+
+
+def _bounded_rdf_error_text(value: str) -> str:
+    return bounded_evidence_text(value, max_bytes=_MAX_RDF_EVIDENCE_BYTES)
+
+
+def _private_resource_limit_payload(
+    extension: _Extension,
+    error: Exception,
+) -> tuple[str, int | float, int | float, Mapping[str, str | int | bool]] | None:
+    """Validate the private typed limit frame without consulting its message."""
+
+    if not isinstance(error, extension._NativeError) or len(error.args) != 3:
+        return None
+    raw = error.args[2]
+    if type(raw) is not dict or set(raw) != {
+        "kind",
+        "limit",
+        "observed",
+        "allowed",
+        "details",
+    }:
+        return None
+    if raw["kind"] != "resource_limit":
+        return None
+    limit = raw["limit"]
+    observed = raw["observed"]
+    allowed = raw["allowed"]
+    details = raw["details"]
+    if not isinstance(limit, str) or _LIMIT_NAME.fullmatch(limit) is None:
+        return None
+    for value in (observed, allowed):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if value < 0 or not math.isfinite(value):
+            return None
+    if type(details) is not dict or len(details) > 16:
+        return None
+    clean_details: dict[str, str | int | bool] = {}
+    for key, value in details.items():
+        if not isinstance(key, str) or _LIMIT_DETAIL_KEY.fullmatch(key) is None:
+            return None
+        if not isinstance(value, (str, int, bool)):
+            return None
+        if isinstance(value, str) and (len(value) > 200 or not value.isprintable()):
+            return None
+        if isinstance(value, int) and not isinstance(value, bool) and value < 0:
+            return None
+        clean_details[key] = value
+    work_term = clean_details.get("work_term")
+    if work_term is not None and work_term not in {
+        "setup",
+        "refinement",
+        "candidate_orders",
+    }:
+        return None
+    return limit, observed, allowed, clean_details
+
+
+def _native_resource_limit_error(
+    extension: _Extension,
+    error: Exception,
+    message: str,
+    code: str,
+) -> ResourceLimitError:
+    payload = _private_resource_limit_payload(extension, error)
+    if payload is None:
+        raise BackendProtocolError(
+            "native configured-limit failure omitted its typed payload",
+            code="NATIVE_LIMIT_PAYLOAD",
+        ) from error
+    limit, observed, allowed, details = payload
+    return ResourceLimitError(
+        message,
+        limit=limit,
+        observed=observed,
+        allowed=allowed,
+        details=details,
+        code=code,
+    )
 
 
 def _decode_receipt(data: bytes) -> NativeValidation:

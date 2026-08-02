@@ -89,12 +89,12 @@ ENGINE_ARTIFACT = "PyPI sdist py_horned_owl-1.4.0.tar.gz"
 ENGINE_SHA256 = "7146d0887c5ec119e423e56c9221cc0ca7da54739be36ce3ed916503348f942d"
 FEATURES = (
     "abi3-wrapper",
-    "independent-common-contract-v1",
+    "independent-common-contract-v2",
     "verified-sdist-install-v1",
 )
 ALLOCATOR = "Rust system allocator and CPython platform allocator"
 THREAD_CEILING = 1
-RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v9"
+RUNNER_REVISION = "pyowl-core-py-horned-common-runner-v10"
 
 MAX_REQUEST_BYTES = 512 * 1024**2
 MAX_RESPONSE_BYTES = 256 * 1024**2

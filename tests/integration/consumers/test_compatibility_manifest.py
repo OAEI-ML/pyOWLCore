@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any, cast
 
 import pyowl_core
-from pyowl_core.adapters import AdapterRequirement, negotiate_capabilities, negotiate_view
+from pyowl_core.adapters import (
+    AdapterRequirement,
+    CoreContract,
+    negotiate_capabilities,
+    negotiate_view,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "reports" / "integration" / "consumer-compatibility.json"
@@ -18,8 +23,15 @@ CORE_RUNTIME_TREE = "d4f3f29f6594b59f3d45a4811c38fb761a7028b9"
 CORE_DIRECT_SAFETY_COMMIT = "a81665241ae86036a3fbe0325f7bcf43660f3a12"
 CORE_PERFORMANCE_EVIDENCE_COMMIT = "4fe32971780e38d2d83932bb93b8c2195bdfcc5f"
 CORE_ADAPTER_CONTRACT_COMMIT = "75132daaf8f665b6f72dbbd7c9fcf30ef23e1eb7"
-STRUCTURAL_SCHEMA_DESCRIPTOR = "9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5"
-STRUCTURAL_SCHEMA_REQUIREMENT = {"pyowl-core/structural-columns": 1}
+HISTORICAL_STRUCTURAL_SCHEMA_DESCRIPTOR = (
+    "9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5"
+)
+HISTORICAL_STRUCTURAL_SCHEMA_REQUIREMENT = {"pyowl-core/structural-columns": 1}
+CURRENT_STRUCTURAL_SCHEMA_DESCRIPTOR = (
+    "c51d0eb7ecf6f29ad3495fe7c40a2ea6741cf03a7cf194d51417bb810df90f51"
+)
+CURRENT_STRUCTURAL_SCHEMA_REQUIREMENT = {"pyowl-core/structural-columns": 2}
+CURRENT_CORE = CoreContract("0.2.0", (0, 2), 1, 2, (1, 2))
 CONSUMER_IDENTITIES = {
     "exact-om": {
         "final_commit": "74b48779f1a3ca3e85614d50186ecf40a7f6db65",
@@ -101,28 +113,39 @@ def _snapshot(iri: str) -> pyowl_core.OntologySnapshot:
     )
 
 
-def _requirement(item: dict[str, Any]) -> AdapterRequirement:
+def _historical_requirement(item: dict[str, Any]) -> AdapterRequirement:
     return AdapterRequirement(
         consumer=item["package"],
         consumer_version=item["package_version"],
         consumer_api=item["consumer_api"],
+        package_api=(0, 1),
+        model_schema=1,
+        minimum_wire_minor=1,
         required_features=frozenset(item["required_features"]),
         required_encoded_view_schemas=item["required_encoded_view_schemas"],
     )
 
 
-def test_recorded_consumer_contracts_negotiate_with_the_implementation_checkpoint() -> None:
+def _current_requirement(item: dict[str, Any]) -> AdapterRequirement:
+    return AdapterRequirement(
+        consumer=item["package"],
+        consumer_version=item["package_version"],
+        consumer_api=item["consumer_api"],
+        required_features=frozenset(item["required_features"]),
+        required_encoded_view_schemas=CURRENT_STRUCTURAL_SCHEMA_REQUIREMENT,
+    )
+
+
+def test_recorded_v1_evidence_is_preserved_and_fails_closed_against_model_v2() -> None:
     payload = cast(dict[str, Any], json.loads(MANIFEST.read_text(encoding="utf-8")))
     assert payload["schema"] == "pyowl-core.consumer-compatibility/4"
     assert payload["recorded_date"] == "2026-07-29"
     core = cast(dict[str, Any], payload["core"])
-    # This is exact historical evidence for the 0.1.0 runtime. Patch releases
-    # remain compatible through the recorded >=0.1,<0.2 consumer constraints.
+    # This remains exact historical evidence and is never relabelled as a V2 run.
     assert core["package_version"] == "0.1.0"
-    assert pyowl_core.__version__ == "0.1.1"
-    assert tuple(core["api_version"]) == pyowl_core.API_VERSION
-    assert core["model_schema"] == pyowl_core.MODEL_SCHEMA_VERSION
-    assert tuple(core["wire_format"]) == pyowl_core.WIRE_FORMAT_VERSION
+    assert tuple(core["api_version"]) == (0, 1)
+    assert core["model_schema"] == 1
+    assert tuple(core["wire_format"]) == (1, 1)
     assert core["adapter_protocol"] == pyowl_core.ADAPTER_PROTOCOL_VERSION
     assert core["final_commit"] == CORE_FINAL_COMMIT
     assert core["runtime_commit"] == CORE_RUNTIME_COMMIT
@@ -130,8 +153,14 @@ def test_recorded_consumer_contracts_negotiate_with_the_implementation_checkpoin
     assert core["direct_safety_commit"] == CORE_DIRECT_SAFETY_COMMIT
     assert core["performance_evidence_commit"] == CORE_PERFORMANCE_EVIDENCE_COMMIT
     assert core["adapter_contract_commit"] == CORE_ADAPTER_CONTRACT_COMMIT
-    assert core["encoded_view_descriptor_sha256"] == STRUCTURAL_SCHEMA_DESCRIPTOR
-    assert core["encoded_view_schemas"] == STRUCTURAL_SCHEMA_REQUIREMENT
+    assert core["encoded_view_descriptor_sha256"] == HISTORICAL_STRUCTURAL_SCHEMA_DESCRIPTOR
+    assert core["encoded_view_schemas"] == HISTORICAL_STRUCTURAL_SCHEMA_REQUIREMENT
+    assert pyowl_core.API_VERSION == (0, 2)
+    assert pyowl_core.MODEL_SCHEMA_VERSION == 2
+    assert pyowl_core.WIRE_FORMAT_VERSION == (1, 2)
+    assert pyowl_core.ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2.hex() == (
+        CURRENT_STRUCTURAL_SCHEMA_DESCRIPTOR
+    )
     assert HEX40.fullmatch(core["runtime_tree"])
     assert HEX64.fullmatch(core["encoded_view_descriptor_sha256"])
     for field in (
@@ -156,7 +185,7 @@ def test_recorded_consumer_contracts_negotiate_with_the_implementation_checkpoin
         assert HEX40.fullmatch(item["final_commit"])
         assert HEX40.fullmatch(item["runtime_commit"])
         assert item["core_requirement"] == ">=0.1,<0.2"
-        assert item["required_encoded_view_schemas"] == STRUCTURAL_SCHEMA_REQUIREMENT
+        assert item["required_encoded_view_schemas"] == HISTORICAL_STRUCTURAL_SCHEMA_REQUIREMENT
         test = cast(dict[str, Any], item["test"])
         assert set(test) == {
             "consumer_final_commit",
@@ -175,11 +204,23 @@ def test_recorded_consumer_contracts_negotiate_with_the_implementation_checkpoin
         assert test["selection"] == CONSUMER_TESTS[item["id"]]["selection"]
         assert test["result"] == CONSUMER_TESTS[item["id"]]["result"]
         view = composite if item["view_kind"] == "composite" else snapshot
-        report = negotiate_view(view, _requirement(item))
-        assert report.compatible, (item["id"], report.to_dict())
+        historical = negotiate_view(
+            view,
+            _historical_requirement(item),
+            core=CURRENT_CORE,
+        )
+        assert not historical.compatible
+        assert {issue.code for issue in historical.issues} >= {
+            "CORE_API_MISMATCH",
+            "CORE_PACKAGE_API_MISMATCH",
+            "MODEL_SCHEMA_MISMATCH",
+        }
+
+        current = negotiate_view(view, _current_requirement(item), core=CURRENT_CORE)
+        assert current.compatible, (item["id"], current.to_dict())
 
 
-def test_recorded_consumers_fail_closed_without_structural_columns_v1() -> None:
+def test_current_consumer_fixture_fails_closed_without_structural_columns_v2() -> None:
     payload = cast(dict[str, Any], json.loads(MANIFEST.read_text(encoding="utf-8")))
     snapshot = _snapshot("urn:manifest:missing-schema")
     capabilities = snapshot.capabilities
@@ -193,7 +234,11 @@ def test_recorded_consumers_fail_closed_without_structural_columns_v1() -> None:
     )
 
     for item in cast(list[dict[str, Any]], payload["consumers"]):
-        report = negotiate_capabilities(without_encoded_views, _requirement(item))
+        report = negotiate_capabilities(
+            without_encoded_views,
+            _current_requirement(item),
+            core=CURRENT_CORE,
+        )
         assert not report.compatible
         encoded_issues = [
             (issue.code, issue.field)

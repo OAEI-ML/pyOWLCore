@@ -101,7 +101,7 @@ final class CommonContract {
                 "fingerprints", fingerprints,
                 "identity", identity,
                 "ledger", ledger,
-                "model_schema", 1,
+                "model_schema", 2,
                 "options_sha256", request.optionsSha256,
                 "provenance", provenance,
                 "root_document_key", key,
@@ -281,12 +281,12 @@ final class CommonContract {
                 "digest", digest,
                 "preimage_bytes", preimage.length,
                 "preimage_sha256", digest,
-                "schema", 1);
+                "schema", 2);
     }
 
     private static byte[] documentPreimage(ModelMapper.MappedDocument document) {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        output.writeBytes(ascii("pyowl-core:document-fingerprint:v1\0"));
+        output.writeBytes(ascii("pyowl-core:document-fingerprint:v2\0"));
         optionalIri(output, document.ontologyIri);
         optionalIri(output, document.versionIri);
         appendCollection(output, document.imports);
@@ -313,9 +313,9 @@ final class CommonContract {
             }
         }
         ByteArrayOutputStream preimage = new ByteArrayOutputStream();
-        preimage.writeBytes(ascii("pyowl-core:document-key:v1\0"));
+        preimage.writeBytes(ascii("pyowl-core:document-key:v2\0"));
         preimage.writeBytes(payload.toByteArray());
-        return "d1:" + Canonical.hex(Canonical.sha256(preimage.toByteArray()));
+        return "d2:" + Canonical.hex(Canonical.sha256(preimage.toByteArray()));
     }
 
     private static byte[] resolverConfigurationDigest() {
@@ -353,7 +353,7 @@ final class CommonContract {
     private static byte[] structuralPreimage(
             ModelMapper.MappedDocument document, String key, byte[] manifest) {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        output.writeBytes(ascii("pyowl-core:snapshot-structural:v1\0"));
+        output.writeBytes(ascii("pyowl-core:snapshot-structural:v2\0"));
         Canonical.frame(output, manifest);
         Canonical.frame(output, utf8(key));
         appendCollection(output, document.annotations);
@@ -371,7 +371,7 @@ final class CommonContract {
         List<byte[]> extensions = Canonical.normalizeSet(document.extensions.stream()
                 .map(value -> value.logical).collect(java.util.stream.Collectors.toList()));
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        output.writeBytes(ascii("pyowl-core:snapshot-logical:v1\0datatype-policy:owl2-v1\0"));
+        output.writeBytes(ascii("pyowl-core:snapshot-logical:v2\0datatype-policy:owl2-v1\0"));
         appendCollection(output, axioms);
         Canonical.varint(output, extensions.size());
         for (byte[] value : extensions) {
@@ -383,7 +383,7 @@ final class CommonContract {
 
     private static byte[] signaturePreimage(ModelMapper.MappedDocument document) {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        output.writeBytes(ascii("pyowl-core:snapshot-signature:v1\0"));
+        output.writeBytes(ascii("pyowl-core:snapshot-signature:v2\0"));
         output.write(1);
         appendCollection(output, document.signature);
         return output.toByteArray();
@@ -482,7 +482,7 @@ final class CommonContract {
 
     @SuppressWarnings("unchecked")
     private static void validate(Map<String, Object> contract) {
-        if (!SCHEMA.equals(contract.get("schema")) || !Integer.valueOf(1).equals(contract.get("model_schema"))) {
+        if (!SCHEMA.equals(contract.get("schema")) || !Integer.valueOf(2).equals(contract.get("model_schema"))) {
             throw new IllegalStateException("common contract schema differs");
         }
         Object observed = contract.get("contract_sha256");
@@ -504,6 +504,7 @@ final class CommonContract {
         for (String name : List.of("document", "structural", "logical", "signature")) {
             Map<String, Object> evidence = (Map<String, Object>) fingerprints.get(name);
             if (!"sha256".equals(evidence.get("algorithm"))
+                    || !Integer.valueOf(2).equals(evidence.get("schema"))
                     || !evidence.get("digest").equals(evidence.get("preimage_sha256"))
                     || !isSha256((String) evidence.get("digest"))) {
                 throw new IllegalStateException("common " + name + " fingerprint differs");

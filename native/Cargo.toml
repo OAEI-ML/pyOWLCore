@@ -1,6 +1,6 @@
 [package]
 name = "pyowl-core-native"
-version = "0.1.1"
+version = "0.2.0"
 description = "Private Java-free native foundation for pyowl-core"
 license = "Apache-2.0"
 edition = "2021"

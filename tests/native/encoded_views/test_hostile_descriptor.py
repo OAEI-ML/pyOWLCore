@@ -10,9 +10,9 @@ import pytest
 from pyowl_core import BackendPreference, ImportPolicy, LoadOptions, load_snapshot
 from pyowl_core.backends import native_views
 from pyowl_core.backends.native_views import (
-    EncodedStructuralViewV1,
-    produce_encoded_structural_view_v1,
-    validate_encoded_structural_view_v1,
+    EncodedStructuralViewV2,
+    produce_encoded_structural_view_v2,
+    validate_encoded_structural_view_v2,
 )
 from pyowl_core.document.document import Fingerprint
 from pyowl_core.document.snapshot import AxiomScope, OntologyView
@@ -21,7 +21,7 @@ from pyowl_core.limits import ParseLimits
 from tests.native.encoded_views._support import complete_constructor_snapshot
 
 
-def _publication(view: EncodedStructuralViewV1, **changes: object) -> SimpleNamespace:
+def _publication(view: EncodedStructuralViewV2, **changes: object) -> SimpleNamespace:
     values: dict[str, object] = {
         "schema_name": view.schema_name,
         "schema_version": view.schema_version,
@@ -38,7 +38,7 @@ def _publication(view: EncodedStructuralViewV1, **changes: object) -> SimpleName
     return SimpleNamespace(**values)
 
 
-def _segment(view: EncodedStructuralViewV1, **changes: object) -> SimpleNamespace:
+def _segment(view: EncodedStructuralViewV2, **changes: object) -> SimpleNamespace:
     direct = view.segments[0]
     values: dict[str, object] = {
         "role": direct.role,
@@ -53,8 +53,8 @@ def _segment(view: EncodedStructuralViewV1, **changes: object) -> SimpleNamespac
     return SimpleNamespace(**values)
 
 
-def _validate(candidate: object, view: EncodedStructuralViewV1) -> EncodedStructuralViewV1:
-    return validate_encoded_structural_view_v1(
+def _validate(candidate: object, view: EncodedStructuralViewV2) -> EncodedStructuralViewV2:
+    return validate_encoded_structural_view_v2(
         candidate,
         expected_owner=view.owner,
         expected_scope=AxiomScope.CLOSURE,
@@ -64,7 +64,7 @@ def _validate(candidate: object, view: EncodedStructuralViewV1) -> EncodedStruct
 
 def test_validator_freezes_exact_owner_and_fresh_buffer_views() -> None:
     snapshot = complete_constructor_snapshot()
-    produced = produce_encoded_structural_view_v1(snapshot)
+    produced = produce_encoded_structural_view_v2(snapshot)
     publication = _publication(produced)
     frozen = _validate(publication, produced)
 
@@ -76,7 +76,7 @@ def test_validator_freezes_exact_owner_and_fresh_buffer_views() -> None:
 
 
 def test_readonly_view_of_mutable_exporter_is_copied_before_publication() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     buffers = dict(produced.buffers)
     original = bytes(buffers["root_kinds"])
     backing = bytearray(original)
@@ -94,7 +94,7 @@ def test_readonly_view_of_mutable_exporter_is_copied_before_publication() -> Non
     (
         ({"schema_name": "hostile"}, "ENCODED_VIEW_DESCRIPTOR"),
         ({"schema_version": True}, "ENCODED_VIEW_DESCRIPTOR"),
-        ({"model_schema": 2}, "ENCODED_VIEW_DESCRIPTOR"),
+        ({"model_schema": 1}, "ENCODED_VIEW_DESCRIPTOR"),
         ({"descriptor": b"hostile"}, "ENCODED_VIEW_DESCRIPTOR"),
         ({"scope": AxiomScope.ROOT}, "ENCODED_VIEW_OPTIONS"),
         ({"document_key": "hostile"}, "ENCODED_VIEW_OPTIONS"),
@@ -103,21 +103,21 @@ def test_readonly_view_of_mutable_exporter_is_copied_before_publication() -> Non
 def test_validator_rejects_hostile_scalar_descriptor_fields(
     changes: dict[str, object], code: str
 ) -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     with pytest.raises(BackendProtocolError) as raised:
         _validate(_publication(produced, **changes), produced)
     assert raised.value.code == code
 
 
 def test_validator_rejects_wrong_owner_by_identity() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     other = complete_constructor_snapshot()
     with pytest.raises(BackendProtocolError) as raised:
         _validate(_publication(produced, owner=other), produced)
     assert raised.value.code == "ENCODED_VIEW_OWNER"
 
     with pytest.raises(TypeError, match="expected_owner"):
-        validate_encoded_structural_view_v1(
+        validate_encoded_structural_view_v2(
             produced,
             expected_owner=cast(OntologyView, object()),
             expected_scope=AxiomScope.CLOSURE,
@@ -126,7 +126,7 @@ def test_validator_rejects_wrong_owner_by_identity() -> None:
 
 
 def test_validator_rejects_mutable_noncontiguous_missing_and_extra_buffers() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     cases: list[dict[str, memoryview]] = []
 
     mutable = dict(produced.buffers)
@@ -152,7 +152,7 @@ def test_validator_rejects_mutable_noncontiguous_missing_and_extra_buffers() -> 
 
 
 def test_validator_rejects_unknown_tag_bad_offsets_and_wrong_fingerprint() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
 
     unknown_tag = dict(produced.buffers)
     tag_bytes = bytearray(unknown_tag["node_tags"])
@@ -180,7 +180,7 @@ def test_validator_rejects_unknown_tag_bad_offsets_and_wrong_fingerprint() -> No
 
 
 def test_validator_rejects_duplicate_set_roots_and_enforces_owner_limits() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     duplicate = dict(produced.buffers)
     root_kinds = bytes(duplicate["root_kinds"])
     root_ids = bytes(duplicate["root_ids"])
@@ -192,7 +192,7 @@ def test_validator_rejects_duplicate_set_roots_and_enforces_owner_limits() -> No
 
     tiny_bytes = replace(ParseLimits(), max_index_bytes=1)
     with pytest.raises(ResourceLimitError) as limited:
-        validate_encoded_structural_view_v1(
+        validate_encoded_structural_view_v2(
             produced,
             expected_owner=produced.owner,
             expected_scope=AxiomScope.CLOSURE,
@@ -203,7 +203,7 @@ def test_validator_rejects_duplicate_set_roots_and_enforces_owner_limits() -> No
 
     shallow = replace(ParseLimits(), max_nesting_depth=1)
     with pytest.raises(ResourceLimitError) as limited:
-        validate_encoded_structural_view_v1(
+        validate_encoded_structural_view_v2(
             produced,
             expected_owner=produced.owner,
             expected_scope=AxiomScope.CLOSURE,
@@ -214,7 +214,7 @@ def test_validator_rejects_duplicate_set_roots_and_enforces_owner_limits() -> No
 
 
 def test_segment_validator_rejects_bad_postings_and_all_mode_payloads() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     root_count = len(produced.buffers["root_ids"]) // 4
 
     out_of_range = _segment(
@@ -253,8 +253,8 @@ def test_segment_validator_rejects_bad_postings_and_all_mode_payloads() -> None:
 
 
 def test_segment_validator_rejects_hostile_anonymous_scope_maps() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
-    referenced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
+    referenced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     first = b"a" * 32
     second = b"b" * 32
     third = b"c" * 32
@@ -284,8 +284,8 @@ def test_segment_validator_rejects_hostile_anonymous_scope_maps() -> None:
 
 
 def test_segment_fingerprint_covers_exact_anonymous_scope_map_bytes() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
-    referenced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
+    referenced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     direct = produced.segments[0]
     first = replace(
         direct,
@@ -303,9 +303,7 @@ def test_segment_fingerprint_covers_exact_anonymous_scope_map_bytes() -> None:
         cast(Any, native_views)._fingerprint,
     )
 
-    assert fingerprint(produced.buffers, (first,)) != fingerprint(
-        produced.buffers, (second,)
-    )
+    assert fingerprint(produced.buffers, (first,)) != fingerprint(produced.buffers, (second,))
 
 
 def test_referenced_anonymous_scope_map_freezes_and_fingerprints_exact_bytes() -> None:
@@ -316,8 +314,8 @@ def test_referenced_anonymous_scope_map_freezes_and_fingerprints_exact_bytes() -
             imports=ImportPolicy.IGNORE,
         ),
     )
-    top = produce_encoded_structural_view_v1(empty_owner)
-    referenced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    top = produce_encoded_structural_view_v2(empty_owner)
+    referenced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     scope_map = memoryview(b"a" * 32 + b"b" * 32)
     base = _segment(
         top,
@@ -344,8 +342,8 @@ def test_referenced_anonymous_scope_map_freezes_and_fingerprints_exact_bytes() -
 
 
 def test_segment_validator_rejects_unselected_local_roots() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
-    referenced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
+    referenced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
 
     base_only = _segment(produced, role=2, source=referenced, owner=referenced.owner)
     with pytest.raises(BackendProtocolError) as raised:
@@ -367,7 +365,7 @@ def test_segment_validator_rejects_unselected_local_roots() -> None:
 
 
 def test_segment_validator_rejects_cycles_and_member_token_collisions() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     cyclic = _publication(produced)
     cyclic.segments = (_segment(produced, role=2, source=cyclic, owner=produced.owner),)
     with pytest.raises(BackendProtocolError) as raised:
@@ -395,8 +393,8 @@ def test_segment_validator_rejects_cycles_and_member_token_collisions() -> None:
 
 
 def test_segment_validator_rechecks_referenced_view_fingerprint_and_exporters() -> None:
-    top = produce_encoded_structural_view_v1(complete_constructor_snapshot())
-    corrupt = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    top = produce_encoded_structural_view_v2(complete_constructor_snapshot())
+    corrupt = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     object.__setattr__(
         corrupt,
         "structural_fingerprint",
@@ -407,7 +405,7 @@ def test_segment_validator_rechecks_referenced_view_fingerprint_and_exporters() 
         _validate(_publication(top, segments=(base,)), top)
     assert raised.value.code == "ENCODED_VIEW_FINGERPRINT"
 
-    mutable = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    mutable = produce_encoded_structural_view_v2(complete_constructor_snapshot())
     source_buffers = dict(mutable.buffers)
     source_buffers["root_kinds"] = memoryview(bytearray(source_buffers["root_kinds"])).toreadonly()
     object.__setattr__(mutable, "buffers", source_buffers)
@@ -418,7 +416,7 @@ def test_segment_validator_rechecks_referenced_view_fingerprint_and_exporters() 
 
 
 def test_validator_contains_raising_descriptors() -> None:
-    produced = produce_encoded_structural_view_v1(complete_constructor_snapshot())
+    produced = produce_encoded_structural_view_v2(complete_constructor_snapshot())
 
     class Hostile:
         @property

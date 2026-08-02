@@ -187,7 +187,8 @@ impl<'text> Lexer<'text> {
                 };
                 enforce_length(
                     value.len(),
-                    session.limits().value(LimitKey::MaxLiteralBytes),
+                    session,
+                    LimitKey::MaxLiteralBytes,
                     "native Turtle literal exceeds max_literal_bytes",
                 )?;
                 self.offset = cursor + delimiter_width;
@@ -564,7 +565,8 @@ impl<'text, 'session, 'guard> Parser<'text, 'session, 'guard> {
             values.push(self.object()?);
             enforce_length(
                 values.len(),
-                self.session.limits().value(LimitKey::MaxRdfListLength),
+                self.session,
+                LimitKey::MaxRdfListLength,
                 "native Turtle collection exceeds max_rdf_list_length",
             )?;
         }
@@ -624,7 +626,8 @@ impl<'text, 'session, 'guard> Parser<'text, 'session, 'guard> {
             .ok_or_else(|| NativeError::limit("native Turtle prefix count overflow"))?;
         enforce_length(
             following,
-            self.session.limits().value(LimitKey::MaxPrefixes),
+            self.session,
+            LimitKey::MaxPrefixes,
             "native Turtle prefixes exceed max_prefixes",
         )?;
         reserve_vec_item(&mut self.prefixes, self.session)?;
@@ -681,7 +684,8 @@ impl<'text, 'session, 'guard> Parser<'text, 'session, 'guard> {
             .ok_or_else(|| NativeError::limit("native Turtle triple count overflow"))?;
         enforce_length(
             following,
-            self.session.limits().value(LimitKey::MaxTriples),
+            self.session,
+            LimitKey::MaxTriples,
             "native Turtle graph exceeds max_triples",
         )?;
         reserve_vec_item(&mut self.triples, self.session)?;
@@ -1121,9 +1125,16 @@ fn number_boundary(source: &str, end: usize) -> bool {
         })
 }
 
-fn enforce_length(value: usize, maximum: u64, message: &'static str) -> NativeResult<()> {
-    if u64::try_from(value).map_or(true, |value| value > maximum) {
-        Err(NativeError::limit(message))
+fn enforce_length(
+    value: usize,
+    session: &Session<'_>,
+    key: LimitKey,
+    message: &'static str,
+) -> NativeResult<()> {
+    let observed = u64::try_from(value)
+        .map_err(|_| NativeError::limit("native Turtle observation exceeds u64"))?;
+    if observed > session.limits().value(key) {
+        Err(session.limits().resource_limit(key, observed, message))
     } else {
         Ok(())
     }

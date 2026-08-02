@@ -67,13 +67,38 @@ class StructuralContext:
         return cls(StructuralContextKind.COMPOSITE, tuple(members))
 
     def canonical_bytes(self) -> bytes:
-        pieces = [
-            b"pyowl-core:view-structure-context:v1\x00",
-            _frame(self.kind.value.encode("ascii")),
-            encode_varint(len(self.fingerprints)),
-        ]
-        pieces.extend(_frame(fingerprint_bytes(item)) for item in self.fingerprints)
-        return b"".join(pieces)
+        """Return the active model-schema-2 structural-context preimage."""
+
+        return _structural_context_bytes(self, version=2)
+
+
+def _structural_context_bytes(context: StructuralContext, *, version: int) -> bytes:
+    if version not in {1, 2}:
+        raise ValueError("fingerprint schema version must be 1 or 2")
+    domain = f"pyowl-core:view-structure-context:v{version}\x00".encode("ascii")
+    pieces = [
+        domain,
+        _frame(context.kind.value.encode("ascii")),
+        encode_varint(len(context.fingerprints)),
+    ]
+    pieces.extend(_frame(fingerprint_bytes(item)) for item in context.fingerprints)
+    return b"".join(pieces)
+
+
+def structural_context_bytes_v1(context: StructuralContext) -> bytes:
+    """Return the frozen model-schema-1 structural-context preimage."""
+
+    if not isinstance(context, StructuralContext):
+        raise TypeError("context must be StructuralContext")
+    return _structural_context_bytes(context, version=1)
+
+
+def structural_context_bytes_v2(context: StructuralContext) -> bytes:
+    """Return the active model-schema-2 structural-context preimage."""
+
+    if not isinstance(context, StructuralContext):
+        raise TypeError("context must be StructuralContext")
+    return _structural_context_bytes(context, version=2)
 
 
 def fingerprint_bytes(value: Fingerprint) -> bytes:
@@ -89,15 +114,39 @@ def fingerprint_bytes(value: Fingerprint) -> bytes:
 
 
 def document_fingerprint(document: OntologyDocument) -> Fingerprint:
-    """Return the canonical document fingerprint frozen by model schema 1."""
+    """Return the canonical document fingerprint for model schema 2."""
 
-    return Fingerprint("sha256", 1, hashlib.sha256(document_fingerprint_bytes(document)).digest())
+    return Fingerprint("sha256", 2, hashlib.sha256(document_fingerprint_bytes(document)).digest())
 
 
 def document_fingerprint_bytes(document: OntologyDocument) -> bytes:
-    """Encode document semantic structure, excluding syntax/acquisition metadata."""
+    """Encode model-schema-2 document structure, excluding acquisition metadata."""
 
-    pieces: list[bytes] = [b"pyowl-core:document-fingerprint:v1\x00"]
+    return _document_fingerprint_bytes(document, version=2)
+
+
+def document_fingerprint_v1(document: OntologyDocument) -> Fingerprint:
+    """Return the frozen model-schema-1 document fingerprint."""
+
+    return Fingerprint(
+        "sha256",
+        1,
+        hashlib.sha256(document_fingerprint_bytes_v1(document)).digest(),
+    )
+
+
+def document_fingerprint_bytes_v1(document: OntologyDocument) -> bytes:
+    """Encode the frozen model-schema-1 document fingerprint preimage."""
+
+    return _document_fingerprint_bytes(document, version=1)
+
+
+def _document_fingerprint_bytes(document: OntologyDocument, *, version: int) -> bytes:
+    if version not in {1, 2}:
+        raise ValueError("fingerprint schema version must be 1 or 2")
+
+    domain = f"pyowl-core:document-fingerprint:v{version}\x00".encode("ascii")
+    pieces: list[bytes] = [domain]
     for iri in (document.ontology_id.ontology_iri, document.ontology_id.version_iri):
         if iri is None:
             pieces.append(b"0")
@@ -127,15 +176,11 @@ def snapshot_structural_fingerprint(
 ) -> Fingerprint:
     """Fingerprint one resolved snapshot while retaining its document boundaries."""
 
-    hasher = hashlib.sha256()
-    hasher.update(b"pyowl-core:snapshot-structural:v1\x00")
-    hasher.update(_frame(manifest.canonical_bytes()))
-    for key, annotation_values, axioms, extensions in documents:
-        hasher.update(_frame(key.encode("ascii")))
-        _update_collection(hasher, annotation_values)
-        _update_collection(hasher, axioms)
-        _update_collection(hasher, extensions)
-    return Fingerprint("sha256", 1, hasher.digest())
+    return Fingerprint(
+        "sha256",
+        2,
+        _snapshot_structural_fingerprint_digest(manifest, documents, version=2),
+    )
 
 
 def snapshot_structural_fingerprint_bytes(
@@ -151,8 +196,63 @@ def snapshot_structural_fingerprint_bytes(
 ) -> bytes:
     """Return the authoritative snapshot-structural fingerprint preimage."""
 
+    return _snapshot_structural_fingerprint_bytes(manifest, documents, version=2)
+
+
+def snapshot_structural_fingerprint_v1(
+    manifest: ImportManifest,
+    documents: Iterable[
+        tuple[
+            str,
+            Iterable[Annotation],
+            Iterable[AxiomNode],
+            Iterable[StructuralNode],
+        ]
+    ],
+) -> Fingerprint:
+    """Return the frozen model-schema-1 snapshot-structural fingerprint."""
+
+    return Fingerprint(
+        "sha256",
+        1,
+        _snapshot_structural_fingerprint_digest(manifest, documents, version=1),
+    )
+
+
+def snapshot_structural_fingerprint_bytes_v1(
+    manifest: ImportManifest,
+    documents: Iterable[
+        tuple[
+            str,
+            Iterable[Annotation],
+            Iterable[AxiomNode],
+            Iterable[StructuralNode],
+        ]
+    ],
+) -> bytes:
+    """Return the frozen model-schema-1 snapshot-structural preimage."""
+
+    return _snapshot_structural_fingerprint_bytes(manifest, documents, version=1)
+
+
+def _snapshot_structural_fingerprint_bytes(
+    manifest: ImportManifest,
+    documents: Iterable[
+        tuple[
+            str,
+            Iterable[Annotation],
+            Iterable[AxiomNode],
+            Iterable[StructuralNode],
+        ]
+    ],
+    *,
+    version: int,
+) -> bytes:
+    if version not in {1, 2}:
+        raise ValueError("fingerprint schema version must be 1 or 2")
+
     pieces = [
-        b"pyowl-core:snapshot-structural:v1\x00",
+        f"pyowl-core:snapshot-structural:v{version}\x00".encode("ascii"),
         _frame(manifest.canonical_bytes()),
     ]
     for key, annotation_values, axioms, extensions in documents:
@@ -163,6 +263,32 @@ def snapshot_structural_fingerprint_bytes(
     return b"".join(pieces)
 
 
+def _snapshot_structural_fingerprint_digest(
+    manifest: ImportManifest,
+    documents: Iterable[
+        tuple[
+            str,
+            Iterable[Annotation],
+            Iterable[AxiomNode],
+            Iterable[StructuralNode],
+        ]
+    ],
+    *,
+    version: int,
+) -> bytes:
+    if version not in {1, 2}:
+        raise ValueError("fingerprint schema version must be 1 or 2")
+    hasher = hashlib.sha256()
+    hasher.update(f"pyowl-core:snapshot-structural:v{version}\x00".encode("ascii"))
+    hasher.update(_frame(manifest.canonical_bytes()))
+    for key, annotation_values, axioms, extensions in documents:
+        hasher.update(_frame(key.encode("ascii")))
+        _update_collection(hasher, annotation_values)
+        _update_collection(hasher, axioms)
+        _update_collection(hasher, extensions)
+    return hasher.digest()
+
+
 def effective_structural_fingerprint(
     context: StructuralContext,
     annotations: Iterable[Annotation],
@@ -171,19 +297,59 @@ def effective_structural_fingerprint(
 ) -> Fingerprint:
     """Fingerprint effective overlay/composite content and canonical boundaries."""
 
+    return _effective_structural_fingerprint(
+        context,
+        annotations,
+        axioms,
+        extensions,
+        version=2,
+    )
+
+
+def effective_structural_fingerprint_v1(
+    context: StructuralContext,
+    annotations: Iterable[Annotation],
+    axioms: Iterable[AxiomNode],
+    extensions: Iterable[StructuralNode],
+) -> Fingerprint:
+    """Return the frozen model-schema-1 effective structural fingerprint."""
+
+    return _effective_structural_fingerprint(
+        context,
+        annotations,
+        axioms,
+        extensions,
+        version=1,
+    )
+
+
+def _effective_structural_fingerprint(
+    context: StructuralContext,
+    annotations: Iterable[Annotation],
+    axioms: Iterable[AxiomNode],
+    extensions: Iterable[StructuralNode],
+    *,
+    version: int,
+) -> Fingerprint:
     if not isinstance(context, StructuralContext):
         raise TypeError("context must be StructuralContext")
+    if version not in {1, 2}:
+        raise ValueError("fingerprint schema version must be 1 or 2")
     domain = {
-        StructuralContextKind.OVERLAY: b"pyowl-core:overlay-structural:v1\x00",
-        StructuralContextKind.COMPOSITE: b"pyowl-core:composite-structural:v1\x00",
+        StructuralContextKind.OVERLAY: (
+            f"pyowl-core:overlay-structural:v{version}\x00".encode("ascii")
+        ),
+        StructuralContextKind.COMPOSITE: (
+            f"pyowl-core:composite-structural:v{version}\x00".encode("ascii")
+        ),
     }[context.kind]
     hasher = hashlib.sha256()
     hasher.update(domain)
-    hasher.update(_frame(context.canonical_bytes()))
+    hasher.update(_frame(_structural_context_bytes(context, version=version)))
     _update_collection(hasher, annotations)
     _update_collection(hasher, axioms)
     _update_collection(hasher, extensions)
-    return Fingerprint("sha256", 1, hasher.digest())
+    return Fingerprint("sha256", version, hasher.digest())
 
 
 def logical_fingerprint(
@@ -191,28 +357,43 @@ def logical_fingerprint(
 ) -> Fingerprint:
     """Fingerprint the annotation-free logical set and logical extensions."""
 
-    logical: dict[bytes, None] = {}
-    for item in axioms:
-        if isinstance(item, LOGICAL_AXIOM_TYPES):
-            logical[canonical_bytes(without_axiom_annotations(item))] = None
-    extension_values = tuple(
-        sorted({canonical_bytes(without_annotations(item)) for item in extensions})
-    )
-    pieces = [
-        b"pyowl-core:snapshot-logical:v1\x00",
-        b"datatype-policy:owl2-v1\x00",
-        encode_varint(len(logical)),
-    ]
-    pieces.extend(_frame(item) for item in sorted(logical))
-    pieces.append(encode_varint(len(extension_values)))
-    pieces.extend(b"E" + _frame(item) for item in extension_values)
-    return Fingerprint("sha256", 1, hashlib.sha256(b"".join(pieces)).digest())
+    preimage = logical_fingerprint_bytes(axioms, extensions)
+    return Fingerprint("sha256", 2, hashlib.sha256(preimage).digest())
+
+
+def logical_fingerprint_v1(
+    axioms: Iterable[AxiomNode], extensions: Iterable[StructuralNode]
+) -> Fingerprint:
+    """Return the frozen model-schema-1 logical fingerprint."""
+
+    preimage = logical_fingerprint_bytes_v1(axioms, extensions)
+    return Fingerprint("sha256", 1, hashlib.sha256(preimage).digest())
 
 
 def logical_fingerprint_bytes(
     axioms: Iterable[AxiomNode], extensions: Iterable[StructuralNode]
 ) -> bytes:
-    """Return the authoritative annotation-free logical fingerprint preimage."""
+    """Return the authoritative model-schema-2 logical fingerprint preimage."""
+
+    return _logical_fingerprint_bytes(axioms, extensions, version=2)
+
+
+def logical_fingerprint_bytes_v1(
+    axioms: Iterable[AxiomNode], extensions: Iterable[StructuralNode]
+) -> bytes:
+    """Return the frozen model-schema-1 logical fingerprint preimage."""
+
+    return _logical_fingerprint_bytes(axioms, extensions, version=1)
+
+
+def _logical_fingerprint_bytes(
+    axioms: Iterable[AxiomNode],
+    extensions: Iterable[StructuralNode],
+    *,
+    version: int,
+) -> bytes:
+    if version not in {1, 2}:
+        raise ValueError("fingerprint schema version must be 1 or 2")
 
     logical = {
         canonical_bytes(without_axiom_annotations(item))
@@ -223,7 +404,7 @@ def logical_fingerprint_bytes(
         sorted({canonical_bytes(without_annotations(item)) for item in extensions})
     )
     pieces = [
-        b"pyowl-core:snapshot-logical:v1\x00",
+        f"pyowl-core:snapshot-logical:v{version}\x00".encode("ascii"),
         b"datatype-policy:owl2-v1\x00",
         encode_varint(len(logical)),
     ]
@@ -238,28 +419,49 @@ def signature_fingerprint(
 ) -> Fingerprint:
     """Fingerprint one canonical effective entity signature."""
 
-    if not isinstance(include_builtins, bool):
-        raise TypeError("include_builtins must be bool")
-    members = sorted({canonical_bytes(item) for item in values})
-    pieces = [
-        b"pyowl-core:snapshot-signature:v1\x00",
-        bytes((int(include_builtins),)),
-        encode_varint(len(members)),
-    ]
-    pieces.extend(_frame(item) for item in members)
-    return Fingerprint("sha256", 1, hashlib.sha256(b"".join(pieces)).digest())
+    preimage = signature_fingerprint_bytes(values, include_builtins=include_builtins)
+    return Fingerprint("sha256", 2, hashlib.sha256(preimage).digest())
 
 
 def signature_fingerprint_bytes(
     values: Iterable[Entity], *, include_builtins: bool = True
 ) -> bytes:
-    """Return the authoritative effective-signature fingerprint preimage."""
+    """Return the authoritative model-schema-2 signature preimage."""
+
+    return _signature_fingerprint_bytes(values, include_builtins=include_builtins, version=2)
+
+
+def signature_fingerprint_v1(
+    values: Iterable[Entity], *, include_builtins: bool = True
+) -> Fingerprint:
+    """Return the frozen model-schema-1 signature fingerprint."""
+
+    preimage = signature_fingerprint_bytes_v1(values, include_builtins=include_builtins)
+    return Fingerprint("sha256", 1, hashlib.sha256(preimage).digest())
+
+
+def signature_fingerprint_bytes_v1(
+    values: Iterable[Entity], *, include_builtins: bool = True
+) -> bytes:
+    """Return the frozen model-schema-1 signature fingerprint preimage."""
+
+    return _signature_fingerprint_bytes(values, include_builtins=include_builtins, version=1)
+
+
+def _signature_fingerprint_bytes(
+    values: Iterable[Entity],
+    *,
+    include_builtins: bool,
+    version: int,
+) -> bytes:
 
     if not isinstance(include_builtins, bool):
         raise TypeError("include_builtins must be bool")
+    if version not in {1, 2}:
+        raise ValueError("fingerprint schema version must be 1 or 2")
     members = sorted({canonical_bytes(item) for item in values})
     pieces = [
-        b"pyowl-core:snapshot-signature:v1\x00",
+        f"pyowl-core:snapshot-signature:v{version}\x00".encode("ascii"),
         bytes((int(include_builtins),)),
         encode_varint(len(members)),
     ]
@@ -316,14 +518,25 @@ __all__ = [
     "StructuralContextKind",
     "document_fingerprint",
     "document_fingerprint_bytes",
+    "document_fingerprint_bytes_v1",
+    "document_fingerprint_v1",
     "effective_structural_fingerprint",
+    "effective_structural_fingerprint_v1",
     "fingerprint_bytes",
     "logical_fingerprint",
     "logical_fingerprint_bytes",
+    "logical_fingerprint_bytes_v1",
+    "logical_fingerprint_v1",
     "signature_fingerprint",
     "signature_fingerprint_bytes",
+    "signature_fingerprint_bytes_v1",
+    "signature_fingerprint_v1",
     "snapshot_structural_fingerprint",
     "snapshot_structural_fingerprint_bytes",
+    "snapshot_structural_fingerprint_bytes_v1",
+    "snapshot_structural_fingerprint_v1",
+    "structural_context_bytes_v1",
+    "structural_context_bytes_v2",
     "without_annotations",
     "without_axiom_annotations",
 ]

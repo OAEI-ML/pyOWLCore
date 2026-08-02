@@ -102,9 +102,9 @@ from .schema import (
 _NONE_U64 = 0xFFFF_FFFF_FFFF_FFFF
 _CANONICAL_WIRE_PARSER = "pyowl_core.wire.canonical"
 _CANONICAL_WIRE_BACKEND = "wire"
-_ENCODED_STRUCTURAL_MAGIC_V1 = b"PYOCEV1\x00"
-_ENCODED_STRUCTURAL_HEADER_V1 = struct.Struct("<8sHHI32s32s")
-_ENCODED_STRUCTURAL_DIRECTORY_V1 = struct.Struct("<QQ")
+_ENCODED_STRUCTURAL_MAGIC_V2 = b"PYOCEV2\x00"
+_ENCODED_STRUCTURAL_HEADER_V2 = struct.Struct("<8sHHI32s32s")
+_ENCODED_STRUCTURAL_DIRECTORY_V2 = struct.Struct("<QQ")
 
 _FORMATS = {
     DocumentFormat.RDF_XML: 1,
@@ -298,7 +298,7 @@ def encode_snapshot(
     digests = {kind: hashlib.sha256(data).digest() for kind, data in sections.items()}
     footer = _footer_row(concrete, sections, digests)
     sections[SectionKind.FOOTER] = encode_table((footer,))
-    sections[SectionKind.ENCODED_STRUCTURAL_V1] = _encoded_structural_section_v1(
+    sections[SectionKind.ENCODED_STRUCTURAL_V2] = _encoded_structural_section_v2(
         concrete,
         selected_limits,
         guard,
@@ -479,7 +479,7 @@ def inspect_image(
         raise _corrupt("VIEW document count disagrees with DOCUMENTS")
     if summary.root_document_key not in keys:
         raise _corrupt("VIEW root document is absent from DOCUMENTS")
-    _validate_encoded_structural_section_v1(image, keys, limits)
+    _validate_encoded_structural_section_v2(image, keys, limits)
     _read_view_provenance(image, limits, is_complete=summary.complete)
     _validate_origins(image, keys, limits, collect=False)
     _validate_footer(image, summary)
@@ -716,13 +716,13 @@ def _native_wire_source_v1(
             code="NATIVE_WIRE_SOURCE",
         )
     from pyowl_core.backends.native_views import (
-        _encoded_structural_wire_rows_v1,
-        _EncodedStructuralWireRowsV1,
-        _produce_native_direct_view_v1,
-        _produce_native_raw_document_view_v1,
+        _encoded_structural_wire_rows_v2,
+        _EncodedStructuralWireRowsV2,
+        _produce_native_direct_view_v2,
+        _produce_native_raw_document_view_v2,
     )
 
-    publication = _produce_native_direct_view_v1(
+    publication = _produce_native_direct_view_v2(
         snapshot,
         scope=AxiomScope.CLOSURE,
         document_key=None,
@@ -735,13 +735,13 @@ def _native_wire_source_v1(
             "attested native wire source lacks direct retained columns",
             code="NATIVE_WIRE_SOURCE",
         )
-    structural = _encoded_structural_wire_rows_v1(publication, limits)
+    structural = _encoded_structural_wire_rows_v2(publication, limits)
     nodes_by_canonical: dict[bytes, tuple[int, str, bytes]] = {}
     scalar_strings: set[bytes] = set()
     sequences: set[bytes] = set()
     temporary = 0
 
-    def merge_rows(value: _EncodedStructuralWireRowsV1) -> None:
+    def merge_rows(value: _EncodedStructuralWireRowsV2) -> None:
         nonlocal temporary
         for node in value.nodes:
             previous = nodes_by_canonical.get(node[2])
@@ -769,7 +769,7 @@ def _native_wire_source_v1(
         for record, _document in snapshot.iter_documents():
             if cancellation_token is not None:
                 cancellation_token.check()
-            effective_publication = _produce_native_direct_view_v1(
+            effective_publication = _produce_native_direct_view_v2(
                 snapshot,
                 scope=AxiomScope.DOCUMENT,
                 document_key=record.document_key,
@@ -777,7 +777,7 @@ def _native_wire_source_v1(
                 budget=None,
                 cancellation_token=cancellation_token,
             )
-            raw_publication = _produce_native_raw_document_view_v1(
+            raw_publication = _produce_native_raw_document_view_v2(
                 snapshot,
                 document_key=record.document_key,
                 limits=limits,
@@ -789,8 +789,8 @@ def _native_wire_source_v1(
                     "scoped native wire source lacks retained document columns",
                     code="NATIVE_WIRE_SOURCE",
                 )
-            effective = _encoded_structural_wire_rows_v1(effective_publication, limits)
-            raw = _encoded_structural_wire_rows_v1(raw_publication, limits)
+            effective = _encoded_structural_wire_rows_v2(effective_publication, limits)
+            raw = _encoded_structural_wire_rows_v2(raw_publication, limits)
             merge_rows(effective)
             merge_rows(raw)
             document_roots.append(
@@ -1422,7 +1422,7 @@ def _footer_row(
     return writer.finish()
 
 
-def _encoded_structural_section_v1(
+def _encoded_structural_section_v2(
     snapshot: OntologySnapshot,
     limits: ParseLimits,
     guard: Guard,
@@ -1434,23 +1434,23 @@ def _encoded_structural_section_v1(
 
     from pyowl_core.backends.native_views import (
         _BUFFER_SPECS,
-        ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
-        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
-        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
-        EncodedStructuralViewV1,
-        _encoded_structural_root_digest_v1,
-        produce_encoded_structural_view_v1,
+        ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V2,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
+        EncodedStructuralViewV2,
+        _encoded_structural_root_digest_v2,
+        produce_encoded_structural_view_v2,
     )
 
     if publication is None:
-        selected = produce_encoded_structural_view_v1(
+        selected = produce_encoded_structural_view_v2(
             snapshot,
             scope=AxiomScope.CLOSURE,
             limits=limits,
             materialize_segments=True,
             _cancellation_token=cancellation_token,
         )
-    elif type(publication) is EncodedStructuralViewV1:
+    elif type(publication) is EncodedStructuralViewV2:
         selected = publication
     else:  # pragma: no cover - internal type invariant
         raise BackendProtocolError(
@@ -1458,9 +1458,9 @@ def _encoded_structural_section_v1(
             code="NATIVE_WIRE_SOURCE",
         )
     buffers = selected.buffers
-    root_digest = _encoded_structural_root_digest_v1(buffers, limits)
-    row_header_bytes = _ENCODED_STRUCTURAL_HEADER_V1.size + len(_BUFFER_SPECS) * (
-        _ENCODED_STRUCTURAL_DIRECTORY_V1.size
+    root_digest = _encoded_structural_root_digest_v2(buffers, limits)
+    row_header_bytes = _ENCODED_STRUCTURAL_HEADER_V2.size + len(_BUFFER_SPECS) * (
+        _ENCODED_STRUCTURAL_DIRECTORY_V2.size
     )
     cursor = row_header_bytes
     slices: list[tuple[int, int]] = []
@@ -1476,24 +1476,24 @@ def _encoded_structural_section_v1(
     section = bytearray(section_length)
     struct.pack_into("<QQQ", section, 0, 1, 0, cursor)
     row_start = 24
-    _ENCODED_STRUCTURAL_HEADER_V1.pack_into(
+    _ENCODED_STRUCTURAL_HEADER_V2.pack_into(
         section,
         row_start,
-        _ENCODED_STRUCTURAL_MAGIC_V1,
-        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
-        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
+        _ENCODED_STRUCTURAL_MAGIC_V2,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V2,
         len(_BUFFER_SPECS),
-        ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
+        ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2,
         root_digest,
     )
-    directory_start = row_start + _ENCODED_STRUCTURAL_HEADER_V1.size
+    directory_start = row_start + _ENCODED_STRUCTURAL_HEADER_V2.size
     for index, ((name, _width, _scalar), (offset, length)) in enumerate(
         zip(_BUFFER_SPECS, slices, strict=True)
     ):
         guard.check(index)
-        _ENCODED_STRUCTURAL_DIRECTORY_V1.pack_into(
+        _ENCODED_STRUCTURAL_DIRECTORY_V2.pack_into(
             section,
-            directory_start + index * _ENCODED_STRUCTURAL_DIRECTORY_V1.size,
+            directory_start + index * _ENCODED_STRUCTURAL_DIRECTORY_V2.size,
             offset,
             length,
         )
@@ -1501,7 +1501,7 @@ def _encoded_structural_section_v1(
     return bytes(section)
 
 
-def _encoded_structural_buffers_v1(
+def _encoded_structural_buffers_v2(
     image: WireImage,
     limits: ParseLimits,
     *,
@@ -1509,31 +1509,31 @@ def _encoded_structural_buffers_v1(
 ) -> tuple[Mapping[str, memoryview], bytes] | None:
     """Parse aligned buffer slices without copying their shared exporter."""
 
-    table = image.tables.get(int(SectionKind.ENCODED_STRUCTURAL_V1))
+    table = image.tables.get(int(SectionKind.ENCODED_STRUCTURAL_V2))
     if table is None:
         return None
-    if image.header.minor < 1:
+    if image.header.minor < 2:
         raise WireVersionError(
-            "ENCODED_STRUCTURAL_V1 requires wire minor 1",
+            "ENCODED_STRUCTURAL_V2 requires wire minor 2",
             code="WIRE_SECTION_VERSION",
         )
     if table.count != 1:
-        raise _corrupt("ENCODED_STRUCTURAL_V1 must contain exactly one row")
+        raise _corrupt("ENCODED_STRUCTURAL_V2 must contain exactly one row")
 
     from pyowl_core.backends.native_views import (
         _BUFFER_SPECS,
-        ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
-        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
-        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
-        _encoded_structural_root_digest_v1,
+        ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V2,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
+        _encoded_structural_root_digest_v2,
     )
 
     row = table.row(0)
-    prefix_bytes = _ENCODED_STRUCTURAL_HEADER_V1.size + len(_BUFFER_SPECS) * (
-        _ENCODED_STRUCTURAL_DIRECTORY_V1.size
+    prefix_bytes = _ENCODED_STRUCTURAL_HEADER_V2.size + len(_BUFFER_SPECS) * (
+        _ENCODED_STRUCTURAL_DIRECTORY_V2.size
     )
     if len(row) < prefix_bytes:
-        raise _corrupt("ENCODED_STRUCTURAL_V1 row is truncated")
+        raise _corrupt("ENCODED_STRUCTURAL_V2 row is truncated")
     (
         magic,
         schema_version,
@@ -1541,23 +1541,23 @@ def _encoded_structural_buffers_v1(
         buffer_count,
         descriptor_digest,
         recorded_root_digest,
-    ) = _ENCODED_STRUCTURAL_HEADER_V1.unpack_from(row)
+    ) = _ENCODED_STRUCTURAL_HEADER_V2.unpack_from(row)
     if (
-        magic != _ENCODED_STRUCTURAL_MAGIC_V1
-        or schema_version != ENCODED_STRUCTURAL_SCHEMA_VERSION_V1
-        or model_schema != ENCODED_STRUCTURAL_MODEL_SCHEMA_V1
+        magic != _ENCODED_STRUCTURAL_MAGIC_V2
+        or schema_version != ENCODED_STRUCTURAL_SCHEMA_VERSION_V2
+        or model_schema != ENCODED_STRUCTURAL_MODEL_SCHEMA_V2
         or buffer_count != len(_BUFFER_SPECS)
-        or descriptor_digest != ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1
+        or descriptor_digest != ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2
     ):
-        raise _corrupt("ENCODED_STRUCTURAL_V1 descriptor metadata is invalid")
-    directory_start = _ENCODED_STRUCTURAL_HEADER_V1.size
+        raise _corrupt("ENCODED_STRUCTURAL_V2 descriptor metadata is invalid")
+    directory_start = _ENCODED_STRUCTURAL_HEADER_V2.size
     cursor = prefix_bytes
     total_bytes = 0
     buffers: dict[str, memoryview] = {}
     for index, (name, width, _scalar) in enumerate(_BUFFER_SPECS):
-        offset, length = _ENCODED_STRUCTURAL_DIRECTORY_V1.unpack_from(
+        offset, length = _ENCODED_STRUCTURAL_DIRECTORY_V2.unpack_from(
             row,
-            directory_start + index * _ENCODED_STRUCTURAL_DIRECTORY_V1.size,
+            directory_start + index * _ENCODED_STRUCTURAL_DIRECTORY_V2.size,
         )
         expected_offset = _align(cursor)
         end = offset + length
@@ -1568,25 +1568,25 @@ def _encoded_structural_buffers_v1(
             or (name != "scalar_bytes" and length % width)
             or any(row[cursor:offset])
         ):
-            raise _corrupt("ENCODED_STRUCTURAL_V1 buffer directory is invalid")
+            raise _corrupt("ENCODED_STRUCTURAL_V2 buffer directory is invalid")
         buffers[name] = row[offset:end]
         total_bytes += length
         cursor = end
     if cursor != len(row):
-        raise _corrupt("ENCODED_STRUCTURAL_V1 row has trailing bytes")
+        raise _corrupt("ENCODED_STRUCTURAL_V2 row has trailing bytes")
     limits.enforce("max_index_bytes", total_bytes)
     immutable = MappingProxyType(buffers)
     if validate_columns:
         try:
-            observed_root_digest = _encoded_structural_root_digest_v1(immutable, limits)
+            observed_root_digest = _encoded_structural_root_digest_v2(immutable, limits)
         except BackendProtocolError as error:
-            raise _corrupt("ENCODED_STRUCTURAL_V1 columns are invalid") from error
+            raise _corrupt("ENCODED_STRUCTURAL_V2 columns are invalid") from error
         if observed_root_digest != recorded_root_digest:
-            raise _corrupt("ENCODED_STRUCTURAL_V1 root digest is invalid")
+            raise _corrupt("ENCODED_STRUCTURAL_V2 root digest is invalid")
     return immutable, recorded_root_digest
 
 
-def encoded_structural_buffers_from_inspected_v1(
+def encoded_structural_buffers_from_inspected_v2(
     inspected: InspectedWire,
     *,
     limits: ParseLimits,
@@ -1597,7 +1597,7 @@ def encoded_structural_buffers_from_inspected_v1(
         raise TypeError("inspected must be InspectedWire")
     if not isinstance(limits, ParseLimits):
         raise TypeError("limits must be ParseLimits")
-    parsed = _encoded_structural_buffers_v1(
+    parsed = _encoded_structural_buffers_v2(
         inspected.image,
         limits,
         validate_columns=False,
@@ -1770,17 +1770,17 @@ def _validate_feature_sections(image: WireImage) -> None:
         )
 
 
-def _validate_encoded_structural_section_v1(
+def _validate_encoded_structural_section_v2(
     image: WireImage,
     document_keys: set[str],
     limits: ParseLimits,
 ) -> None:
-    parsed = _encoded_structural_buffers_v1(image, limits, validate_columns=True)
+    parsed = _encoded_structural_buffers_v2(image, limits, validate_columns=True)
     if parsed is None:
         return
     _buffers, observed_digest = parsed
     _summary, references = _read_view(image, document_keys, limits, collect=True)
-    from pyowl_core.backends.native_views import _encoded_structural_rows_digest_v1
+    from pyowl_core.backends.native_views import _encoded_structural_rows_digest_v2
 
     tables = (
         (1, SectionKind.ANNOTATIONS, references.annotations),
@@ -1796,8 +1796,8 @@ def _validate_encoded_structural_section_v1(
             for row_id in postings:
                 yield root_kind, table.row(row_id - 1)
 
-    if _encoded_structural_rows_digest_v1(rows()) != observed_digest:
-        raise _corrupt("ENCODED_STRUCTURAL_V1 roots disagree with VIEW postings")
+    if _encoded_structural_rows_digest_v2(rows()) != observed_digest:
+        raise _corrupt("ENCODED_STRUCTURAL_V2 roots disagree with VIEW postings")
 
 
 def _validate_model_table(

@@ -38,7 +38,7 @@ use std::sync::Arc;
 #[cfg(feature = "extension-module")]
 use cancel::{interrupt_slot, take_interrupt, Cancellation, Guard, InterruptSlot};
 #[cfg(feature = "extension-module")]
-use error::{NativeError, NativeResult};
+use error::{NativeError, NativeErrorPayload, NativeNumber, NativeResult};
 #[cfg(feature = "extension-module")]
 use limits::Limits;
 #[cfg(all(feature = "extension-module", feature = "test-hooks"))]
@@ -54,19 +54,19 @@ use pyo3::exceptions::{PyMemoryError, PyValueError};
 #[cfg(feature = "extension-module")]
 use pyo3::prelude::*;
 #[cfg(feature = "extension-module")]
-use pyo3::types::{PyAny, PyBytes, PyModule, PyTuple};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyModule, PyTuple};
 #[cfg(feature = "extension-module")]
 use wire::WireArena;
 
 pub(crate) const ABI_VERSION: u32 = 3;
 #[cfg(feature = "extension-module")]
-const MODEL_SCHEMA_VERSION: u32 = 1;
+const MODEL_SCHEMA_VERSION: u32 = 2;
 #[cfg(feature = "extension-module")]
-const WIRE_FORMAT_VERSION: (u16, u16) = (1, 1);
+const WIRE_FORMAT_VERSION: (u16, u16) = (1, 2);
 #[cfg(feature = "extension-module")]
 const FOUNDATION_FEATURES: [&str; 9] = [
     "cancellation",
-    "canonical-model-v1",
+    "canonical-model-v2",
     "deadlines",
     "gil-release",
     "index-axiom-types-v1",
@@ -155,7 +155,83 @@ fn run_detached<T: Send>(
 
 #[cfg(feature = "extension-module")]
 fn python_error(error: NativeError) -> PyErr {
-    PyErr::new::<_NativeError, _>((error.code, error.message))
+    let NativeError {
+        code,
+        message,
+        payload,
+    } = error;
+    match payload {
+        NativeErrorPayload::None => PyErr::new::<_NativeError, _>((code, message)),
+        NativeErrorPayload::ResourceLimit(resource) => Python::attach(|py| {
+            let payload = PyDict::new(py);
+            if let Err(error) = payload.set_item("kind", "resource_limit") {
+                return error;
+            }
+            if let Err(error) = payload.set_item("limit", resource.limit) {
+                return error;
+            }
+            let observed = match resource.observed {
+                NativeNumber::Integer(value) => payload.set_item("observed", value),
+                NativeNumber::FloatBits(bits) => payload.set_item("observed", f64::from_bits(bits)),
+            };
+            if let Err(error) = observed {
+                return error;
+            }
+            let allowed = match resource.allowed {
+                NativeNumber::Integer(value) => payload.set_item("allowed", value),
+                NativeNumber::FloatBits(bits) => payload.set_item("allowed", f64::from_bits(bits)),
+            };
+            if let Err(error) = allowed {
+                return error;
+            }
+            let details = PyDict::new(py);
+            let observations = resource.details;
+            for (key, value) in [
+                ("component_count", observations.component_count),
+                (
+                    "largest_component_labels",
+                    observations.largest_component_labels,
+                ),
+                (
+                    "largest_component_arcs",
+                    observations.largest_component_arcs,
+                ),
+                ("refinement_rounds", observations.refinement_rounds),
+            ] {
+                if let Some(value) = value {
+                    if let Err(error) = details.set_item(key, value) {
+                        return error;
+                    }
+                }
+            }
+            if let Some(value) = observations.work_term {
+                if let Err(error) = details.set_item("work_term", value) {
+                    return error;
+                }
+            }
+            if let Err(error) = payload.set_item("details", details) {
+                return error;
+            }
+            PyErr::new::<_NativeError, _>((code, message, payload.unbind()))
+        }),
+        NativeErrorPayload::Opaque { kind, data } => Python::attach(|py| {
+            const MAX_OPAQUE_ERROR_BYTES: usize = 4 * 1024 * 1024;
+            if data.len() > MAX_OPAQUE_ERROR_BYTES {
+                return PyErr::new::<_NativeError, _>((
+                    "NATIVE_PROTOCOL",
+                    "native error payload exceeds the boundary limit",
+                ));
+            }
+            let payload = PyDict::new(py);
+            if let Err(error) = payload.set_item("kind", kind) {
+                return error;
+            }
+            if let Err(error) = payload.set_item("data", PyBytes::new(py, &data)) {
+                return error;
+            }
+            PyErr::new::<_NativeError, _>((code, message, payload.unbind()))
+        }),
+    }
 }
 
 #[cfg(feature = "extension-module")]
@@ -271,13 +347,26 @@ fn owned_source_request_with_allocations(
     let maximum = usize::try_from(limits.max_source_bytes)
         .unwrap_or(usize::MAX)
         .saturating_add(source::HEADER_BYTES);
-    if nbytes > maximum
-        || limits
-            .max_memory_bytes
-            .is_some_and(|value| u64::try_from(nbytes).map_or(true, |size| size > value))
+    if nbytes > maximum {
+        let observed = u64::try_from(nbytes.saturating_sub(source::HEADER_BYTES))
+            .map_err(|_| python_error(NativeError::limit("native source size exceeds u64")))?;
+        return Err(python_error(limits.resource_limit(
+            limits::LimitKey::MaxSourceBytes,
+            observed,
+            "native parser request exceeds max_source_bytes",
+        )));
+    }
+    let observed = u64::try_from(nbytes)
+        .map_err(|_| python_error(NativeError::limit("native request size exceeds u64")))?;
+    if let Some(maximum) = limits
+        .max_memory_bytes
+        .filter(|maximum| observed > *maximum)
     {
-        return Err(python_error(NativeError::limit(
-            "native parser request exceeds configured resource limits",
+        return Err(python_error(NativeError::resource_limit(
+            "max_memory_bytes",
+            observed,
+            maximum,
+            "native parser request exceeds max_memory_bytes",
         )));
     }
     allocations.checkpoint()?;
@@ -370,14 +459,24 @@ fn owned_index_source_with_allocations(
     })?;
     allocations.checkpoint()?;
     let nbytes: usize = view.getattr("nbytes")?.extract()?;
-    if u64::try_from(nbytes).map_or(true, |size| {
-        size > limits.value(limits::LimitKey::MaxIndexBytes)
-            || limits
-                .max_memory_bytes
-                .is_some_and(|maximum| size > maximum)
-    }) {
-        return Err(python_error(NativeError::limit(
-            "native index source exceeds configured resource limits",
+    let observed = u64::try_from(nbytes)
+        .map_err(|_| python_error(NativeError::limit("native index size exceeds u64")))?;
+    if observed > limits.value(limits::LimitKey::MaxIndexBytes) {
+        return Err(python_error(limits.resource_limit(
+            limits::LimitKey::MaxIndexBytes,
+            observed,
+            "native index source exceeds max_index_bytes",
+        )));
+    }
+    if let Some(maximum) = limits
+        .max_memory_bytes
+        .filter(|maximum| observed > *maximum)
+    {
+        return Err(python_error(NativeError::resource_limit(
+            "max_memory_bytes",
+            observed,
+            maximum,
+            "native index source exceeds max_memory_bytes",
         )));
     }
     allocations.checkpoint()?;
@@ -536,7 +635,9 @@ fn _work_probe(
 ) -> PyResult<u64> {
     let limits = limits_from_python(config)?;
     if iterations > limits.max_terms {
-        return Err(python_error(NativeError::limit(
+        return Err(python_error(limits.resource_limit(
+            limits::LimitKey::MaxTerms,
+            iterations,
             "native work probe exceeds max_terms",
         )));
     }

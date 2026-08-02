@@ -21,6 +21,7 @@ from itertools import zip_longest
 from types import TracebackType
 from typing import Any, Generic, TypeVar, cast
 
+from pyowl_core._evidence import bounded_evidence_text
 from pyowl_core._immutable import FrozenMap, freeze_mapping
 from pyowl_core.backends.native_handoff import (
     NativeDiagnosticPublicationV1,
@@ -106,7 +107,7 @@ from .snapshot import (
     CoreCapabilities,
     LoadReport,
     OntologySnapshot,
-    _encoded_view_schemas_v1,
+    _encoded_view_schemas_v2,
 )
 
 T = TypeVar("T", bound=StructuralNode)
@@ -129,9 +130,7 @@ _MISSING = object()
 _REPLACE_ERROR = "native ontology facades cannot be replaced; materialize them first"
 _WIRE_STRUCTURAL_ALIAS_SEAL_V1 = object()
 _NO_ANONYMOUS_SCOPES_SEAL_V2 = object()
-_COMMON_CONTRACT_RECORD_INVENTORY_DOMAIN_V1 = (
-    b"pyowl-core:comparator-record-inventory:v1\x00"
-)
+_COMMON_CONTRACT_RECORD_INVENTORY_DOMAIN_V1 = b"pyowl-core:comparator-record-inventory:v1\x00"
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,9 +214,7 @@ class _NativeCommonContractSummaryV1:
             raise ValueError("native common-contract root count must be nonnegative")
         if type(self.node_count) is not int or self.node_count < self.root_count:
             raise ValueError("native common-contract node count is smaller than its roots")
-        expected_roots = (
-            self.ontology_annotations.count + self.axioms.count + self.extensions.count
-        )
+        expected_roots = self.ontology_annotations.count + self.axioms.count + self.extensions.count
         if self.root_count != expected_roots:
             raise ValueError("native common-contract root count diverges from inventories")
         if self.signature.count > self.node_count:
@@ -1143,7 +1140,17 @@ def _rdf_triple_evidence(value: object) -> RDFTripleEvidence:
             "native RDF unconsumed collection has the wrong row type",
             code="NATIVE_RDF_REPORT",
         )
-    return RDFTripleEvidence(value.subject, value.predicate, value.object)
+    subject = bounded_evidence_text(value.subject)
+    predicate = bounded_evidence_text(value.predicate)
+    object_value = bounded_evidence_text(value.object)
+    object_kind = (
+        "iri"
+        if object_value.startswith("<")
+        else "blank"
+        if object_value.startswith("_:")
+        else "literal"
+    )
+    return RDFTripleEvidence(subject, predicate, object_value, object_kind)
 
 
 def _rdf_rule_id(value: object) -> str:
@@ -1775,9 +1782,7 @@ def _rebind_native_document_provenance_v2(
         return None
     if provenance == document.provenance:
         return document
-    return _NativeOntologyDocument(
-        replace(document._native_document_state, provenance=provenance)
-    )
+    return _NativeOntologyDocument(replace(document._native_document_state, provenance=provenance))
 
 
 def _frame(value: bytes) -> bytes:
@@ -1785,7 +1790,7 @@ def _frame(value: bytes) -> bytes:
 
 
 def _document_fingerprint_parts(document: OntologyDocument) -> Iterator[bytes]:
-    yield b"pyowl-core:document-fingerprint:v1\x00"
+    yield b"pyowl-core:document-fingerprint:v2\x00"
     for iri in (document.ontology_id.ontology_iri, document.ontology_id.version_iri):
         if iri is None:
             yield b"0"
@@ -2142,12 +2147,12 @@ class _NativeOntologySnapshot(OntologySnapshot):
         if retained is not None:
             return retained
         from pyowl_core.backends.native_views import (
-            EncodedStructuralViewV1,
-            _anonymous_document_scopes_from_encoded_view_v1,
+            EncodedStructuralViewV2,
+            _anonymous_document_scopes_from_encoded_view_v2,
         )
 
-        encoded = self.view(EncodedStructuralViewV1)
-        created = _anonymous_document_scopes_from_encoded_view_v1(encoded)
+        encoded = self.view(EncodedStructuralViewV2)
+        created = _anonymous_document_scopes_from_encoded_view_v2(encoded)
         with state.lock:
             retained = state.anonymous_scopes
             if retained is None:
@@ -2467,9 +2472,9 @@ def _capabilities(publication: NativeSnapshotPublicationV2) -> CoreCapabilities:
     return CoreCapabilities(
         1,
         publication.report.model_schema,
-        (1, 1),
+        (1, 2),
         frozenset(features),
-        _encoded_view_schemas_v1(),
+        _encoded_view_schemas_v2(),
         "native",
     )
 
@@ -2504,9 +2509,10 @@ def ontology_snapshot_from_native_publication_v2(
         anonymous_scopes = frozenset()
     else:
         raise TypeError("_anonymous_scope_evidence carries an invalid internal seal")
-    if _common_contract_summary is not None and type(
-        _common_contract_summary
-    ) is not _NativeCommonContractSummaryV1:
+    if (
+        _common_contract_summary is not None
+        and type(_common_contract_summary) is not _NativeCommonContractSummaryV1
+    ):
         raise TypeError("_common_contract_summary has the wrong internal type")
     selected = require_native_facade_publication_v2(publication)
     shared = _NativeSharedState(selected)
@@ -2689,12 +2695,10 @@ def ontology_snapshot_from_native_publication_v2(
                 summary.document_fingerprint.sha256 != document.document_fingerprint.digest
                 or summary.structural_fingerprint.sha256
                 != selected.report.structural_fingerprint.digest
-                or summary.logical_fingerprint.sha256
-                != selected.report.logical_fingerprint.digest
+                or summary.logical_fingerprint.sha256 != selected.report.logical_fingerprint.digest
                 or summary.signature_fingerprint.sha256
                 != selected.report.signature_fingerprint.digest
-                or summary.ontology_annotations.count
-                != closure.effective_annotation_count
+                or summary.ontology_annotations.count != closure.effective_annotation_count
                 or summary.axioms.count != closure.effective_axiom_count
                 or summary.extensions.count != closure.effective_extension_count
             ):

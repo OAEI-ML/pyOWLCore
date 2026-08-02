@@ -13,7 +13,7 @@ from pyowl_core._immutable import FrozenMap, freeze_mapping
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.config import LoadOptions
 from pyowl_core.diagnostics import Diagnostic
-from pyowl_core.exceptions import ProfileError, ResourceLimitError
+from pyowl_core.exceptions import OptionConflictError, ProfileError, ResourceLimitError
 from pyowl_core.io.source import DocumentSource
 from pyowl_core.model import (
     IRI,
@@ -52,17 +52,23 @@ V = TypeVar("V")
 _ENCODED_STRUCTURAL_VIEW_FEATURE = "encoded-structural-view"
 
 
-def _encoded_view_schemas_v1() -> dict[str, int]:
-    """Return the advertised frozen schema without creating an import cycle."""
+def _encoded_view_schemas_v2() -> dict[str, int]:
+    """Return the active model-compatible schema without creating an import cycle."""
 
     from pyowl_core.backends.native_views import (
-        ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
-        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
     )
 
     return {
-        ENCODED_STRUCTURAL_SCHEMA_NAME_V1: ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V2: ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
     }
+
+
+def _encoded_view_schemas_v1() -> dict[str, int]:
+    """Compatibility import for storage implementations pending their V2 rename."""
+
+    return _encoded_view_schemas_v2()
 
 
 class AxiomScope(str, Enum):
@@ -318,6 +324,14 @@ class OntologySnapshot:
             raise ValueError("documents must align with manifest records")
         if not isinstance(self.load_options, LoadOptions):
             raise TypeError("load_options must be LoadOptions")
+        if self.load_options.allow_partial_rdf_mapping or any(
+            document.rdf_mapping_report is not None and not document.rdf_mapping_report.conformant
+            for document in documents
+        ):
+            raise OptionConflictError(
+                "partial RDF mapping is diagnostic-only and cannot create a snapshot",
+                code="PARTIAL_RDF_MAPPING_SNAPSHOT_FORBIDDEN",
+            )
         records = self.import_manifest.documents
         document_by_key = {
             record.document_key: document
@@ -400,8 +414,8 @@ class OntologySnapshot:
                 )
         capabilities = CoreCapabilities(
             1,
-            1,
-            (1, 1),
+            2,
+            (1, 2),
             frozenset(
                 {
                     "owl2-structural",
@@ -422,7 +436,7 @@ class OntologySnapshot:
                 | ({"owl2-dl-validated"} if owl2_dl_report is not None else set())
                 | ({"wire-v1", "wire-verified"} if self._wire_verified else set())
             ),
-            _encoded_view_schemas_v1(),
+            _encoded_view_schemas_v2(),
             "python",
         )
         if self._structural_fingerprint_override is not None:
@@ -456,8 +470,8 @@ class OntologySnapshot:
         signature_value = signature_fingerprint(signature_values, include_builtins=True)
         report = LoadReport(
             "python",
-            (0, 1),
-            1,
+            (0, 2),
+            2,
             len(documents),
             sum(item.provenance.byte_length for item in documents),
             len(closure_axioms),
@@ -772,7 +786,7 @@ def _scope_documents(
                 )
                 continue
             scope = hashlib.sha256(
-                b"pyowl-core:snapshot-document-scope:v1\x00" + fingerprint + encode_varint(ordinal)
+                b"pyowl-core:snapshot-document-scope:v2\x00" + fingerprint + encode_varint(ordinal)
             ).digest()
             replacements: dict[AnonymousIndividual, AnonymousIndividual] = {}
             pairs: list[tuple[StructuralNode, StructuralNode]] = []
@@ -983,9 +997,9 @@ def materialize_view(
         origin_index=origin_index,
     )
     key = (
-        "d1:"
+        "d2:"
         + hashlib.sha256(
-            b"pyowl-core:materialized-document-key:v1\x00" + structural.digest
+            b"pyowl-core:materialized-document-key:v2\x00" + structural.digest
         ).hexdigest()
     )
     record = DocumentRecord(

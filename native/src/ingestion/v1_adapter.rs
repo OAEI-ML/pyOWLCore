@@ -205,10 +205,12 @@ pub(super) fn encode_observation(
     session: &mut Session<'_>,
 ) -> NativeResult<Vec<u8>> {
     let size = observation_size(document)?;
-    if u64::try_from(size).map_or(true, |size| {
-        size > session.limits().value(LimitKey::MaxTemporaryBytes)
-    }) {
-        return Err(NativeError::limit(
+    let size_u64 = u64::try_from(size)
+        .map_err(|_| NativeError::limit("native RDF/XML observation size exceeds u64"))?;
+    if size_u64 > session.limits().value(LimitKey::MaxTemporaryBytes) {
+        return Err(session.limits().resource_limit(
+            LimitKey::MaxTemporaryBytes,
+            size_u64,
             "native RDF/XML test observation exceeds max_temporary_bytes",
         ));
     }

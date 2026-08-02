@@ -18,6 +18,9 @@ use super::{ComponentFieldRef, ComponentId, ComponentSequenceRef, NativeComponen
 pub(crate) const ENCODED_STRUCTURAL_SCHEMA_NAME_V1: &str = "pyowl-core/structural-columns";
 pub(crate) const ENCODED_STRUCTURAL_SCHEMA_VERSION_V1: u32 = 1;
 pub(crate) const ENCODED_STRUCTURAL_MODEL_SCHEMA_V1: u32 = 1;
+pub(crate) const ENCODED_STRUCTURAL_SCHEMA_NAME_V2: &str = "pyowl-core/structural-columns";
+pub(crate) const ENCODED_STRUCTURAL_SCHEMA_VERSION_V2: u32 = 2;
+pub(crate) const ENCODED_STRUCTURAL_MODEL_SCHEMA_V2: u32 = 2;
 
 const ENCODED_BUFFER_NAMES_V1: [&str; 11] = [
     "root_kinds",
@@ -297,7 +300,10 @@ impl ColumnWork {
             .checked_add(amount)
             .ok_or_else(|| NativeError::limit("native encoded-column work counter overflow"))?;
         if self.used > self.maximum {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_canonical_work",
+                self.used,
+                self.maximum,
                 "native encoded-column build exceeds max_canonical_work",
             ));
         }
@@ -341,6 +347,19 @@ pub(crate) struct PreparedEncodedStructuralColumnsV1<'arena> {
     #[cfg(feature = "test-hooks")]
     workspace_allocations: u64,
 }
+
+// The physical column layout is unchanged in schema 2. These aliases name the
+// model-schema-2 producer contract without reinterpreting the frozen schema-1
+// descriptor or exposing schema-1 producer functions to the rest of the crate.
+pub(crate) type EncodedRootKindV2 = EncodedRootKindV1;
+pub(crate) type EncodedRootV2 = EncodedRootV1;
+pub(crate) type EncodedRootTableV2<'arena> = EncodedRootTableV1<'arena>;
+pub(crate) type EncodedStructuralBuffersV2 = EncodedStructuralBuffersV1;
+pub(crate) type EncodedStructuralBufferLayoutV2 = EncodedStructuralBufferLayoutV1;
+pub(crate) type EncodedColumnCountersV2 = EncodedColumnCountersV1;
+pub(crate) type EncodedStructuralColumnsV2 = EncodedStructuralColumnsV1;
+pub(crate) type PreparedEncodedStructuralColumnsV2<'arena> =
+    PreparedEncodedStructuralColumnsV1<'arena>;
 
 impl PreparedEncodedStructuralColumnsV1<'_> {
     pub(crate) const fn layout(&self) -> EncodedStructuralBufferLayoutV1 {
@@ -417,6 +436,16 @@ pub(crate) fn build_encoded_structural_columns_v1(
     .into_columns()
 }
 
+pub(crate) fn build_encoded_structural_columns_v2(
+    arena: &NativeComponentArena,
+    roots: &[EncodedRootV2],
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+) -> NativeResult<EncodedStructuralColumnsV2> {
+    build_encoded_structural_columns_v1(arena, roots, limits, cancellation, interrupt)
+}
+
 pub(crate) fn build_encoded_structural_columns_from_tables_v1(
     arena: &NativeComponentArena,
     tables: &[EncodedRootTableV1<'_>],
@@ -434,6 +463,24 @@ pub(crate) fn build_encoded_structural_columns_from_tables_v1(
         caller_external_bytes,
     )?
     .into_columns()
+}
+
+pub(crate) fn build_encoded_structural_columns_from_tables_v2(
+    arena: &NativeComponentArena,
+    tables: &[EncodedRootTableV2<'_>],
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    caller_external_bytes: usize,
+) -> NativeResult<EncodedStructuralColumnsV2> {
+    build_encoded_structural_columns_from_tables_v1(
+        arena,
+        tables,
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+    )
 }
 
 pub(crate) fn prepare_encoded_structural_columns_from_tables_v1<'arena>(
@@ -454,6 +501,24 @@ pub(crate) fn prepare_encoded_structural_columns_from_tables_v1<'arena>(
     )
 }
 
+pub(crate) fn prepare_encoded_structural_columns_from_tables_v2<'arena>(
+    arena: &'arena NativeComponentArena,
+    tables: &[EncodedRootTableV2<'arena>],
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    caller_external_bytes: usize,
+) -> NativeResult<PreparedEncodedStructuralColumnsV2<'arena>> {
+    prepare_encoded_structural_columns_from_tables_v1(
+        arena,
+        tables,
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+    )
+}
+
 #[cfg(feature = "test-hooks")]
 pub(crate) fn prepare_encoded_structural_columns_from_tables_with_allocation_probe_v1<'arena>(
     arena: &'arena NativeComponentArena,
@@ -471,6 +536,27 @@ pub(crate) fn prepare_encoded_structural_columns_from_tables_with_allocation_pro
         limits,
         caller_external_bytes,
         work,
+    )
+}
+
+#[cfg(feature = "test-hooks")]
+pub(crate) fn prepare_encoded_structural_columns_from_tables_with_allocation_probe_v2<'arena>(
+    arena: &'arena NativeComponentArena,
+    tables: &[EncodedRootTableV2<'arena>],
+    limits: &Limits,
+    cancellation: Cancellation,
+    interrupt: Option<InterruptSlot>,
+    caller_external_bytes: usize,
+    fail_after: Option<u64>,
+) -> NativeResult<PreparedEncodedStructuralColumnsV2<'arena>> {
+    prepare_encoded_structural_columns_from_tables_with_allocation_probe_v1(
+        arena,
+        tables,
+        limits,
+        cancellation,
+        interrupt,
+        caller_external_bytes,
+        fail_after,
     )
 }
 
@@ -624,7 +710,9 @@ fn prepare_encoded_structural_columns_from_source_with_work_v1<'arena>(
     let root_count = u64::try_from(root_rows)
         .map_err(|_| NativeError::limit("native encoded-column root count exceeds u64"))?;
     if root_count > limits.value(LimitKey::MaxIndexRows) {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexRows,
+            root_count,
             "native encoded-column roots exceed max_index_rows",
         ));
     }
@@ -636,8 +724,12 @@ fn prepare_encoded_structural_columns_from_source_with_work_v1<'arena>(
                 .ok_or_else(|| NativeError::limit("native encoded-column axiom count overflow"))?;
         }
     }
-    if u64::try_from(axiom_count).map_or(true, |count| count > limits.max_axioms) {
-        return Err(NativeError::limit(
+    let axiom_count = u64::try_from(axiom_count)
+        .map_err(|_| NativeError::limit("native encoded-column axiom count exceeds u64"))?;
+    if axiom_count > limits.max_axioms {
+        return Err(limits.resource_limit(
+            LimitKey::MaxAxioms,
+            axiom_count,
             "native encoded-column roots exceed max_axioms",
         ));
     }
@@ -763,13 +855,18 @@ fn prepare_encoded_structural_columns_from_source_with_work_v1<'arena>(
     check_workspace_memory(arena, workspace_bytes, caller_external_bytes, limits)?;
 
     let counts = measure_columns(arena, &nodes, limits, &mut work)?;
-    if counts.strings > limits.max_strings
-        || counts.annotations > limits.max_annotations
-        || counts.rule_atoms > limits.max_rule_atoms
-    {
-        return Err(NativeError::limit(
-            "native encoded-column graph exceeds structural limits",
-        ));
+    for (observed, key) in [
+        (counts.strings, LimitKey::MaxStrings),
+        (counts.annotations, LimitKey::MaxAnnotations),
+        (counts.rule_atoms, LimitKey::MaxRuleAtoms),
+    ] {
+        if observed > limits.value(key) {
+            return Err(limits.resource_limit(
+                key,
+                observed,
+                "native encoded-column graph exceeds structural limits",
+            ));
+        }
     }
     let layout = encoded_buffer_layout(
         root_rows,
@@ -905,8 +1002,11 @@ fn discover_node(
     work: &mut ColumnWork,
 ) -> NativeResult<()> {
     let record = arena.record(row.component)?;
-    if record.height().saturating_sub(1) > limits.max_nesting_depth {
-        return Err(NativeError::limit(
+    let depth = record.height().saturating_sub(1);
+    if depth > limits.max_nesting_depth {
+        return Err(limits.resource_limit(
+            LimitKey::MaxNestingDepth,
+            u64::from(depth),
             "native encoded-column graph exceeds max_nesting_depth",
         ));
     }
@@ -918,8 +1018,12 @@ fn discover_node(
         .len()
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("native encoded-column node count overflow"))?;
-    if u64::try_from(next).map_or(true, |count| count > limits.max_terms) {
-        return Err(NativeError::limit(
+    let next_count = u64::try_from(next)
+        .map_err(|_| NativeError::limit("native encoded-column node count exceeds u64"))?;
+    if next_count > limits.max_terms {
+        return Err(limits.resource_limit(
+            LimitKey::MaxTerms,
+            next_count,
             "native encoded-column nodes exceed max_terms",
         ));
     }
@@ -958,10 +1062,13 @@ fn discover_field_nodes(
         }
         ComponentFieldRef::CanonicalSet(sequence)
         | ComponentFieldRef::OrderedSequence(sequence) => {
-            if u64::try_from(sequence.len())
-                .map_or(true, |length| length > limits.max_sequence_arity)
-            {
-                return Err(NativeError::limit(
+            let length = u64::try_from(sequence.len()).map_err(|_| {
+                NativeError::limit("native encoded-column sequence length exceeds u64")
+            })?;
+            if length > limits.max_sequence_arity {
+                return Err(limits.resource_limit(
+                    LimitKey::MaxSequenceArity,
+                    length,
                     "native encoded-column sequence exceeds max_sequence_arity",
                 ));
             }
@@ -1015,11 +1122,11 @@ fn check_discovery_memory(
         })?)
         .and_then(|value| value.checked_add(workspace))
         .ok_or_else(|| NativeError::limit("native encoded-column workspace overflow"))?;
-    if limits
-        .max_memory_bytes
-        .is_some_and(|maximum| peak > maximum)
-    {
-        return Err(NativeError::limit(
+    if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| peak > *maximum) {
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            peak,
+            maximum,
             "native encoded-column discovery exceeds max_memory_bytes",
         ));
     }
@@ -1085,11 +1192,11 @@ fn check_workspace_memory(
         })?)
         .and_then(|value| value.checked_add(workspace_bytes))
         .ok_or_else(|| NativeError::limit("native encoded-column workspace overflow"))?;
-    if limits
-        .max_memory_bytes
-        .is_some_and(|maximum| peak > maximum)
-    {
-        return Err(NativeError::limit(
+    if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| peak > *maximum) {
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            peak,
+            maximum,
             "native encoded-column workspace exceeds max_memory_bytes",
         ));
     }
@@ -1838,8 +1945,12 @@ fn measure_field(
 }
 
 fn measure_sequence(length: usize, counts: &mut ColumnCounts, limits: &Limits) -> NativeResult<()> {
-    if u64::try_from(length).map_or(true, |value| value > limits.max_sequence_arity) {
-        return Err(NativeError::limit(
+    let observed = u64::try_from(length)
+        .map_err(|_| NativeError::limit("native encoded-column sequence length exceeds u64"))?;
+    if observed > limits.max_sequence_arity {
+        return Err(limits.resource_limit(
+            LimitKey::MaxSequenceArity,
+            observed,
             "native encoded-column sequence exceeds max_sequence_arity",
         ));
     }
@@ -2336,23 +2447,30 @@ fn check_layout_limits(
     layout: ColumnLayout,
 ) -> NativeResult<()> {
     let row_limit = limits.value(LimitKey::MaxIndexRows);
-    if [
+    let maximum_rows = [
         layout.root_rows,
         layout.node_rows,
         layout.field_rows,
         layout.item_rows,
     ]
     .into_iter()
-    .any(|rows| u64::try_from(rows).map_or(true, |rows| rows > row_limit))
-    {
-        return Err(NativeError::limit(
+    .max()
+    .unwrap_or_default();
+    let maximum_rows = u64::try_from(maximum_rows)
+        .map_err(|_| NativeError::limit("native encoded-column row count exceeds u64"))?;
+    if maximum_rows > row_limit {
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexRows,
+            maximum_rows,
             "native encoded-column rows exceed max_index_rows",
         ));
     }
     let buffer_bytes = u64::try_from(layout.buffer_bytes)
         .map_err(|_| NativeError::limit("native encoded-column buffers exceed u64"))?;
     if buffer_bytes > limits.value(LimitKey::MaxIndexBytes) {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexBytes,
+            buffer_bytes,
             "native encoded-column buffers exceed max_index_bytes",
         ));
     }
@@ -2370,11 +2488,11 @@ fn check_layout_limits(
         .and_then(|value| value.checked_add(metadata_bytes))
         .and_then(|value| value.checked_add(workspace_bytes))
         .ok_or_else(|| NativeError::limit("native encoded-column memory overflow"))?;
-    if limits
-        .max_memory_bytes
-        .is_some_and(|maximum| peak > maximum)
-    {
-        return Err(NativeError::limit(
+    if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| peak > *maximum) {
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            peak,
+            maximum,
             "native encoded-column build exceeds max_memory_bytes",
         ));
     }
@@ -2406,8 +2524,12 @@ mod tests {
     use super::*;
     use crate::model::NativeComponentBuilder;
 
-    mod generated {
+    mod generated_v1 {
         include!(concat!(env!("OUT_DIR"), "/encoded_view_v1.rs"));
+    }
+
+    mod generated_v2 {
+        include!(concat!(env!("OUT_DIR"), "/encoded_view_v2.rs"));
     }
 
     fn encode_varint(mut value: u64) -> Vec<u8> {
@@ -2899,22 +3021,36 @@ mod tests {
 
     #[test]
     fn frozen_advertised_descriptor_names_exact_buffers() {
-        assert_eq!(generated::NAME, ENCODED_STRUCTURAL_SCHEMA_NAME_V1);
-        assert_eq!(generated::VERSION, ENCODED_STRUCTURAL_SCHEMA_VERSION_V1);
-        assert_eq!(generated::MODEL_SCHEMA, ENCODED_STRUCTURAL_MODEL_SCHEMA_V1);
-        assert_eq!(generated::STATUS, "frozen-advertised");
-        assert!(std::hint::black_box(generated::CAPABILITY_ADVERTISED));
+        assert_eq!(generated_v2::NAME, ENCODED_STRUCTURAL_SCHEMA_NAME_V2);
+        assert_eq!(generated_v2::VERSION, ENCODED_STRUCTURAL_SCHEMA_VERSION_V2);
         assert_eq!(
-            crate::hash::sha256(generated::DESCRIPTOR),
-            generated::DESCRIPTOR_SHA256
+            generated_v2::MODEL_SCHEMA,
+            ENCODED_STRUCTURAL_MODEL_SCHEMA_V2
         );
-        let descriptor = std::str::from_utf8(generated::DESCRIPTOR).expect("ASCII descriptor");
+        assert_eq!(generated_v2::STATUS, "frozen-advertised");
+        assert!(std::hint::black_box(generated_v2::CAPABILITY_ADVERTISED));
+        assert_eq!(
+            crate::hash::sha256(generated_v2::DESCRIPTOR),
+            generated_v2::DESCRIPTOR_SHA256
+        );
+        let descriptor = std::str::from_utf8(generated_v2::DESCRIPTOR).expect("ASCII descriptor");
         for name in EncodedStructuralBuffersV1::default()
             .named()
             .map(|(name, _)| name)
         {
             assert!(descriptor.contains(&format!("\"name\":\"{name}\"")));
         }
+
+        assert_eq!(generated_v1::NAME, ENCODED_STRUCTURAL_SCHEMA_NAME_V1);
+        assert_eq!(generated_v1::VERSION, ENCODED_STRUCTURAL_SCHEMA_VERSION_V1);
+        assert_eq!(
+            generated_v1::MODEL_SCHEMA,
+            ENCODED_STRUCTURAL_MODEL_SCHEMA_V1
+        );
+        assert_eq!(
+            crate::hash::sha256(generated_v1::DESCRIPTOR),
+            generated_v1::DESCRIPTOR_SHA256
+        );
     }
 
     #[test]

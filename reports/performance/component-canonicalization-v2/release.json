@@ -1,0 +1,223 @@
+{
+  "cases": [
+    {
+      "error": null,
+      "id": "fixed-1",
+      "input": {
+        "bytes": 259,
+        "component_count": 1,
+        "labels_per_component": 1,
+        "max_canonical_work": 9,
+        "sha256": "2c86a914c94db2f081b52c85ebef5cfb408740dd1bf2c41f392e2b05be5f9a13"
+      },
+      "kind": "fixed-components",
+      "output": {
+        "anonymous_individual_count": 1,
+        "axiom_count": 2,
+        "document_fingerprint_schema": 2,
+        "document_fingerprint_sha256": "1e4e978b32f92d8a1cd63584836339095104f33dedb69da9b021b080736e459d"
+      },
+      "shape": {
+        "component_count": 1,
+        "largest_component_arcs": 1,
+        "largest_component_labels": 1,
+        "largest_component_roots": 1,
+        "maximum_open_root_intervals": 1,
+        "maximum_root_interval_span": 1,
+        "total_arcs": 1,
+        "total_labels": 1
+      },
+      "status": "pass",
+      "work": {
+        "component_record_count": 1,
+        "largest_component_work": 9,
+        "maximum_refinement_rounds": 1,
+        "total_candidate_order_work": 2,
+        "total_canonical_work": 9,
+        "total_permutations_examined": 1,
+        "total_refinement_work": 4,
+        "total_setup_work": 3
+      }
+    },
+    {
+      "error": null,
+      "id": "fixed-8",
+      "input": {
+        "bytes": 959,
+        "component_count": 8,
+        "labels_per_component": 1,
+        "max_canonical_work": 9,
+        "sha256": "b3d29c898cea137544e085f953528e4f5f92e5eeb39e06b4f9bbe18739a89bd4"
+      },
+      "kind": "fixed-components",
+      "output": {
+        "anonymous_individual_count": 8,
+        "axiom_count": 9,
+        "document_fingerprint_schema": 2,
+        "document_fingerprint_sha256": "981f21b791b03747e7216cba773368cde118e2b061ddfc17971f5e23ea74bd0e"
+      },
+      "shape": {
+        "component_count": 8,
+        "largest_component_arcs": 1,
+        "largest_component_labels": 1,
+        "largest_component_roots": 1,
+        "maximum_open_root_intervals": 1,
+        "maximum_root_interval_span": 1,
+        "total_arcs": 8,
+        "total_labels": 8
+      },
+      "status": "pass",
+      "work": {
+        "component_record_count": 8,
+        "largest_component_work": 9,
+        "maximum_refinement_rounds": 1,
+        "total_candidate_order_work": 16,
+        "total_canonical_work": 72,
+        "total_permutations_examined": 8,
+        "total_refinement_work": 32,
+        "total_setup_work": 24
+      }
+    },
+    {
+      "error": null,
+      "id": "fixed-64",
+      "input": {
+        "bytes": 6559,
+        "component_count": 64,
+        "labels_per_component": 1,
+        "max_canonical_work": 9,
+        "sha256": "e3347fe43eb768e9b40370e96aa6680ab30d53131efc6692cc05f230c9846a55"
+      },
+      "kind": "fixed-components",
+      "output": {
+        "anonymous_individual_count": 64,
+        "axiom_count": 65,
+        "document_fingerprint_schema": 2,
+        "document_fingerprint_sha256": "96f2634f62ca2d71fe3230eba492b61c78b9601fb1c069c3ca34213b5306d0c3"
+      },
+      "shape": {
+        "component_count": 64,
+        "largest_component_arcs": 1,
+        "largest_component_labels": 1,
+        "largest_component_roots": 1,
+        "maximum_open_root_intervals": 1,
+        "maximum_root_interval_span": 1,
+        "total_arcs": 64,
+        "total_labels": 64
+      },
+      "status": "pass",
+      "work": {
+        "component_record_count": 64,
+        "largest_component_work": 9,
+        "maximum_refinement_rounds": 1,
+        "total_candidate_order_work": 128,
+        "total_canonical_work": 576,
+        "total_permutations_examined": 64,
+        "total_refinement_work": 256,
+        "total_setup_work": 192
+      }
+    },
+    {
+      "error": null,
+      "id": "fixed-50000",
+      "input": {
+        "bytes": 5000159,
+        "component_count": 50000,
+        "labels_per_component": 1,
+        "max_canonical_work": 9,
+        "sha256": "e93b82497f07b7d44abec136010a0999e3434d97e2d5a46aa3fba29a0796868f"
+      },
+      "kind": "fixed-components",
+      "output": {
+        "anonymous_individual_count": 50000,
+        "axiom_count": 50001,
+        "document_fingerprint_schema": 2,
+        "document_fingerprint_sha256": "d95eacbbad0f0fc91c567599ece59404ff8e372153763999153ddf6044460832"
+      },
+      "shape": {
+        "component_count": 50000,
+        "largest_component_arcs": 1,
+        "largest_component_labels": 1,
+        "largest_component_roots": 1,
+        "maximum_open_root_intervals": 1,
+        "maximum_root_interval_span": 1,
+        "total_arcs": 50000,
+        "total_labels": 50000
+      },
+      "status": "pass",
+      "work": {
+        "component_record_count": 50000,
+        "largest_component_work": 9,
+        "maximum_refinement_rounds": 1,
+        "total_candidate_order_work": 100000,
+        "total_canonical_work": 450000,
+        "total_permutations_examined": 50000,
+        "total_refinement_work": 200000,
+        "total_setup_work": 150000
+      }
+    },
+    {
+      "error": {
+        "allowed": 23,
+        "code": "RESOURCE_LIMIT",
+        "details": {
+          "component_count": 1,
+          "largest_component_arcs": 10,
+          "largest_component_labels": 4,
+          "refinement_rounds": 0,
+          "work_term": "setup"
+        },
+        "limit": "max_canonical_work",
+        "observed": 24,
+        "type": "ResourceLimitError"
+      },
+      "id": "oversized-4",
+      "input": {
+        "bytes": 160,
+        "component_count": 1,
+        "labels_per_component": 4,
+        "max_canonical_work": 23,
+        "sha256": "d2d6681594230f44c69a2853ed975c31e8289ad211efe7fe1cec90d1667dd06c"
+      },
+      "kind": "oversized-component",
+      "output": null,
+      "shape": {
+        "component_count": 1,
+        "largest_component_arcs": 10,
+        "largest_component_labels": 4,
+        "largest_component_roots": 1,
+        "maximum_open_root_intervals": 1,
+        "maximum_root_interval_span": 1,
+        "total_arcs": 10,
+        "total_labels": 4
+      },
+      "status": "pass",
+      "work": null
+    }
+  ],
+  "claims": {
+    "bounded_component_metrics_present": true,
+    "fixed_component_work_is_additive": true,
+    "fixed_component_work_per_component": 9,
+    "input_hashes_verified": true,
+    "oversized_component_failed_closed": true,
+    "performance_claim": null
+  },
+  "contract": {
+    "api_version": [
+      0,
+      2
+    ],
+    "backend": "python",
+    "format": "functional",
+    "model_schema": 2
+  },
+  "input_lock": {
+    "generator": "pyowl-core/component-canonicalization-functional/v1",
+    "schema": "pyowl-core/component-canonicalization-input-lock/v1",
+    "sha256": "b03be31e945465800b5713caa9e5f544c10b0a72c2967588736071b97c5fbbd0"
+  },
+  "profile": "release",
+  "schema": "pyowl-core/component-canonicalization-evidence/v1",
+  "status": "pass"
+}

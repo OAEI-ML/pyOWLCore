@@ -87,13 +87,23 @@ impl<'a> Session<'a> {
         self.limits
     }
 
+    /// Return the monotonic operation-wide byte charge at this instant.
+    ///
+    /// Deltas between two checkpoints describe accounted allocation work;
+    /// they are not allocator-live or process-RSS peaks.
+    pub(crate) fn accounted_bytes(&self) -> u64 {
+        self.memory.used()
+    }
+
     pub(crate) fn step(&mut self, amount: u64) -> NativeResult<()> {
         self.work = self
             .work
             .checked_add(amount)
             .ok_or_else(|| NativeError::limit("native session work counter overflow"))?;
         if self.work > self.limits.max_canonical_work {
-            return Err(NativeError::limit(
+            return Err(self.limits.resource_limit(
+                LimitKey::MaxCanonicalWork,
+                self.work,
                 "native operation exceeds max_canonical_work",
             ));
         }
@@ -118,7 +128,9 @@ impl<'a> Session<'a> {
             .checked_add(bytes)
             .ok_or_else(|| NativeError::limit("native temporary memory accounting overflow"))?;
         if following > self.limits.value(LimitKey::MaxTemporaryBytes) {
-            return Err(NativeError::limit(
+            return Err(self.limits.resource_limit(
+                LimitKey::MaxTemporaryBytes,
+                following,
                 "native operation exceeds max_temporary_bytes",
             ));
         }
@@ -139,6 +151,22 @@ impl<'a> Session<'a> {
 mod tests {
     use super::*;
     use crate::cancel::Cancellation;
+
+    #[test]
+    fn accounted_bytes_are_monotonic_across_shared_reservations() {
+        let limits = Limits::default();
+        let cancellation = Cancellation::with_duration(None);
+        let mut guard = Guard::new(cancellation, limits.deadline, limits.cancellation_stride);
+        let mut session = Session::new(&mut guard, &limits, 3).expect("session");
+
+        assert_eq!(session.accounted_bytes(), 3);
+        session.reserve_bytes(7).expect("persistent reservation");
+        assert_eq!(session.accounted_bytes(), 10);
+        session
+            .reserve_temporary_bytes(5)
+            .expect("temporary reservation");
+        assert_eq!(session.accounted_bytes(), 15);
+    }
 
     #[test]
     fn temporary_limit_failure_does_not_mutate_the_session_budget() {

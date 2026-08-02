@@ -392,7 +392,6 @@ class ComparatorManifest:
             "source_url",
             "artifact",
             "artifact_sha256",
-            "features",
             "allocator",
             "thread_ceiling",
         )
@@ -403,6 +402,19 @@ class ComparatorManifest:
             raise ComparatorManifestError(
                 "raw/common Horned engine pins differ: " + ", ".join(mismatched)
             )
+        if raw[0].features != ("default", "raw-inventory-v1"):
+            raise ComparatorManifestError("raw Horned lane must publish raw-inventory-v1")
+        if common[0].features != ("default", "independent-common-contract-v2"):
+            raise ComparatorManifestError(
+                "common Horned lane must publish independent-common-contract-v2"
+            )
+        for pin in self.comparators:
+            if pin.boundary != COMMON_BOUNDARY:
+                continue
+            if not ({"common-contract-v2", "independent-common-contract-v2"} & set(pin.features)):
+                raise ComparatorManifestError(
+                    f"{pin.id}: common lane must publish model-schema-2 contract features"
+                )
         phases = tuple(value.phase for value in self.timing_fences)
         if phases != REQUIRED_PHASES:
             raise ComparatorManifestError(

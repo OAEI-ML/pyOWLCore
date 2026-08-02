@@ -10,13 +10,14 @@ pyELK, pyHermiT, pyOwl2Vec-Star-projector, and OAEI evaluation code. Consumers
 build their own reasoning or projection IR; they do not reparse paths or own a
 second OWL object model.
 
-Version `0.1.0` was the first production publication of the stabilized 0.1 API.
-Version `0.1.1` is the current corrective release candidate and keeps the same
-public API, model, wire, adapter, and encoded-view versions. The portable
-implementation is the compatibility baseline; native wheels are optional
-accelerators, but every file for one package version is built atomically from
-one source revision. Release decisions and retained limitations are recorded
-in [the release checklist](docs/release-checklist.md).
+Version `0.2.0` is the current release candidate. It introduces API `(0, 2)`,
+model schema `2`, wire `(1, 2)`, and encoded structural schema `2`; adapter
+protocol `1` is unchanged. The portable implementation is the compatibility
+baseline; native wheels are optional accelerators, but every file for one
+package version is built atomically from one source revision. Historical
+`0.1.x` test and performance records are retained as historical evidence and
+are not relabelled as `0.2.0` results. Current release decisions and remaining
+evidence gates are recorded in [the release checklist](docs/release-checklist.md).
 
 ## Installation
 
@@ -79,10 +80,12 @@ edges, repair an ontology, or expose consumer-private IDs. See
 ## Release status
 
 The distribution name is `pyowl-core`; the import package is `pyowl_core`.
-The source tree carries the production `0.1.1` patch release candidate. Native
-wheels are optional optimizations and must never remove features from the pure
-fallback. The 1.0 API remains a future compatibility milestone; it is not
-implied by the production status of the 0.1 line.
+The source tree carries the `0.2.0` production release candidate. Native wheels
+are optional optimizations and must never remove features from the pure
+fallback. Publication remains fail-closed until the current corpus, native,
+consumer, and artifact evidence named in the release ledger is attached. The
+1.0 API remains a future compatibility milestone; it is not implied by the
+production status of the 0.2 line.
 
 ## Documentation
 
@@ -105,8 +108,9 @@ Normative requirements begin at [the master specification](specs/SPEC.md).
 - Distribution: `pyowl-core`
 - Import: `pyowl_core`
 - Python: `>=3.10`
-- Current package line: production `0.1.x`
-- API: `(0, 1)`; model schema: `1`; wire: `(1, 1)`; adapter protocol: `1`
+- Current package candidate: `0.2.0`
+- API: `(0, 2)`; model schema: `2`; wire: `(1, 2)`; adapter protocol: `1`
+- Encoded structural view: `pyowl-core/structural-columns` schema `2`
 - Runtime/build: no JDK, JRE, JVM, OWLAPI, JPype, ROBOT, Maven, Gradle, or Java archive
 - Project source license: Apache License 2.0; packaged third-party notices are
   listed in `THIRD_PARTY_LICENSES/`

@@ -287,6 +287,11 @@ class PythonParser:
         selected_options = LoadOptions() if options is None else options
         if not isinstance(selected_options, LoadOptions):
             raise TypeError("options must be LoadOptions or None")
+        if type(allow_partial_rdf_mapping) is not bool:
+            raise TypeError("allow_partial_rdf_mapping must be bool")
+        allow_partial_rdf_mapping = (
+            allow_partial_rdf_mapping or selected_options.allow_partial_rdf_mapping
+        )
         explicit = coerce_format(format)
         if (
             explicit is not None
@@ -298,6 +303,17 @@ class PythonParser:
                 code="FORMAT_OPTION_CONFLICT",
             )
         forced = explicit or selected_options.format
+        if allow_partial_rdf_mapping:
+            if forced is None:
+                raise OptionConflictError(
+                    "partial RDF diagnostic parsing requires an explicit RDF format",
+                    code="PARTIAL_RDF_MAPPING_FORMAT_REQUIRED",
+                )
+            if forced not in {DocumentFormat.RDF_XML, DocumentFormat.TURTLE}:
+                raise OptionConflictError(
+                    "partial RDF diagnostic parsing applies only to RDF/XML and Turtle",
+                    code="PARTIAL_RDF_MAPPING_FORMAT_CONFLICT",
+                )
         iri = _coerce_iri(document_iri)
         preselected_backend: str | None = None
         if (

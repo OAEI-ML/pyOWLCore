@@ -1,0 +1,354 @@
+{
+  "correctness_reference": {
+    "alpha_equivalence": {
+      "baseline_model_schema": null,
+      "blocks_release_gate": false,
+      "candidate_model_schema": 2,
+      "passed": null,
+      "reason": "generated release input has no historical model-schema-1 incident baseline",
+      "status": "not-applicable-generated-model-schema-2"
+    },
+    "count_anchor": null,
+    "count_qualification": "generator-exact-and-python-cross-pinned"
+  },
+  "id": "generated-component-scaling-functional",
+  "incident_baseline": null,
+  "rss_comparison": {
+    "baseline_peak_rss_bytes": null,
+    "evaluable": false,
+    "observed_peak_rss_bytes": 284332032,
+    "passed": null,
+    "reason": "generated scaling case has no incident RSS baseline",
+    "same_machine_attested": false
+  },
+  "schema": "pyowl-core/biomedical-one-document-case/v1",
+  "status": "pass",
+  "transport": {
+    "parent_cpu_ns": 10298000,
+    "parent_startup_to_ready_wall_ns": 13186937218,
+    "request_bytes": 626,
+    "stderr_bytes": 0,
+    "stdout_bytes": 8898
+  },
+  "worker": {
+    "contract": {
+      "adapter_protocol": 1,
+      "api_version": [
+        0,
+        2
+      ],
+      "consumer_chunking": false,
+      "default_parse_limits": {
+        "cancellation_check_interval": 4096,
+        "deadline_seconds": null,
+        "max_annotations": 100000000,
+        "max_axioms": 100000000,
+        "max_canonical_work": 1000000000,
+        "max_catalog_rewrites": 128,
+        "max_composite_members": 1024,
+        "max_concurrent_fetches": 8,
+        "max_decompressed_bytes": 8589934592,
+        "max_delta_entries": 10000000,
+        "max_diagnostics": 10000,
+        "max_disk_cache_bytes": 68719476736,
+        "max_documents": 1000,
+        "max_import_depth": 128,
+        "max_index_bytes": 17179869184,
+        "max_index_rows": 500000000,
+        "max_iri_bytes": 1048576,
+        "max_literal_bytes": 67108864,
+        "max_memory_bytes": null,
+        "max_nesting_depth": 512,
+        "max_origin_entries": 100000000,
+        "max_overlay_depth": 32,
+        "max_prefixes": 1000000,
+        "max_rdf_list_length": 10000000,
+        "max_redirects": 5,
+        "max_resolver_attempts": 10000,
+        "max_rule_atoms": 10000000,
+        "max_sequence_arity": 10000000,
+        "max_source_bytes": 2147483648,
+        "max_source_map_entries": 100000000,
+        "max_strings": 500000000,
+        "max_temporary_bytes": 17179869184,
+        "max_terms": 500000000,
+        "max_total_source_bytes": 8589934592,
+        "max_triples": 100000000,
+        "max_wire_bytes": 17179869184,
+        "max_wire_rows": 500000000
+      },
+      "default_parse_limits_sha256": "c3f2e8d1cb8ef06e7c3f66df174c1a5b86347ff39d8bda1a4fbd7ff2b410e005",
+      "document_count": 1,
+      "encoded_view_schemas": {
+        "pyowl-core/structural-columns": 2
+      },
+      "load_entrypoint_calls": 1,
+      "model_schema": 2,
+      "options": {
+        "allow_partial_rdf_mapping": false,
+        "backend": "native",
+        "collect_provenance": true,
+        "deterministic": true,
+        "format": "functional",
+        "imports": "ignore",
+        "limits": {
+          "cancellation_check_interval": 4096,
+          "deadline_seconds": null,
+          "max_annotations": 100000000,
+          "max_axioms": 100000000,
+          "max_canonical_work": 1000000000,
+          "max_catalog_rewrites": 128,
+          "max_composite_members": 1024,
+          "max_concurrent_fetches": 8,
+          "max_decompressed_bytes": 8589934592,
+          "max_delta_entries": 10000000,
+          "max_diagnostics": 10000,
+          "max_disk_cache_bytes": 68719476736,
+          "max_documents": 1000,
+          "max_import_depth": 128,
+          "max_index_bytes": 17179869184,
+          "max_index_rows": 500000000,
+          "max_iri_bytes": 1048576,
+          "max_literal_bytes": 67108864,
+          "max_memory_bytes": null,
+          "max_nesting_depth": 512,
+          "max_origin_entries": 100000000,
+          "max_overlay_depth": 32,
+          "max_prefixes": 1000000,
+          "max_rdf_list_length": 10000000,
+          "max_redirects": 5,
+          "max_resolver_attempts": 10000,
+          "max_rule_atoms": 10000000,
+          "max_sequence_arity": 10000000,
+          "max_source_bytes": 2147483648,
+          "max_source_map_entries": 100000000,
+          "max_strings": 500000000,
+          "max_temporary_bytes": 17179869184,
+          "max_terms": 500000000,
+          "max_total_source_bytes": 8589934592,
+          "max_triples": 100000000,
+          "max_wire_bytes": 17179869184,
+          "max_wire_rows": 500000000
+        },
+        "offline": true,
+        "preserve_source_map": false,
+        "validate_owl2_dl": false
+      },
+      "options_sha256": "f866ea275f2a458b77902caba0d8b893cb43bc394c7391f1f6d6039a74630002",
+      "requested_backend": "native",
+      "selected_backend": "native",
+      "wire_format": [
+        1,
+        2
+      ]
+    },
+    "corpus": {
+      "acquired": "2026-08-02",
+      "axioms": 50001,
+      "bytes": 5000159,
+      "count_basis": "generator-exact",
+      "entities": 1,
+      "families": [
+        "biomedical",
+        "synthetic",
+        "adversarial"
+      ],
+      "format": "functional",
+      "generator": "anonymous-components",
+      "generator_size": 50000,
+      "id": "generated-component-scaling-functional",
+      "imports": 0,
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "redistribution": "generated",
+      "revision": "generator-v2/anonymous-components-50000",
+      "sha256": "e93b82497f07b7d44abec136010a0999e3434d97e2d5a46aa3fba29a0796868f",
+      "source": "generated",
+      "tier": "synthetic",
+      "triples": 50002,
+      "url": null
+    },
+    "measurement": {
+      "child_startup_to_ready_cpu_ns": 11667478000,
+      "fresh_process_peak_rss_bytes": 284332032,
+      "load_wall_ns": 4161590913,
+      "portable_performance_claim": false,
+      "rss_platform_unit": "bytes",
+      "sample_count": 1
+    },
+    "output": {
+      "anonymous_components": {
+        "native_anonymous_accounted_bytes": 172184969,
+        "native_anonymous_component_count": 50000,
+        "native_anonymous_largest_component_arcs": 1,
+        "native_anonymous_largest_component_labels": 1,
+        "native_anonymous_largest_component_roots": 1,
+        "native_anonymous_largest_component_work": 9,
+        "native_anonymous_maximum_open_root_intervals": 1,
+        "native_anonymous_maximum_refinement_rounds": 1,
+        "native_anonymous_maximum_root_interval_span": 1,
+        "native_anonymous_total_arcs": 50000,
+        "native_anonymous_total_candidate_order_work": 100000,
+        "native_anonymous_total_canonical_work": 450000,
+        "native_anonymous_total_labels": 50000,
+        "native_anonymous_total_permutations_examined": 50000,
+        "native_anonymous_total_refinement_work": 200000,
+        "native_anonymous_total_setup_work": 150000
+      },
+      "common_contract_sha256": "37174f39899385644d4ec7d3590850482a363b6cf7e04ac462872e51e190e27e",
+      "complete_import_closure": true,
+      "counts": {
+        "axioms": 50001,
+        "declarations": 1,
+        "diagnostics": 0,
+        "documents": 1,
+        "extensions": 0,
+        "imports": 0,
+        "ontology_annotations": 0,
+        "rdf_triples": null,
+        "signature_entities": 1,
+        "source_bytes": 5000159
+      },
+      "encoded_evidence": {
+        "declaration_root_rows_scanned": 50001,
+        "declaration_view_count": 1,
+        "declaration_view_referenced_buffer_bytes": 8700192,
+        "encoded_document_view_count": 0,
+        "encoded_node_count": 200003,
+        "encoded_provenance_rows_streamed": 50001,
+        "encoded_referenced_buffer_bytes": 0,
+        "encoded_referenced_buffer_copy_bytes": 0,
+        "encoded_root_count": 50001,
+        "encoded_scalar_traversal_calls": 0,
+        "encoded_structural_nodes_materialized": 0,
+        "encoded_view_count": 0,
+        "native_common_contract_summary_count": 1
+      },
+      "fingerprints": {
+        "document": {
+          "algorithm": "sha256",
+          "digest": "d95eacbbad0f0fc91c567599ece59404ff8e372153763999153ddf6044460832",
+          "preimage_bytes": 7500186,
+          "preimage_sha256": "d95eacbbad0f0fc91c567599ece59404ff8e372153763999153ddf6044460832",
+          "schema": 2
+        },
+        "logical": {
+          "algorithm": "sha256",
+          "digest": "e44e64a515b8b4bc2174139fa5f8dfd82183d1ae4a1b40f2cd5830720155e120",
+          "preimage_bytes": 7500059,
+          "preimage_sha256": "e44e64a515b8b4bc2174139fa5f8dfd82183d1ae4a1b40f2cd5830720155e120",
+          "schema": 2
+        },
+        "signature": {
+          "algorithm": "sha256",
+          "digest": "b7d27030fbfba6fa25becb99cdeb88c906f75e6b8cea2c13aa087cfa85cecff1",
+          "preimage_bytes": 108,
+          "preimage_sha256": "b7d27030fbfba6fa25becb99cdeb88c906f75e6b8cea2c13aa087cfa85cecff1",
+          "schema": 2
+        },
+        "structural": {
+          "algorithm": "sha256",
+          "digest": "600605b95ba33e273136e47f035ea7373aa0a86c65388bed7502c252f9d3f951",
+          "preimage_bytes": 7500431,
+          "preimage_sha256": "600605b95ba33e273136e47f035ea7373aa0a86c65388bed7502c252f9d3f951",
+          "schema": 2
+        }
+      },
+      "inventories": {
+        "axioms": {
+          "canonical_bytes": 7400077,
+          "count": 50001,
+          "sha256": "072621e8d0993b33a0904db1833ed453f7b46cc6ae046496a80f3d071cded3cf",
+          "transcript_bytes": 7500123
+        },
+        "documents": {
+          "canonical_bytes": 132,
+          "count": 1,
+          "sha256": "adbca6c5cadd36b8af8afc0873573a4c1a3b15df7d24f4756a71abc8d00d0f15",
+          "transcript_bytes": 177
+        },
+        "extensions": {
+          "canonical_bytes": 0,
+          "count": 0,
+          "sha256": "0712b6859e228ce2e0c927d25e42f43bd99a4543ae06ad54ddf81cda4a030893",
+          "transcript_bytes": 43
+        },
+        "ontology_annotations": {
+          "canonical_bytes": 0,
+          "count": 0,
+          "sha256": "0712b6859e228ce2e0c927d25e42f43bd99a4543ae06ad54ddf81cda4a030893",
+          "transcript_bytes": 43
+        },
+        "signature": {
+          "canonical_bytes": 72,
+          "count": 1,
+          "sha256": "1371eabbb83e0433dd4763bd450a162b82242280e04bde2e66dbd4827db6d55e",
+          "transcript_bytes": 116
+        }
+      },
+      "root_document_key": "d2:a174cfe786fc4f4b608ca488bcd5a8b8a526d10853d7471df59c49f45851041f"
+    },
+    "runtime": {
+      "cpu": {
+        "logical_count": 12
+      },
+      "identity_sha256": "48af2f2be91ac5fee6666f4f031d110e1b7fc41bb6184cd6a4d30898666216b1",
+      "memory": {
+        "physical_bytes": 34359738368
+      },
+      "native": {
+        "available": true,
+        "bytes": 3328256,
+        "features": [
+          "cancellation",
+          "canonical-model-v2",
+          "deadlines",
+          "gil-release",
+          "index-axiom-types-v1",
+          "owned-buffers",
+          "panic-containment",
+          "parse-functional-v1",
+          "parse-owlxml-v1",
+          "parse-rdfxml-v1",
+          "parse-turtle-v1",
+          "pyowl-core/structural-columns",
+          "safe-rust",
+          "wire-v1"
+        ],
+        "origin": "src/pyowl_core/_native.cpython-312-darwin.so",
+        "reason": null,
+        "sha256": "27d07a79de9921b6d93f40d965fa6f8f6ef1bc1d0e8c07877face09d01b7dc27",
+        "version": "0.2.0"
+      },
+      "package": {
+        "api_version": [
+          0,
+          2
+        ],
+        "source_origin": "src/pyowl_core/__init__.py",
+        "source_tree_bytes": 2108901,
+        "source_tree_file_count": 94,
+        "source_tree_sha256": "7d784701f837ace7ff80349dcbff5e8158c8a36e0cdc6448980876500c2a5ef2",
+        "version": "0.2.0"
+      },
+      "platform": {
+        "machine": "x86_64",
+        "processor": "i386",
+        "python_build_platform": "macOS-26.5.2-x86_64-i386-64bit",
+        "release": "25.5.0",
+        "system": "Darwin",
+        "version": "Darwin Kernel Version 25.5.0: Tue Jun  9 22:26:23 PDT 2026; root:xnu-12377.121.10~1/RELEASE_X86_64"
+      },
+      "python": {
+        "compiler": "Clang 15.0.0 (clang-1500.3.9.4)",
+        "executable": "/usr/local/Cellar/python@3.12/3.12.3/Frameworks/Python.framework/Versions/3.12/bin/python3.12",
+        "executable_bytes": 13592,
+        "executable_sha256": "fc3cced60b55796d594da285fbe5886c06213e81526103cef70324f68679c3b9",
+        "implementation": "CPython",
+        "version": "3.12.3"
+      }
+    },
+    "schema": "pyowl-core/biomedical-one-document-result/v1",
+    "status": "pass"
+  }
+}

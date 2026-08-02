@@ -914,7 +914,7 @@ final class ModelMapper {
     }
 
     private static IneligibleException unsupported(Object value) {
-        return new IneligibleException("OWLAPI object is outside model schema one: "
+        return new IneligibleException("OWLAPI object is outside model schema two: "
                 + value.getClass().getName());
     }
 }

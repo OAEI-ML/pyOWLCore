@@ -1,0 +1,71 @@
+{
+  "cases": [
+    {
+      "component_count": 1,
+      "id": "fixed-1",
+      "kind": "fixed-components",
+      "labels_per_component": 1,
+      "max_canonical_work": 9,
+      "profiles": [
+        "smoke",
+        "release"
+      ],
+      "source_bytes": 259,
+      "source_sha256": "2c86a914c94db2f081b52c85ebef5cfb408740dd1bf2c41f392e2b05be5f9a13"
+    },
+    {
+      "component_count": 8,
+      "id": "fixed-8",
+      "kind": "fixed-components",
+      "labels_per_component": 1,
+      "max_canonical_work": 9,
+      "profiles": [
+        "smoke",
+        "release"
+      ],
+      "source_bytes": 959,
+      "source_sha256": "b3d29c898cea137544e085f953528e4f5f92e5eeb39e06b4f9bbe18739a89bd4"
+    },
+    {
+      "component_count": 64,
+      "id": "fixed-64",
+      "kind": "fixed-components",
+      "labels_per_component": 1,
+      "max_canonical_work": 9,
+      "profiles": [
+        "smoke",
+        "release"
+      ],
+      "source_bytes": 6559,
+      "source_sha256": "e3347fe43eb768e9b40370e96aa6680ab30d53131efc6692cc05f230c9846a55"
+    },
+    {
+      "component_count": 50000,
+      "id": "fixed-50000",
+      "kind": "fixed-components",
+      "labels_per_component": 1,
+      "max_canonical_work": 9,
+      "profiles": [
+        "release"
+      ],
+      "source_bytes": 5000159,
+      "source_sha256": "e93b82497f07b7d44abec136010a0999e3434d97e2d5a46aa3fba29a0796868f"
+    },
+    {
+      "component_count": 1,
+      "id": "oversized-4",
+      "kind": "oversized-component",
+      "labels_per_component": 4,
+      "max_canonical_work": 23,
+      "profiles": [
+        "smoke",
+        "release"
+      ],
+      "source_bytes": 160,
+      "source_sha256": "d2d6681594230f44c69a2853ed975c31e8289ad211efe7fe1cec90d1667dd06c"
+    }
+  ],
+  "generator": "pyowl-core/component-canonicalization-functional/v1",
+  "model_schema": 2,
+  "schema": "pyowl-core/component-canonicalization-input-lock/v1"
+}

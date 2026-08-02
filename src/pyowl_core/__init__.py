@@ -20,7 +20,30 @@ from .api import (
 )
 from .backends.native_views import (
     ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
+    ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2,
+    ENCODED_STRUCTURAL_DESCRIPTOR_V1,
+    ENCODED_STRUCTURAL_DESCRIPTOR_V2,
+    ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
+    ENCODED_STRUCTURAL_MODEL_SCHEMA_V2,
+    ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
+    ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
+    ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+    ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
+    EncodedStructuralOptionsV1,
+    EncodedStructuralOptionsV2,
+    EncodedStructuralPublicationV1,
+    EncodedStructuralPublicationV2,
+    EncodedStructuralSegmentPublicationV1,
+    EncodedStructuralSegmentPublicationV2,
+    EncodedStructuralSegmentV1,
+    EncodedStructuralSegmentV2,
     EncodedStructuralView,
+    EncodedStructuralViewV1,
+    EncodedStructuralViewV2,
+    produce_encoded_structural_view_v1,
+    produce_encoded_structural_view_v2,
+    validate_encoded_structural_view_v1,
+    validate_encoded_structural_view_v2,
 )
 from .backends.python import PythonParser
 from .cancellation import CancellationSource, CancellationToken
@@ -159,11 +182,11 @@ from .wire import (
     WireCache,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
-API_VERSION = (0, 1)
-MODEL_SCHEMA_VERSION = 1
-WIRE_FORMAT_VERSION = (1, 1)
+API_VERSION = (0, 2)
+MODEL_SCHEMA_VERSION = 2
+WIRE_FORMAT_VERSION = (1, 2)
 ADAPTER_PROTOCOL_VERSION = 1
 
 __all__ = [
@@ -210,7 +233,26 @@ __all__ = [
     "DocumentRecord",
     "DocumentStatus",
     "ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1",
+    "ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2",
+    "ENCODED_STRUCTURAL_DESCRIPTOR_V1",
+    "ENCODED_STRUCTURAL_DESCRIPTOR_V2",
+    "ENCODED_STRUCTURAL_MODEL_SCHEMA_V1",
+    "ENCODED_STRUCTURAL_MODEL_SCHEMA_V2",
+    "ENCODED_STRUCTURAL_SCHEMA_NAME_V1",
+    "ENCODED_STRUCTURAL_SCHEMA_NAME_V2",
+    "ENCODED_STRUCTURAL_SCHEMA_VERSION_V1",
+    "ENCODED_STRUCTURAL_SCHEMA_VERSION_V2",
+    "EncodedStructuralOptionsV1",
+    "EncodedStructuralOptionsV2",
+    "EncodedStructuralPublicationV1",
+    "EncodedStructuralPublicationV2",
+    "EncodedStructuralSegmentPublicationV1",
+    "EncodedStructuralSegmentPublicationV2",
+    "EncodedStructuralSegmentV1",
+    "EncodedStructuralSegmentV2",
     "EncodedStructuralView",
+    "EncodedStructuralViewV1",
+    "EncodedStructuralViewV2",
     "FormatDetectionError",
     "FormatDetection",
     "FormatGuessWarning",
@@ -311,10 +353,14 @@ __all__ = [
     "logical_fingerprint",
     "open_snapshot",
     "parse_document",
+    "produce_encoded_structural_view_v1",
+    "produce_encoded_structural_view_v2",
     "render_document",
     "report_progress",
     "signature_fingerprint",
     "snapshot_structural_fingerprint",
+    "validate_encoded_structural_view_v1",
+    "validate_encoded_structural_view_v2",
     "write_document",
     "write_snapshot",
     "resolver_configuration_fingerprint",

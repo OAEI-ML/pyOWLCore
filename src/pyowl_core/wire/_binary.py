@@ -375,6 +375,24 @@ def validate_wire(
                 raise WireVersionError(
                     "unsupported wire section schema", code="WIRE_SECTION_SCHEMA"
                 )
+            if known_kind in {
+                SectionKind.VIEW_PROVENANCE,
+                SectionKind.ENCODED_STRUCTURAL_V1,
+            } and minor < 1:
+                raise WireVersionError(
+                    "optional wire section requires minor 1",
+                    code="WIRE_SECTION_VERSION",
+                )
+            if known_kind is SectionKind.ENCODED_STRUCTURAL_V2 and minor < 2:
+                raise WireVersionError(
+                    "ENCODED_STRUCTURAL_V2 requires wire minor 2",
+                    code="WIRE_SECTION_VERSION",
+                )
+            if known_kind is SectionKind.ENCODED_STRUCTURAL_V1:
+                raise WireVersionError(
+                    "ENCODED_STRUCTURAL_V1 is incompatible with model schema 2",
+                    code="WIRE_MODEL_SCHEMA",
+                )
         if entry.decoded_length != entry.stored_length:
             raise WireVersionError(
                 "compressed required data is unsupported in wire v1",
@@ -403,27 +421,39 @@ def validate_wire(
     if cursor != total_length and any(view[cursor:]):
         raise _corrupt("wire trailing padding is not zero")
     tables: dict[int, TableView] = {}
-    for index, entry in enumerate(entries):
-        guard.check(index)
-        section = view[entry.offset : entry.end]
-        if hashlib.sha256(section).digest() != entry.digest:
-            raise _corrupt("wire section SHA-256 mismatch")
-        try:
-            known_kind = SectionKind(entry.kind)
-        except ValueError:
-            continue
-        if known_kind not in REQUIRED_SECTIONS and known_kind not in KNOWN_OPTIONAL_SECTIONS:
-            continue
-        _validate_table(section, entry, guard)
-        tables[entry.kind] = TableView(view, entry)
-    if verify:
-        hasher = hashlib.sha256()
-        hasher.update(view[:56])
-        hasher.update(bytes(36))
-        hasher.update(view[92:])
-        if hasher.digest() != file_digest:
-            raise _corrupt("wire file SHA-256 mismatch")
-    guard.check(force=True)
+    try:
+        for index, entry in enumerate(entries):
+            guard.check(index)
+            section = view[entry.offset : entry.end]
+            try:
+                if hashlib.sha256(section).digest() != entry.digest:
+                    raise _corrupt("wire section SHA-256 mismatch")
+                try:
+                    known_kind = SectionKind(entry.kind)
+                except ValueError:
+                    continue
+                if (
+                    known_kind not in REQUIRED_SECTIONS
+                    and known_kind not in KNOWN_OPTIONAL_SECTIONS
+                ):
+                    continue
+                _validate_table(section, entry, guard)
+                tables[entry.kind] = TableView(view, entry)
+            finally:
+                section.release()
+        if verify:
+            hasher = hashlib.sha256()
+            hasher.update(view[:56])
+            hasher.update(bytes(36))
+            hasher.update(view[92:])
+            if hasher.digest() != file_digest:
+                raise _corrupt("wire file SHA-256 mismatch")
+        guard.check(force=True)
+    except BaseException:
+        for table in tables.values():
+            table.release()
+        view.release()
+        raise
     return WireImage(
         view,
         WireHeader(

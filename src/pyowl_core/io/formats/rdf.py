@@ -9,7 +9,9 @@ from itertools import pairwise
 from typing import Any, NoReturn, TypeAlias, cast
 
 import pyowl_core.model as m
+from pyowl_core._evidence import bounded_evidence_text
 from pyowl_core.cancellation import CancellationToken
+from pyowl_core.diagnostics import Diagnostic, Severity
 from pyowl_core.document import OntologyDocument, OntologyID
 from pyowl_core.document.document import provisional_anonymous
 from pyowl_core.document.provenance import RDFMappingReport, RDFTripleEvidence
@@ -37,6 +39,10 @@ RDFS = "http://www.w3.org/2000/01/rdf-schema#"
 OWL = "http://www.w3.org/2002/07/owl#"
 XSD = "http://www.w3.org/2001/XMLSchema#"
 SWRL = "http://www.w3.org/2003/11/swrl#"
+
+_MAX_RDF_EVIDENCE_BYTES = 4_096
+_MAX_RDF_REIFICATION_PAYLOAD_BYTES = 32 * 1_024
+_RDF_REIFICATION_PAYLOAD_HEADER_BYTES = 8 + 8 + 4
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -68,6 +74,15 @@ class Triple:
 
     def key(self) -> tuple[tuple[str, str], tuple[str, str], tuple[str, str, str]]:
         return _resource_key(self.subject), _resource_key(self.predicate), _term_key(self.object)
+
+
+@dataclass(frozen=True, slots=True)
+class _ReificationIssue:
+    message: str
+    reason: str
+    node: RDFResource | None = None
+    main: Triple | None = None
+    main_triple_present: bool | None = None
 
 
 class RDFGraph:
@@ -192,6 +207,7 @@ class RDFMapper:
     def map(self, *, allow_partial: bool = False) -> ParsedOntology:
         self._scan_entity_kinds()
         self._consume_owl1_redundant_types()
+        self._raise_preflight_reification_errors()
         self._collect_axiom_annotations()
         ontology_id, imports, ontology_annotations, ontology_node = self._header()
         axioms: list[m.AxiomNode] = []
@@ -228,29 +244,44 @@ class RDFMapper:
         self._consume_detached_data_enumerations()
         self._consume_detached_owl1_data_enumerations()
         if self.unclaimed_axiom_reifications or self.unclaimed_nested_reifications:
-            raise OntologySyntaxError(
-                "RDF reification targets an unsupported axiom or annotation mapping",
-                code="RDF_AXIOM_REIFICATION",
+            unclaimed = min(
+                self.unclaimed_axiom_reifications | self.unclaimed_nested_reifications,
+                key=Triple.key,
             )
-        unconsumed = tuple(item for item in self.graph.triples if item not in self.consumed)
+            raise self._reification_error(
+                "RDF reification targets an unsupported axiom or annotation mapping",
+                reason="UNCLAIMED_MAIN_TRIPLE",
+                main=unclaimed,
+                main_triple_present=True,
+            )
+        unconsumed_count = 0
+        unconsumed_examples: list[RDFTripleEvidence] = []
+        for item in self.graph.triples:
+            self.context.check()
+            if item in self.consumed:
+                continue
+            unconsumed_count += 1
+            if len(unconsumed_examples) < self.context.limits.max_diagnostics:
+                unconsumed_examples.append(_evidence(item))
+        total_triples = len(self.graph.triples)
+        consumed_triples = total_triples - unconsumed_count
         report = RDFMappingReport(
-            conformant=not unconsumed,
-            consumed_triples=len(self.consumed),
-            total_triples=len(self.graph.triples),
-            unconsumed=tuple(
-                _evidence(item) for item in unconsumed[: self.context.limits.max_diagnostics]
-            ),
-            rule_ids=("OWL2-RDF-REVERSE",) if unconsumed else (),
+            conformant=unconsumed_count == 0,
+            consumed_triples=consumed_triples,
+            total_triples=total_triples,
+            unconsumed=tuple(unconsumed_examples),
+            rule_ids=("OWL2-RDF-REVERSE",) if unconsumed_count else (),
         )
-        if unconsumed and not allow_partial:
+        if unconsumed_count and not allow_partial:
             examples = "; ".join(
-                f"{_term_text(item.subject)} {_term_text(item.predicate)} {_term_text(item.object)}"
-                for item in unconsumed[:3]
+                f"{item.subject} <{item.predicate}> {item.object}"
+                for item in unconsumed_examples[:3]
             )
             raise UnsupportedSyntaxError(
                 f"RDF graph is not completely mappable to OWL 2 structure; "
-                f"{len(unconsumed)} unconsumed triple(s): {examples}",
+                f"{unconsumed_count} unconsumed triple(s): {examples}",
                 code="RDF_MAPPING_INCOMPLETE",
+                rdf_mapping_report=report,
             )
         parsed = ParsedOntology(
             ontology_id,
@@ -261,9 +292,7 @@ class RDFMapper:
             occurrences=tuple(occurrences),
             rdf_mapping_report=report,
         )
-        axiom_rows = {
-            m.canonical_bytes(root, limits=self.context.limits) for root in parsed.axioms
-        }
+        axiom_rows = {m.canonical_bytes(root, limits=self.context.limits) for root in parsed.axioms}
         self.context.limits.enforce("max_axioms", len(axiom_rows))
         annotation_rows = {
             m.canonical_bytes(root, limits=self.context.limits) for root in parsed.annotations
@@ -330,9 +359,7 @@ class RDFMapper:
             if expected is None:
                 continue
             if any(
-                self.graph.contains(
-                    Triple(triple.subject, RDFIRI(RDF + "type"), RDFIRI(candidate))
-                )
+                self.graph.contains(Triple(triple.subject, RDFIRI(RDF + "type"), RDFIRI(candidate)))
                 for candidate in expected
             ):
                 self._consume(triple)
@@ -453,14 +480,8 @@ class RDFMapper:
             if not isinstance(first, RDFIRI):
                 return False
             if expected_kind not in self.kinds.get(first.value, set()) and not (
-                (
-                    expected_kind is m.EntityKind.CLASS
-                    and first.value in _BUILTIN_CLASSES
-                )
-                or (
-                    expected_kind is m.EntityKind.DATATYPE
-                    and first.value in _BUILTIN_DATATYPES
-                )
+                (expected_kind is m.EntityKind.CLASS and first.value in _BUILTIN_CLASSES)
+                or (expected_kind is m.EntityKind.DATATYPE and first.value in _BUILTIN_DATATYPES)
             ):
                 return False
             rest = rests[0]
@@ -607,9 +628,7 @@ class RDFMapper:
                 )
             )
             if has_other_constructor or has_compatibility_marker:
-                self._mapping_error(
-                    "datatype restriction has conflicting constructors or markers"
-                )
+                self._mapping_error("datatype restriction has conflicting constructors or markers")
             self._data_range(triple.subject)
 
     def _is_established_facet_list(self, head: RDFTerm) -> bool:
@@ -704,17 +723,102 @@ class RDFMapper:
                 self._mapping_error("OWL 1 data range has conflicting constructors")
             self._data_range(marker.subject)
 
+    def _raise_preflight_reification_errors(self) -> None:
+        node_kinds: dict[RDFResource, set[str]] = {}
+        for type_triple in self.graph.find(predicate=RDF + "type"):
+            self.context.check()
+            if not isinstance(type_triple.object, RDFIRI):
+                continue
+            if type_triple.object.value == OWL + "Axiom":
+                node_kinds.setdefault(type_triple.subject, set()).add("axiom")
+            elif type_triple.object.value == OWL + "Annotation":
+                node_kinds.setdefault(type_triple.subject, set()).add("annotation")
+
+        issue_count = 0
+        retained: list[_ReificationIssue] = []
+        retained_payload_bytes = _RDF_REIFICATION_PAYLOAD_HEADER_BYTES
+        for node in sorted(node_kinds, key=_resource_key):
+            self.context.check()
+            kinds = node_kinds[node]
+            issue: _ReificationIssue | None
+            if kinds == {"axiom", "annotation"}:
+                issue = _ReificationIssue(
+                    "RDF reification node cannot be both owl:Axiom and owl:Annotation",
+                    "NODE_KIND_CONFLICT",
+                    node=node,
+                )
+            else:
+                sources = self.graph.objects(node, OWL + "annotatedSource")
+                predicates = self.graph.objects(node, OWL + "annotatedProperty")
+                targets = self.graph.objects(node, OWL + "annotatedTarget")
+                cardinalities = (len(sources), len(predicates), len(targets))
+                label = "owl:Axiom" if "axiom" in kinds else "owl:Annotation"
+                if cardinalities != (1, 1, 1):
+                    reason = "METADATA_INCOMPLETE" if 0 in cardinalities else "METADATA_AMBIGUOUS"
+                    issue = _ReificationIssue(
+                        f"{label} reification metadata is incomplete or ambiguous",
+                        reason,
+                        node=node,
+                    )
+                else:
+                    source, predicate, target = sources[0], predicates[0], targets[0]
+                    if not isinstance(source, (RDFIRI, RDFBlank)) or not isinstance(
+                        predicate, RDFIRI
+                    ):
+                        issue = _ReificationIssue(
+                            f"{label} reification has invalid source/property",
+                            "METADATA_TYPE_INVALID",
+                            node=node,
+                        )
+                    else:
+                        main = Triple(source, predicate, target)
+                        issue = (
+                            None
+                            if self.graph.contains(main)
+                            else _ReificationIssue(
+                                f"{label} reification main triple is absent",
+                                "MAIN_TRIPLE_ABSENT",
+                                node=node,
+                                main=main,
+                                main_triple_present=False,
+                            )
+                        )
+            if issue is None:
+                continue
+            issue_count += 1
+            issue_payload_bytes = _reification_issue_payload_bytes(issue)
+            if (
+                len(retained) < self.context.limits.max_diagnostics
+                and retained_payload_bytes + issue_payload_bytes
+                <= _MAX_RDF_REIFICATION_PAYLOAD_BYTES
+            ):
+                retained.append(issue)
+                retained_payload_bytes += issue_payload_bytes
+
+        if issue_count:
+            raise self._reification_exception(tuple(retained), issue_count)
+
     def _collect_axiom_annotations(self) -> None:
         annotation_nodes: dict[Triple, list[RDFResource]] = {}
         for type_triple in self.graph.find(
             predicate=RDF + "type", object=RDFIRI(OWL + "Annotation")
         ):
             node = type_triple.subject
+            if self.graph.contains(Triple(node, RDFIRI(RDF + "type"), RDFIRI(OWL + "Axiom"))):
+                raise self._reification_error(
+                    "RDF reification node cannot be both owl:Axiom and owl:Annotation",
+                    reason="NODE_KIND_CONFLICT",
+                    node=node,
+                    derive_main=False,
+                )
             main = self._reification_main(node, "owl:Annotation")
             if not self.graph.contains(main):
-                raise OntologySyntaxError(
+                raise self._reification_error(
                     "owl:Annotation reification main triple is absent",
-                    code="RDF_AXIOM_REIFICATION",
+                    reason="MAIN_TRIPLE_ABSENT",
+                    node=node,
+                    main=main,
+                    main_triple_present=False,
                 )
             annotation_nodes.setdefault(main, []).append(node)
             self.unclaimed_nested_reifications.add(main)
@@ -726,9 +830,12 @@ class RDFMapper:
             if cached is not None:
                 return cached
             if main in visiting:
-                raise OntologySyntaxError(
+                evidence_main = min((*visiting, main), key=Triple.key)
+                raise self._reification_error(
                     "cyclic annotated annotation reification",
-                    code="RDF_AXIOM_REIFICATION",
+                    reason="ANNOTATION_CYCLE",
+                    main=evidence_main,
+                    main_triple_present=True,
                 )
             visiting.add(main)
             values: list[m.Annotation] = []
@@ -756,18 +863,21 @@ class RDFMapper:
         collected_axiom_annotations: dict[Triple, list[m.Annotation]] = {}
         for type_triple in self.graph.find(predicate=RDF + "type", object=RDFIRI(OWL + "Axiom")):
             node = type_triple.subject
-            if self.graph.contains(
-                Triple(node, RDFIRI(RDF + "type"), RDFIRI(OWL + "Annotation"))
-            ):
-                raise OntologySyntaxError(
+            if self.graph.contains(Triple(node, RDFIRI(RDF + "type"), RDFIRI(OWL + "Annotation"))):
+                raise self._reification_error(
                     "RDF reification node cannot be both owl:Axiom and owl:Annotation",
-                    code="RDF_AXIOM_REIFICATION",
+                    reason="NODE_KIND_CONFLICT",
+                    node=node,
+                    derive_main=False,
                 )
             main = self._reification_main(node, "owl:Axiom")
             if not self.graph.contains(main):
-                raise OntologySyntaxError(
+                raise self._reification_error(
                     "owl:Axiom reification main triple is absent",
-                    code="RDF_AXIOM_REIFICATION",
+                    reason="MAIN_TRIPLE_ABSENT",
+                    node=node,
+                    main=main,
+                    main_triple_present=False,
                 )
             self.unclaimed_axiom_reifications.add(main)
             metadata = {
@@ -795,21 +905,129 @@ class RDFMapper:
         )
 
     def _reification_main(self, node: RDFResource, label: str) -> Triple:
-        try:
-            source = self.graph.one(node, OWL + "annotatedSource", required=True)
-            predicate = self.graph.one(node, OWL + "annotatedProperty", required=True)
-            target = self.graph.one(node, OWL + "annotatedTarget", required=True)
-        except OntologySyntaxError as error:
-            raise OntologySyntaxError(
+        sources = self.graph.objects(node, OWL + "annotatedSource")
+        predicates = self.graph.objects(node, OWL + "annotatedProperty")
+        targets = self.graph.objects(node, OWL + "annotatedTarget")
+        cardinalities = (len(sources), len(predicates), len(targets))
+        if cardinalities != (1, 1, 1):
+            reason = "METADATA_INCOMPLETE" if 0 in cardinalities else "METADATA_AMBIGUOUS"
+            raise self._reification_error(
                 f"{label} reification metadata is incomplete or ambiguous",
-                code="RDF_AXIOM_REIFICATION",
-            ) from error
-        if not isinstance(source, (RDFIRI, RDFBlank)) or not isinstance(predicate, RDFIRI):
-            raise OntologySyntaxError(
-                f"{label} reification has invalid source/property",
-                code="RDF_AXIOM_REIFICATION",
+                reason=reason,
+                node=node,
             )
-        return Triple(source, predicate, cast(RDFTerm, target))
+        source, predicate, target = sources[0], predicates[0], targets[0]
+        if not isinstance(source, (RDFIRI, RDFBlank)) or not isinstance(predicate, RDFIRI):
+            raise self._reification_error(
+                f"{label} reification has invalid source/property",
+                reason="METADATA_TYPE_INVALID",
+                node=node,
+            )
+        return Triple(source, predicate, target)
+
+    def _reification_error(
+        self,
+        message: str,
+        *,
+        reason: str,
+        node: RDFResource | None = None,
+        main: Triple | None = None,
+        main_triple_present: bool | None = None,
+        derive_main: bool = True,
+    ) -> UnsupportedSyntaxError:
+        if derive_main and main is None and node is not None:
+            sources = self.graph.objects(node, OWL + "annotatedSource")
+            predicates = self.graph.objects(node, OWL + "annotatedProperty")
+            targets = self.graph.objects(node, OWL + "annotatedTarget")
+            if len(sources) == len(predicates) == len(targets) == 1:
+                source, predicate, target = sources[0], predicates[0], targets[0]
+                if isinstance(source, (RDFIRI, RDFBlank)) and isinstance(predicate, RDFIRI):
+                    main = Triple(source, predicate, target)
+        if main is not None and main_triple_present is None:
+            main_triple_present = self.graph.contains(main)
+        return self._reification_exception(
+            (
+                _ReificationIssue(
+                    message,
+                    reason,
+                    node=node,
+                    main=main,
+                    main_triple_present=main_triple_present,
+                ),
+            ),
+            1,
+        )
+
+    def _reification_exception(
+        self,
+        retained: tuple[_ReificationIssue, ...],
+        issue_count: int,
+    ) -> UnsupportedSyntaxError:
+        evidence_count = len(retained)
+        suppressed_count = issue_count - evidence_count
+        diagnostics = tuple(
+            self._reification_diagnostic(
+                issue,
+                issue_count=issue_count,
+                evidence_count=evidence_count,
+                suppressed_count=suppressed_count,
+            )
+            for issue in retained
+        )
+        message = (
+            retained[0].message if retained else "RDF axiom or annotation reification is malformed"
+        )
+        primary = (
+            diagnostics[0]
+            if diagnostics
+            else Diagnostic(
+                code="RDF_AXIOM_REIFICATION",
+                severity=Severity.ERROR,
+                message=message,
+                details={
+                    "reification_issue_count": issue_count,
+                    "reification_evidence_count": 0,
+                    "reification_suppressed_count": issue_count,
+                },
+            )
+        )
+        return UnsupportedSyntaxError(
+            message,
+            code="RDF_AXIOM_REIFICATION",
+            diagnostic=primary,
+            reification_evidence=diagnostics,
+            reification_issue_count=issue_count,
+        )
+
+    @staticmethod
+    def _reification_diagnostic(
+        issue: _ReificationIssue,
+        *,
+        issue_count: int,
+        evidence_count: int,
+        suppressed_count: int,
+    ) -> Diagnostic:
+        details: dict[str, str | int | bool] = {
+            "reification_error": issue.reason,
+            "reification_issue_count": issue_count,
+            "reification_evidence_count": evidence_count,
+            "reification_suppressed_count": suppressed_count,
+        }
+        if issue.node is not None:
+            details["reification_subject"] = _bounded_term_text(issue.node)
+        if issue.main is not None:
+            details["annotated_source"] = _bounded_term_text(issue.main.subject)
+            details["annotated_property"] = _bounded_text(issue.main.predicate.value)
+            details["annotated_target"] = _bounded_term_text(issue.main.object)
+            details["annotated_target_kind"] = _term_kind(issue.main.object)
+        if issue.main_triple_present is not None:
+            details["main_triple_present"] = issue.main_triple_present
+        return Diagnostic(
+            code="RDF_AXIOM_REIFICATION",
+            severity=Severity.ERROR,
+            message=issue.message,
+            details=details,
+        )
 
     def _header(
         self,
@@ -958,17 +1176,14 @@ class RDFMapper:
                         self._mapping_error(
                             "all-disjoint class axiom requires at least two members"
                         )
-                    collection_value: m.AxiomNode = _disjoint_classes(
-                        expressions, annotations
-                    )
+                    collection_value: m.AxiomNode = _disjoint_classes(expressions, annotations)
                 elif kind == OWL + "AllDifferent":
                     individuals = m.CanonicalSet(
                         self._individual_resource(item) for item in members
                     )
                     if len(individuals) < 2:
                         self._mapping_error(
-                            "different-individuals axiom requires at least two "
-                            "distinct members"
+                            "different-individuals axiom requires at least two distinct members"
                         )
                     collection_value = m.DifferentIndividuals(
                         individuals,
@@ -981,20 +1196,16 @@ class RDFMapper:
                         )
                         if len(data_properties) < 2:
                             self._mapping_error(
-                                "all-disjoint property axiom requires at least two "
-                                "distinct members"
+                                "all-disjoint property axiom requires at least two distinct members"
                             )
-                        collection_value = m.DisjointDataProperties(
-                            data_properties, annotations
-                        )
+                        collection_value = m.DisjointDataProperties(data_properties, annotations)
                     else:
                         object_properties = m.CanonicalSet(
                             self._object_property(item) for item in members
                         )
                         if len(object_properties) < 2:
                             self._mapping_error(
-                                "all-disjoint property axiom requires at least two "
-                                "distinct members"
+                                "all-disjoint property axiom requires at least two distinct members"
                             )
                         collection_value = m.DisjointObjectProperties(
                             object_properties, annotations
@@ -1005,9 +1216,7 @@ class RDFMapper:
 
     def _swrl_rules(self) -> tuple[SWRLRule, ...]:
         values: list[SWRLRule] = []
-        for type_triple in self.graph.find(
-            predicate=RDF + "type", object=RDFIRI(SWRL + "Imp")
-        ):
+        for type_triple in self.graph.find(predicate=RDF + "type", object=RDFIRI(SWRL + "Imp")):
             if not self.allow_swrl:
                 raise UnsupportedSyntaxError(
                     "SWRL extension requires explicit enablement",
@@ -1037,9 +1246,7 @@ class RDFMapper:
         kind = atom_type.value
         if kind == SWRL + "ClassAtom":
             self._ensure_predicates(term, _SWRL_CLASS_ATOM_METADATA)
-            predicate = cast(
-                RDFTerm, self.graph.one(term, SWRL + "classPredicate", required=True)
-            )
+            predicate = cast(RDFTerm, self.graph.one(term, SWRL + "classPredicate", required=True))
             if not isinstance(predicate, (RDFIRI, RDFBlank)):
                 self._mapping_type("SWRL class predicate must be a resource")
             argument = cast(RDFTerm, self.graph.one(term, SWRL + "argument1", required=True))
@@ -1052,9 +1259,7 @@ class RDFMapper:
             if not isinstance(predicate, (RDFIRI, RDFBlank)):
                 self._mapping_type("SWRL data-range predicate must be a resource")
             argument = cast(RDFTerm, self.graph.one(term, SWRL + "argument1", required=True))
-            value = DataRangeAtom(
-                self._data_range(predicate), self._swrl_data_argument(argument)
-            )
+            value = DataRangeAtom(self._data_range(predicate), self._swrl_data_argument(argument))
         elif kind == SWRL + "IndividualPropertyAtom":
             self._ensure_predicates(term, _SWRL_PROPERTY_ATOM_METADATA)
             predicate = cast(
@@ -1088,9 +1293,7 @@ class RDFMapper:
             predicate = cast(RDFTerm, self.graph.one(term, SWRL + "builtin", required=True))
             if not isinstance(predicate, RDFIRI):
                 self._mapping_type("SWRL builtin predicate must be a named IRI")
-            arguments_head = cast(
-                RDFTerm, self.graph.one(term, SWRL + "arguments", required=True)
-            )
+            arguments_head = cast(RDFTerm, self.graph.one(term, SWRL + "arguments", required=True))
             value = BuiltInAtom(
                 m.IRI(predicate.value),
                 tuple(self._swrl_data_argument(item) for item in self._list(arguments_head)),
@@ -1207,42 +1410,28 @@ class RDFMapper:
                     self._mapping_error(
                         "equivalent-classes axiom requires at least two distinct members"
                     )
-                output.append(
-                    m.EquivalentClasses(expressions, annotations)
-                )
+                output.append(m.EquivalentClasses(expressions, annotations))
             elif kind == "same":
                 individuals = m.CanonicalSet(map(self._individual_resource, ordered))
                 if len(individuals) < 2:
                     self._mapping_error(
                         "same-individual axiom requires at least two distinct members"
                     )
-                output.append(
-                    m.SameIndividual(individuals, annotations)
-                )
+                output.append(m.SameIndividual(individuals, annotations))
             elif all(self._resource_iri(item) in self.data_kinds for item in ordered):
-                data_properties = m.CanonicalSet(
-                    map(self._data_property_term, ordered)
-                )
+                data_properties = m.CanonicalSet(map(self._data_property_term, ordered))
                 if len(data_properties) < 2:
                     self._mapping_error(
-                        "equivalent-data-properties axiom requires at least two "
-                        "distinct members"
+                        "equivalent-data-properties axiom requires at least two distinct members"
                     )
-                output.append(
-                    m.EquivalentDataProperties(data_properties, annotations)
-                )
+                output.append(m.EquivalentDataProperties(data_properties, annotations))
             else:
-                object_properties = m.CanonicalSet(
-                    map(self._object_property, ordered)
-                )
+                object_properties = m.CanonicalSet(map(self._object_property, ordered))
                 if len(object_properties) < 2:
                     self._mapping_error(
-                        "equivalent-object-properties axiom requires at least two "
-                        "distinct members"
+                        "equivalent-object-properties axiom requires at least two distinct members"
                     )
-                output.append(
-                    m.EquivalentObjectProperties(object_properties, annotations)
-                )
+                output.append(m.EquivalentObjectProperties(object_properties, annotations))
         return tuple(output)
 
     def _simple_axiom(
@@ -1261,13 +1450,9 @@ class RDFMapper:
                 annotations,
             )
         elif p == OWL + "disjointUnionOf":
-            expressions = m.CanonicalSet(
-                self._class_expression(item) for item in self._list(o)
-            )
+            expressions = m.CanonicalSet(self._class_expression(item) for item in self._list(o))
             if len(expressions) < 2:
-                self._mapping_error(
-                    "disjoint-union axiom requires at least two distinct members"
-                )
+                self._mapping_error("disjoint-union axiom requires at least two distinct members")
             value = m.DisjointUnion(
                 self._class_resource(s),
                 expressions,
@@ -1276,8 +1461,7 @@ class RDFMapper:
         elif (
             isinstance(s, RDFIRI)
             and (
-                m.EntityKind.CLASS in self.kinds.get(s.value, set())
-                or s.value in _BUILTIN_CLASSES
+                m.EntityKind.CLASS in self.kinds.get(s.value, set()) or s.value in _BUILTIN_CLASSES
             )
             and p
             in {
@@ -1297,16 +1481,12 @@ class RDFMapper:
                     named_individuals_only=True,
                 )
             )
-            equivalent_expressions = m.CanonicalSet(
-                (m.Class(m.IRI(s.value)), expression)
-            )
+            equivalent_expressions = m.CanonicalSet((m.Class(m.IRI(s.value)), expression))
             if len(equivalent_expressions) < 2:
                 self._mapping_error(
                     "named class constructor axiom requires two distinct expressions"
                 )
-            value = m.EquivalentClasses(
-                equivalent_expressions, annotations
-            )
+            value = m.EquivalentClasses(equivalent_expressions, annotations)
         elif p == RDFS + "subPropertyOf" and isinstance(s, RDFIRI) and isinstance(o, RDFIRI):
             if s.value in self.annotation_kinds or o.value in self.annotation_kinds:
                 value = m.SubAnnotationPropertyOf(
@@ -1325,9 +1505,7 @@ class RDFMapper:
         elif p == OWL + "propertyChainAxiom" and isinstance(s, RDFIRI):
             properties = tuple(self._object_property(item) for item in self._list(o))
             if len(properties) < 2:
-                self._mapping_cardinality(
-                    "object property chain requires at least two members"
-                )
+                self._mapping_cardinality("object property chain requires at least two members")
             chain = m.ObjectPropertyChain(properties)
             value = m.SubObjectPropertyOf(chain, m.ObjectProperty(m.IRI(s.value)), annotations)
         elif p == OWL + "propertyDisjointWith" and isinstance(o, RDFIRI):
@@ -1337,24 +1515,18 @@ class RDFMapper:
                 )
                 if len(disjoint_data_properties) < 2:
                     self._mapping_error(
-                        "disjoint-data-properties axiom requires at least two "
-                        "distinct members"
+                        "disjoint-data-properties axiom requires at least two distinct members"
                     )
-                value = m.DisjointDataProperties(
-                    disjoint_data_properties, annotations
-                )
+                value = m.DisjointDataProperties(disjoint_data_properties, annotations)
             else:
                 disjoint_object_properties = m.CanonicalSet(
                     (self._object_property(s), self._object_property(o))
                 )
                 if len(disjoint_object_properties) < 2:
                     self._mapping_error(
-                        "disjoint-object-properties axiom requires at least two "
-                        "distinct members"
+                        "disjoint-object-properties axiom requires at least two distinct members"
                     )
-                value = m.DisjointObjectProperties(
-                    disjoint_object_properties, annotations
-                )
+                value = m.DisjointObjectProperties(disjoint_object_properties, annotations)
         elif (
             p == OWL + "inverseOf"
             and isinstance(o, (RDFIRI, RDFBlank))
@@ -1422,9 +1594,7 @@ class RDFMapper:
                 self._mapping_error(
                     "different-individuals axiom requires at least two distinct members"
                 )
-            value = m.DifferentIndividuals(
-                individuals, annotations
-            )
+            value = m.DifferentIndividuals(individuals, annotations)
         elif (
             p == RDF + "type"
             and isinstance(s, RDFIRI)
@@ -2477,9 +2647,7 @@ def _cardinality_predicate(value: object, *, qualified: bool) -> str:
         else ("max" if isinstance(value, (m.ObjectMaxCardinality, m.DataMaxCardinality)) else "")
     )
     if qualified:
-        return OWL + (
-            middle + "QualifiedCardinality" if middle else "qualifiedCardinality"
-        )
+        return OWL + (middle + "QualifiedCardinality" if middle else "qualifiedCardinality")
     return OWL + middle + "Cardinality"
 
 
@@ -2543,12 +2711,8 @@ _SWRL_INDIVIDUAL_ATOM_METADATA = {
     SWRL + "argument2",
 }
 _BUILTIN_CLASSES = frozenset({OWL + "Thing", OWL + "Nothing"})
-_BUILTIN_OBJECT_PROPERTIES = frozenset(
-    {OWL + "topObjectProperty", OWL + "bottomObjectProperty"}
-)
-_BUILTIN_DATA_PROPERTIES = frozenset(
-    {OWL + "topDataProperty", OWL + "bottomDataProperty"}
-)
+_BUILTIN_OBJECT_PROPERTIES = frozenset({OWL + "topObjectProperty", OWL + "bottomObjectProperty"})
+_BUILTIN_DATA_PROPERTIES = frozenset({OWL + "topDataProperty", OWL + "bottomDataProperty"})
 _BUILTIN_DATATYPES = frozenset(
     {
         RDFS + "Literal",
@@ -2690,9 +2854,54 @@ def _term_text(value: RDFTerm) -> str:
     return repr(value.lexical)
 
 
+def _term_kind(value: RDFTerm) -> str:
+    if isinstance(value, RDFIRI):
+        return "iri"
+    if isinstance(value, RDFBlank):
+        return "blank"
+    return "literal"
+
+
+def _bounded_text(value: str) -> str:
+    return bounded_evidence_text(value, max_bytes=_MAX_RDF_EVIDENCE_BYTES)
+
+
+def _bounded_term_text(value: RDFTerm) -> str:
+    return _bounded_text(_term_text(value))
+
+
+def _reification_issue_payload_bytes(issue: _ReificationIssue) -> int:
+    fields = [issue.reason]
+    if issue.node is not None:
+        fields.append(issue.node.value if isinstance(issue.node, RDFIRI) else issue.node.label)
+    else:
+        fields.append("")
+    if issue.main is None:
+        fields.extend(("", "", ""))
+    else:
+        fields.append(
+            issue.main.subject.value
+            if isinstance(issue.main.subject, RDFIRI)
+            else issue.main.subject.label
+        )
+        fields.append(issue.main.predicate.value)
+        target = issue.main.object
+        fields.append(
+            target.value
+            if isinstance(target, RDFIRI)
+            else target.label
+            if isinstance(target, RDFBlank)
+            else target.lexical
+        )
+    return 1 + sum(5 + min(len(value.encode("utf-8")), _MAX_RDF_EVIDENCE_BYTES) for value in fields)
+
+
 def _evidence(value: Triple) -> RDFTripleEvidence:
     return RDFTripleEvidence(
-        _term_text(value.subject), value.predicate.value, _term_text(value.object)
+        _bounded_term_text(value.subject),
+        _bounded_text(value.predicate.value),
+        _bounded_term_text(value.object),
+        _term_kind(value.object),
     )
 
 

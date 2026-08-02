@@ -25,8 +25,8 @@ def _metadata_extension(
     features = tuple(sorted((*native._FOUNDATION_FEATURE_LEDGER, *extra_features)))
     return SimpleNamespace(
         ABI_VERSION=abi_version,
-        MODEL_SCHEMA_VERSION=1,
-        WIRE_FORMAT_VERSION=(1, 1),
+        MODEL_SCHEMA_VERSION=2,
+        WIRE_FORMAT_VERSION=(1, 2),
         FEATURES=features,
         INGESTION_FEATURES=ingestion,
         VIEW_FEATURES=views,
@@ -121,6 +121,54 @@ def test_native_metadata_accepts_exhaustive_disjoint_successor_partitions() -> N
         extra_features=("ingest-v1", "view-v1"),
     )
     assert native._validate_metadata(extension) == extension.FEATURES
+
+
+def test_retained_phase_metadata_exposes_exact_anonymous_accounting() -> None:
+    phase_names = ("native_syntax_parse_seconds", "native_result_encode_seconds")
+    metadata = (
+        (1_000_000_000, 2_000_000_000),
+        (
+            tuple(range(1, 9)),
+            tuple(range(9, 16)),
+            (4_096,),
+        ),
+    )
+
+    timings = dict(native._retained_phase_timings(metadata, phase_names, label="test"))
+
+    assert timings["native_syntax_parse_seconds"] == 1.0
+    assert timings["native_result_encode_seconds"] == 2.0
+    assert timings["native_anonymous_component_count"] == 1.0
+    assert timings["native_anonymous_total_permutations_examined"] == 15.0
+    assert timings["native_anonymous_accounted_bytes"] == 4_096.0
+
+
+@pytest.mark.parametrize(
+    "allocation",
+    (
+        (),
+        (-1,),
+        (True,),
+        ((1 << 53) + 1,),
+        [1],
+    ),
+)
+def test_retained_phase_metadata_rejects_invalid_anonymous_accounting(
+    allocation: object,
+) -> None:
+    metadata = (
+        (0,),
+        (
+            (0,) * 8,
+            (0,) * 7,
+            allocation,
+        ),
+    )
+
+    with pytest.raises(BackendProtocolError) as captured:
+        native._retained_phase_timings(metadata, ("native_syntax_parse_seconds",), label="test")
+
+    assert captured.value.code == "NATIVE_RESULT_TYPE"
 
 
 def test_stale_private_abi_fails_closed_before_native_code_runs() -> None:

@@ -16,10 +16,12 @@ const RECORD_INVENTORY_DOMAIN: &[u8] = b"pyowl-core:comparator-record-inventory:
 const RDF_PLAIN_LITERAL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const PROVISIONAL_SCOPE: [u8; 32] = [
-    0x0e, 0xf6, 0xe7, 0x99, 0x0d, 0x6e, 0x56, 0xdc, 0x7c, 0x2f, 0x06, 0xfc, 0xe3, 0xbf, 0xe1, 0x7c,
-    0xd3, 0x7f, 0x89, 0x58, 0x2a, 0xfd, 0x4d, 0x37, 0xb9, 0xdf, 0xd6, 0x6a, 0x83, 0xce, 0x26, 0x7c,
+    0x9b, 0x38, 0x99, 0xd1, 0x03, 0x23, 0x85, 0xa3, 0x21, 0xe2, 0x7b, 0xfa, 0xc9, 0x56, 0xcf, 0xc4,
+    0x71, 0x31, 0x6b, 0x7b, 0x8b, 0x87, 0x29, 0xaf, 0x81, 0x9e, 0xb0, 0x93, 0x4d, 0xc6, 0x59, 0xef,
 ];
-const LEXICAL_KEY: &[u8] = b"pyowl-core:parser-blank-label:v1\0";
+const LEXICAL_KEY: &[u8] = b"pyowl-core:parser-blank-label:v2\0";
+const COMPONENT_CLASS_DOMAIN: &[u8] = b"pyowl-core:blank-component-class:v2\0";
+const COMPONENT_MANIFEST_DOMAIN: &[u8] = b"pyowl-core:blank-component-manifest:v2\0";
 
 struct MappingContext {
     signature: BTreeSet<Vec<u8>>,
@@ -41,6 +43,7 @@ struct MappedDocument {
     axioms: Vec<MappedAxiom>,
     extensions: Vec<(Vec<u8>, Vec<u8>)>,
     signature: Vec<Vec<u8>>,
+    source_occurrences: Vec<Vec<u8>>,
 }
 
 pub(crate) struct CommonContractBuild {
@@ -54,6 +57,19 @@ struct BlankArc {
     role: String,
     target: Option<String>,
     payload: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct BlankComponent {
+    labels: BTreeSet<String>,
+    arcs: Vec<BlankArc>,
+}
+
+#[derive(Debug)]
+struct SolvedBlankComponent {
+    labels: BTreeSet<String>,
+    order: Vec<String>,
+    canonical_graph: Vec<u8>,
 }
 
 fn constructor_schema(tag: u64) -> Option<(&'static str, &'static [&'static str])> {
@@ -267,7 +283,7 @@ fn provisional_label(node: &c::ParsedNode) -> Result<Option<String>, RunnerError
     let [c::ParsedField::Bytes(scope), c::ParsedField::Bytes(local_key)] = node.fields.as_slice()
     else {
         return Err(RunnerError::new(
-            "anonymous individual fields differ from model schema one",
+            "anonymous individual fields differ from the active model schema",
         ));
     };
     if scope.as_slice() != PROVISIONAL_SCOPE || !local_key.starts_with(LEXICAL_KEY) {
@@ -307,7 +323,7 @@ fn skeleton_node(node: &c::ParsedNode) -> Result<Vec<u8>, RunnerError> {
         .ok_or_else(|| RunnerError::new("blank skeleton encountered an unknown model tag"))?;
     if node.fields.len() != fields.len() {
         return Err(RunnerError::new(
-            "blank skeleton field count differs from model schema one",
+            "blank skeleton field count differs from the active model schema",
         ));
     }
     let mut output = b"N".to_vec();
@@ -370,7 +386,7 @@ fn blank_occurrences(
         .ok_or_else(|| RunnerError::new("blank occurrence encountered an unknown model tag"))?;
     if node.fields.len() != fields.len() {
         return Err(RunnerError::new(
-            "blank occurrence field count differs from model schema one",
+            "blank occurrence field count differs from the active model schema",
         ));
     }
     for (field, name) in node.fields.iter().zip(fields.iter()) {
@@ -395,7 +411,7 @@ fn blank_occurrences_field(
                 .collect::<Result<Vec<_>, RunnerError>>()?;
             grouped.sort_by(|left, right| left.0.cmp(&right.0));
             for (skeleton, value) in grouped {
-                let marker = &hex_digest(&digest(&skeleton))[..16];
+                let marker = hex_digest(&digest(&skeleton));
                 let mut child_path = path.to_vec();
                 child_path.push(format!("set:{marker}"));
                 blank_occurrences(value, &child_path, output)?;
@@ -476,6 +492,87 @@ fn enforce_blank_terms(
     Ok(())
 }
 
+fn blank_leader(parents: &BTreeMap<String, String>, label: &str) -> Result<String, RunnerError> {
+    let mut leader = label;
+    loop {
+        let parent = parents
+            .get(leader)
+            .ok_or_else(|| RunnerError::new("blank component label is missing"))?;
+        if parent == leader {
+            return Ok(parent.clone());
+        }
+        leader = parent;
+    }
+}
+
+fn union_blank_labels(
+    parents: &mut BTreeMap<String, String>,
+    left: &str,
+    right: &str,
+) -> Result<(), RunnerError> {
+    let left_leader = blank_leader(parents, left)?;
+    let right_leader = blank_leader(parents, right)?;
+    if left_leader == right_leader {
+        return Ok(());
+    }
+    let (first, second) = if left_leader < right_leader {
+        (left_leader, right_leader)
+    } else {
+        (right_leader, left_leader)
+    };
+    parents.insert(second, first);
+    Ok(())
+}
+
+fn partition_blank_graph(
+    labels: &BTreeSet<String>,
+    arcs: &[BlankArc],
+) -> Result<Vec<BlankComponent>, RunnerError> {
+    let mut parents = labels
+        .iter()
+        .map(|label| (label.clone(), label.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for arc in arcs {
+        if let Some(target) = &arc.target {
+            union_blank_labels(&mut parents, &arc.source, target)?;
+        }
+    }
+
+    let mut grouped_labels = BTreeMap::<String, BTreeSet<String>>::new();
+    for label in labels {
+        let leader = blank_leader(&parents, label)?;
+        grouped_labels
+            .entry(leader)
+            .or_default()
+            .insert(label.clone());
+    }
+    let mut grouped_arcs = grouped_labels
+        .keys()
+        .map(|leader| (leader.clone(), Vec::new()))
+        .collect::<BTreeMap<_, _>>();
+    for arc in arcs {
+        let leader = blank_leader(&parents, &arc.source)?;
+        grouped_arcs
+            .get_mut(&leader)
+            .ok_or_else(|| RunnerError::new("blank component arc leader is missing"))?
+            .push(arc.clone());
+    }
+
+    let mut components = grouped_labels
+        .into_iter()
+        .map(|(leader, labels)| {
+            Ok(BlankComponent {
+                labels,
+                arcs: grouped_arcs
+                    .remove(&leader)
+                    .ok_or_else(|| RunnerError::new("blank component arcs are missing"))?,
+            })
+        })
+        .collect::<Result<Vec<_>, RunnerError>>()?;
+    components.sort_by(|left, right| left.labels.cmp(&right.labels));
+    Ok(components)
+}
+
 fn arc_signature(
     label: &str,
     arc: &BlankArc,
@@ -553,7 +650,7 @@ fn blank_colors(
     let mut output = BTreeMap::new();
     for (label, mut signatures) in neighborhoods {
         signatures.sort();
-        let mut preimage = b"pyowl-core:blank-color:v1\0".to_vec();
+        let mut preimage = b"pyowl-core:blank-color:v2\0".to_vec();
         if let Some(previous) = previous {
             preimage.extend(c::frame(previous.get(&label).ok_or_else(|| {
                 RunnerError::new("blank refinement color is missing")
@@ -626,7 +723,7 @@ fn serialize_blank_graph(order: &[String], arcs: &[BlankArc]) -> Result<Vec<u8>,
         encoded.extend(c::frame(&arc.payload)?);
         encoded_arcs.insert(encoded);
     }
-    let mut graph = b"pyowl-core:blank-graph:v1\0".to_vec();
+    let mut graph = b"pyowl-core:blank-graph:v2\0".to_vec();
     graph.extend(c::encode_varint(
         u64::try_from(order.len()).map_err(|_| RunnerError::new("blank count exceeds u64"))?,
     ));
@@ -867,6 +964,28 @@ fn ontology_key(document: &MappedDocument) -> Result<Vec<u8>, RunnerError> {
     }
 }
 
+fn canonical_component_manifest(solved: &[SolvedBlankComponent]) -> Result<Vec<u8>, RunnerError> {
+    let mut multiplicities = BTreeMap::<Vec<u8>, u64>::new();
+    for component in solved {
+        let count = multiplicities
+            .entry(component.canonical_graph.clone())
+            .or_default();
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| RunnerError::new("blank component multiplicity exceeds u64"))?;
+    }
+    let mut manifest = COMPONENT_MANIFEST_DOMAIN.to_vec();
+    manifest.extend(c::encode_varint(
+        u64::try_from(multiplicities.len())
+            .map_err(|_| RunnerError::new("blank component class count exceeds u64"))?,
+    ));
+    for (graph, multiplicity) in multiplicities {
+        manifest.extend(c::frame(&graph)?);
+        manifest.extend(c::encode_varint(multiplicity));
+    }
+    Ok(manifest)
+}
+
 fn freeze_document_anonymous(
     document: &mut MappedDocument,
     max_canonical_work: u64,
@@ -884,23 +1003,59 @@ fn freeze_document_anonymous(
         normalize_document_sets(document);
         return Ok(());
     }
-    let (order, canonical_graph) = alpha_order(&labels, &arcs, max_canonical_work)?;
+    let mut solved = partition_blank_graph(&labels, &arcs)?
+        .into_iter()
+        .map(|component| {
+            let (order, canonical_graph) =
+                alpha_order(&component.labels, &component.arcs, max_canonical_work)?;
+            Ok(SolvedBlankComponent {
+                labels: component.labels,
+                order,
+                canonical_graph,
+            })
+        })
+        .collect::<Result<Vec<_>, RunnerError>>()?;
+    let component_manifest = canonical_component_manifest(&solved)?;
     let key = ontology_key(document)?;
-    let mut scope_preimage = b"pyowl-core:document-scope:v1\0".to_vec();
+    let mut scope_preimage = b"pyowl-core:document-scope:v2\0".to_vec();
     scope_preimage.extend(c::frame(&key)?);
-    scope_preimage.extend(c::frame(&canonical_graph)?);
+    scope_preimage.extend(c::frame(&component_manifest)?);
     let scope = digest(&scope_preimage);
-    let graph_digest = digest(&canonical_graph);
+    solved.sort_by(|left, right| {
+        left.canonical_graph
+            .cmp(&right.canonical_graph)
+            .then_with(|| left.labels.cmp(&right.labels))
+    });
     let mut replacements = BTreeMap::new();
-    for (index, label) in order.into_iter().enumerate() {
-        let mut key_preimage = b"pyowl-core:anonymous-key:v1\0".to_vec();
-        key_preimage.extend_from_slice(&scope);
-        key_preimage.extend_from_slice(&graph_digest);
-        key_preimage
-            .extend(c::encode_varint(u64::try_from(index).map_err(|_| {
-                RunnerError::new("anonymous canonical index exceeds u64")
-            })?));
-        replacements.insert(label, anonymous_node(&scope, digest(&key_preimage))?);
+    let mut class_start = 0;
+    while class_start < solved.len() {
+        let graph = &solved[class_start].canonical_graph;
+        let mut class_end = class_start + 1;
+        while class_end < solved.len() && solved[class_end].canonical_graph == *graph {
+            class_end += 1;
+        }
+        let mut class_preimage = COMPONENT_CLASS_DOMAIN.to_vec();
+        class_preimage.extend(c::frame(graph)?);
+        let component_class = digest(&class_preimage);
+        for (ordinal, component) in solved[class_start..class_end].iter().enumerate() {
+            let ordinal = u64::try_from(ordinal)
+                .map_err(|_| RunnerError::new("blank component ordinal exceeds u64"))?;
+            for (index, label) in component.order.iter().enumerate() {
+                let mut key_preimage = b"pyowl-core:anonymous-key:v2\0".to_vec();
+                key_preimage.extend_from_slice(&scope);
+                key_preimage.extend_from_slice(&component_class);
+                key_preimage.extend(c::encode_varint(ordinal));
+                key_preimage
+                    .extend(c::encode_varint(u64::try_from(index).map_err(|_| {
+                        RunnerError::new("anonymous canonical index exceeds u64")
+                    })?));
+                replacements.insert(
+                    label.clone(),
+                    anonymous_node(&scope, digest(&key_preimage))?,
+                );
+            }
+        }
+        class_start = class_end;
     }
     transform_document(document, |node| replace_provisional(node, &replacements))?;
     normalize_document_sets(document);
@@ -944,10 +1099,50 @@ fn transform_document(
     Ok(())
 }
 
+fn document_roots(document: &MappedDocument) -> Vec<Vec<u8>> {
+    document
+        .annotations
+        .iter()
+        .cloned()
+        .chain(document.axioms.iter().map(|value| value.value.clone()))
+        .chain(document.extensions.iter().map(|value| value.0.clone()))
+        .collect()
+}
+
+fn erase_anonymous_identity(node: &mut c::ParsedNode) -> Result<(), RunnerError> {
+    if node.tag == c::ANONYMOUS_INDIVIDUAL {
+        let [c::ParsedField::Bytes(scope), c::ParsedField::Bytes(key)] = node.fields.as_mut_slice()
+        else {
+            return Err(RunnerError::new("anonymous identity fields are malformed"));
+        };
+        scope.clear();
+        key.clear();
+        return Ok(());
+    }
+    for field in &mut node.fields {
+        match field {
+            c::ParsedField::Node(value) => erase_anonymous_identity(value)?,
+            c::ParsedField::Set(values) | c::ParsedField::Sequence(values) => {
+                for value in values {
+                    erase_anonymous_identity(value)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn anonymous_skeleton(value: &[u8]) -> Result<Vec<u8>, RunnerError> {
+    let mut parsed = c::parse_node(value)?;
+    erase_anonymous_identity(&mut parsed)?;
+    parsed.encode()
+}
+
 fn snapshot_scope_document(
     document: &mut MappedDocument,
     document_fingerprint: &[u8],
-) -> Result<(), RunnerError> {
+) -> Result<Option<Vec<(Vec<u8>, Vec<u8>)>>, RunnerError> {
     let roots = document
         .annotations
         .iter()
@@ -958,25 +1153,33 @@ fn snapshot_scope_document(
         collect_anonymous_identities(&c::parse_node(root)?, &mut identities)?;
     }
     if identities.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-    let mut scope_preimage = b"pyowl-core:snapshot-document-scope:v1\0".to_vec();
+    let mut scope_preimage = b"pyowl-core:snapshot-document-scope:v2\0".to_vec();
     scope_preimage.extend_from_slice(document_fingerprint);
     scope_preimage.extend(c::encode_varint(0));
     let new_scope = digest(&scope_preimage);
     let mut replacements = BTreeMap::new();
     for (encoded, (old_scope, old_key)) in identities {
-        let mut key_preimage = b"pyowl-core:anonymous-key:v1\0".to_vec();
+        let mut key_preimage = b"pyowl-core:anonymous-key:v2\0".to_vec();
         key_preimage.extend_from_slice(&new_scope);
         key_preimage.extend_from_slice(&old_scope);
         key_preimage.extend_from_slice(&old_key);
         replacements.insert(encoded, anonymous_node(&new_scope, digest(&key_preimage))?);
     }
+    let pairs = document_roots(document)
+        .into_iter()
+        .map(|original| {
+            let mut moved = c::parse_node(&original)?;
+            replace_encoded_anonymous(&mut moved, &replacements)?;
+            Ok((original, moved.encode()?))
+        })
+        .collect::<Result<Vec<_>, RunnerError>>()?;
     transform_document(document, |node| {
         replace_encoded_anonymous(node, &replacements)
     })?;
     normalize_document_sets(document);
-    Ok(())
+    Ok(Some(pairs))
 }
 
 fn collect_anonymous_identities(
@@ -2082,6 +2285,23 @@ fn map_document(
             "Horned ontology version IRI has no ontology IRI",
         ));
     }
+    let mut source_occurrences: Vec<Vec<u8>> = if matches!(format, Format::RdfXml) {
+        axioms
+            .iter()
+            .map(|value| value.value.clone())
+            .chain(extensions.iter().map(|value| value.0.clone()))
+            .collect()
+    } else {
+        annotations
+            .iter()
+            .cloned()
+            .chain(axioms.iter().map(|value| value.value.clone()))
+            .chain(extensions.iter().map(|value| value.0.clone()))
+            .collect()
+    };
+    if matches!(format, Format::RdfXml) {
+        source_occurrences.sort_by_key(|value| c::structural_digest(value));
+    }
     let mut document = MappedDocument {
         ontology_iri,
         version_iri,
@@ -2090,6 +2310,7 @@ fn map_document(
         axioms,
         extensions,
         signature: context.signature.into_iter().collect(),
+        source_occurrences,
     };
     freeze_document_anonymous(&mut document, max_canonical_work, max_terms)?;
     Ok(document)
@@ -2135,7 +2356,7 @@ fn fingerprint_evidence(preimage: &[u8]) -> Value {
     let digest = hex_digest(&digest(preimage));
     json!({
         "algorithm": "sha256",
-        "schema": 1,
+        "schema": 2,
         "preimage_bytes": preimage.len(),
         "preimage_sha256": digest,
         "digest": digest,
@@ -2163,7 +2384,7 @@ fn record_inventory(values: &[Vec<u8>]) -> Result<Value, RunnerError> {
 }
 
 fn document_fingerprint(document: &MappedDocument) -> Result<Vec<u8>, RunnerError> {
-    let mut preimage = b"pyowl-core:document-fingerprint:v1\0".to_vec();
+    let mut preimage = b"pyowl-core:document-fingerprint:v2\0".to_vec();
     append_optional_iri(&mut preimage, document.ontology_iri.as_deref())?;
     append_optional_iri(&mut preimage, document.version_iri.as_deref())?;
     append_collection(&mut preimage, &document.imports)?;
@@ -2214,9 +2435,9 @@ fn document_key(
             ));
         }
     }
-    let mut preimage = b"pyowl-core:document-key:v1\0".to_vec();
+    let mut preimage = b"pyowl-core:document-key:v2\0".to_vec();
     preimage.extend(payload);
-    Ok(format!("d1:{}", hex_digest(&digest(&preimage))))
+    Ok(format!("d2:{}", hex_digest(&digest(&preimage))))
 }
 
 fn resolver_configuration_digest() -> Result<Vec<u8>, RunnerError> {
@@ -2260,7 +2481,7 @@ fn structural_preimage(
     document_key: &str,
     manifest: &[u8],
 ) -> Result<Vec<u8>, RunnerError> {
-    let mut output = b"pyowl-core:snapshot-structural:v1\0".to_vec();
+    let mut output = b"pyowl-core:snapshot-structural:v2\0".to_vec();
     output.extend(c::frame(manifest)?);
     output.extend(c::frame(document_key.as_bytes())?);
     append_collection(&mut output, &document.annotations)?;
@@ -2291,7 +2512,7 @@ fn logical_preimage(document: &MappedDocument) -> Result<Vec<u8>, RunnerError> {
             .filter_map(|value| value.logical.clone()),
     );
     let extensions = c::normalize_set(document.extensions.iter().map(|value| value.1.clone()));
-    let mut output = b"pyowl-core:snapshot-logical:v1\0datatype-policy:owl2-v1\0".to_vec();
+    let mut output = b"pyowl-core:snapshot-logical:v2\0datatype-policy:owl2-v1\0".to_vec();
     append_collection(&mut output, &logical)?;
     output.extend(c::encode_varint(u64::try_from(extensions.len()).map_err(
         |_| RunnerError::new("logical extension count exceeds u64"),
@@ -2304,7 +2525,7 @@ fn logical_preimage(document: &MappedDocument) -> Result<Vec<u8>, RunnerError> {
 }
 
 fn signature_preimage(document: &MappedDocument) -> Result<Vec<u8>, RunnerError> {
-    let mut output = b"pyowl-core:snapshot-signature:v1\0".to_vec();
+    let mut output = b"pyowl-core:snapshot-signature:v2\0".to_vec();
     output.push(1);
     append_collection(&mut output, &document.signature)?;
     Ok(output)
@@ -2453,14 +2674,99 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>, RunnerError> {
         .map_err(|_| RunnerError::new("common contract could not be canonically serialized"))
 }
 
+fn document_origin_index(
+    document: &MappedDocument,
+    roots: &[Vec<u8>],
+) -> Result<BTreeMap<Vec<u8>, Vec<u64>>, RunnerError> {
+    let mut by_digest = BTreeMap::<Vec<u8>, Vec<u8>>::new();
+    let mut by_skeleton = BTreeMap::<Vec<u8>, Vec<u8>>::new();
+    for root in roots {
+        let root_digest = c::structural_digest(root);
+        by_digest.insert(root_digest.clone(), root_digest.clone());
+        by_skeleton.insert(anonymous_skeleton(root)?, root_digest);
+    }
+    let mut origins = BTreeMap::<Vec<u8>, Vec<u64>>::new();
+    for (occurrence, source) in document.source_occurrences.iter().enumerate() {
+        let source_digest = c::structural_digest(source);
+        let candidate = match by_digest.get(&source_digest) {
+            Some(candidate) => Some(candidate.clone()),
+            None => by_skeleton.get(&anonymous_skeleton(source)?).cloned(),
+        };
+        if let Some(candidate) = candidate {
+            origins.entry(candidate).or_default().push(
+                u64::try_from(occurrence)
+                    .map_err(|_| RunnerError::new("provenance occurrence exceeds u64"))?,
+            );
+        }
+    }
+    Ok(origins)
+}
+
 fn provenance_rows(
+    document: &MappedDocument,
+    roots: &[Vec<u8>],
+    scoped_pairs: Option<&[(Vec<u8>, Vec<u8>)]>,
+    document_key: &str,
+) -> Result<Vec<Value>, RunnerError> {
+    let document_origins = document_origin_index(document, roots)?;
+    let mut origins: BTreeMap<Vec<u8>, Vec<Value>> = BTreeMap::new();
+    match scoped_pairs {
+        None => {
+            for (digest, occurrences) in document_origins {
+                for occurrence in occurrences {
+                    origins.entry(digest.clone()).or_default().push(json!({
+                        "document_key": document_key,
+                        "occurrence": occurrence,
+                        "span": Value::Null,
+                    }));
+                }
+            }
+        }
+        Some(pairs) => {
+            let mut fallback = 0_u64;
+            for (original, moved) in pairs {
+                let original_digest = c::structural_digest(original);
+                let moved_digest = c::structural_digest(moved);
+                let occurrences = match document_origins.get(&original_digest) {
+                    Some(occurrences) if !occurrences.is_empty() => occurrences.clone(),
+                    _ => {
+                        let occurrence = fallback;
+                        fallback = fallback.checked_add(1).ok_or_else(|| {
+                            RunnerError::new("provenance fallback occurrence exceeds u64")
+                        })?;
+                        vec![occurrence]
+                    }
+                };
+                for occurrence in occurrences {
+                    origins
+                        .entry(moved_digest.clone())
+                        .or_default()
+                        .push(json!({
+                            "document_key": document_key,
+                            "occurrence": occurrence,
+                            "span": Value::Null,
+                        }));
+                }
+            }
+        }
+    }
+    Ok(origins
+        .into_iter()
+        .map(|(digest, occurrences)| {
+            json!({
+                "structural_sha256": hex_digest(&digest),
+                "occurrences": occurrences,
+            })
+        })
+        .collect())
+}
+
+#[cfg(test)]
+fn canonical_provenance_rows(
     mut root_digests: Vec<Vec<u8>>,
     document_key: &str,
-    canonical_ordinals: bool,
 ) -> Result<Vec<Value>, RunnerError> {
-    if canonical_ordinals {
-        root_digests.sort();
-    }
+    root_digests.sort();
     let mut origins: BTreeMap<Vec<u8>, Vec<Value>> = BTreeMap::new();
     for (occurrence, digest) in root_digests.into_iter().enumerate() {
         origins.entry(digest).or_default().push(json!({
@@ -2501,7 +2807,8 @@ pub(crate) fn build_common_contract(
     let document_fingerprint = digest(&document_preimage);
     let key = document_key(&document, &document_fingerprint)?;
     let manifest = manifest_bytes(&document, &key, &document_fingerprint)?;
-    snapshot_scope_document(&mut document, &document_fingerprint)?;
+    let document_roots = document_roots(&document);
+    let scoped_pairs = snapshot_scope_document(&mut document, &document_fingerprint)?;
     let structural = structural_preimage(&document, &key, &manifest)?;
     let logical = logical_preimage(&document)?;
     let signature = signature_preimage(&document)?;
@@ -2532,39 +2839,8 @@ pub(crate) fn build_common_contract(
         "root_document_key": key,
     });
 
-    let root_digests = if matches!(request.format, Format::RdfXml) {
-        document
-            .axioms
-            .iter()
-            .map(|value| c::structural_digest(&value.value))
-            .chain(
-                document
-                    .extensions
-                    .iter()
-                    .map(|value| c::structural_digest(&value.0)),
-            )
-            .collect::<Vec<_>>()
-    } else {
-        document
-            .annotations
-            .iter()
-            .map(|value| c::structural_digest(value))
-            .chain(
-                document
-                    .axioms
-                    .iter()
-                    .map(|value| c::structural_digest(&value.value)),
-            )
-            .chain(
-                document
-                    .extensions
-                    .iter()
-                    .map(|value| c::structural_digest(&value.0)),
-            )
-            .collect::<Vec<_>>()
-    };
     let provenance_rows =
-        provenance_rows(root_digests, &key, matches!(request.format, Format::RdfXml))?;
+        provenance_rows(&document, &document_roots, scoped_pairs.as_deref(), &key)?;
     let provenance = json!({
         "origins": provenance_rows,
         "origin_entry_count": provenance_rows.len(),
@@ -2609,7 +2885,7 @@ pub(crate) fn build_common_contract(
     });
     let mut contract = json!({
         "schema": COMMON_CONTRACT_SCHEMA,
-        "model_schema": 1,
+        "model_schema": 2,
         "corpus_id": request.corpus_id,
         "source_sha256": request.source_sha256,
         "options_sha256": request.options_sha256,
@@ -2667,10 +2943,8 @@ fn validate_contract(contract: &Value) -> Result<(), RunnerError> {
     if object.get("schema").and_then(Value::as_str) != Some(COMMON_CONTRACT_SCHEMA) {
         return Err(RunnerError::new("common contract schema is unsupported"));
     }
-    if object.get("model_schema").and_then(Value::as_i64).is_none() {
-        return Err(RunnerError::new(
-            "common contract model_schema is not an integer",
-        ));
+    if object.get("model_schema").and_then(Value::as_u64) != Some(2) {
+        return Err(RunnerError::new("common contract model_schema differs"));
     }
     for name in ["corpus_id", "root_document_key"] {
         if object
@@ -2736,7 +3010,7 @@ fn validate_contract(contract: &Value) -> Result<(), RunnerError> {
             &format!("{name} fingerprint"),
         )?;
         if evidence.get("algorithm").and_then(Value::as_str) != Some("sha256")
-            || evidence.get("schema").and_then(Value::as_u64) != Some(1)
+            || evidence.get("schema").and_then(Value::as_u64) != Some(2)
         {
             return Err(RunnerError::new(format!(
                 "{name} fingerprint algorithm or schema differs"
@@ -3002,16 +3276,46 @@ mod tests {
         );
         assert_eq!(
             left["contract_sha256"],
-            "7b8c6de9dc11cb21585386278a0138acb25112fcdc0f972a3fe24320171b2fb5"
+            "4315ae3f45c1c44b9df03fdbf21fd8defd04c0b63897ed33c62160252832cda7"
         );
         assert_eq!(
             renamed["contract_sha256"],
-            "8dc792f4d8fa535c459f76fd27d0e4deccf784fcd5d79748c5feb671dd463bc2"
+            "d6e0f79094ee3f2f6e4992c47a3183ae94cec77a2ae085421ce49623a8697945"
         );
         assert_eq!(left["fingerprints"], renamed["fingerprints"]);
         assert_eq!(
             left["ledger"]["inventories"]["axioms"],
             renamed["ledger"]["inventories"]["axioms"]
+        );
+    }
+
+    #[test]
+    fn repeated_isomorphic_components_remain_distinct_and_label_invariant() {
+        let left = contract(
+            b"Ontology(ClassAssertion(ObjectOneOf(_:left) _:left) ClassAssertion(ObjectOneOf(_:right) _:right))",
+            "probe-repeated-components",
+        );
+        let renamed = contract(
+            b"Ontology(ClassAssertion(ObjectOneOf(_:beta) _:beta) ClassAssertion(ObjectOneOf(_:alpha) _:alpha))",
+            "probe-repeated-components-renamed",
+        );
+        assert_eq!(
+            left["contract_sha256"],
+            "018d143fe3ba02a62698e5ea5ca255e07f9b0c806c89bbc9e3ccdef6e3362b5e"
+        );
+        assert_eq!(
+            renamed["contract_sha256"],
+            "6f667b9d6a010d5177d4ef66191f5b4d083e2e327f4734c726521e6183717a59"
+        );
+        assert_eq!(left["fingerprints"], renamed["fingerprints"]);
+        assert_eq!(
+            left["ledger"]["inventories"]["axioms"],
+            json!({
+                "count": 2,
+                "canonical_bytes": 298,
+                "transcript_bytes": 345,
+                "sha256": "1bf4408db93fdf6117abe6456eccedad8f807706c44f309617433507e0aec928",
+            })
         );
     }
 
@@ -3031,7 +3335,7 @@ mod tests {
         let value = contract(source.as_bytes(), "probe-horned-annotation-probe");
         assert_eq!(
             value["contract_sha256"],
-            "01b8fa5f1510fffe9d6efc08619a69d55aa6e081fce813a1535d274c563dc5f2"
+            "681d7908041c2c6639493a8d60c248595354fbae0e03cc1ad1b18eb35796eb73"
         );
     }
 
@@ -3054,7 +3358,7 @@ mod tests {
         );
         assert_eq!(
             value["contract_sha256"],
-            "1805ba8326e393c14a9f383ed00df5c948e49ebcf0356d024652a53f427a3e96"
+            "17c36b305dcf5dd3b2f8876826847c5eac486d53c60afa2301691c0f06c49c20"
         );
     }
 
@@ -3077,7 +3381,7 @@ mod tests {
         );
         assert_eq!(
             value["contract_sha256"],
-            "6bf684d79b456ab3243205d6e9fd436c2f013590c2226b09f83cb37c4c8e008d"
+            "536e781d2558966894ff568a3a85b2d107f158d147d71d8873f4203d8e4d3c81"
         );
     }
 
@@ -3105,7 +3409,7 @@ mod tests {
         assert_eq!(value["ledger"]["inventories"]["axioms"]["count"], 4);
         assert_eq!(
             value["contract_sha256"],
-            "9034dbb5b3448dde1baf34adf9e5b92948dd677e8d83d6d2b29d865dad7c9c3e"
+            "504e5a2fc0e1b4c51cdcab4fbb1425f1784c950b035a7aa4a4e1d90feaf9ce85"
         );
     }
 
@@ -3146,7 +3450,7 @@ mod tests {
         );
         assert_eq!(
             expected["contract_sha256"],
-            "186f5521f2e029ca5cf246c03916719e1c65a73f5f75daa410d9278f170b675d"
+            "e9e0f648d28e7a2c517a6dd1b6ec2d5429f97ae26a0ef86fd8655e5985edc5b4"
         );
         assert_eq!(
             expected["ledger"]["inventories"]["axioms"],
@@ -3174,18 +3478,12 @@ mod tests {
     fn rdfxml_provenance_ordinals_are_digest_canonical_and_evidence_sensitive() {
         let lower = vec![0x10; 32];
         let upper = vec![0x20; 32];
-        let canonical = provenance_rows(
-            vec![upper.clone(), lower.clone(), upper.clone()],
-            "d1:test",
-            true,
-        )
-        .unwrap();
-        let reordered = provenance_rows(
-            vec![upper.clone(), upper.clone(), lower.clone()],
-            "d1:test",
-            true,
-        )
-        .unwrap();
+        let canonical =
+            canonical_provenance_rows(vec![upper.clone(), lower.clone(), upper.clone()], "d2:test")
+                .unwrap();
+        let reordered =
+            canonical_provenance_rows(vec![upper.clone(), upper.clone(), lower.clone()], "d2:test")
+                .unwrap();
 
         assert_eq!(canonical, reordered);
         assert_eq!(canonical[0]["occurrences"][0]["occurrence"], 0);
@@ -3193,20 +3491,19 @@ mod tests {
         assert_eq!(canonical[1]["occurrences"][1]["occurrence"], 2);
         assert_ne!(
             canonical,
-            provenance_rows(
+            canonical_provenance_rows(
                 vec![upper.clone(), lower.clone(), upper.clone()],
-                "d1:other",
-                true,
+                "d2:other",
             )
             .unwrap()
         );
         assert_ne!(
             canonical,
-            provenance_rows(vec![upper.clone(), lower], "d1:test", true).unwrap()
+            canonical_provenance_rows(vec![upper.clone(), lower], "d2:test").unwrap()
         );
         assert_ne!(
             canonical,
-            provenance_rows(vec![upper, vec![0x30; 32]], "d1:test", true).unwrap()
+            canonical_provenance_rows(vec![upper, vec![0x30; 32]], "d2:test").unwrap()
         );
     }
 
@@ -3231,7 +3528,7 @@ mod tests {
         let value = contract(source.as_bytes(), "probe-horned-swrl-probe");
         assert_eq!(
             value["contract_sha256"],
-            "4a5d29bc226f43b5d7a1c776374aaf4539cfbb38b7972351f9558a26b6cf3f78"
+            "c9834adb1be31bcc1b1286ae0dcf07c214ae1f4595c4e07e211cf24dfdc1df22"
         );
         assert_eq!(value["ledger"]["inventories"]["extensions"]["count"], 1);
     }

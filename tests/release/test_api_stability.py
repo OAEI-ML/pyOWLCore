@@ -25,9 +25,10 @@ def test_independent_version_domains_and_distribution_metadata_agree() -> None:
     match = re.search(r'^version = "([^"]+)"$', pyproject, flags=re.MULTILINE)
     assert match is not None
     assert match.group(1) == pyowl_core.__version__
-    assert pyowl_core.API_VERSION == (0, 1)
-    assert pyowl_core.MODEL_SCHEMA_VERSION == 1
-    assert pyowl_core.WIRE_FORMAT_VERSION == (1, 1)
+    assert pyowl_core.__version__ == "0.2.0"
+    assert pyowl_core.API_VERSION == (0, 2)
+    assert pyowl_core.MODEL_SCHEMA_VERSION == 2
+    assert pyowl_core.WIRE_FORMAT_VERSION == (1, 2)
     assert pyowl_core.ADAPTER_PROTOCOL_VERSION == 1
     assert (ROOT / "src" / "pyowl_core" / "py.typed").is_file()
 
@@ -52,20 +53,23 @@ def test_documented_consumer_handoff_matches_exact_revision_evidence() -> None:
         assert consumer["required_encoded_view_schemas"] == core["encoded_view_schemas"]
 
 
-def test_release_checklist_records_owner_override() -> None:
+def test_release_checklist_is_fail_closed_and_preserves_historical_override() -> None:
     checklist = (ROOT / "docs" / "release-checklist.md").read_text(encoding="utf-8")
-    assert "release-owner override" in checklist
-    assert "- [x] `pyowl-core` publication is authorized" in checklist
-    assert "- [x] License owner approval is recorded" in checklist
-    assert "- [x] Local token publication replaces" in checklist
-    assert "- [x] Consumer requirements target" in checklist
+    assert "corrective `0.1.1` owner override" in checklist
+    assert "reports/release/0.2.0/gates.json" in checklist
+    assert "- [ ] `consumer_matrix`" in checklist
+    assert "- [ ] `platform_artifact_audit`" in checklist
+    assert "- [ ] `reference_performance`" in checklist
+    assert "not promoted into the `0.2.0` gate ledger" in checklist
 
 
 def test_docs_disclose_release_status_and_unsupported_performance_claims() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     performance = (ROOT / "docs" / "performance.md").read_text(encoding="utf-8")
-    assert "production `0.1.1` patch release candidate" in readme
+    assert "`0.2.0` production release candidate" in readme
+    assert "Publication remains fail-closed" in readme
     assert "1.0 API remains a future compatibility milestone" in readme
     assert "No 2x parser claim" in " ".join(performance.split())
     assert "shared-host" in performance
     assert "reference" in performance
+    assert "No current `0.2.0` corpus result is accepted yet" in performance

@@ -13,6 +13,7 @@ pub(crate) type StructuralDigest = [u8; 32];
 
 const STRUCTURAL_DIGEST_DOMAIN_V1: &[u8] = b"pyowl-core:structural-value:v1\0";
 const MODEL_SCHEMA_VARINT_V1: &[u8] = &[1];
+const MODEL_SCHEMA_VARINT_V2: &[u8] = &[2];
 
 type DigestFunction = fn(&[u8]) -> StructuralDigest;
 
@@ -49,7 +50,7 @@ impl NativeComponentDigestIndex {
             cancellation,
             interrupt,
             0,
-            structural_digest_v1,
+            structural_digest_v2,
         )
     }
 
@@ -76,7 +77,7 @@ impl NativeComponentDigestIndex {
             cancellation,
             interrupt,
             external_retained_bytes,
-            structural_digest_v1,
+            structural_digest_v2,
         )
     }
 
@@ -96,7 +97,9 @@ impl NativeComponentDigestIndex {
         let count = u64::try_from(identifiers.len())
             .map_err(|_| NativeError::limit("native component index row count exceeds u64"))?;
         if count > limits.value(LimitKey::MaxIndexRows) {
-            return Err(NativeError::limit(
+            return Err(limits.resource_limit(
+                LimitKey::MaxIndexRows,
+                count,
                 "native component digest index exceeds max_index_rows",
             ));
         }
@@ -222,7 +225,9 @@ fn check_retained_bytes(
     limits: &Limits,
 ) -> NativeResult<()> {
     if retained_bytes > limits.value(LimitKey::MaxIndexBytes) {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxIndexBytes,
+            retained_bytes,
             "native component digest index exceeds max_index_bytes",
         ));
     }
@@ -232,11 +237,14 @@ fn check_retained_bytes(
         .checked_add(external_retained_bytes)
         .and_then(|value| value.checked_add(retained_bytes))
         .ok_or_else(|| NativeError::limit("native component index memory overflow"))?;
-    if limits
+    if let Some(maximum) = limits
         .max_memory_bytes
-        .is_some_and(|maximum| total_retained > maximum)
+        .filter(|maximum| total_retained > *maximum)
     {
-        return Err(NativeError::limit(
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            total_retained,
+            maximum,
             "native component digest index exceeds max_memory_bytes",
         ));
     }
@@ -269,6 +277,14 @@ pub(crate) fn structural_digest_v1(canonical: &[u8]) -> StructuralDigest {
     let mut hasher = Sha256::new();
     hasher.update(STRUCTURAL_DIGEST_DOMAIN_V1);
     hasher.update(MODEL_SCHEMA_VARINT_V1);
+    hasher.update(canonical);
+    hasher.finish()
+}
+
+pub(crate) fn structural_digest_v2(canonical: &[u8]) -> StructuralDigest {
+    let mut hasher = Sha256::new();
+    hasher.update(STRUCTURAL_DIGEST_DOMAIN_V1);
+    hasher.update(MODEL_SCHEMA_VARINT_V2);
     hasher.update(canonical);
     hasher.finish()
 }

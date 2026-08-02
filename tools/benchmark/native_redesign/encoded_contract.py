@@ -201,7 +201,7 @@ class EncodedStructuralTraversal:
         require_native_direct: bool,
     ) -> None:
         if type(view) is not EncodedStructuralView:
-            raise EncodedContractError("encoded traversal requires the exact schema-v1 view")
+            raise EncodedContractError("encoded traversal requires the exact active schema view")
         selected = view
         if selected.owner is not owner:
             raise EncodedContractError("encoded traversal lost its exact snapshot owner")
@@ -211,7 +211,7 @@ class EncodedStructuralTraversal:
             raise EncodedContractError("encoded traversal schema name differs")
         if selected.schema_version != EncodedStructuralView.SCHEMA_VERSION:
             raise EncodedContractError("encoded traversal schema version differs")
-        if selected.model_schema != 1:
+        if selected.model_schema != EncodedStructuralView.MODEL_SCHEMA:
             raise EncodedContractError("encoded traversal model schema differs")
         if hashlib.sha256(selected.descriptor).digest() != EncodedStructuralView.DESCRIPTOR_SHA256:
             raise EncodedContractError("encoded traversal descriptor digest differs")
@@ -290,7 +290,7 @@ class EncodedStructuralTraversal:
         direct_imports: Sequence[bytes],
     ) -> DigestResult:
         sink = _DigestSink()
-        sink.update(b"pyowl-core:document-fingerprint:v1\x00")
+        sink.update(b"pyowl-core:document-fingerprint:v2\x00")
         for iri in (ontology_iri, version_iri):
             if iri is None:
                 sink.update(b"0")
@@ -312,7 +312,7 @@ class EncodedStructuralTraversal:
         documents: Sequence[tuple[str, EncodedStructuralTraversal]],
     ) -> DigestResult:
         sink = _DigestSink()
-        sink.update(b"pyowl-core:snapshot-structural:v1\x00")
+        sink.update(b"pyowl-core:snapshot-structural:v2\x00")
         _write_frame(sink, manifest_bytes)
         for document_key, traversal in documents:
             _write_frame(sink, document_key.encode("ascii"))
@@ -329,7 +329,7 @@ class EncodedStructuralTraversal:
         extension_count = sum(1 for _node_id in self._normalized_extension_roots())
 
         sink = _DigestSink()
-        sink.update(b"pyowl-core:snapshot-logical:v1\x00")
+        sink.update(b"pyowl-core:snapshot-logical:v2\x00")
         sink.update(b"datatype-policy:owl2-v1\x00")
         sink.update(encode_varint(logical_count))
         for node_id in self._normalized_logical_roots():
@@ -343,7 +343,7 @@ class EncodedStructuralTraversal:
     def signature_preimage(self) -> DigestResult:
         entity_count = sum(self._tag(node_id) == 2 for node_id in range(1, self.node_count + 1))
         sink = _DigestSink()
-        sink.update(b"pyowl-core:snapshot-signature:v1\x00")
+        sink.update(b"pyowl-core:snapshot-signature:v2\x00")
         sink.update(b"\x01")
         sink.update(encode_varint(entity_count))
         self._write_entity_records(sink)
@@ -380,7 +380,7 @@ class EncodedStructuralTraversal:
         """Hash all ontology-sized single-document ledgers in one root pass."""
 
         document = _DigestSink()
-        document.update(b"pyowl-core:document-fingerprint:v1\x00")
+        document.update(b"pyowl-core:document-fingerprint:v2\x00")
         for iri in (ontology_iri, version_iri):
             if iri is None:
                 document.update(b"0")
@@ -390,18 +390,18 @@ class EncodedStructuralTraversal:
         _write_byte_collection(document, direct_imports)
 
         structural = _DigestSink()
-        structural.update(b"pyowl-core:snapshot-structural:v1\x00")
+        structural.update(b"pyowl-core:snapshot-structural:v2\x00")
         _write_frame(structural, manifest_bytes)
         _write_frame(structural, document_key.encode("ascii"))
 
         logical = _DigestSink()
-        logical.update(b"pyowl-core:snapshot-logical:v1\x00")
+        logical.update(b"pyowl-core:snapshot-logical:v2\x00")
         logical.update(b"datatype-policy:owl2-v1\x00")
         logical.update(encode_varint(sum(1 for _ in self._normalized_logical_roots())))
         extension_count = sum(1 for _ in self._normalized_extension_roots())
 
         signature = _DigestSink()
-        signature.update(b"pyowl-core:snapshot-signature:v1\x00")
+        signature.update(b"pyowl-core:snapshot-signature:v2\x00")
         signature.update(b"\x01")
 
         inventories: dict[str, dict[str, object]] = {}

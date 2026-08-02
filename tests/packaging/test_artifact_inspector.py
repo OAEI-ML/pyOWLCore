@@ -16,7 +16,7 @@ from tools.packaging.artifact_inspector import inspect_artifact
 
 _METADATA = b"""Metadata-Version: 2.4
 Name: pyowl-core
-Version: 0.1.1
+Version: 0.2.0
 Requires-Python: >=3.10
 License-Expression: Apache-2.0
 Provides-Extra: dev
@@ -26,7 +26,7 @@ fixture
 """
 _PYPROJECT = b"""[project]
 name = "pyowl-core"
-version = "0.1.1"
+version = "0.2.0"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 dependencies = []
@@ -70,7 +70,7 @@ def _wheel(
     tmp_path: Path,
     variant: str = "pure",
     *,
-    dist_info: str = "pyowl_core-0.1.1.dist-info",
+    dist_info: str = "pyowl_core-0.2.0.dist-info",
     extra_binary: str | None = None,
     extra_entries: Mapping[str, bytes] | None = None,
     internal_tag: str | None = None,
@@ -86,7 +86,7 @@ def _wheel(
         ("true" if variant == "pure" else "false") if root_is_purelib is None else root_is_purelib
     )
     entries = {
-        "pyowl_core/__init__.py": b'__version__ = "0.1.1"\n',
+        "pyowl_core/__init__.py": b'__version__ = "0.2.0"\n',
         f"{dist_info}/METADATA": metadata,
         f"{dist_info}/WHEEL": (
             f"Wheel-Version: {wheel_version}\n"
@@ -111,7 +111,7 @@ def _wheel(
         duplicate_member=record_duplicate,
         malformed_row=malformed_record_row,
     )
-    path = tmp_path / f"pyowl_core-0.1.1-{tag}.whl"
+    path = tmp_path / f"pyowl_core-0.2.0-{tag}.whl"
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, payload in entries.items():
             info = zipfile.ZipInfo(name, date_time=(2025, 1, 1, 0, 0, 0))
@@ -128,9 +128,9 @@ def _sdist(
     link_member: str | None = None,
     metadata: bytes = _METADATA,
     omitted_legal_path: str | None = None,
-    package_init: bytes = b'__version__ = "0.1.1"\n',
+    package_init: bytes = b'__version__ = "0.2.0"\n',
     pyproject: bytes = _PYPROJECT,
-    root: str = "pyowl_core-0.1.1",
+    root: str = "pyowl_core-0.2.0",
     special_member: str | None = None,
 ) -> Path:
     entries = {
@@ -147,7 +147,7 @@ def _sdist(
             entries[f"{root}/{name}"] = payload
     if extra_entries is not None:
         entries.update({f"{root}/{name}": payload for name, payload in extra_entries.items()})
-    path = tmp_path / "pyowl_core-0.1.1.tar.gz"
+    path = tmp_path / "pyowl_core-0.2.0.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
         for name, payload in entries.items():
             info = tarfile.TarInfo(name)
@@ -192,7 +192,7 @@ def test_pure_wheel_structure_metadata_and_record_are_verified(tmp_path: Path) -
 def test_wheel_record_allows_unrecorded_directory_entries(tmp_path: Path) -> None:
     wheel = _wheel(tmp_path)
     with zipfile.ZipFile(wheel, "a") as archive:
-        directory = zipfile.ZipInfo("pyowl_core-0.1.1.dist-info/licenses/")
+        directory = zipfile.ZipInfo("pyowl_core-0.2.0.dist-info/licenses/")
         directory.external_attr = 0o40755 << 16
         archive.writestr(directory, b"")
 
@@ -244,7 +244,7 @@ def test_legal_payload_fingerprint_matches_sdist_and_detects_tampering(
         _wheel(
             tampered_root,
             extra_entries={
-                "pyowl_core-0.1.1.dist-info/"
+                "pyowl_core-0.2.0.dist-info/"
                 "licenses/THIRD_PARTY_LICENSES/"
                 "W3C-RDF-tests-BSD-3-Clause.txt": b"tampered license"
             },
@@ -284,7 +284,7 @@ def test_artifact_rejects_unreviewed_legal_payload(tmp_path: Path, kind: str) ->
     if kind == "wheel":
         artifact = _wheel(
             tmp_path,
-            extra_entries={f"pyowl_core-0.1.1.dist-info/licenses/{extra}": b"unreviewed"},
+            extra_entries={f"pyowl_core-0.2.0.dist-info/licenses/{extra}": b"unreviewed"},
         )
     else:
         artifact = _sdist(tmp_path, extra_entries={extra: b"unreviewed"})
@@ -376,7 +376,7 @@ def test_native_wheel_rejects_additional_binary_outside_package(tmp_path: Path) 
 
 
 def test_wheel_metadata_root_must_match_project_identity(tmp_path: Path) -> None:
-    result = inspect_artifact(_wheel(tmp_path, dist_info="foreign-0.1.1.dist-info"))
+    result = inspect_artifact(_wheel(tmp_path, dist_info="foreign-0.2.0.dist-info"))
 
     assert not result.ok
     assert "wheel: dist-info root does not exactly match project identity" in result.errors
@@ -400,7 +400,7 @@ def test_artifact_rejects_package_version_metadata_drift(
     result = inspect_artifact(artifact)
 
     assert not result.ok
-    assert f"{kind}: pyowl_core.__version__ is '9.9.9', expected '0.1.1'" in result.errors
+    assert f"{kind}: pyowl_core.__version__ is '9.9.9', expected '0.2.0'" in result.errors
 
 
 def test_metadata_rejects_optional_marker_with_runtime_escape(tmp_path: Path) -> None:
@@ -439,7 +439,7 @@ def test_sdist_contains_complete_sources_without_binaries(tmp_path: Path) -> Non
     ("pyproject", "expected_error"),
     [
         (
-            _PYPROJECT.replace(b'version = "0.1.1"', b'version = "9.9.9"'),
+            _PYPROJECT.replace(b'version = "0.2.0"', b'version = "9.9.9"'),
             "sdist: pyproject [project].version does not match PKG-INFO Version",
         ),
         (
@@ -469,7 +469,7 @@ def test_sdist_rejects_embedded_project_metadata_drift(
 
 def test_sdist_root_must_match_project_identity(tmp_path: Path) -> None:
     result = inspect_artifact(
-        _sdist(tmp_path, root="foreign-0.1.1"),
+        _sdist(tmp_path, root="foreign-0.2.0"),
         expected_variant="sdist",
     )
 
@@ -499,8 +499,8 @@ def test_sdist_duplicate_member_blocks_before_ambiguous_payload_read(
 @pytest.mark.parametrize(
     ("member_kind", "expected_error"),
     (
-        ("link", "sdist: links are forbidden: pyowl_core-0.1.1/alias"),
-        ("special", "sdist: special members are forbidden: pyowl_core-0.1.1/pipe"),
+        ("link", "sdist: links are forbidden: pyowl_core-0.2.0/alias"),
+        ("special", "sdist: special members are forbidden: pyowl_core-0.2.0/pipe"),
     ),
 )
 def test_sdist_unsafe_member_type_blocks_before_payload_read(

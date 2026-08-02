@@ -56,7 +56,7 @@ def test_unknown_major_model_schema_required_section_and_flags_fail_as_version_e
     struct.pack_into("<H", major, 8, 2)
     cases.append(major)
     model = bytearray(original)
-    struct.pack_into("<I", model, 24, 2)
+    struct.pack_into("<I", model, 24, 1)
     cases.append(model)
     flags = bytearray(original)
     struct.pack_into("<I", flags, 16, 0x8000_0000)

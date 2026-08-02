@@ -53,6 +53,50 @@ pub(crate) enum LimitKey {
     CancellationCheckInterval,
 }
 
+impl LimitKey {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::MaxSourceBytes => "max_source_bytes",
+            Self::MaxDocuments => "max_documents",
+            Self::MaxTotalSourceBytes => "max_total_source_bytes",
+            Self::MaxAxioms => "max_axioms",
+            Self::MaxTerms => "max_terms",
+            Self::MaxNestingDepth => "max_nesting_depth",
+            Self::MaxRdfListLength => "max_rdf_list_length",
+            Self::MaxLiteralBytes => "max_literal_bytes",
+            Self::MaxIriBytes => "max_iri_bytes",
+            Self::MaxPrefixes => "max_prefixes",
+            Self::MaxImportDepth => "max_import_depth",
+            Self::MaxRedirects => "max_redirects",
+            Self::MaxDiagnostics => "max_diagnostics",
+            Self::MaxMemoryBytes => "max_memory_bytes",
+            Self::DeadlineNanoseconds => "deadline_seconds",
+            Self::MaxTriples => "max_triples",
+            Self::MaxStrings => "max_strings",
+            Self::MaxAnnotations => "max_annotations",
+            Self::MaxRuleAtoms => "max_rule_atoms",
+            Self::MaxSequenceArity => "max_sequence_arity",
+            Self::MaxCatalogRewrites => "max_catalog_rewrites",
+            Self::MaxResolverAttempts => "max_resolver_attempts",
+            Self::MaxConcurrentFetches => "max_concurrent_fetches",
+            Self::MaxSourceMapEntries => "max_source_map_entries",
+            Self::MaxOriginEntries => "max_origin_entries",
+            Self::MaxOverlayDepth => "max_overlay_depth",
+            Self::MaxDeltaEntries => "max_delta_entries",
+            Self::MaxCompositeMembers => "max_composite_members",
+            Self::MaxIndexRows => "max_index_rows",
+            Self::MaxIndexBytes => "max_index_bytes",
+            Self::MaxWireRows => "max_wire_rows",
+            Self::MaxWireBytes => "max_wire_bytes",
+            Self::MaxTemporaryBytes => "max_temporary_bytes",
+            Self::MaxDiskCacheBytes => "max_disk_cache_bytes",
+            Self::MaxDecompressedBytes => "max_decompressed_bytes",
+            Self::MaxCanonicalWork => "max_canonical_work",
+            Self::CancellationCheckInterval => "cancellation_check_interval",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Limits {
     values: [u64; LIMIT_COUNT],
@@ -94,7 +138,14 @@ impl MemoryBudget {
             .max_memory_bytes
             .is_some_and(|maximum| used > maximum)
         {
-            return Err(NativeError::limit("native input exceeds max_memory_bytes"));
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                used,
+                limits
+                    .max_memory_bytes
+                    .ok_or_else(|| NativeError::protocol("native memory limit disappeared"))?,
+                "native input exceeds max_memory_bytes",
+            ));
         }
         Ok(Self {
             maximum: limits.max_memory_bytes,
@@ -113,12 +164,21 @@ impl MemoryBudget {
             .checked_add(bytes)
             .ok_or_else(|| NativeError::limit("native memory accounting overflow"))?;
         if self.maximum.is_some_and(|maximum| next > maximum) {
-            return Err(NativeError::limit(
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                next,
+                self.maximum
+                    .ok_or_else(|| NativeError::protocol("native memory limit disappeared"))?,
                 "native operation exceeds max_memory_bytes",
             ));
         }
         self.used = next;
         Ok(())
+    }
+
+    /// Monotonic bytes charged to this operation's memory budget.
+    pub(crate) fn used(&self) -> u64 {
+        self.used
     }
 }
 
@@ -229,17 +289,58 @@ impl Limits {
 
     #[allow(dead_code)]
     pub(crate) fn value(&self, key: LimitKey) -> u64 {
-        self.values[key as usize]
+        match key {
+            LimitKey::MaxSourceBytes => self.max_source_bytes,
+            LimitKey::MaxDocuments => self.max_documents,
+            LimitKey::MaxTotalSourceBytes => self.max_total_source_bytes,
+            LimitKey::MaxAxioms => self.max_axioms,
+            LimitKey::MaxTerms => self.max_terms,
+            LimitKey::MaxNestingDepth => u64::from(self.max_nesting_depth),
+            LimitKey::MaxLiteralBytes => self.max_literal_bytes,
+            LimitKey::MaxIriBytes => self.max_iri_bytes,
+            LimitKey::MaxMemoryBytes => self.max_memory_bytes.unwrap_or(0),
+            LimitKey::MaxStrings => self.max_strings,
+            LimitKey::MaxAnnotations => self.max_annotations,
+            LimitKey::MaxRuleAtoms => self.max_rule_atoms,
+            LimitKey::MaxSequenceArity => self.max_sequence_arity,
+            LimitKey::MaxSourceMapEntries => self.max_source_map_entries,
+            LimitKey::MaxOriginEntries => self.max_origin_entries,
+            LimitKey::MaxCompositeMembers => self.max_composite_members,
+            LimitKey::MaxWireRows => self.max_wire_rows,
+            LimitKey::MaxWireBytes => self.max_wire_bytes,
+            LimitKey::MaxCanonicalWork => self.max_canonical_work,
+            LimitKey::CancellationCheckInterval => u64::from(self.cancellation_stride),
+            _ => self.values[key as usize],
+        }
+    }
+
+    pub(crate) fn resource_limit(
+        &self,
+        key: LimitKey,
+        observed: u64,
+        message: &'static str,
+    ) -> NativeError {
+        NativeError::resource_limit(key.name(), observed, self.value(key), message)
     }
 
     pub(crate) fn check_source_size(&self, size: usize) -> NativeResult<()> {
         let size = u64::try_from(size)
             .map_err(|_| NativeError::limit("native input length exceeds u64"))?;
         if size > self.max_wire_bytes {
-            return Err(NativeError::limit("native input exceeds max_wire_bytes"));
+            return Err(self.resource_limit(
+                LimitKey::MaxWireBytes,
+                size,
+                "native input exceeds max_wire_bytes",
+            ));
         }
         if self.max_memory_bytes.is_some_and(|maximum| size > maximum) {
-            return Err(NativeError::limit("native input exceeds max_memory_bytes"));
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                size,
+                self.max_memory_bytes
+                    .ok_or_else(|| NativeError::protocol("native memory limit disappeared"))?,
+                "native input exceeds max_memory_bytes",
+            ));
         }
         Ok(())
     }
@@ -252,7 +353,13 @@ impl Limits {
             .max_memory_bytes
             .is_some_and(|maximum| u64::try_from(total).map_or(true, |value| value > maximum))
         {
-            return Err(NativeError::limit(
+            let observed = u64::try_from(total)
+                .map_err(|_| NativeError::limit("native memory accounting exceeds u64"))?;
+            return Err(NativeError::resource_limit(
+                "max_memory_bytes",
+                observed,
+                self.max_memory_bytes
+                    .ok_or_else(|| NativeError::protocol("native memory limit disappeared"))?,
                 "native operation exceeds max_memory_bytes",
             ));
         }

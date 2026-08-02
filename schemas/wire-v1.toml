@@ -2,8 +2,8 @@ schema = 1
 name = "PYOCORE"
 magic_hex = "50594f434f524500"
 wire_major = 1
-wire_minor = 1
-model_schema = 1
+wire_minor = 2
+model_schema = 2
 canonical_profile = 1
 byte_order = "little"
 alignment = 8
@@ -121,10 +121,26 @@ name = "ENCODED_STRUCTURAL_V1"
 required = false
 schema = 1
 
+[[sections]]
+kind = 32772
+name = "ENCODED_STRUCTURAL_V2"
+required = false
+schema = 2
+
 [encoded_structural_v1]
 minor = 1
 row_count = 1
 magic_hex = "50594f4345563100"
+header_layout = "<8sHHI32s32s"
+buffer_count = 11
+directory_layout = "<QQ"
+buffer_alignment = 8
+selection = "closure"
+
+[encoded_structural_v2]
+minor = 2
+row_count = 1
+magic_hex = "50594f4345563200"
 header_layout = "<8sHHI32s32s"
 buffer_count = 11
 directory_layout = "<QQ"

@@ -1,4 +1,4 @@
-//! Minimal model-schema-v1 encoder used only by the comparator adapter.
+//! Minimal canonical structural encoder used only by the comparator adapter.
 //!
 //! This deliberately mirrors the public, language-neutral pyowl-core
 //! canonical contract without depending on pyowl-core's runtime crate.  The
@@ -269,7 +269,7 @@ pub(crate) fn entity(kind: &'static str, value: &str) -> Result<Vec<u8>, RunnerE
 pub(crate) fn structural_digest(value: &[u8]) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(b"pyowl-core:structural-value:v1\0");
-    hasher.update(encode_varint(1));
+    hasher.update(encode_varint(2));
     hasher.update(value);
     hasher.finalize().to_vec()
 }
@@ -399,7 +399,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonical_iri_matches_model_schema_one() {
+    fn canonical_iri_matches_model_schema_two() {
         assert_eq!(iri("urn:test").unwrap(), b"\x01\x02\x08urn:test".to_vec());
     }
 

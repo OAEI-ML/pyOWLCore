@@ -63,7 +63,7 @@ def build_coverage() -> dict[str, object]:
     return {
         "constructor_count": len(rows),
         "evidence_catalog": _EVIDENCE,
-        "model_schema": 1,
+        "model_schema": 2,
         "required_evidence_columns": sorted(_EVIDENCE),
         "rows": rows,
         "schema": 1,

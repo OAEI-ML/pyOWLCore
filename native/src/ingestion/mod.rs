@@ -38,6 +38,7 @@ pub(crate) struct RdfTripleEvidence {
     pub(crate) subject: String,
     pub(crate) predicate: String,
     pub(crate) object: String,
+    pub(crate) object_kind: &'static str,
     pub(crate) object_requires_repr: bool,
 }
 
@@ -72,6 +73,7 @@ pub(crate) struct RetainedStructuralOutcomeV2 {
     pub(crate) metadata: crate::parse::RetainedParseMetadataV2,
     pub(crate) phases: crate::parse::RetainedParsePhases,
     pub(crate) mapping_ns: u64,
+    pub(crate) anonymous_metrics: crate::parse::AnonymousCanonicalMetricsV2,
 }
 
 #[derive(Clone, Copy)]
@@ -408,6 +410,7 @@ fn parse_structural_retained_v2(
     let mut effective_rows = None;
     let mut scoped_occurrence_digests: Option<Vec<([u8; 32], [u8; 32])>> = None;
     let mut effective_origin_fallbacks = Vec::new();
+    let mut anonymous_metrics = crate::parse::AnonymousCanonicalMetricsV2::default();
     if contains_anonymous {
         let scoped_rows = [
             document.ontology_annotations.clone(),
@@ -431,7 +434,9 @@ fn parse_structural_retained_v2(
             effective,
             effective_occurrence_digests,
             source_occurrence_digests,
+            anonymous_metrics: scoped_anonymous_metrics,
         } = scoped;
+        anonymous_metrics = scoped_anonymous_metrics;
         if effective_occurrence_digests.len() != source_occurrence_digests.len() {
             return Err(NativeError::protocol(
                 "native RDF/XML scoped occurrence digest tables diverge",
@@ -534,7 +539,9 @@ fn parse_structural_retained_v2(
                         NativeError::limit("native RDF/XML effective origin count overflow")
                     })?;
                 if effective_origin_count > limits.max_origin_entries {
-                    return Err(NativeError::limit(
+                    return Err(limits.resource_limit(
+                        LimitKey::MaxOriginEntries,
+                        effective_origin_count,
                         "native retained publication exceeds max_origin_entries",
                     ));
                 }
@@ -644,6 +651,7 @@ fn parse_structural_retained_v2(
             freeze_ns: published.freeze_ns.saturating_add(anonymous_scope_ns),
         },
         mapping_ns,
+        anonymous_metrics,
     })
 }
 
@@ -701,13 +709,26 @@ fn check_source(source: &[u8], session: &Session<'_>) -> NativeResult<()> {
     let transient = size
         .checked_mul(3)
         .ok_or_else(|| NativeError::limit("native RDF/XML transient size overflow"))?;
-    if size > session.limits().value(LimitKey::MaxSourceBytes)
-        || size > session.limits().value(LimitKey::MaxTotalSourceBytes)
-        || transient > session.limits().value(LimitKey::MaxTemporaryBytes)
-    {
-        return Err(NativeError::limit(
-            "native RDF/XML source exceeds configured resource limits",
-        ));
+    for (key, observed, message) in [
+        (
+            LimitKey::MaxSourceBytes,
+            size,
+            "native RDF/XML source exceeds max_source_bytes",
+        ),
+        (
+            LimitKey::MaxTotalSourceBytes,
+            size,
+            "native RDF/XML source exceeds max_total_source_bytes",
+        ),
+        (
+            LimitKey::MaxTemporaryBytes,
+            transient,
+            "native RDF/XML source exceeds max_temporary_bytes",
+        ),
+    ] {
+        if observed > session.limits().value(key) {
+            return Err(session.limits().resource_limit(key, observed, message));
+        }
     }
     Ok(())
 }
@@ -715,21 +736,30 @@ fn check_source(source: &[u8], session: &Session<'_>) -> NativeResult<()> {
 fn check_turtle_source(source: &[u8], session: &Session<'_>) -> NativeResult<()> {
     let size = u64::try_from(source.len())
         .map_err(|_| NativeError::limit("native Turtle source length exceeds u64"))?;
-    if size > session.limits().value(LimitKey::MaxSourceBytes)
-        || size > session.limits().value(LimitKey::MaxTotalSourceBytes)
-    {
-        return Err(NativeError::limit(
-            "native Turtle source exceeds configured resource limits",
-        ));
+    for (key, message) in [
+        (
+            LimitKey::MaxSourceBytes,
+            "native Turtle source exceeds max_source_bytes",
+        ),
+        (
+            LimitKey::MaxTotalSourceBytes,
+            "native Turtle source exceeds max_total_source_bytes",
+        ),
+    ] {
+        if size > session.limits().value(key) {
+            return Err(session.limits().resource_limit(key, size, message));
+        }
     }
     Ok(())
 }
 
 fn check_turtle_iri(value: &str, session: &Session<'_>) -> NativeResult<()> {
-    if u64::try_from(value.len()).map_or(true, |size| {
-        size > session.limits().value(LimitKey::MaxIriBytes)
-    }) {
-        return Err(NativeError::limit(
+    let observed = u64::try_from(value.len())
+        .map_err(|_| NativeError::limit("native Turtle document IRI size exceeds u64"))?;
+    if observed > session.limits().value(LimitKey::MaxIriBytes) {
+        return Err(session.limits().resource_limit(
+            LimitKey::MaxIriBytes,
+            observed,
             "native Turtle document IRI exceeds max_iri_bytes",
         ));
     }
@@ -743,10 +773,14 @@ fn check_turtle_iri(value: &str, session: &Session<'_>) -> NativeResult<()> {
 }
 
 fn check_iri(value: &str, session: &Session<'_>, limit_message: &'static str) -> NativeResult<()> {
-    if u64::try_from(value.len()).map_or(true, |size| {
-        size > session.limits().value(LimitKey::MaxIriBytes)
-    }) {
-        return Err(NativeError::limit(limit_message));
+    let observed = u64::try_from(value.len())
+        .map_err(|_| NativeError::limit("native document IRI size exceeds u64"))?;
+    if observed > session.limits().value(LimitKey::MaxIriBytes) {
+        return Err(session.limits().resource_limit(
+            LimitKey::MaxIriBytes,
+            observed,
+            limit_message,
+        ));
     }
     crate::model::validate_iri(value).map_err(|error| {
         if error.code == "NATIVE_WIRE_CORRUPTION" {

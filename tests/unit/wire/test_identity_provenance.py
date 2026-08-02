@@ -49,7 +49,7 @@ def test_identity_and_digests_match_direct_decoded_and_unmaterialized_mmap(
     for index, value in enumerate(values):
         direct = value.view(OntologyIdentityIndex)
         encoded = encode_snapshot(value)
-        assert struct.unpack_from("<H", encoded, 10)[0] == 1
+        assert struct.unpack_from("<H", encoded, 10)[0] == 2
         assert int(SectionKind.VIEW_PROVENANCE) in read_wire(encoded).sections
 
         decoded = decode_snapshot(encoded)
@@ -86,7 +86,7 @@ def test_minor_zero_manifest_metadata_has_zero_copy_identity_fallback(tmp_path: 
     direct = source.view(OntologyIdentityIndex)
     current = read_wire(encode_snapshot(source))
     sections = dict(current.sections)
-    sections.pop(int(SectionKind.ENCODED_STRUCTURAL_V1))
+    sections.pop(int(SectionKind.ENCODED_STRUCTURAL_V2))
     encoded = encode_sections(sections, feature_flags=current.feature_flags, minor=0)
     image = read_wire(encoded)
     assert image.minor == 0
@@ -112,11 +112,25 @@ def test_view_provenance_requires_minor_one_and_valid_bounded_rows() -> None:
     image = read_wire(encode_snapshot(source))
     sections = dict(image.sections)
 
-    with pytest.raises(WireVersionError):
-        decode_snapshot(encode_sections(sections, feature_flags=image.feature_flags, minor=0))
+    without_encoded_v2 = dict(sections)
+    without_encoded_v2.pop(int(SectionKind.ENCODED_STRUCTURAL_V2))
+    with pytest.raises(WireVersionError, match="minor 1"):
+        decode_snapshot(
+            encode_sections(
+                without_encoded_v2,
+                feature_flags=image.feature_flags,
+                minor=0,
+            )
+        )
 
-    provenance = bytearray(sections[int(SectionKind.VIEW_PROVENANCE)])
+    provenance = bytearray(without_encoded_v2[int(SectionKind.VIEW_PROVENANCE)])
     struct.pack_into("<Q", provenance, 24 + 64, 0)
-    sections[int(SectionKind.VIEW_PROVENANCE)] = bytes(provenance)
+    without_encoded_v2[int(SectionKind.VIEW_PROVENANCE)] = bytes(provenance)
     with pytest.raises(WireCorruptionError):
-        decode_snapshot(encode_sections(sections, feature_flags=image.feature_flags, minor=1))
+        decode_snapshot(
+            encode_sections(
+                without_encoded_v2,
+                feature_flags=image.feature_flags,
+                minor=1,
+            )
+        )

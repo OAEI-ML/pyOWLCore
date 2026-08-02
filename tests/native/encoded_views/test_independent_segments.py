@@ -20,8 +20,8 @@ from pyowl_core import (
 )
 from pyowl_core.backends import native_views
 from pyowl_core.backends.native_views import (
-    EncodedStructuralViewV1,
-    produce_encoded_structural_view_v1,
+    EncodedStructuralViewV2,
+    produce_encoded_structural_view_v2,
 )
 from pyowl_core.document.document import Fingerprint
 from pyowl_core.document.snapshot import AxiomScope, OntologySnapshot
@@ -96,16 +96,16 @@ def _snapshot(identity: str, *axioms: str) -> OntologySnapshot:
     )
 
 
-def _direct(identity: str, *axioms: str) -> EncodedStructuralViewV1:
-    return produce_encoded_structural_view_v1(_snapshot(identity, *axioms))
+def _direct(identity: str, *axioms: str) -> EncodedStructuralViewV2:
+    return produce_encoded_structural_view_v2(_snapshot(identity, *axioms))
 
 
 def _digest(label: str) -> Fingerprint:
-    return Fingerprint("sha256", 1, hashlib.sha256(label.encode()).digest())
+    return Fingerprint("sha256", 2, hashlib.sha256(label.encode()).digest())
 
 
 def _view(
-    local: EncodedStructuralViewV1,
+    local: EncodedStructuralViewV2,
     label: str,
     *,
     owner: object | None = None,
@@ -126,6 +126,11 @@ def _view(
         if segments is None
         else segments
     )
+    selected_fingerprint = (
+        _digest(label)
+        if fingerprint is None
+        else Fingerprint(fingerprint.algorithm, 2, fingerprint.digest)
+    )
     return _ViewFixture(
         local.schema_name,
         local.schema_version,
@@ -133,7 +138,7 @@ def _view(
         selected_owner,
         local.buffers,
         local.descriptor,
-        _digest(label) if fingerprint is None else fingerprint,
+        selected_fingerprint,
         selected_segments,
         local.scope,
         local.document_key,
@@ -156,7 +161,7 @@ def _sorted_pairs(*groups: tuple[tuple[int, bytes], ...]) -> tuple[tuple[int, by
     return tuple(sorted((item for group in groups for item in group), key=lambda item: item))
 
 
-def _axiom_at(view: EncodedStructuralViewV1, root_id: int) -> AxiomNode:
+def _axiom_at(view: EncodedStructuralViewV2, root_id: int) -> AxiomNode:
     target = decode_root_canonical_bytes(view.buffers)[root_id - 1][1]
     return next(value for value in view.owner.iter_axioms() if canonical_bytes(value) == target)
 
@@ -324,9 +329,7 @@ def test_recursive_source_local_include_and_exclude_do_not_flatten_nested_base()
     assert excluded.proof.referenced_buffer_copy_bytes == 0
 
 
-def _member_segments(
-    sources: tuple[object, ...], actual: object
-) -> tuple[_SegmentFixture, ...]:
+def _member_segments(sources: tuple[object, ...], actual: object) -> tuple[_SegmentFixture, ...]:
     tokens = cast(tuple[bytes, ...], cast(Any, actual)._source_tokens())
     mappings = cast(tuple[Mapping[bytes, bytes], ...], cast(Any, actual)._scope_replacements())
     rows = sorted(zip(tokens, sources, mappings, strict=True), key=lambda row: row[0])
@@ -362,11 +365,7 @@ def test_anonymous_scope_maps_match_scalar_composite_exactly() -> None:
     assert _pairs(decoded) == scalar_root_bytes(actual)
     assert len(decoded.roots) == 2
     assert decoded.roots[0].canonical != decoded.roots[1].canonical
-    identities = {
-        identity
-        for root in decoded.roots
-        for identity in root.anonymous_identities
-    }
+    identities = {identity for root in decoded.roots for identity in root.anonymous_identities}
     assert len(identities) == 2
     assert len({identity.member_tokens for identity in identities}) == 2
     assert len({identity.document_scope for identity in identities}) == 2
@@ -414,11 +413,7 @@ def test_nested_anonymous_scope_maps_compose_to_scalar_identity() -> None:
     decoded = independent_decoder._decode_segmented_root_canonical_bytes(outer)
 
     assert _pairs(decoded) == scalar_root_bytes(outer_actual)
-    identities = {
-        identity
-        for root in decoded.roots
-        for identity in root.anonymous_identities
-    }
+    identities = {identity for root in decoded.roots for identity in root.anonymous_identities}
     assert len(identities) == 3
     assert len({identity.document_scope for identity in identities}) == 3
     assert all(identity.member_tokens for identity in identities)
@@ -452,9 +447,7 @@ def test_hostile_posting_cycle_and_duplicate_locator_fail_closed() -> None:
         empty,
         "out-of-range",
         owner=top_owner,
-        segments=(
-            _SegmentFixture(2, source.owner, source, 2, _postings(2)),
-        ),
+        segments=(_SegmentFixture(2, source.owner, source, 2, _postings(2)),),
     )
     with pytest.raises(IndependentSegmentError) as hostile:
         independent_decoder._decode_segmented_root_canonical_bytes(out_of_range)
@@ -480,9 +473,7 @@ def test_hostile_posting_cycle_and_duplicate_locator_fail_closed() -> None:
     assert hostile_map.value.code == "INDEPENDENT_SEGMENTS"
 
     cyclic = _view(empty, "cycle", owner=top_owner)
-    cyclic.segments = (
-        _SegmentFixture(2, top_owner, cyclic, 0, _postings()),
-    )
+    cyclic.segments = (_SegmentFixture(2, top_owner, cyclic, 0, _postings()),)
     with pytest.raises(IndependentSegmentError) as cycle:
         independent_decoder._decode_segmented_root_canonical_bytes(cyclic)
     assert cycle.value.code == "INDEPENDENT_CYCLE"
@@ -530,7 +521,7 @@ def test_referenced_fingerprint_mutation_fails_before_independent_decode(
     object.__setattr__(
         source,
         "structural_fingerprint",
-        Fingerprint("sha256", 1, b"\x11" * 32),
+        Fingerprint("sha256", 2, b"\x11" * 32),
     )
     independent_calls: list[object] = []
 

@@ -12,7 +12,7 @@ use crate::cancel::{Cancellation, Guard, InterruptSlot};
 use crate::error::{NativeError, NativeResult};
 use crate::hash::Sha256;
 use crate::limits::{LimitKey, Limits};
-use crate::model::{canonical_field_count, scan_canonical, structural_digest_v1, ScanBudget};
+use crate::model::{canonical_field_count, scan_canonical, structural_digest_v2, ScanBudget};
 use crate::parse::RetainedParseMetadataV2;
 use crate::publication::{
     PreparedTypedAuxiliaryV2, TypedFacadeBuilderV2, TypedFacadeCollectionV2, TypedFacadeScopeV2,
@@ -24,11 +24,11 @@ use crate::session::Session;
 pub(super) const RETAINED_CLOSURE_PREPARED_MAGIC_V2: &[u8; 8] = b"PYNFCP2\0";
 const RETAINED_CLOSURE_PREPARED_SCHEMA_V2: u16 = 1;
 
-const DOCUMENT_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:document-fingerprint:v1\0";
-const STRUCTURAL_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:snapshot-structural:v1\0";
-const LOGICAL_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:snapshot-logical:v1\0";
+const DOCUMENT_FINGERPRINT_DOMAIN_V2: &[u8] = b"pyowl-core:document-fingerprint:v2\0";
+const STRUCTURAL_FINGERPRINT_DOMAIN_V2: &[u8] = b"pyowl-core:snapshot-structural:v2\0";
+const LOGICAL_FINGERPRINT_DOMAIN_V2: &[u8] = b"pyowl-core:snapshot-logical:v2\0";
 const LOGICAL_POLICY_V1: &[u8] = b"datatype-policy:owl2-v1\0";
-const SIGNATURE_FINGERPRINT_DOMAIN_V1: &[u8] = b"pyowl-core:snapshot-signature:v1\0";
+const SIGNATURE_FINGERPRINT_DOMAIN_V2: &[u8] = b"pyowl-core:snapshot-signature:v2\0";
 
 const ROOT_TABLE_MANIFEST_DOMAIN_V2: &[u8] = b"pyowl-core:native-root-table-manifest:v2";
 const DOCUMENT_ROOT_TABLE_DOMAIN_V2: &[u8] = b"pyowl-core:native-document-root-table:v2";
@@ -498,9 +498,9 @@ fn prepare_scope_digest_maps(
                 raw_rows.iter().zip(prior_rows).zip(transformed_rows)
             {
                 cancellation.checkpoint()?;
-                let selected = structural_digest_v1(transformed_row);
-                mapping.push((structural_digest_v1(raw_row), selected));
-                mapping.push((structural_digest_v1(prior_row), selected));
+                let selected = structural_digest_v2(transformed_row);
+                mapping.push((structural_digest_v2(raw_row), selected));
+                mapping.push((structural_digest_v2(prior_row), selected));
             }
         }
         cancellation.checkpoint()?;
@@ -590,7 +590,9 @@ fn enforce_scope_workspace(
     let workspace = u64::try_from(workspace_bytes)
         .map_err(|_| NativeError::limit("native closure scope workspace exceeds u64"))?;
     if workspace > limits.value(LimitKey::MaxTemporaryBytes) {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxTemporaryBytes,
+            workspace,
             "native closure scope workspace exceeds max_temporary_bytes",
         ));
     }
@@ -598,11 +600,11 @@ fn enforce_scope_workspace(
         .checked_add(workspace_bytes)
         .and_then(|value| u64::try_from(value).ok())
         .ok_or_else(|| NativeError::limit("native closure scope live-byte count overflow"))?;
-    if limits
-        .max_memory_bytes
-        .is_some_and(|maximum| live > maximum)
-    {
-        return Err(NativeError::limit(
+    if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| live > *maximum) {
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            live,
+            maximum,
             "native closure scope workspace exceeds max_memory_bytes",
         ));
     }
@@ -665,7 +667,9 @@ fn enforce_evidence_peak(
     let workspace_u64 = u64::try_from(workspace)
         .map_err(|_| NativeError::limit("native closure evidence workspace exceeds u64"))?;
     if workspace_u64 > limits.value(LimitKey::MaxTemporaryBytes) {
-        return Err(NativeError::limit(
+        return Err(limits.resource_limit(
+            LimitKey::MaxTemporaryBytes,
+            workspace_u64,
             "native closure evidence exceeds max_temporary_bytes",
         ));
     }
@@ -673,11 +677,11 @@ fn enforce_evidence_peak(
         .checked_add(workspace)
         .and_then(|value| u64::try_from(value).ok())
         .ok_or_else(|| NativeError::limit("native closure evidence live-byte overflow"))?;
-    if limits
-        .max_memory_bytes
-        .is_some_and(|maximum| live > maximum)
-    {
-        return Err(NativeError::limit(
+    if let Some(maximum) = limits.max_memory_bytes.filter(|maximum| live > *maximum) {
+        return Err(NativeError::resource_limit(
+            "max_memory_bytes",
+            live,
+            maximum,
             "native closure evidence exceeds max_memory_bytes",
         ));
     }
@@ -1124,13 +1128,7 @@ fn prepare_auxiliary_plan(
 }
 
 fn map_auxiliary_budget_error(error: NativeError) -> NativeError {
-    if error.code == "NATIVE_WIRE_LIMIT" {
-        NativeError::limit(
-            "native closure auxiliary attachment plan exceeds configured memory limits",
-        )
-    } else {
-        error
-    }
+    error
 }
 
 const fn structural_collections() -> [TypedFacadeCollectionV2; 3] {
@@ -1190,13 +1188,13 @@ fn prepare_composite_evidence(
     let document_count = u64::try_from(document_keys.len())
         .map_err(|_| NativeError::limit("native closure document count exceeds u64"))?;
     let mut raw_manifest = MeasuredSha256::domain(ROOT_TABLE_MANIFEST_DOMAIN_V2)?;
-    raw_manifest.u32_le(1)?;
+    raw_manifest.u32_le(2)?;
     raw_manifest.u64_le(document_count)?;
     let mut effective_manifest = MeasuredSha256::domain(EFFECTIVE_ROOT_TABLE_MANIFEST_DOMAIN_V2)?;
-    effective_manifest.u32_le(1)?;
+    effective_manifest.u32_le(2)?;
     effective_manifest.u64_le(document_count)?;
     let mut structural = MeasuredSha256::new();
-    structural.update(STRUCTURAL_FINGERPRINT_DOMAIN_V1)?;
+    structural.update(STRUCTURAL_FINGERPRINT_DOMAIN_V2)?;
     structural.frame_varint(manifest)?;
 
     let mut documents = Vec::new();
@@ -1418,7 +1416,7 @@ fn prepare_composite_evidence(
             evidence_budget.retain(rdf_report_storage_bytes(report)?)?;
         }
         let (preimage_bytes, digest) = metadata.closure_document_fingerprint();
-        if preimage_bytes < u64::try_from(DOCUMENT_FINGERPRINT_DOMAIN_V1.len()).unwrap_or(u64::MAX)
+        if preimage_bytes < u64::try_from(DOCUMENT_FINGERPRINT_DOMAIN_V2.len()).unwrap_or(u64::MAX)
         {
             return Err(NativeError::protocol(
                 "native closure document fingerprint evidence is invalid",
@@ -1781,7 +1779,7 @@ fn prepare_logical_fingerprint(
     cancellation.checkpoint()?;
     extensions.dedup();
     let mut logical = MeasuredSha256::new();
-    logical.update(LOGICAL_FINGERPRINT_DOMAIN_V1)?;
+    logical.update(LOGICAL_FINGERPRINT_DOMAIN_V2)?;
     logical.update(LOGICAL_POLICY_V1)?;
     logical.varint(
         u64::try_from(axioms.len())
@@ -1821,7 +1819,7 @@ fn prepare_signature_fingerprint(
         })?;
     budget.ensure_temporary(canonical_row_temporary_bytes)?;
     let mut signature = MeasuredSha256::new();
-    signature.update(SIGNATURE_FINGERPRINT_DOMAIN_V1)?;
+    signature.update(SIGNATURE_FINGERPRINT_DOMAIN_V2)?;
     signature.update(&[1])?;
     signature.varint(count)?;
     let mut emitted = 0_u64;
@@ -2076,7 +2074,7 @@ fn fingerprint_inputs_digest(
     signature: FingerprintEvidenceV2,
 ) -> NativeResult<[u8; 32]> {
     let mut manifest = MeasuredSha256::domain(FINGERPRINT_INPUTS_MANIFEST_DOMAIN_V2)?;
-    manifest.u32_le(1)?;
+    manifest.u32_le(2)?;
     manifest.text64(root_document_key)?;
     manifest.u64_le(
         u64::try_from(documents.len())
@@ -2099,7 +2097,7 @@ fn append_fingerprint_evidence(
     evidence: FingerprintEvidenceV2,
 ) -> NativeResult<()> {
     manifest.u64_le(evidence.preimage_bytes)?;
-    manifest.u32_le(1)?;
+    manifest.u32_le(2)?;
     manifest.update(&evidence.digest)
 }
 

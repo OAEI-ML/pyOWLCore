@@ -152,7 +152,7 @@ def test_private_turtle_owner_matches_shared_rdf_mapping_fingerprint(
     )
     assert turtle.parsed is None
     assert type(turtle.storage) is extension._NativeParsedStructuralStorageV2
-    assert tuple(name for name, _value in turtle.phase_timings) == (
+    assert tuple(name for name, _value in turtle.phase_timings)[:5] == (
         "native_turtle_syntax_parse_seconds",
         "native_rdf_mapping_seconds",
         "native_result_encode_seconds",

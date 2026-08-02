@@ -27,7 +27,7 @@ pub(crate) use canonical::{
 };
 #[allow(unused_imports)]
 pub(crate) use component_index::{
-    structural_digest_v1, NativeComponentDigestIndex, StructuralDigest,
+    structural_digest_v1, structural_digest_v2, NativeComponentDigestIndex, StructuralDigest,
 };
 #[allow(unused_imports)]
 pub(crate) use components::{
@@ -36,15 +36,15 @@ pub(crate) use components::{
     NativeComponentArena, NativeComponentBuilder, PendingComponentId,
 };
 #[cfg(feature = "test-hooks")]
-pub(crate) use encoded_columns::prepare_encoded_structural_columns_from_tables_with_allocation_probe_v1;
+pub(crate) use encoded_columns::prepare_encoded_structural_columns_from_tables_with_allocation_probe_v2;
 #[allow(unused_imports)]
 pub(crate) use encoded_columns::{
-    build_encoded_structural_columns_from_tables_v1, build_encoded_structural_columns_v1,
-    prepare_encoded_structural_columns_from_tables_v1, EncodedColumnCountersV1, EncodedRootKindV1,
-    EncodedRootTableV1, EncodedRootV1, EncodedStructuralBufferLayoutV1, EncodedStructuralBuffersV1,
-    EncodedStructuralColumnsV1, PreparedEncodedStructuralColumnsV1,
-    ENCODED_STRUCTURAL_MODEL_SCHEMA_V1, ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
-    ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+    build_encoded_structural_columns_from_tables_v2, build_encoded_structural_columns_v2,
+    prepare_encoded_structural_columns_from_tables_v2, EncodedColumnCountersV2, EncodedRootKindV2,
+    EncodedRootTableV2, EncodedRootV2, EncodedStructuralBufferLayoutV2, EncodedStructuralBuffersV2,
+    EncodedStructuralColumnsV2, PreparedEncodedStructuralColumnsV2,
+    ENCODED_STRUCTURAL_MODEL_SCHEMA_V2, ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
+    ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
 };
 #[allow(unused_imports)]
 pub(crate) use ids::{AnonymousId, CanonicalRowId, DocumentId, SequenceId};

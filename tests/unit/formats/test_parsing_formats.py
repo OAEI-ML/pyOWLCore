@@ -4673,7 +4673,7 @@ def test_rdf_mapping_rejects_malformed_or_unclaimed_reifications(body: str) -> N
 {body}</rdf:RDF>
 """.encode()
 
-    with pytest.raises(OntologySyntaxError) as raised:
+    with pytest.raises(UnsupportedSyntaxError) as raised:
         parse_document(source, format="rdfxml", options=PYTHON_OPTIONS)
     assert raised.value.code == "RDF_AXIOM_REIFICATION"
 

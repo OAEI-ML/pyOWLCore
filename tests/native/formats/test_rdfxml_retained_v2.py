@@ -13,7 +13,6 @@ import pyowl_core.model as m
 from pyowl_core import (
     IRI,
     BackendPreference,
-    BackendProtocolError,
     CancellationSource,
     DocumentFormat,
     EncodedStructuralView,
@@ -617,12 +616,15 @@ def test_private_partial_mapping_is_explicit_and_diagnostic_bounded() -> None:
         )
     assert incomplete.value.code == "RDF_MAPPING_INCOMPLETE"
 
-    with pytest.raises(BackendProtocolError, match="RDF report summary"):
+    with pytest.raises(UnsupportedSyntaxError) as strict:
         _retained_snapshot(
             PARTIAL_MAPPING_SOURCE,
             allow_partial_rdf_mapping=True,
             publication_allow_partial_rdf_mapping=False,
         )
+    assert strict.value.code == "RDF_MAPPING_INCOMPLETE"
+    assert strict.value.rdf_mapping_report is not None
+    assert strict.value.rdf_mapping_report.dropped_triples == 3
 
     options = LoadOptions(
         format=DocumentFormat.RDF_XML,
@@ -679,7 +681,7 @@ def test_private_partial_mapping_retains_classic_statement_reification() -> None
     (
         ("apostrophe'", "apostrophe'"),
         ('double"', 'double"'),
-        ('both\'"', 'both\'"'),
+        ("both'\"", "both'\""),
         ("line&#9;&#10;&#13;end", "line\t\n\rend"),
         (
             "unicode&#x85;&#xA0;&#x200B;&#x2028;&#xFEFF;&#xE000;"
@@ -745,8 +747,8 @@ def test_private_partial_generated_blank_evidence_uses_the_disjoint_domain() -> 
     )
     assert selected.root.rdf_mapping_report == reference.rdf_mapping_report
     assert selected.root.rdf_mapping_report is not None
-    assert selected.root.rdf_mapping_report.unconsumed[0].subject == "_:\x001"
-    assert selected.root.rdf_mapping_report.unconsumed[0].object == "_:\x002"
+    assert selected.root.rdf_mapping_report.unconsumed[0].subject == "_:?1"
+    assert selected.root.rdf_mapping_report.unconsumed[0].object == "_:?2"
 
 
 def test_private_partial_literal_rendering_is_bounded_by_max_diagnostics(
@@ -817,9 +819,7 @@ def test_private_partial_literal_rendering_is_bounded_by_max_diagnostics(
     assert tuple(
         (item.subject, item.predicate, item.object)
         for item in selected.root.rdf_mapping_report.unconsumed
-    ) == (
-        ("<urn:partial:subject>", "urn:partial:a", "'one'"),
-    )
+    ) == (("<urn:partial:subject>", "urn:partial:a", "'one'"),)
 
 
 def test_retained_swrl_extension_matches_python_canonical_bytes() -> None:
@@ -1574,6 +1574,26 @@ def test_anonymous_individuals_keep_distinct_raw_and_effective_native_owners(
     assert selected.signature_fingerprint == reference.signature_fingerprint
     assert selected._anonymous_scopes == reference._anonymous_scopes
     assert not selected._native_wire_structural_aliases_v1()
+    timings = selected.report.timings
+    assert timings["native_anonymous_component_count"] >= 1.0
+    assert timings["native_anonymous_total_labels"] >= 1.0
+    assert timings["native_anonymous_largest_component_labels"] >= 1.0
+    assert timings["native_anonymous_maximum_open_root_intervals"] >= 1.0
+    assert timings["native_anonymous_largest_component_work"] > 0.0
+    assert timings["native_anonymous_accounted_bytes"] > 0.0
+    assert timings["native_anonymous_total_canonical_work"] == sum(
+        timings[name]
+        for name in (
+            "native_anonymous_total_setup_work",
+            "native_anonymous_total_refinement_work",
+            "native_anonymous_total_candidate_order_work",
+        )
+    )
+    assert all(
+        value >= 0.0 and value.is_integer()
+        for name, value in timings.items()
+        if name.startswith("native_anonymous_")
+    )
     reference_wire = encode_snapshot(reference)
     before_wire_native = raw_owner._publication_counters_v2()
     before_wire_python = selected._native_python_counters()
@@ -1588,10 +1608,7 @@ def test_anonymous_individuals_keep_distinct_raw_and_effective_native_owners(
     after_wire_native = raw_owner._publication_counters_v2()
     after_wire_python = selected._native_python_counters()
     assert selected_wire == reference_wire
-    assert (
-        after_wire_native.encoded_view_requests
-        == before_wire_native.encoded_view_requests + 3
-    )
+    assert after_wire_native.encoded_view_requests == before_wire_native.encoded_view_requests + 3
     assert after_wire_python == before_wire_python
     assert before.parser_bytes == len(source)
     assert before.publication_structural_rows_copied == 0
@@ -1599,7 +1616,7 @@ def test_anonymous_individuals_keep_distinct_raw_and_effective_native_owners(
 
 
 def test_anonymous_alpha_permutations_obey_the_shared_canonical_work_limit() -> None:
-    limits = ParseLimits(max_canonical_work=5_000)
+    limits = ParseLimits(max_canonical_work=8)
     with pytest.raises(ResourceLimitError, match="max_canonical_work"):
         native._parse_rdfxml_retained_v2(
             ANONYMOUS_SYMMETRIC_SOURCE,
@@ -1735,20 +1752,16 @@ def test_private_source_map_retains_only_explicit_blank_labels(
     assert lexical_rows == ([] if expected_lexical is None else [expected_lexical])
     reference_axiom = next(iter(reference.root.axioms))
     selected_axiom = next(iter(selected.root.axioms))
-    assert len(
-        {
-            value
-            for value in m.walk(reference_axiom)
-            if isinstance(value, m.AnonymousIndividual)
-        }
-    ) == expected_anonymous
-    assert len(
-        {
-            value
-            for value in m.walk(selected_axiom)
-            if isinstance(value, m.AnonymousIndividual)
-        }
-    ) == expected_anonymous
+    assert (
+        len(
+            {value for value in m.walk(reference_axiom) if isinstance(value, m.AnonymousIndividual)}
+        )
+        == expected_anonymous
+    )
+    assert (
+        len({value for value in m.walk(selected_axiom) if isinstance(value, m.AnonymousIndividual)})
+        == expected_anonymous
+    )
     assert encode_snapshot(selected) == encode_snapshot(reference)
     after = raw_owner._publication_counters_v2()
     assert after.source_map_rows_emitted > before.source_map_rows_emitted
@@ -1777,9 +1790,7 @@ def test_private_provenance_rows_match_python_and_remain_native_until_access() -
     ingestion = selected._native_ingestion_counters_v2()
 
     assert type(selected).__name__ == "_NativeOntologySnapshot"
-    expected_origin_rows = sum(
-        len(values) for values in reference.origin_index.entries.values()
-    )
+    expected_origin_rows = sum(len(values) for values in reference.origin_index.entries.values())
     assert before.retained_origin_rows == 3 * expected_origin_rows
     assert before.retained_origin_bytes > 0
     assert before.origin_rows_emitted == 0
@@ -2016,9 +2027,7 @@ def test_private_source_map_and_provenance_match_under_default_combination() -> 
     counters = raw_owner._publication_counters_v2()
 
     assert selected.root.source_map == reference.root.source_map
-    assert tuple(selected.root.origin_index.entries) == tuple(
-        reference.root.origin_index.entries
-    )
+    assert tuple(selected.root.origin_index.entries) == tuple(reference.root.origin_index.entries)
     assert {
         digest: tuple((item.occurrence, item.span) for item in occurrences)
         for digest, occurrences in selected.root.origin_index.entries.items()
@@ -2034,8 +2043,7 @@ def test_private_source_map_and_provenance_match_under_default_combination() -> 
 
 def test_private_source_map_accepts_zero_entries_with_prefixes() -> None:
     source = (
-        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
-        b'xmlns="urn:default:"/>'
+        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="urn:default:"/>'
     )
 
     def options(backend: BackendPreference) -> LoadOptions:
@@ -2063,7 +2071,7 @@ def test_private_source_map_accepts_zero_entries_with_prefixes() -> None:
     assert dict(selected.root.source_map.entries) == {}
     assert dict(selected.root.source_map.prefixes) == {
         "": "urn:default:",
-        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     }
     assert counters.retained_source_map_rows == 0
     assert counters.retained_source_prefix_rows == 2
@@ -2267,15 +2275,11 @@ def test_private_rdfxml_identity_wire_and_mmap_owners_avoid_scalar_materializati
     assert selected_identity.documents == reference_identity.documents
     assert selected_identity.import_manifest_digest == reference_identity.import_manifest_digest
     assert (
-        selected_identity.loader_diagnostics_digest
-        == reference_identity.loader_diagnostics_digest
+        selected_identity.loader_diagnostics_digest == reference_identity.loader_diagnostics_digest
     )
     assert selected_identity.is_complete is reference_identity.is_complete is False
     identity_owner = cast(Any, selected_identity)._native_owner
-    assert (
-        type(identity_owner)
-        is cast(Any, extension)._NativeRetainedOntologyIdentityIndexV1
-    )
+    assert type(identity_owner) is cast(Any, extension)._NativeRetainedOntologyIdentityIndexV1
     *_identity_layout, identity_counters = identity_owner._layout_v1()
     assert identity_counters["document_count"] == 1
     assert identity_counters["import_edge_count"] == 1
@@ -2305,8 +2309,7 @@ def test_private_rdfxml_identity_wire_and_mmap_owners_avoid_scalar_materializati
     assert decoded_identity.documents == reference_identity.documents
     assert decoded_identity.import_manifest_digest == reference_identity.import_manifest_digest
     assert (
-        decoded_identity.loader_diagnostics_digest
-        == reference_identity.loader_diagnostics_digest
+        decoded_identity.loader_diagnostics_digest == reference_identity.loader_diagnostics_digest
     )
 
     path = tmp_path / "retained-rdfxml.pyocore"
@@ -2317,10 +2320,7 @@ def test_private_rdfxml_identity_wire_and_mmap_owners_avoid_scalar_materializati
     mapped_identity = mapped.view(OntologyIdentityIndex)
     assert mapped_identity.documents == reference_identity.documents
     assert mapped_identity.import_manifest_digest == reference_identity.import_manifest_digest
-    assert (
-        mapped_identity.loader_diagnostics_digest
-        == reference_identity.loader_diagnostics_digest
-    )
+    assert mapped_identity.loader_diagnostics_digest == reference_identity.loader_diagnostics_digest
     assert mapped._mapped_state.decoded is None
 
     mapped_view = mapped.view(EncodedStructuralView)
@@ -2396,10 +2396,8 @@ def test_private_production_seam_fails_closed_for_syntax_limits_and_cancellation
     assert malformed.value.code == "RDFXML_SYNTAX"
 
     for source in (
-        b"<?xml version='1.1'?><rdf:RDF "
-        b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
-        b"<!--bad---><rdf:RDF "
-        b"xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+        b"<?xml version='1.1'?><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
+        b"<!--bad---><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'/>",
     ):
         with pytest.raises(OntologySyntaxError) as invalid_envelope:
             native._parse_rdfxml_retained_v2(source, document_iri=None)

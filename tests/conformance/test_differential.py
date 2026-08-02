@@ -26,7 +26,7 @@ def test_core_cross_syntax_and_independent_differential_has_frozen_result() -> N
     report = core_comparison()
     assert report == {
         "axioms": 4,
-        "document_fingerprint": "55291b5bd2afd97fed64e8cc75edc6c42a75cebe6b9fd57584c7c58443aee703",
+        "document_fingerprint": "9bd8664a480418c0de76a2acb6ca3aae067b016c485e0b73b0912e65dd6e6512",
         "formats": ["functional", "owlxml", "rdfxml", "turtle"],
         "independent_wire": True,
         "wire_bytes": 6188,

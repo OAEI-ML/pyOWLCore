@@ -38,10 +38,14 @@ impl<'a> SourceRequest<'a> {
                 "native parser source length mismatch",
             ));
         }
-        if u64::try_from(length)
-            .map_or(true, |value| value > limits.value(LimitKey::MaxSourceBytes))
-        {
-            return Err(NativeError::limit("native source exceeds max_source_bytes"));
+        let observed = u64::try_from(length)
+            .map_err(|_| NativeError::limit("native source length exceeds u64"))?;
+        if observed > limits.value(LimitKey::MaxSourceBytes) {
+            return Err(limits.resource_limit(
+                LimitKey::MaxSourceBytes,
+                observed,
+                "native source exceeds max_source_bytes",
+            ));
         }
         Ok(Self {
             source: &data[HEADER_BYTES..],

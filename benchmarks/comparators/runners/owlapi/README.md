@@ -25,14 +25,15 @@ export PYOWL_CORE_OWLAPI_RUNNER="$PWD/launcher.sh"
 ```
 
 The deterministic runner JAR SHA-256 is
-`41d963ed33dc151331239ef7b327c1ddd0096005655486db145dacaf6bf93676`.
+`0b602354672c8f769960dbc17c9527286141820720cd9e04175051190eb35783`.
 `runtime.sha256` authenticates all 521 JDK/JAR files and `runtime.files`
 rejects additions or omissions before Java starts. The launcher itself is
 SHA-256 pinned by `comparators.toml` and passes its observed digest into the
 runner's persistent handshake and adapter-result artifact attestation.
 
 The launcher fixes `-Xms8g -Xmx8g`, G1GC, `AlwaysPreTouch`, UTF-8, headless
-mode, and one active processor. Runner v6 uses framed
+mode, and one active processor. Runner v7 publishes model-schema-2 identity
+and fingerprint evidence inside the unchanged common-contract v1 envelope. It uses framed
 `pyowl-core/comparator-fresh-runner/v1` and persistent runner v3. A fresh
 process reads one exact v1 request, creates and fully validates one ontology
 result, emits a PID- and token-bound v1 completion, and blocks until the

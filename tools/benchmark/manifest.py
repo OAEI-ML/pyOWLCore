@@ -29,6 +29,8 @@ from .synthetic import (
     SyntheticCounts,
     adversarial_deep_functional,
     annotation_list_turtle,
+    anonymous_component_counts,
+    anonymous_components_functional,
     equivalent_counts,
     equivalent_source,
     import_diamond,
@@ -247,6 +249,8 @@ def generated_bytes(corpus: Corpus) -> bytes:
         return annotation_list_turtle(size)
     if corpus.generator == "adversarial-deep":
         return adversarial_deep_functional(size)
+    if corpus.generator == "anonymous-components":
+        return anonymous_components_functional(size)
     if corpus.generator == "import-diamond-root":
         root, _mapping_values = import_diamond()
         return root
@@ -265,6 +269,8 @@ def verify_generated(corpus: Corpus) -> None:
         expected = _synthetic_counts(payload, 4 * size + 5, 2 * size + 2, size + 3, 0)
     elif corpus.generator == "adversarial-deep":
         expected = _synthetic_counts(payload, 2 * size + 2, 1, 2, 0)
+    elif corpus.generator == "anonymous-components":
+        expected = anonymous_component_counts(size)
     elif corpus.generator == "import-diamond-root":
         expected = _synthetic_counts(payload, 4, 1, 1, 2)
     else:
@@ -335,13 +341,25 @@ def prepare_corpus(
 
 
 def verify_prepared(corpus: Corpus, path: Path) -> None:
-    """Verify a prepared corpus before any timed phase."""
+    """Verify a prepared corpus without materializing ontology-sized bytes."""
 
     try:
-        payload = path.read_bytes()
+        observed_bytes = path.stat().st_size
+        hasher = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                hasher.update(chunk)
     except OSError as error:
         raise ManifestError(f"{corpus.id}: cannot read prepared input: {error}") from error
-    _verify_payload(corpus, payload)
+    if observed_bytes != corpus.counts.bytes:
+        raise ManifestError(
+            f"{corpus.id}: expected {corpus.counts.bytes} bytes, got {observed_bytes}"
+        )
+    observed_digest = hasher.hexdigest()
+    if observed_digest != corpus.sha256:
+        raise ManifestError(
+            f"{corpus.id}: SHA-256 mismatch: expected {corpus.sha256}, got {observed_digest}"
+        )
 
 
 def manifest_fingerprint(path: Path = DEFAULT_MANIFEST) -> str:

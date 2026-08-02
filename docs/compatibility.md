@@ -4,13 +4,28 @@
 
 | Domain | Current | Compatibility rule |
 |---|---:|---|
-| Package/API | `0.1.1`, API `(0,1)` | SemVer and explicit API tuple |
-| Model | `1` | equality/fingerprint changes require a new schema |
-| Wire | `(1,1)` | major incompatible; minor only backwards-compatible additions |
+| Package/API | `0.2.0`, API `(0,2)` | SemVer and explicit API tuple |
+| Model | `2` | equality/fingerprint changes require a new schema |
+| Wire | `(1,2)` | major incompatible; minor only backwards-compatible additions |
 | Adapter | `1` | provider/plugin negotiation must match |
-| Encoded structural view | `pyowl-core/structural-columns` v1 | consumers require the named schema at version 1 or newer |
+| Encoded structural view | `pyowl-core/structural-columns` v2 | consumers validate the exact v2 descriptor and model schema |
 
-## Tested workspace consumers
+Model schema 2 changes anonymous-individual canonical identity. Persisted model,
+fingerprint, encoded-view, and consumer-compiled caches from schema 1 must be
+regenerated; they are never reinterpreted as schema 2. Encoded structural
+schema v1 remains a frozen historical descriptor, but the active runtime
+advertises only v2. Wire major 1 remains stable, while the optional v2 encoded
+section requires wire minor 2.
+
+## Current 0.2.0 consumer status
+
+The `0.2.0` consumer gate is pending. Every consumer must explicitly widen its
+package/API range, negotiate `pyowl-core/structural-columns` v2, clear semantic
+caches, and rerun its exact-commit zero-reparse and semantic matrix. Until that
+evidence is attached to `reports/release/0.2.0/gates.json`, the historical
+`>=0.1,<0.2` results below do not establish `0.2.0` compatibility.
+
+## Historical 0.1.x workspace evidence
 
 The coordinated native-redesign compatibility run used exact core runtime
 `005c3ccad129757b3a9be125dc064b812b607ef5`, tree
@@ -23,10 +38,11 @@ performance-evidence commit is `4fe32971780e38d2d83932bb93b8c2195bdfcc5f`,
 which adds the paired DOID result. The compatibility manifest records that
 evidence subject instead of attempting to embed its own circular Git identity.
 Neither successor changes the `pyowl_core` package runtime used by consumers.
-That recorded runtime reported package `0.1.0`; the `0.1.1` patch retains the
-same API/model/wire/adapter/encoded-view contracts and remains inside every
-recorded `>=0.1,<0.2` consumer range. The historical exact-commit evidence is
-not relabeled as a new run.
+That recorded runtime reported package `0.1.0`, API `(0,1)`, model schema `1`,
+wire `(1,1)`, adapter protocol `1`, and encoded schema
+`pyowl-core/structural-columns` v1. The `0.1.1` patch retained those contracts
+and remained inside every recorded `>=0.1,<0.2` consumer range. This exact-
+commit evidence is historical and is not relabelled as a `0.2.0` run.
 
 Every recorded workflow requires public encoded structural schema
 `pyowl-core/structural-columns` v1. Compatibility consumers observe that
@@ -83,10 +99,10 @@ than metadata until the hosted WP12 matrix succeeds for the selected revision:
 exists. Unsupported implementations/platforms must resolve to the universal
 pure wheel, and native support is advertised only after its target lane passes.
 
-## 1.0 handoff rule
+## Future handoff rule
 
-The current consumers exclude package version 1.0. A 1.0 release therefore
-requires coordinated consumer dependency updates and a repeated exact-commit
-matrix. Until that evidence exists, the 1.0 API snapshot is a candidate and the
-release checklist remains blocked; documentation does not silently relabel the
-tested 0.1 line as consumer-compatible 1.0.
+The recorded consumers exclude package version `0.2.0`, so the current release
+already requires coordinated dependency updates and a repeated exact-commit
+matrix. A future 1.0 release requires the same process again. Documentation
+must not infer compatibility from package, model, or wire numbers alone or
+silently relabel the tested 0.1 line as a later consumer-compatible release.

@@ -356,10 +356,11 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
         let next_depth = active_length
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("native RDF expression depth overflow"))?;
-        if usize_as_u64(next_depth, "native RDF expression depth exceeds u64")?
-            > session.limits().value(LimitKey::MaxNestingDepth)
-        {
-            return Err(NativeError::limit(
+        let next_depth = usize_as_u64(next_depth, "native RDF expression depth exceeds u64")?;
+        if next_depth > session.limits().value(LimitKey::MaxNestingDepth) {
+            return Err(session.limits().resource_limit(
+                LimitKey::MaxNestingDepth,
+                next_depth,
                 "native RDF expression exceeds max_nesting_depth",
             ));
         }
@@ -702,10 +703,11 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             .len()
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("native RDF expression depth overflow"))?;
-        if usize_as_u64(next_depth, "native RDF expression depth exceeds u64")?
-            > session.limits().value(LimitKey::MaxNestingDepth)
-        {
-            return Err(NativeError::limit(
+        let next_depth = usize_as_u64(next_depth, "native RDF expression depth exceeds u64")?;
+        if next_depth > session.limits().value(LimitKey::MaxNestingDepth) {
+            return Err(session.limits().resource_limit(
+                LimitKey::MaxNestingDepth,
+                next_depth,
                 "native RDF expression exceeds max_nesting_depth",
             ));
         }
@@ -1434,10 +1436,11 @@ impl<'graph, 'data> RdfClassExpressionDecoder<'graph, 'data> {
             };
             (lexical, datatype, None)
         };
-        if usize_as_u64(lexical.len(), "native RDF literal length exceeds u64")?
-            > session.limits().value(LimitKey::MaxLiteralBytes)
-        {
-            return Err(NativeError::limit(
+        let lexical_length = usize_as_u64(lexical.len(), "native RDF literal length exceeds u64")?;
+        if lexical_length > session.limits().value(LimitKey::MaxLiteralBytes) {
+            return Err(session.limits().resource_limit(
+                LimitKey::MaxLiteralBytes,
+                lexical_length,
                 "native RDF literal exceeds max_literal_bytes",
             ));
         }
@@ -1590,10 +1593,11 @@ fn nonnegative_integer(value: RdfTerm<'_>, session: &mut Session<'_>) -> NativeR
             "native RDF cardinality must be a nonnegative integer literal",
         ));
     };
-    if usize_as_u64(value.len(), "native RDF cardinality length exceeds u64")?
-        > session.limits().value(LimitKey::MaxLiteralBytes)
-    {
-        return Err(NativeError::limit(
+    let value_length = usize_as_u64(value.len(), "native RDF cardinality length exceeds u64")?;
+    if value_length > session.limits().value(LimitKey::MaxLiteralBytes) {
+        return Err(session.limits().resource_limit(
+            LimitKey::MaxLiteralBytes,
+            value_length,
             "native RDF cardinality exceeds max_literal_bytes",
         ));
     }

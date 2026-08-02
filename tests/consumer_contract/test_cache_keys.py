@@ -6,6 +6,7 @@ import pytest
 
 import pyowl_core
 from pyowl_core.adapters import CacheScope, ConsumerCacheKey, compare_cache_keys
+from pyowl_core.document.fingerprint import logical_fingerprint_v1, signature_fingerprint_v1
 
 OPTIONS = b"o" * 32
 
@@ -76,6 +77,41 @@ def test_cache_comparison_is_exhaustive_and_fail_closed() -> None:
     assert caught.value.code == "ADAPTER_CACHE_KEY_MISMATCH"
     assert caught.value.diagnostic is not None
     assert caught.value.diagnostic.details["issue_count"] == 5
+
+
+def test_model_schema_v1_cache_key_is_rejected_not_reinterpreted() -> None:
+    view = snapshot()
+    current = key(view)
+    stale = ConsumerCacheKey(
+        consumer=current.consumer,
+        consumer_version=current.consumer_version,
+        consumer_api=current.consumer_api,
+        compiler_schema=current.compiler_schema,
+        compatibility_id=current.compatibility_id,
+        core_package_version="0.1.0",
+        core_api_version=(0, 1),
+        core_model_schema=1,
+        core_wire_format=(1, 1),
+        core_adapter_protocol=1,
+        scope=current.scope,
+        primary_fingerprint=logical_fingerprint_v1(
+            view.iter_axioms(),
+            view.iter_extensions(),
+        ),
+        signature_fingerprint=signature_fingerprint_v1(view.signature()),
+        semantic_options_sha256=current.semantic_options_sha256,
+    )
+
+    report = compare_cache_keys(stale, current)
+    assert not report.compatible
+    assert {issue.field for issue in report.issues} == {
+        "core_package_version",
+        "core_api_version",
+        "core_model_schema",
+        "core_wire_format",
+        "primary_fingerprint",
+        "signature_fingerprint",
+    }
 
 
 def test_equal_wire_views_have_equal_keys_and_content_changes_do_not() -> None:

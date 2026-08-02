@@ -34,6 +34,10 @@ EXPECTED_PROVENANCE_INPUTS = {
     "pyproject.toml",
     "schemas/encoded-view-v1.json",
     "schemas/encoded-view-v1.toml",
+    "schemas/encoded-view-v2.json",
+    "schemas/encoded-view-v2.toml",
+    "schemas/model-v2.toml",
+    "schemas/version-decision-v2.toml",
     "setup.py",
     "tools/__init__.py",
     "tools/packaging/__init__.py",
@@ -120,7 +124,7 @@ def test_pure_and_native_sboms_are_variant_exact_and_deterministic() -> None:
     assert pure["components"] == []
     assert pure["dependencies"][0]["dependsOn"] == []
     assert len(native["components"]) == 14
-    assert native["metadata"]["component"]["version"] == "0.1.1"
+    assert native["metadata"]["component"]["version"] == "0.2.0"
     assert all("pkg:cargo/" in component["bom-ref"] for component in native["components"])
     assert all(component["hashes"][0]["alg"] == "SHA-256" for component in native["components"])
 
@@ -272,8 +276,8 @@ def test_inventory_rejects_source_less_component_omitted_from_sbom(tmp_path: Pat
 
     assert validate_inventory(tmp_path) == [
         "inventory: source-less lock packages must contain only "
-        "pyowl-core-native 0.1.1; found "
-        "pyowl-core-native 0.1.1, untracked-path-component 9.9.9"
+        "pyowl-core-native 0.2.0; found "
+        "pyowl-core-native 0.2.0, untracked-path-component 9.9.9"
     ]
 
 

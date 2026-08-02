@@ -7,15 +7,44 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 
-const SCHEMA_LEDGER: &str = "../schemas/encoded-view-v1.toml";
-const DESCRIPTOR_FILE: &str = "../schemas/encoded-view-v1.json";
-const GENERATED_SOURCE: &str = "encoded_view_v1.rs";
-const GENERATED_DESCRIPTOR: &str = "encoded-view-v1.json";
+#[derive(Clone, Copy)]
+struct EncodedViewSchemaInput {
+    ledger: &'static str,
+    descriptor: &'static str,
+    generated_source: &'static str,
+    generated_descriptor: &'static str,
+    expected_version: u32,
+    expected_model_schema: u32,
+}
+
+const ENCODED_VIEW_SCHEMAS: [EncodedViewSchemaInput; 2] = [
+    EncodedViewSchemaInput {
+        ledger: "../schemas/encoded-view-v1.toml",
+        descriptor: "../schemas/encoded-view-v1.json",
+        generated_source: "encoded_view_v1.rs",
+        generated_descriptor: "encoded-view-v1.json",
+        expected_version: 1,
+        expected_model_schema: 1,
+    },
+    EncodedViewSchemaInput {
+        ledger: "../schemas/encoded-view-v2.toml",
+        descriptor: "../schemas/encoded-view-v2.json",
+        generated_source: "encoded_view_v2.rs",
+        generated_descriptor: "encoded-view-v2.json",
+        expected_version: 2,
+        expected_model_schema: 2,
+    },
+];
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(fuzzing)");
-    if let Err(error) = generate_encoded_view_schema() {
-        panic!("cannot generate native encoded-view schema: {error}");
+    for input in ENCODED_VIEW_SCHEMAS {
+        if let Err(error) = generate_encoded_view_schema(input) {
+            panic!(
+                "cannot generate native encoded-view schema {}: {error}",
+                input.expected_version
+            );
+        }
     }
     #[cfg(feature = "extension-module")]
     {
@@ -23,17 +52,17 @@ fn main() {
     }
 }
 
-fn generate_encoded_view_schema() -> Result<(), String> {
-    println!("cargo:rerun-if-changed={SCHEMA_LEDGER}");
-    println!("cargo:rerun-if-changed={DESCRIPTOR_FILE}");
+fn generate_encoded_view_schema(input: EncodedViewSchemaInput) -> Result<(), String> {
+    println!("cargo:rerun-if-changed={}", input.ledger);
+    println!("cargo:rerun-if-changed={}", input.descriptor);
     println!("cargo:rerun-if-changed=src/hash.rs");
 
     let manifest = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR")
             .ok_or_else(|| "CARGO_MANIFEST_DIR is unavailable".to_owned())?,
     );
-    let schema_path = manifest.join(SCHEMA_LEDGER);
-    let descriptor_path = manifest.join(DESCRIPTOR_FILE);
+    let schema_path = manifest.join(input.ledger);
+    let descriptor_path = manifest.join(input.descriptor);
     let schema = fs::read_to_string(&schema_path)
         .map_err(|error| format!("cannot read {}: {error}", schema_path.display()))?;
     let descriptor = fs::read(&descriptor_path)
@@ -57,20 +86,23 @@ fn generate_encoded_view_schema() -> Result<(), String> {
         "capability_advertised",
     )?;
 
-    if version == 0 || model_schema == 0 {
-        return Err("schema versions must be positive".to_owned());
+    if version != input.expected_version || model_schema != input.expected_model_schema {
+        return Err(format!(
+            "encoded-view schema/model version mismatch: expected {}/{}, observed {version}/{model_schema}",
+            input.expected_version, input.expected_model_schema
+        ));
     }
     if name.is_empty() || !name.is_ascii() {
         return Err("schema name must be nonempty ASCII".to_owned());
     }
     if status != "frozen-advertised" || !advertised {
-        return Err("native schema must remain frozen and advertised".to_owned());
+        return Err("encoded-view ledger must remain frozen and advertised".to_owned());
     }
     if descriptor_format != "canonical-json-sorted-keys-compact-ascii" {
         return Err("native schema requires the supported canonical JSON format".to_owned());
     }
     if byte_order != "little" {
-        return Err("native encoded-view v1 requires little-endian columns".to_owned());
+        return Err("native encoded views require little-endian columns".to_owned());
     }
 
     validate_compact_ascii_json(&descriptor)?;
@@ -90,10 +122,10 @@ fn generate_encoded_view_schema() -> Result<(), String> {
 
     let output =
         PathBuf::from(env::var_os("OUT_DIR").ok_or_else(|| "OUT_DIR is unavailable".to_owned())?);
-    fs::write(output.join(GENERATED_DESCRIPTOR), &descriptor)
+    fs::write(output.join(input.generated_descriptor), &descriptor)
         .map_err(|error| format!("cannot write generated descriptor: {error}"))?;
     fs::write(
-        output.join(GENERATED_SOURCE),
+        output.join(input.generated_source),
         render_constants(
             &name,
             version,
@@ -101,6 +133,8 @@ fn generate_encoded_view_schema() -> Result<(), String> {
             &status,
             advertised,
             expected_digest,
+            input.ledger,
+            input.generated_descriptor,
         ),
     )
     .map_err(|error| format!("cannot write generated Rust constants: {error}"))?;
@@ -238,6 +272,8 @@ fn render_constants(
     status: &str,
     advertised: bool,
     digest: [u8; 32],
+    ledger: &str,
+    generated_descriptor: &str,
 ) -> String {
     let digest = digest
         .iter()
@@ -245,13 +281,13 @@ fn render_constants(
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "// @generated by native/build.rs from schemas/encoded-view-v1.*; do not edit.\n\
+        "// @generated by native/build.rs from {ledger}; do not edit.\n\
          pub(super) const NAME: &str = {name:?};\n\
          pub(super) const VERSION: u32 = {version};\n\
          pub(super) const MODEL_SCHEMA: u32 = {model_schema};\n\
          pub(super) const STATUS: &str = {status:?};\n\
          pub(super) const CAPABILITY_ADVERTISED: bool = {advertised};\n\
          pub(super) const DESCRIPTOR_SHA256: [u8; 32] = [{digest}];\n\
-         pub(super) const DESCRIPTOR: &[u8] = include_bytes!(\"{GENERATED_DESCRIPTOR}\");\n"
+         pub(super) const DESCRIPTOR: &[u8] = include_bytes!(\"{generated_descriptor}\");\n"
     )
 }

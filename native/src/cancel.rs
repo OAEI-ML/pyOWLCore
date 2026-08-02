@@ -31,6 +31,8 @@ pub(crate) fn take_interrupt(slot: &InterruptSlot) -> NativeResult<Option<PyErr>
 #[derive(Debug)]
 struct SharedCancel {
     cancelled: AtomicBool,
+    started: Instant,
+    duration: Option<Duration>,
     deadline: Option<Instant>,
 }
 
@@ -90,10 +92,13 @@ impl Cancellation {
 
 impl Cancellation {
     pub(crate) fn with_duration(duration: Option<Duration>) -> Self {
+        let started = Instant::now();
         Self {
             inner: Arc::new(SharedCancel {
                 cancelled: AtomicBool::new(false),
-                deadline: duration.and_then(|value| Instant::now().checked_add(value)),
+                started,
+                duration,
+                deadline: duration.and_then(|value| started.checked_add(value)),
             }),
         }
     }
@@ -119,7 +124,14 @@ impl Cancellation {
             .deadline
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
-            return Err(NativeError::deadline());
+            let allowed = self
+                .inner
+                .duration
+                .ok_or_else(|| NativeError::protocol("native deadline duration disappeared"))?;
+            return Err(NativeError::deadline_limit(
+                self.inner.started.elapsed().as_secs_f64(),
+                allowed.as_secs_f64(),
+            ));
         }
         Ok(())
     }
@@ -182,7 +194,13 @@ impl Guard {
             .deadline
             .is_some_and(|deadline| self.started.elapsed() >= deadline)
         {
-            return Err(NativeError::deadline());
+            let allowed = self
+                .deadline
+                .ok_or_else(|| NativeError::protocol("native guard deadline disappeared"))?;
+            return Err(NativeError::deadline_limit(
+                self.started.elapsed().as_secs_f64(),
+                allowed.as_secs_f64(),
+            ));
         }
         Ok(())
     }

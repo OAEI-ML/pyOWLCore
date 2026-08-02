@@ -9,6 +9,7 @@ from typing import Literal as TypingLiteral
 from typing import TypeVar, cast
 
 from pyowl_core.diagnostics import Diagnostic
+from pyowl_core.exceptions import ResourceLimitError
 from pyowl_core.model import (
     AXIOM_TYPES,
     IRI,
@@ -26,14 +27,63 @@ from pyowl_core.model import (
     constructor_spec,
     encode_varint,
 )
+from pyowl_core.model.anonymous import (
+    AlphaCanonicalization,
+    _bind_component_blank_nodes,
+    _canonical_component_manifest,
+)
 from pyowl_core.model.axioms import AxiomNode
 from pyowl_core.model.visitor import _collect_signature
 
 from .provenance import DocumentProvenance, OriginIndex, RDFMappingReport, SourceMap
 
 A = TypeVar("A", bound=AxiomNode)
-_LEXICAL_KEY = b"pyowl-core:parser-blank-label:v1\x00"
-_PROVISIONAL_SCOPE = hashlib.sha256(b"pyowl-core:provisional-document-scope:v1\x00").digest()
+_LEXICAL_KEY = b"pyowl-core:parser-blank-label:v2\x00"
+_PROVISIONAL_SCOPE = hashlib.sha256(b"pyowl-core:provisional-document-scope:v2\x00").digest()
+
+
+@dataclass(frozen=True, slots=True)
+class _BlankComponent:
+    labels: tuple[str, ...]
+    arcs: tuple[BlankNodeArc, ...]
+    root_indexes: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _BlankPartitionSummary:
+    component_count: int
+    largest_component_labels: int
+    largest_component_arcs: int
+    largest_component_roots: int
+    maximum_root_interval_span: int
+    maximum_open_root_intervals: int
+    total_labels: int
+    total_arcs: int
+
+
+@dataclass(frozen=True, slots=True)
+class _BlankComponentTelemetry:
+    label_count: int
+    arc_count: int
+    root_count: int
+    setup_work: int
+    refinement_work: int
+    candidate_order_work: int
+    canonical_work: int
+    refinement_rounds: int
+    permutations_examined: int
+
+
+@dataclass(frozen=True, slots=True)
+class _BlankCanonicalizationSummary:
+    components: tuple[_BlankComponentTelemetry, ...]
+    total_setup_work: int
+    total_refinement_work: int
+    total_candidate_order_work: int
+    total_canonical_work: int
+    largest_component_work: int
+    maximum_refinement_rounds: int
+    total_permutations_examined: int
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -212,27 +262,41 @@ def freeze_document_anonymous(
     axiom_values = tuple(axioms)
     extensions = tuple(extension_components)
     roots: tuple[StructuralNode, ...] = (*annotations, *axiom_values, *extensions)
-    labels = sorted(
-        {
-            label
-            for root in roots
-            for individual in _anonymous_values(root)
-            if (label := provisional_label(individual)) is not None
-        }
-    )
-    if not labels:
+    components, summary = _partition_blank_graph(roots, limits=limits)
+    if not components:
         return (
             imports,
             CanonicalSet(annotations),
             CanonicalSet(axiom_values),
             CanonicalSet(extensions),
         )
-    arcs = _blank_arcs(roots)
-    first = alpha_canonicalize_blank_nodes(arcs, _PROVISIONAL_SCOPE, labels=labels, limits=limits)
+
+    solved, _ = _canonicalize_blank_components(
+        components,
+        summary,
+        limits=limits,
+    )
+
+    manifest = _canonical_component_manifest(
+        canonicalization.canonical_graph for _, canonicalization in solved
+    )
     ontology_key = _ontology_key(ontology_id)
-    scope = canonical_document_scope(ontology_key, canonical_graph=first.canonical_graph)
-    result = alpha_canonicalize_blank_nodes(arcs, scope, labels=labels, limits=limits)
-    replacements = result.as_mapping()
+    scope = canonical_document_scope(ontology_key, canonical_graph=manifest)
+    classes: dict[bytes, list[tuple[_BlankComponent, AlphaCanonicalization]]] = {}
+    for component, canonicalization in solved:
+        classes.setdefault(canonicalization.canonical_graph, []).append(
+            (component, canonicalization)
+        )
+    replacements: dict[str, AnonymousIndividual] = {}
+    for graph in sorted(classes):
+        component_class = sorted(classes[graph], key=lambda item: item[0].labels)
+        for occurrence_ordinal, (_, canonicalization) in enumerate(component_class):
+            rebound = _bind_component_blank_nodes(
+                canonicalization,
+                scope,
+                occurrence_ordinal=occurrence_ordinal,
+            )
+            replacements.update(rebound.as_mapping())
     replaced_annotations = CanonicalSet(
         cast(Annotation, _replace_blanks(item, replacements)) for item in annotations
     )
@@ -254,24 +318,235 @@ def _ontology_key(ontology_id: OntologyID) -> bytes:
     return payload
 
 
-def _blank_arcs(roots: tuple[StructuralNode, ...]) -> tuple[BlankNodeArc, ...]:
-    arcs: list[BlankNodeArc] = []
-    for root in roots:
+def _partition_blank_graph(
+    roots: tuple[StructuralNode, ...],
+    *,
+    limits: object | None = None,
+) -> tuple[tuple[_BlankComponent, ...], _BlankPartitionSummary]:
+    """Partition provisional blanks and expose bounded structural telemetry."""
+
+    maximum_terms = _blank_limit(limits, "max_terms", 500_000_000)
+    parents: dict[str, str] = {}
+    ranks: dict[str, int] = {}
+    component_arcs: dict[str, list[BlankNodeArc]] = {}
+    component_roots: dict[str, list[int]] = {}
+    arc_count = 0
+
+    def add_label(label: str) -> None:
+        if label not in parents:
+            parents[label] = label
+            ranks[label] = 0
+            component_arcs[label] = []
+            component_roots[label] = []
+            _enforce_blank_terms(len(parents) + arc_count, maximum_terms)
+
+    def find(label: str) -> str:
+        parent = parents[label]
+        while parent != parents[parent]:
+            parent = parents[parent]
+        while label != parent:
+            next_label = parents[label]
+            parents[label] = parent
+            label = next_label
+        return parent
+
+    def union(left: str, right: str) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root == right_root:
+            return
+        left_rank = ranks[left_root]
+        right_rank = ranks[right_root]
+        if left_rank < right_rank:
+            left_root, right_root = right_root, left_root
+        parents[right_root] = left_root
+        component_arcs[left_root].extend(component_arcs.pop(right_root))
+        component_roots[left_root].extend(component_roots.pop(right_root))
+        if left_rank == right_rank:
+            ranks[left_root] += 1
+
+    def append_arc(leader: str, arc: BlankNodeArc) -> None:
+        nonlocal arc_count
+        component_arcs[leader].append(arc)
+        arc_count += 1
+        _enforce_blank_terms(len(parents) + arc_count, maximum_terms)
+
+    for root_index, root in enumerate(roots):
         skeleton = _skeleton(root)
         occurrences = tuple(_blank_occurrences(root, (type(root).__name__,)))
+        if not occurrences:
+            continue
+        labels = tuple(sorted({label for label, _ in occurrences}))
+        for label in labels:
+            add_label(label)
+        for label in labels[1:]:
+            union(labels[0], label)
+        leader = find(labels[0])
+        component_roots[leader].append(root_index)
         for label, path in occurrences:
-            arcs.append(BlankNodeArc(label, "/".join(path), payload=skeleton))
+            append_arc(leader, BlankNodeArc(label, "/".join(path), payload=skeleton))
         for index, (source, source_path) in enumerate(occurrences):
             for target, target_path in occurrences[index + 1 :]:
-                arcs.append(
+                append_arc(
+                    leader,
                     BlankNodeArc(
                         source,
                         "/".join(source_path) + "->" + "/".join(target_path),
                         target,
                         skeleton,
-                    )
+                    ),
                 )
-    return tuple(arcs)
+
+    if not parents:
+        return (), _BlankPartitionSummary(0, 0, 0, 0, 0, 0, 0, 0)
+
+    grouped_labels: dict[str, list[str]] = {}
+    for label in sorted(parents):
+        grouped_labels.setdefault(find(label), []).append(label)
+
+    components = tuple(
+        sorted(
+            (
+                _BlankComponent(
+                    tuple(labels),
+                    tuple(component_arcs[leader]),
+                    tuple(sorted(component_roots[leader])),
+                )
+                for leader, labels in grouped_labels.items()
+            ),
+            key=lambda component: component.labels,
+        )
+    )
+    intervals = tuple(
+        (component.root_indexes[0], component.root_indexes[-1]) for component in components
+    )
+    events: dict[int, int] = {}
+    for start, end in intervals:
+        events[start] = events.get(start, 0) + 1
+        events[end + 1] = events.get(end + 1, 0) - 1
+    active = 0
+    maximum_active = 0
+    for index in sorted(events):
+        active += events[index]
+        maximum_active = max(maximum_active, active)
+    return components, _BlankPartitionSummary(
+        component_count=len(components),
+        largest_component_labels=max(len(component.labels) for component in components),
+        largest_component_arcs=max(len(component.arcs) for component in components),
+        largest_component_roots=max(len(component.root_indexes) for component in components),
+        maximum_root_interval_span=max(end - start + 1 for start, end in intervals),
+        maximum_open_root_intervals=maximum_active,
+        total_labels=len(parents),
+        total_arcs=arc_count,
+    )
+
+
+def _canonicalize_blank_components(
+    components: tuple[_BlankComponent, ...],
+    partition: _BlankPartitionSummary,
+    *,
+    limits: object | None = None,
+) -> tuple[
+    list[tuple[_BlankComponent, AlphaCanonicalization]],
+    _BlankCanonicalizationSummary,
+]:
+    """Run each component once and retain per-phase benchmark telemetry."""
+
+    solved: list[tuple[_BlankComponent, AlphaCanonicalization]] = []
+    telemetry: list[_BlankComponentTelemetry] = []
+    for component in components:
+        try:
+            canonicalization = alpha_canonicalize_blank_nodes(
+                component.arcs,
+                _PROVISIONAL_SCOPE,
+                labels=component.labels,
+                limits=limits,
+            )
+        except ResourceLimitError as error:
+            if error.limit != "max_canonical_work":
+                raise
+            details = dict(getattr(error, "details", {}))
+            details.update(
+                {
+                    "component_count": partition.component_count,
+                    "largest_component_labels": partition.largest_component_labels,
+                    "largest_component_arcs": partition.largest_component_arcs,
+                }
+            )
+            raise ResourceLimitError(
+                str(error),
+                limit=error.limit,
+                observed=error.observed,
+                allowed=error.allowed,
+                code=error.code,
+                details=details,
+            ) from error
+        solved.append((component, canonicalization))
+        setup_work = len(component.labels) + 2 * len(component.arcs)
+        refinement_work = canonicalization.refinement_rounds * (
+            2 * len(component.labels) + 2 * len(component.arcs)
+        )
+        candidate_order_work = canonicalization.permutations_examined * max(
+            1,
+            len(component.labels) + len(component.arcs),
+        )
+        telemetry.append(
+            _BlankComponentTelemetry(
+                label_count=len(component.labels),
+                arc_count=len(component.arcs),
+                root_count=len(component.root_indexes),
+                setup_work=setup_work,
+                refinement_work=refinement_work,
+                candidate_order_work=candidate_order_work,
+                canonical_work=setup_work + refinement_work + candidate_order_work,
+                refinement_rounds=canonicalization.refinement_rounds,
+                permutations_examined=canonicalization.permutations_examined,
+            )
+        )
+    entries = tuple(telemetry)
+    return solved, _BlankCanonicalizationSummary(
+        components=entries,
+        total_setup_work=sum(item.setup_work for item in entries),
+        total_refinement_work=sum(item.refinement_work for item in entries),
+        total_candidate_order_work=sum(item.candidate_order_work for item in entries),
+        total_canonical_work=sum(item.canonical_work for item in entries),
+        largest_component_work=max(
+            (item.canonical_work for item in entries),
+            default=0,
+        ),
+        maximum_refinement_rounds=max(
+            (item.refinement_rounds for item in entries),
+            default=0,
+        ),
+        total_permutations_examined=sum(item.permutations_examined for item in entries),
+    )
+
+
+def _blank_component_summary(
+    roots: tuple[StructuralNode, ...],
+    *,
+    limits: object | None = None,
+) -> _BlankPartitionSummary:
+    """Return the component metrics consumed by benchmarks and regression tests."""
+
+    return _partition_blank_graph(roots, limits=limits)[1]
+
+
+def _blank_limit(limits: object | None, name: str, default: int) -> int:
+    value = default if limits is None else getattr(limits, name, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def _enforce_blank_terms(observed: int, maximum: int) -> None:
+    if observed > maximum:
+        raise ResourceLimitError(
+            "resource limit max_terms exceeded",
+            limit="max_terms",
+            observed=observed,
+            allowed=maximum,
+        )
 
 
 def _blank_occurrences(
@@ -285,7 +560,7 @@ def _blank_occurrences(
     if isinstance(value, CanonicalSet):
         grouped = sorted(value, key=_skeleton)
         for item in grouped:
-            marker = hashlib.sha256(_skeleton(item)).hexdigest()[:16]
+            marker = hashlib.sha256(_skeleton(item)).hexdigest()
             yield from _blank_occurrences(item, (*path, f"set:{marker}"))
         return
     if isinstance(value, tuple):

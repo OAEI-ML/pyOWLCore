@@ -22,7 +22,7 @@ from pyowl_core import (
 )
 from pyowl_core.backends import native
 from pyowl_core.backends.native_ingestion import _publish_structural_snapshot_v2
-from pyowl_core.backends.native_views import produce_encoded_structural_view_v1
+from pyowl_core.backends.native_views import produce_encoded_structural_view_v2
 from pyowl_core.cancellation import CancellationToken
 from pyowl_core.document.provenance import OriginIndex
 from pyowl_core.exceptions import ResourceLimitError, SnapshotInUseError
@@ -97,7 +97,7 @@ def test_every_constructor_mapped_owner_matches_scalar_native_and_wire(
         assert encode_snapshot(opened) == native_wire
         assert opened._mapped_state.decoded is None
 
-        encoded = produce_encoded_structural_view_v1(opened)
+        encoded = produce_encoded_structural_view_v2(opened)
         assert encoded.owner is opened
         assert decode_root_canonical_bytes(encoded.buffers) == scalar_root_bytes(source)
         assert opened._mapped_state.decoded is None
@@ -196,7 +196,7 @@ def test_every_constructor_scoped_retained_owner_uses_native_wire_and_mapping(
         assert encode_snapshot(opened) == retained_wire
         assert opened._mapped_state.decoded is None
 
-        encoded = produce_encoded_structural_view_v1(opened)
+        encoded = produce_encoded_structural_view_v2(opened)
         assert encoded.owner is opened
         assert decode_root_canonical_bytes(encoded.buffers) == scalar_root_bytes(source)
         assert opened._mapped_state.decoded is None

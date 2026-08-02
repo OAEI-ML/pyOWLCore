@@ -9,7 +9,7 @@ import pyowl_core.model as m
 from pyowl_core import PyOWLCoreError
 from tests.generated.model.fixtures import model_fixtures, typed_entity_fixtures
 from tests.generated.model.generate_coverage import OUTPUT, render_coverage
-from tools.schema.tags import TagLedger
+from tools.schema.tags import TagLedger, validate_evolution
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -90,10 +90,12 @@ class ConstructorCoverageTests(unittest.TestCase):
         self.assertEqual(len(entity_row["productions"]), len(m.EntityKind))
 
     def test_model_schema_and_generated_constants_are_exactly_current(self) -> None:
-        ledger = TagLedger.load(ROOT / "schemas" / "model-v1.toml")
+        previous = TagLedger.load(ROOT / "schemas" / "model-v1.toml")
+        ledger = TagLedger.load(ROOT / "schemas" / "model-v2.toml")
         generated = ROOT / "src" / "pyowl_core" / "model" / "_tags.py"
         import pyowl_core
 
+        validate_evolution(previous, ledger)
         self.assertEqual(ledger.schema, pyowl_core.MODEL_SCHEMA_VERSION)
         self.assertEqual(generated.read_text(encoding="utf-8"), ledger.render_python())
         active = {(tag.name, tag.value) for tag in ledger.tags if tag.status == "active"}

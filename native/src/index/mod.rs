@@ -41,12 +41,18 @@ pub(crate) fn build(data: &[u8], session: &mut Session<'_>) -> NativeResult<Vec<
         return Err(NativeError::protocol("unsupported native index source"));
     }
     if count > session.limits().value(LimitKey::MaxIndexRows) {
-        return Err(NativeError::limit("native index exceeds max_index_rows"));
+        return Err(session.limits().resource_limit(
+            LimitKey::MaxIndexRows,
+            count,
+            "native index exceeds max_index_rows",
+        ));
     }
-    if u64::try_from(data.len()).map_or(true, |value| {
-        value > session.limits().value(LimitKey::MaxIndexBytes)
-    }) {
-        return Err(NativeError::limit(
+    let source_bytes = u64::try_from(data.len())
+        .map_err(|_| NativeError::limit("native index source size exceeds u64"))?;
+    if source_bytes > session.limits().value(LimitKey::MaxIndexBytes) {
+        return Err(session.limits().resource_limit(
+            LimitKey::MaxIndexBytes,
+            source_bytes,
             "native index source exceeds max_index_bytes",
         ));
     }
@@ -101,10 +107,12 @@ fn encode(groups: BTreeMap<u64, Vec<u64>>, session: &mut Session<'_>) -> NativeR
         .checked_add(groups.len().saturating_mul(16))
         .and_then(|value| value.checked_add(rows.saturating_mul(8)))
         .ok_or_else(|| NativeError::limit("native index result size overflow"))?;
-    if u64::try_from(size).map_or(true, |value| {
-        value > session.limits().value(LimitKey::MaxIndexBytes)
-    }) {
-        return Err(NativeError::limit(
+    let size_u64 = u64::try_from(size)
+        .map_err(|_| NativeError::limit("native index result size exceeds u64"))?;
+    if size_u64 > session.limits().value(LimitKey::MaxIndexBytes) {
+        return Err(session.limits().resource_limit(
+            LimitKey::MaxIndexBytes,
+            size_u64,
             "native index result exceeds max_index_bytes",
         ));
     }

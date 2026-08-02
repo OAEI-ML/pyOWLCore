@@ -28,7 +28,7 @@ from pyowl_core.document.snapshot import (
     CoreCapabilities,
     LoadReport,
     OntologySnapshot,
-    _encoded_view_schemas_v1,
+    _encoded_view_schemas_v2,
 )
 from pyowl_core.exceptions import (
     ClosedSnapshotError,
@@ -44,7 +44,7 @@ from .codec import (
     InspectedWire,
     checked_materialize_image,
     decode_snapshot,
-    encoded_structural_buffers_from_inspected_v1,
+    encoded_structural_buffers_from_inspected_v2,
     identity_metadata_from_inspected,
     image_import_options,
     validate_bytes,
@@ -125,10 +125,10 @@ class _MappedState:
             features.add("materialized-view")
         self.capabilities = CoreCapabilities(
             1,
-            1,
-            (1, 1),
+            2,
+            (1, 2),
             frozenset(features),
-            _encoded_view_schemas_v1(),
+            _encoded_view_schemas_v2(),
             "python",
         )
         from pyowl_core.index.cache import create_index_cache
@@ -325,7 +325,7 @@ class MappedOntologySnapshot(OntologySnapshot):
     def _retain_dependent(self) -> object:
         return self._mapped_state.retain()
 
-    def _encoded_structural_columns_v1(
+    def _encoded_structural_columns_v2(
         self,
         scope: AxiomScope,
         document_key: str | None,
@@ -336,7 +336,7 @@ class MappedOntologySnapshot(OntologySnapshot):
         self._check_open()
         if scope is not AxiomScope.CLOSURE or document_key is not None:
             return None
-        buffers = encoded_structural_buffers_from_inspected_v1(
+        buffers = encoded_structural_buffers_from_inspected_v2(
             self._mapped_state.inspected,
             limits=limits,
         )
@@ -416,8 +416,8 @@ class MappedOntologySnapshot(OntologySnapshot):
         summary = self._mapped_state.inspected.summary
         return LoadReport(
             "python",
-            (0, 1),
-            1,
+            (0, 2),
+            2,
             summary.document_count,
             summary.total_source_bytes,
             summary.effective_axiom_count,
@@ -440,12 +440,12 @@ class MappedOntologySnapshot(OntologySnapshot):
     def _anonymous_document_scopes(self) -> frozenset[bytes]:
         self._check_open()
         from pyowl_core.backends.native_views import (
-            EncodedStructuralViewV1,
-            _anonymous_document_scopes_from_encoded_view_v1,
+            EncodedStructuralViewV2,
+            _anonymous_document_scopes_from_encoded_view_v2,
         )
 
-        encoded = self.view(EncodedStructuralViewV1)
-        return _anonymous_document_scopes_from_encoded_view_v1(encoded)
+        encoded = self.view(EncodedStructuralViewV2)
+        return _anonymous_document_scopes_from_encoded_view_v2(encoded)
 
     def _anonymous_scope_lineage(self) -> tuple[tuple[bytes, bytes, bytes], ...]:
         leaf = fingerprint_bytes(self.structural_fingerprint)

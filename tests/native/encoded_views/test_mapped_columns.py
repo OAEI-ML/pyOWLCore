@@ -96,7 +96,7 @@ def test_legacy_wire_without_columns_falls_back_to_scalar_materialization(
     source = complete_constructor_snapshot()
     current = read_wire(pyowl_core.encode_snapshot(source))
     sections = dict(current.sections)
-    sections.pop(int(pyowl_core.SectionKind.ENCODED_STRUCTURAL_V1))
+    sections.pop(int(pyowl_core.SectionKind.ENCODED_STRUCTURAL_V2))
     legacy = encode_sections(sections, feature_flags=current.feature_flags, minor=0)
     path = tmp_path / "legacy.pyocore"
     path.write_bytes(legacy)
@@ -119,8 +119,8 @@ def test_mapped_columns_are_bound_to_required_view_roots(tmp_path: Path) -> None
     )
     second = read_wire(pyowl_core.encode_snapshot(replacement_source))
     sections = dict(first.sections)
-    sections[int(pyowl_core.SectionKind.ENCODED_STRUCTURAL_V1)] = second.sections[
-        int(pyowl_core.SectionKind.ENCODED_STRUCTURAL_V1)
+    sections[int(pyowl_core.SectionKind.ENCODED_STRUCTURAL_V2)] = second.sections[
+        int(pyowl_core.SectionKind.ENCODED_STRUCTURAL_V2)
     ]
     hostile = encode_sections(
         sections,

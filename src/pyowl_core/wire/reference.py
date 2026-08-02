@@ -69,7 +69,7 @@ def validate_reference_buffer(data: memoryview) -> ReferenceValidation:
     ) = _HEADER.unpack_from(data)
     if magic != b"PYOCORE\0":
         raise _corrupt("reference validator found invalid magic")
-    if major != 1 or header_size != 96 or model_schema != 1 or profile != 1 or reserved:
+    if major != 1 or header_size != 96 or model_schema != 2 or profile != 1 or reserved:
         raise WireVersionError(
             "reference validator found unsupported wire metadata",
             code="WIRE_REFERENCE_VERSION",

@@ -168,6 +168,15 @@ _SOURCE_FILES = (
     "native/build.rs",
     "schemas/encoded-view-v1.json",
     "schemas/encoded-view-v1.toml",
+    "schemas/encoded-view-v2.json",
+    "schemas/encoded-view-v2.toml",
+    "schemas/model-v1.toml",
+    "schemas/model-v2.toml",
+    "schemas/native-snapshot-publication-v1.toml",
+    "schemas/native-snapshot-publication-v2.toml",
+    "schemas/version-decision-v1.toml",
+    "schemas/version-decision-v2.toml",
+    "schemas/wire-v1.toml",
 )
 _SOURCE_TREES = (
     ("src/pyowl_core", frozenset({".py", ".pyi", ".typed"})),

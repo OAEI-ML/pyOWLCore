@@ -175,6 +175,28 @@ generator = "adversarial-deep"
 generator_size = 64
 
 [[corpus]]
+id = "generated-component-scaling-functional"
+tier = "synthetic"
+families = ["biomedical", "synthetic", "adversarial"]
+source = "generated"
+format = "functional"
+revision = "generator-v2/anonymous-components-50000"
+sha256 = "e93b82497f07b7d44abec136010a0999e3434d97e2d5a46aa3fba29a0796868f"
+bytes = 5000159
+triples = 50002
+axioms = 50001
+entities = 1
+imports = 0
+count_basis = "generator-exact"
+license = "CC0-1.0"
+license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+acquired = "2026-08-02"
+redistribution = "generated"
+generator = "anonymous-components"
+generator_size = 50000
+notes = "Release-gating public Functional Syntax input with 50,000 disconnected isomorphic anonymous components."
+
+[[corpus]]
 id = "uberon-common-anatomy-2026-06-23"
 tier = "small"
 families = ["biomedical", "annotation-list-heavy"]
@@ -242,6 +264,69 @@ license_url = "https://creativecommons.org/licenses/by/4.0/"
 acquired = "2026-07-17"
 redistribution = "manifest-only"
 notes = "The paired ORDO member is pinned by the same record but currently fails strict RDF mapping; see reports/performance/limitations.md."
+
+[[corpus]]
+id = "oaei-bioml-doid-2026"
+tier = "medium"
+families = ["biomedical", "annotation-list-heavy", "oaei-composite"]
+source = "url"
+format = "rdfxml"
+revision = "OAEI-ML/bio-ml@2026/ontologies/DOID-611355c44553-doid.owl"
+url = "https://huggingface.co/datasets/OAEI-ML/bio-ml/resolve/2026/ontologies/DOID-611355c44553-doid.owl"
+sha256 = "611355c445537fcf4bae2c519f1b3598af5a8fea793274316e35525b7d05e945"
+bytes = 28385948
+triples = 305919
+axioms = 0
+entities = 0
+imports = 0
+count_basis = "pinned strict-report triple total; structural counts intentionally pending strict-source repair"
+license = "CC0-1.0"
+license_url = "https://creativecommons.org/publicdomain/zero/1.0/"
+acquired = "2026-08-02"
+redistribution = "allowed"
+notes = "Strict mapping intentionally reports 305,901 consumed and 18 unconsumed triples; zero structural counts are not parity claims."
+
+[[corpus]]
+id = "oaei-bioml-fma-2026"
+tier = "large"
+families = ["biomedical", "annotation-list-heavy", "oaei-composite"]
+source = "url"
+format = "rdfxml"
+revision = "OAEI-ML/bio-ml@2026/ontologies/FMA-beb3dc47979a-fma.owl"
+url = "https://huggingface.co/datasets/OAEI-ML/bio-ml/resolve/2026/ontologies/FMA-beb3dc47979a-fma.owl"
+sha256 = "beb3dc47979ad5434ef70fd02af4307f147f2023f7d8c2c57103b995191194c3"
+bytes = 208047132
+triples = 0
+axioms = 791162
+entities = 0
+imports = 0
+count_basis = "incident composed axiom anchor only; remaining counts populated by the schema-2 one-document gate"
+license = "FMA license"
+license_url = "https://huggingface.co/datasets/OAEI-ML/bio-ml/blob/2026/ontologies.md"
+acquired = "2026-08-02"
+redistribution = "manifest-only"
+notes = "The 791,162-axiom incident value is a regression anchor, not a parity oracle; 104,942 declarations are reported separately."
+
+[[corpus]]
+id = "oaei-bioml-ncit-2026"
+tier = "large"
+families = ["biomedical", "annotation-list-heavy", "oaei-composite"]
+source = "url"
+format = "rdfxml"
+revision = "OAEI-ML/bio-ml@2026/ontologies/NCIT-bd7a9a8a75e5-Thesaurus.owl"
+url = "https://huggingface.co/datasets/OAEI-ML/bio-ml/resolve/2026/ontologies/NCIT-bd7a9a8a75e5-Thesaurus.owl"
+sha256 = "1a7182a7327ebc4181f7d6b0f7e81ed04dd258f1a86bd8f560e4a0d61439d58a"
+bytes = 747403746
+triples = 0
+axioms = 0
+entities = 0
+imports = 0
+count_basis = "schema-2 one-document gate; exact counts populated from verified run evidence"
+license = "CC-BY-4.0"
+license_url = "https://creativecommons.org/licenses/by/4.0/"
+acquired = "2026-08-02"
+redistribution = "manifest-only"
+notes = "Checksum-pinned incident input; zero counters are placeholders until the verified one-document report lands."
 
 [[corpus]]
 id = "oaei-bioml-doid-2024"

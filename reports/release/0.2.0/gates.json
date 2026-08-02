@@ -1,0 +1,53 @@
+{
+  "gates": {
+    "advisory_scan": {
+      "evidence": "pending final exact-source Wheels run: attach checksum-bound cargo-audit/RustSec evidence for the 0.2.0 source revision",
+      "status": "blocked"
+    },
+    "consumer_matrix": {
+      "evidence": "pending exact-commit 0.2.0 consumer reruns after API (0,2), model 2, wire (1,2), and structural-columns v2 negotiation; historical 0.1.x runs are not evidence",
+      "status": "blocked"
+    },
+    "legal_review": {
+      "evidence": "pending current release-owner or counsel approval of the final native dependency inventory, NOTICE, and packaged third-party license payload",
+      "status": "blocked"
+    },
+    "name_control": {
+      "evidence": "pending release-owner evidence that the production pyowl-core project is controlled for the 0.2.0 publication",
+      "status": "blocked"
+    },
+    "platform_artifact_audit": {
+      "evidence": "pending final exact-source audit of one sdist, one universal wheel, and all 25 native wheels across the five approved platform lanes",
+      "status": "blocked"
+    },
+    "project_urls": {
+      "evidence": "pending inspection and release-owner approval of repository, documentation, and issue URLs in the final 0.2.0 artifact metadata",
+      "status": "blocked"
+    },
+    "reference_performance": {
+      "evidence": "pending final model-schema-2 native evidence: pinned NCIt/FMA one-pass correctness and RSS, public Functional component scaling, and paired direct Horned/py-horned comparisons",
+      "status": "blocked"
+    },
+    "release_owner_approval": {
+      "evidence": "pending release-owner approval of the exact checksum-bound 0.2.0 candidate, current limitations, and every completed gate",
+      "status": "blocked"
+    },
+    "signatures": {
+      "evidence": "pending verification of provenance/signatures for the immutable 0.2.0 report and 27-file distribution set",
+      "status": "blocked"
+    },
+    "source_tag_verified": {
+      "evidence": "pending creation and verification of v0.2.0 at the exact source revision used by the final native, corpus, and artifact evidence",
+      "status": "blocked"
+    },
+    "testpypi_rehearsal": {
+      "evidence": "pending TestPyPI upload, hash/provenance comparison, clean installation, native self-test, and public examples for all identical candidate files",
+      "status": "blocked"
+    },
+    "trusted_publishing": {
+      "evidence": "pending verification of the protected publishing environment and selected PyPI Trusted Publisher identity for 0.2.0",
+      "status": "blocked"
+    }
+  },
+  "schema": 1
+}

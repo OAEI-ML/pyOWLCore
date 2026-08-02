@@ -1,7 +1,7 @@
 """Generated tag constants; do not edit by hand."""
 
 SCHEMA_NAMESPACE = "model"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 IRI = 1
 ENTITY = 2

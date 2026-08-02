@@ -36,7 +36,14 @@ from pyowl_core import (
     load_snapshot,
 )
 from tests.generated.model.fixtures import model_fixtures
-from tools.wire_reference import encode_sections, read_wire, reencode
+from tools.wire_reference import (
+    encode_sections,
+    encode_sections_v1,
+    read_wire,
+    read_wire_v1,
+    reencode,
+    reencode_v1,
+)
 from tools.wire_reference.check_schema import check_schema
 
 from .conftest import snapshot
@@ -47,20 +54,52 @@ def test_fixed_header_required_inventory_and_independent_reencode() -> None:
     assert encoded[:8] == b"PYOCORE\0"
     assert len(encoded) == struct.unpack_from("<Q", encoded, 32)[0]
     assert struct.unpack_from("<I", encoded, 12)[0] == 96
+    assert struct.unpack_from("<H", encoded, 10)[0] == 2
+    assert struct.unpack_from("<I", encoded, 24)[0] == 2
     reference = read_wire(encoded)
+    assert reference.minor == 2
+    assert reference.model_schema == 2
     assert {entry.kind for entry in reference.entries if entry.flags == 1} == set(range(1, 15))
     assert reencode(reference) == encoded
     root = Path(__file__).resolve().parents[3]
     assert check_schema(root / "schemas" / "wire-v1.toml") == ()
 
 
-def test_empty_v1_bytes_match_frozen_golden_digest() -> None:
-    golden_path = Path(__file__).with_name("goldens") / "empty-v1.json"
+def test_empty_v2_bytes_match_frozen_golden_digest() -> None:
+    golden_path = Path(__file__).with_name("goldens") / "empty-v2.json"
     golden = json.loads(golden_path.read_text(encoding="utf-8"))
     encoded = encode_snapshot(snapshot())
     assert len(encoded) == golden["length"]
     assert hashlib.sha256(encoded).hexdigest() == golden["sha256"]
     assert encoded[56:88].hex() == golden["wire_digest"]
+
+
+def test_historical_v1_oracle_and_golden_remain_explicitly_frozen() -> None:
+    golden_path = Path(__file__).with_name("goldens") / "empty-v1.json"
+    golden = json.loads(golden_path.read_text(encoding="utf-8"))
+    assert golden == {
+        "name": "empty-functional-ontology",
+        "length": 2976,
+        "sha256": "51316095a22e724c2123255a06996a4bdc271d0805792f07875fca3723124fef",
+        "wire_digest": "c4148a52b1de2f18524825a4cbf6871fef8c9a68cec939174d905f6f0e6886f4",
+    }
+
+    empty_table = struct.pack("<QQ", 0, 0)
+    sections = {kind: empty_table for kind in range(1, 15)}
+    encoded_v1 = encode_sections_v1(sections)
+    historical = read_wire_v1(encoded_v1)
+    assert historical.minor == 0
+    assert historical.model_schema == 1
+    assert reencode_v1(historical) == encoded_v1
+    assert reencode(historical) == encoded_v1
+    with pytest.raises(ValueError, match="schema"):
+        read_wire(encoded_v1)
+
+    encoded_v2 = encode_sections(sections)
+    assert struct.unpack_from("<H", encoded_v2, 10)[0] == 2
+    assert struct.unpack_from("<I", encoded_v2, 24)[0] == 2
+    with pytest.raises(ValueError, match="schema"):
+        read_wire_v1(encoded_v2)
 
 
 def test_bytes_buffer_stream_and_effective_views_round_trip_canonically() -> None:

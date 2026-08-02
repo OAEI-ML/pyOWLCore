@@ -124,7 +124,7 @@ final class OwlApiRunnerProtocolTest {
 
         assertEquals("pyowl-core/comparator-adapter-request/v2", request.schema);
         assertEquals(Long.valueOf(1), Long.valueOf(request.expectedThreadCeiling));
-        assertEquals(List.of("isolated-java", "common-contract-v1"), request.expectedFeatures);
+        assertEquals(List.of("isolated-java", "common-contract-v2"), request.expectedFeatures);
     }
 
     @Test
@@ -552,12 +552,12 @@ final class OwlApiRunnerProtocolTest {
         request.put("expected_artifact_sha256", "c".repeat(64));
         request.putArray("expected_features")
                 .add("isolated-java")
-                .add("common-contract-v1");
+                .add("common-contract-v2");
         request.put("expected_allocator", "HotSpot G1GC");
         request.put("expected_thread_ceiling", 1);
         request.put(
                 "expected_runner_revision",
-                "pyowl-core-owlapi-common-runner-v6");
+                "pyowl-core-owlapi-common-runner-v7");
         request.put("expected_runner_sha256", "d".repeat(64));
         return request;
     }

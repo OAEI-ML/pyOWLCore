@@ -37,8 +37,8 @@ from pyowl_core import (
 )
 from pyowl_core.backends import native, native_handoff_v2, native_ingestion
 from pyowl_core.backends.native_views import (
-    ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
-    ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+    ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
+    ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
 )
 from pyowl_core.document import native_storage
 from pyowl_core.exceptions import (
@@ -65,8 +65,25 @@ AUTO_SOURCE = (
 ROOT = Path(__file__).parents[3]
 RUNNER = Path(__file__).with_name("_retained_load_runner.py")
 EXPECTED_ENCODED_VIEW_SCHEMAS = {
-    ENCODED_STRUCTURAL_SCHEMA_NAME_V1: ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+    ENCODED_STRUCTURAL_SCHEMA_NAME_V2: ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
 }
+
+
+def _native_deadline_error(native_error: Any) -> Exception:
+    return cast(
+        Exception,
+        native_error(
+            "NATIVE_DEADLINE",
+            "native operation deadline exceeded",
+            {
+                "kind": "resource_limit",
+                "limit": "deadline_seconds",
+                "observed": 60.000001,
+                "allowed": 60.0,
+                "details": {},
+            },
+        ),
+    )
 
 
 class _UnreadableFunctional(io.BytesIO):
@@ -440,6 +457,26 @@ def test_anonymous_re_scope_retains_distinct_raw_and_effective_native_owners(
     assert before_native.page_requests == 0
     assert before_python.model_rows_materialized == 0
     assert before_python.auxiliary_rows_decoded == 0
+    timings = selected.report.timings
+    assert timings["native_anonymous_component_count"] == 1.0
+    assert timings["native_anonymous_total_labels"] == 1.0
+    assert timings["native_anonymous_largest_component_labels"] == 1.0
+    assert timings["native_anonymous_maximum_open_root_intervals"] == 1.0
+    assert timings["native_anonymous_largest_component_work"] > 0.0
+    assert timings["native_anonymous_accounted_bytes"] > 0.0
+    assert timings["native_anonymous_total_canonical_work"] == sum(
+        timings[name]
+        for name in (
+            "native_anonymous_total_setup_work",
+            "native_anonymous_total_refinement_work",
+            "native_anonymous_total_candidate_order_work",
+        )
+    )
+    assert all(
+        value >= 0.0 and value.is_integer()
+        for name, value in timings.items()
+        if name.startswith("native_anonymous_")
+    )
 
     raw_axioms = tuple(canonical_bytes(value) for value in selected.root.axioms)
     reference_raw_axioms = tuple(canonical_bytes(value) for value in reference.root.axioms)
@@ -509,16 +546,7 @@ def test_anonymous_retained_occurrences_preserve_source_maps_and_duplicates(
     assert selected.structural_fingerprint == reference.structural_fingerprint
     assert selected.logical_fingerprint == reference.logical_fingerprint
     assert selected.signature_fingerprint == reference.signature_fingerprint
-    assert tuple(selected.root.origin_index.entries) == tuple(reference.root.origin_index.entries)
-    assert tuple(
-        (item.occurrence, item.span)
-        for occurrences in selected.root.origin_index.entries.values()
-        for item in occurrences
-    ) == tuple(
-        (item.occurrence, item.span)
-        for occurrences in reference.root.origin_index.entries.values()
-        for item in occurrences
-    )
+    assert selected.root.origin_index == reference.root.origin_index
     assert selected.origin_index == reference.origin_index
     assert selected.root.source_map == reference.root.source_map
     assert encode_snapshot(selected) == encode_snapshot(reference)
@@ -825,7 +853,7 @@ def test_attested_wire_source_fails_closed_without_direct_columns(
     raw_owner = object.__getattribute__(handle, "_owner_v2")
     before_native = cast(Any, raw_owner)._publication_counters_v2()
     before_python = cast(Any, selected)._native_python_counters()
-    monkeypatch.setattr(cast(Any, extension), "_encoded_structural_columns_v1", None)
+    monkeypatch.setattr(cast(Any, extension), "_encoded_structural_columns_v2", None)
 
     scalar_error = AssertionError("failed wire source crossed scalar traversal")
     with (
@@ -1782,14 +1810,14 @@ def test_owner_first_closure_translates_in_phase_native_deadlines(
         nonlocal prepare_calls
         prepare_calls += 1
         if inject_deadline and phase == "prepare":
-            raise native_error("NATIVE_DEADLINE", "native operation deadline exceeded")
+            raise _native_deadline_error(native_error)
         return prepare(*arguments, **keywords)
 
     def deadline_finalize(*arguments: object, **keywords: object) -> object:
         nonlocal finalize_calls
         finalize_calls += 1
         if inject_deadline and phase == "finalize":
-            raise native_error("NATIVE_DEADLINE", "native operation deadline exceeded")
+            raise _native_deadline_error(native_error)
         return finalize(*arguments, **keywords)
 
     monkeypatch.setattr(
@@ -1865,7 +1893,7 @@ def test_owner_first_closure_preserves_caller_token_deadline_precedence(
         nonlocal prepare_calls
         prepare_calls += 1
         _TokenClock.offset = 120.0
-        raise native_error("NATIVE_DEADLINE", "native operation deadline exceeded")
+        raise _native_deadline_error(native_error)
 
     def unexpected_finalize(*_arguments: object, **_keywords: object) -> object:
         nonlocal finalize_calls
@@ -1999,10 +2027,7 @@ def test_owner_first_closure_closes_finalized_owner_when_envelope_build_fails(
         f"Import(<{namespace}:child>) "
         f"Declaration(Class(<{namespace}:Root>)))"
     ).encode()
-    child = (
-        f"Ontology(<{namespace}:child> "
-        f"Declaration(Class(<{namespace}:Child>)))"
-    ).encode()
+    child = (f"Ontology(<{namespace}:child> Declaration(Class(<{namespace}:Child>)))").encode()
     sources = {f"{namespace}:child": child}
     finalize = cast(Any, extension)._finalize_parsed_structural_closure_v2
     seal = native_handoff_v2._seal_native_snapshot_owner_v2
@@ -2200,8 +2225,7 @@ def test_owner_first_unresolved_warning_error_closes_retained_snapshot(
     assert cast(Any, raw_owners[0])._publication_closed_v2()
     assert cast(Any, captured["snapshot"]).closed
     assert all(
-        cast(Any, document).closed
-        for document in cast(tuple[object, ...], captured["documents"])
+        cast(Any, document).closed for document in cast(tuple[object, ...], captured["documents"])
     )
 
 
@@ -2672,13 +2696,8 @@ def test_repeated_named_only_fingerprint_candidate_is_a_native_scope_noop(
         b"Import(<urn:retained-repeat-named:second>) "
         b"Declaration(Class(<urn:retained-repeat-named:Root>)))"
     )
-    first = (
-        b"Ontology(Declaration(Class(<urn:retained-repeat-named:Child>)))"
-    )
-    second = (
-        b"Ontology(\n"
-        b"Declaration(Class(<urn:retained-repeat-named:Child>))  )"
-    )
+    first = b"Ontology(Declaration(Class(<urn:retained-repeat-named:Child>)))"
+    second = b"Ontology(\nDeclaration(Class(<urn:retained-repeat-named:Child>))  )"
     sources = {
         "urn:retained-repeat-named:first": first,
         "urn:retained-repeat-named:second": second,
@@ -3058,8 +3077,8 @@ def test_repeated_anonymous_scope_workspace_obeys_aggregate_memory_limit(
 
         def owner_boundary(message: str | None) -> bool:
             return message is not None and (
-                "native retained boundary exceeds configured memory limits" in message
-                or "native closure aggregate owners exceed configured memory limits" in message
+                "native retained boundary exceeds max_memory_bytes" in message
+                or "native closure aggregate owners exceed max_memory_bytes" in message
             )
 
         lower = 1
@@ -3153,15 +3172,9 @@ def test_auxiliary_attachment_plan_one_byte_boundary_is_retryable_before_finaliz
         for ordinal in range(128)
     )
     root = (
-        b"Ontology(<urn:retained-plan:root> "
-        b"Import(<urn:retained-plan:child>) "
-        + annotations
-        + b")"
+        b"Ontology(<urn:retained-plan:root> Import(<urn:retained-plan:child>) " + annotations + b")"
     )
-    child = (
-        b"Ontology(<urn:retained-plan:child> "
-        b'Declaration(Class(<urn:retained-plan:Child>)))'
-    )
+    child = b"Ontology(<urn:retained-plan:child> Declaration(Class(<urn:retained-plan:Child>)))"
     options = LoadOptions(
         format=DocumentFormat.FUNCTIONAL,
         imports=ImportPolicy.RESOLVE_STRICT,

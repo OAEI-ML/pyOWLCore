@@ -16,8 +16,13 @@ use crate::publication::{
 };
 
 #[allow(dead_code)]
-mod generated {
+mod generated_v1 {
     include!(concat!(env!("OUT_DIR"), "/encoded_view_v1.rs"));
+}
+
+#[allow(dead_code)]
+mod generated_v2 {
+    include!(concat!(env!("OUT_DIR"), "/encoded_view_v2.rs"));
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -33,18 +38,30 @@ struct EncodedViewSchema {
 }
 
 #[cfg(any(test, feature = "test-hooks"))]
+#[allow(dead_code)]
 const ENCODED_VIEW_SCHEMA_V1: EncodedViewSchema = EncodedViewSchema {
-    name: generated::NAME,
-    version: generated::VERSION,
-    model_schema: generated::MODEL_SCHEMA,
-    status: generated::STATUS,
-    capability_advertised: generated::CAPABILITY_ADVERTISED,
-    descriptor: generated::DESCRIPTOR,
-    descriptor_sha256: generated::DESCRIPTOR_SHA256,
+    name: generated_v1::NAME,
+    version: generated_v1::VERSION,
+    model_schema: generated_v1::MODEL_SCHEMA,
+    status: generated_v1::STATUS,
+    capability_advertised: false,
+    descriptor: generated_v1::DESCRIPTOR,
+    descriptor_sha256: generated_v1::DESCRIPTOR_SHA256,
+};
+
+#[cfg(any(test, feature = "test-hooks"))]
+const ENCODED_VIEW_SCHEMA_V2: EncodedViewSchema = EncodedViewSchema {
+    name: generated_v2::NAME,
+    version: generated_v2::VERSION,
+    model_schema: generated_v2::MODEL_SCHEMA,
+    status: generated_v2::STATUS,
+    capability_advertised: generated_v2::CAPABILITY_ADVERTISED,
+    descriptor: generated_v2::DESCRIPTOR,
+    descriptor_sha256: generated_v2::DESCRIPTOR_SHA256,
 };
 
 #[cfg(feature = "test-hooks")]
-type PyEncodedViewSchemaV1 = (String, u32, u32, Py<PyBytes>, Py<PyBytes>, String, bool);
+type PyEncodedViewSchemaV2 = (String, u32, u32, Py<PyBytes>, Py<PyBytes>, String, bool);
 
 #[derive(Debug, Default)]
 struct EncodedBridgeAllocationProbe {
@@ -98,8 +115,8 @@ impl EncodedBridgeAllocationProbe {
     }
 }
 
-const ADVERTISED_FEATURES: &[&str] = &[generated::NAME];
-pub(super) const FEATURES: &[&str] = if generated::CAPABILITY_ADVERTISED {
+const ADVERTISED_FEATURES: &[&str] = &[generated_v2::NAME];
+pub(super) const FEATURES: &[&str] = if generated_v2::CAPABILITY_ADVERTISED {
     ADVERTISED_FEATURES
 } else {
     &[]
@@ -110,8 +127,13 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     _module.add_class::<NativeRetainedSignatureIndexV1>()?;
     _module.add_class::<NativeRetainedOntologyIdentityIndexV1>()?;
     _module.add_function(wrap_pyfunction!(_encoded_structural_columns_v1, _module)?)?;
+    _module.add_function(wrap_pyfunction!(_encoded_structural_columns_v2, _module)?)?;
     _module.add_function(wrap_pyfunction!(
         _encoded_structural_document_columns_v1,
+        _module
+    )?)?;
+    _module.add_function(wrap_pyfunction!(
+        _encoded_structural_document_columns_v2,
         _module
     )?)?;
     _module.add_function(wrap_pyfunction!(_retained_axiom_type_index_v1, _module)?)?;
@@ -123,17 +145,19 @@ pub(super) fn register(_py: Python<'_>, _module: &Bound<'_, PyModule>) -> PyResu
     #[cfg(feature = "test-hooks")]
     {
         _module.add_function(wrap_pyfunction!(_encoded_view_schema_v1, _module)?)?;
+        _module.add_function(wrap_pyfunction!(_encoded_view_schema_v2, _module)?)?;
         _module.add_function(wrap_pyfunction!(_encoded_structural_fixture_v1, _module)?)?;
+        _module.add_function(wrap_pyfunction!(_encoded_structural_fixture_v2, _module)?)?;
         _module.add_function(wrap_pyfunction!(
-            _encoded_structural_bridge_allocation_probe_v1,
+            _encoded_structural_bridge_allocation_probe_v2,
             _module
         )?)?;
         _module.add_function(wrap_pyfunction!(
-            _encoded_structural_document_bridge_allocation_probe_v1,
+            _encoded_structural_document_bridge_allocation_probe_v2,
             _module
         )?)?;
         _module.add_function(wrap_pyfunction!(
-            _encoded_structural_workspace_allocation_probe_v1,
+            _encoded_structural_workspace_allocation_probe_v2,
             _module
         )?)?;
         _module.add_function(wrap_pyfunction!(
@@ -1040,9 +1064,43 @@ fn _retained_axiom_type_page_bridge_allocation_probe_v1<'py>(
 
 /// Exercise raw document-owner selection without relaxing the snapshot
 /// operation's effective-scope semantics.
+fn encoded_schema_v1_rejected() -> PyErr {
+    crate::python_error(NativeError::version(
+        "encoded structural schema 1 is frozen and not valid for model schema 2",
+    ))
+}
+
 #[pyfunction]
 #[pyo3(signature = (handle, config, cancel=None))]
 fn _encoded_structural_document_columns_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeDocumentHandle>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
+    let _ = (py, handle, config, cancel);
+    Err(encoded_schema_v1_rejected())
+}
+
+#[pyfunction]
+#[pyo3(signature = (handle, scope, document_ordinal, config, cancel=None))]
+fn _encoded_structural_columns_v1<'py>(
+    py: Python<'py>,
+    handle: PyRef<'py, NativeSnapshotHandle>,
+    scope: &Bound<'py, PyAny>,
+    document_ordinal: Option<u64>,
+    config: &Bound<'py, PyAny>,
+    cancel: Option<PyRef<'py, crate::cancel::Cancellation>>,
+) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
+    let _ = (py, handle, scope, document_ordinal, config, cancel);
+    Err(encoded_schema_v1_rejected())
+}
+
+/// Exercise raw document-owner selection without relaxing the snapshot
+/// operation's effective-scope semantics.
+#[pyfunction]
+#[pyo3(signature = (handle, config, cancel=None))]
+fn _encoded_structural_document_columns_v2<'py>(
     py: Python<'py>,
     handle: PyRef<'py, NativeDocumentHandle>,
     config: &Bound<'py, PyAny>,
@@ -1068,7 +1126,7 @@ fn _encoded_structural_document_columns_v1<'py>(
 /// The operation implements the advertised frozen structural-column schema.
 #[pyfunction]
 #[pyo3(signature = (handle, scope, document_ordinal, config, cancel=None))]
-fn _encoded_structural_columns_v1<'py>(
+fn _encoded_structural_columns_v2<'py>(
     py: Python<'py>,
     handle: PyRef<'py, NativeSnapshotHandle>,
     scope: &Bound<'py, PyAny>,
@@ -1102,7 +1160,7 @@ fn _encoded_structural_columns_v1<'py>(
 #[cfg(feature = "test-hooks")]
 #[pyfunction]
 #[pyo3(signature = (handle, scope, document_ordinal, config, fail_after=None))]
-fn _encoded_structural_bridge_allocation_probe_v1<'py>(
+fn _encoded_structural_bridge_allocation_probe_v2<'py>(
     py: Python<'py>,
     handle: PyRef<'py, NativeSnapshotHandle>,
     scope: &Bound<'py, PyAny>,
@@ -1138,7 +1196,7 @@ fn _encoded_structural_bridge_allocation_probe_v1<'py>(
 #[cfg(feature = "test-hooks")]
 #[pyfunction]
 #[pyo3(signature = (handle, config, fail_after=None))]
-fn _encoded_structural_document_bridge_allocation_probe_v1<'py>(
+fn _encoded_structural_document_bridge_allocation_probe_v2<'py>(
     py: Python<'py>,
     handle: PyRef<'py, NativeDocumentHandle>,
     config: &Bound<'py, PyAny>,
@@ -1165,7 +1223,7 @@ fn _encoded_structural_document_bridge_allocation_probe_v1<'py>(
 #[cfg(feature = "test-hooks")]
 #[pyfunction]
 #[pyo3(signature = (handle, scope, document_ordinal, config, fail_after=None))]
-fn _encoded_structural_workspace_allocation_probe_v1<'py>(
+fn _encoded_structural_workspace_allocation_probe_v2<'py>(
     py: Python<'py>,
     handle: PyRef<'py, NativeSnapshotHandle>,
     scope: &Bound<'py, PyAny>,
@@ -1268,7 +1326,7 @@ fn encoded_columns_to_python_with_allocations(
 fn encoded_prepared_columns_to_python(
     py: Python<'_>,
     storage: &PublicationStorageV2,
-    prepared: crate::model::PreparedEncodedStructuralColumnsV1<'_>,
+    prepared: crate::model::PreparedEncodedStructuralColumnsV2<'_>,
     allocations: &mut EncodedBridgeAllocationProbe,
 ) -> PyResult<(Py<PyDict>, Py<PyDict>)> {
     let layout = prepared.layout();
@@ -1349,6 +1407,12 @@ fn encoded_prepared_columns_to_python(
 #[cfg(feature = "test-hooks")]
 #[pyfunction]
 fn _encoded_structural_fixture_v1() -> PyResult<NativeSnapshotHandle> {
+    Err(encoded_schema_v1_rejected())
+}
+
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+fn _encoded_structural_fixture_v2() -> PyResult<NativeSnapshotHandle> {
     crate::publication::encoded_fixture_handle_v2().map_err(crate::python_error)
 }
 
@@ -1359,7 +1423,7 @@ fn registered_schema(
     model_schema: u32,
     descriptor_sha256: &[u8],
 ) -> NativeResult<&'static EncodedViewSchema> {
-    let schema = &ENCODED_VIEW_SCHEMA_V1;
+    let schema = &ENCODED_VIEW_SCHEMA_V2;
     if name != schema.name
         || version != schema.version
         || model_schema != schema.model_schema
@@ -1377,12 +1441,25 @@ fn registered_schema(
 #[cfg(feature = "test-hooks")]
 #[pyfunction]
 fn _encoded_view_schema_v1(
+    _py: Python<'_>,
+    _schema_name: &str,
+    _schema_version: u32,
+    _model_schema: u32,
+    _descriptor_sha256: &Bound<'_, PyBytes>,
+) -> PyResult<PyEncodedViewSchemaV2> {
+    Err(encoded_schema_v1_rejected())
+}
+
+/// Validate and observe the active advertised descriptor.
+#[cfg(feature = "test-hooks")]
+#[pyfunction]
+fn _encoded_view_schema_v2(
     py: Python<'_>,
     schema_name: &str,
     schema_version: u32,
     model_schema: u32,
     descriptor_sha256: &Bound<'_, PyBytes>,
-) -> PyResult<PyEncodedViewSchemaV1> {
+) -> PyResult<PyEncodedViewSchemaV2> {
     let schema = registered_schema(
         schema_name,
         schema_version,
@@ -1408,24 +1485,40 @@ mod tests {
     #[test]
     fn generated_schema_matches_the_embedded_descriptor() {
         let schema = registered_schema(
-            generated::NAME,
-            generated::VERSION,
-            generated::MODEL_SCHEMA,
-            &generated::DESCRIPTOR_SHA256,
+            generated_v2::NAME,
+            generated_v2::VERSION,
+            generated_v2::MODEL_SCHEMA,
+            &generated_v2::DESCRIPTOR_SHA256,
         )
         .unwrap();
         assert_eq!(
             crate::hash::sha256(schema.descriptor),
             schema.descriptor_sha256
         );
-        assert!(schema.descriptor.is_ascii());
         assert!(schema.capability_advertised);
-        assert_eq!(FEATURES, &[generated::NAME]);
+        assert_eq!(FEATURES, &[generated_v2::NAME]);
+        assert_eq!(schema.version, 2);
+        assert_eq!(schema.model_schema, 2);
+
+        assert_eq!(
+            crate::hash::sha256(ENCODED_VIEW_SCHEMA_V1.descriptor),
+            ENCODED_VIEW_SCHEMA_V1.descriptor_sha256
+        );
+        assert_eq!(ENCODED_VIEW_SCHEMA_V1.version, 1);
+        assert_eq!(ENCODED_VIEW_SCHEMA_V1.model_schema, 1);
+        assert!(!ENCODED_VIEW_SCHEMA_V1.capability_advertised);
+        assert!(registered_schema(
+            generated_v1::NAME,
+            generated_v1::VERSION,
+            generated_v1::MODEL_SCHEMA,
+            &generated_v1::DESCRIPTOR_SHA256,
+        )
+        .is_err());
     }
 
     #[test]
     fn registration_mismatches_fail_closed() {
-        let schema = ENCODED_VIEW_SCHEMA_V1;
+        let schema = ENCODED_VIEW_SCHEMA_V2;
         let mut wrong_digest = schema.descriptor_sha256;
         wrong_digest[0] ^= 0xff;
         assert!(registered_schema(

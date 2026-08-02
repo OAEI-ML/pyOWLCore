@@ -94,6 +94,18 @@ def test_wheel_matrix_covers_supported_runtime_and_platforms() -> None:
     assert 'MACOSX_DEPLOYMENT_TARGET: "13.0"' in WHEELS
 
 
+def test_active_workflows_target_the_0_2_0_contract() -> None:
+    assert "0.1.1" not in CI
+    assert "0.1.1" not in WHEELS
+    assert "0.1.1" not in NATIVE_PERFORMANCE
+    assert "pyowl_core-0.2.0" in WHEELS
+    assert "reports/release/0.2.0/gates.json" in WHEELS
+    assert WHEELS.count("pyowl-core==0.2.0") == 2
+    assert "assert n.WIRE_FORMAT_VERSION == (1, 2)" in WHEELS
+    assert "pyowl_core.__version__ == '0.2.0'" in CI
+    assert 'importlib.metadata.version("pyowl-core") == "0.2.0"' in NATIVE_PERFORMANCE
+
+
 def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:
     for requirement in (
         "nightly-2026-07-14",
@@ -370,7 +382,7 @@ def test_release_signs_final_report_and_verifies_index_attestations() -> None:
     assert RELEASE[public_index:].count("pypi-attestations verify pypi") == 1
 
 
-def test_checked_gate_manifest_stages_only_exact_run_evidence() -> None:
+def test_historical_0_1_1_gate_manifest_remains_unchanged() -> None:
     path = ROOT / "reports" / "release" / "0.1.1" / "gates.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema"] == 1
@@ -393,4 +405,29 @@ def test_checked_gate_manifest_stages_only_exact_run_evidence() -> None:
     )
     evidence = " ".join(gate["evidence"] for gate in gates.values())
     for phrase in ("PyPI", "legal", "exact-source", "owner"):
+        assert phrase in evidence
+
+
+def test_checked_0_2_0_gate_manifest_is_fail_closed() -> None:
+    path = ROOT / "reports" / "release" / "0.2.0" / "gates.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schema"] == 1
+    gates = payload["gates"]
+    assert set(gates) == {
+        "advisory_scan",
+        "consumer_matrix",
+        "legal_review",
+        "name_control",
+        "platform_artifact_audit",
+        "project_urls",
+        "reference_performance",
+        "release_owner_approval",
+        "signatures",
+        "source_tag_verified",
+        "testpypi_rehearsal",
+        "trusted_publishing",
+    }
+    assert all(gate["status"] == "blocked" for gate in gates.values())
+    evidence = " ".join(gate["evidence"] for gate in gates.values())
+    for phrase in ("0.2.0", "model-schema-2", "native", "consumer", "wheel"):
         assert phrase in evidence

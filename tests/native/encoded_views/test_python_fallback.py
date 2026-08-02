@@ -7,9 +7,9 @@ import pytest
 
 import pyowl_core.model as m
 from pyowl_core.backends.native_views import (
-    ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
-    ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
-    produce_encoded_structural_view_v1,
+    ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2,
+    ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
+    produce_encoded_structural_view_v2,
 )
 from pyowl_core.document.snapshot import AxiomScope
 from pyowl_core.exceptions import ResourceLimitError
@@ -29,15 +29,15 @@ def _unsigned(data: memoryview, width: int) -> tuple[int, ...]:
 
 def test_python_fallback_covers_every_constructor_and_independent_decoder() -> None:
     snapshot = complete_constructor_snapshot()
-    encoded = produce_encoded_structural_view_v1(snapshot)
+    encoded = produce_encoded_structural_view_v2(snapshot)
 
     assert encoded.owner is snapshot
-    assert encoded.schema_name == ENCODED_STRUCTURAL_SCHEMA_NAME_V1
-    assert encoded.schema_version == 1
-    assert encoded.model_schema == 1
+    assert encoded.schema_name == ENCODED_STRUCTURAL_SCHEMA_NAME_V2
+    assert encoded.schema_version == 2
+    assert encoded.model_schema == 2
     assert encoded.descriptor
-    assert ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1.hex() == (
-        "9ad29db6a7e616f65cea2957bc5ba8d1f9b99ef0eb1fe1432c09be25786267b5"
+    assert ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2.hex() == (
+        "c51d0eb7ecf6f29ad3495fe7c40a2ea6741cf03a7cf194d51417bb810df90f51"
     )
     assert len(encoded.segments) == 1
     direct = encoded.segments[0]
@@ -58,8 +58,8 @@ def test_python_fallback_covers_every_constructor_and_independent_decoder() -> N
 
 def test_buffers_are_deterministic_readonly_contiguous_and_owner_retaining() -> None:
     snapshot = complete_constructor_snapshot()
-    first = produce_encoded_structural_view_v1(snapshot)
-    second = produce_encoded_structural_view_v1(snapshot)
+    first = produce_encoded_structural_view_v2(snapshot)
+    second = produce_encoded_structural_view_v2(snapshot)
 
     assert first.owner is snapshot
     assert second.owner is snapshot
@@ -85,13 +85,13 @@ def test_buffers_are_deterministic_readonly_contiguous_and_owner_retaining() -> 
 
 def test_scope_and_document_selection_use_public_scalar_semantics() -> None:
     snapshot = complete_constructor_snapshot()
-    root = produce_encoded_structural_view_v1(snapshot, scope=AxiomScope.ROOT)
-    document = produce_encoded_structural_view_v1(
+    root = produce_encoded_structural_view_v2(snapshot, scope=AxiomScope.ROOT)
+    document = produce_encoded_structural_view_v2(
         snapshot,
         scope=AxiomScope.DOCUMENT,
         document_key=snapshot.root_document_key,
     )
-    closure = produce_encoded_structural_view_v1(snapshot)
+    closure = produce_encoded_structural_view_v2(snapshot)
 
     assert root.scope is AxiomScope.ROOT
     assert root.document_key is None
@@ -102,9 +102,9 @@ def test_scope_and_document_selection_use_public_scalar_semantics() -> None:
     assert decode_root_canonical_bytes(closure.buffers) == scalar_root_bytes(snapshot)
 
     with pytest.raises(ValueError, match="requires document_key"):
-        produce_encoded_structural_view_v1(snapshot, scope=AxiomScope.DOCUMENT)
+        produce_encoded_structural_view_v2(snapshot, scope=AxiomScope.DOCUMENT)
     with pytest.raises(ValueError, match="valid only"):
-        produce_encoded_structural_view_v1(
+        produce_encoded_structural_view_v2(
             snapshot,
             scope=AxiomScope.CLOSURE,
             document_key=snapshot.root_document_key,
@@ -113,7 +113,7 @@ def test_scope_and_document_selection_use_public_scalar_semantics() -> None:
 
 def test_multiplicity_order_and_structural_identity_survive_columns() -> None:
     snapshot = complete_constructor_snapshot()
-    encoded = produce_encoded_structural_view_v1(snapshot)
+    encoded = produce_encoded_structural_view_v2(snapshot)
     independent = decode_root_canonical_bytes(encoded.buffers)
     expected = scalar_root_bytes(snapshot)
 
@@ -142,9 +142,9 @@ def test_producer_uses_owner_limits_and_only_allows_tightening() -> None:
     )
 
     with pytest.raises(ResourceLimitError) as limited:
-        produce_encoded_structural_view_v1(tight_owner)
+        produce_encoded_structural_view_v2(tight_owner)
     assert limited.value.limit == "max_index_bytes"
 
     with pytest.raises(ResourceLimitError) as limited:
-        produce_encoded_structural_view_v1(snapshot, limits=tight_limits)
+        produce_encoded_structural_view_v2(snapshot, limits=tight_limits)
     assert limited.value.limit == "max_index_bytes"

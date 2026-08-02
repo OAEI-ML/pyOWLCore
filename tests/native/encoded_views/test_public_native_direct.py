@@ -25,7 +25,7 @@ from pyowl_core.backends.native_handoff_v2 import (
     NativeFacadeScopeV2,
     _seal_native_snapshot_owner_v2,
 )
-from pyowl_core.backends.native_views import EncodedStructuralViewV1
+from pyowl_core.backends.native_views import EncodedStructuralViewV2
 from pyowl_core.index.cache import create_index_cache, request_index_view
 from pyowl_core.model import canonical_bytes
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
@@ -36,8 +36,8 @@ from tests.native.foundation._support import NativeTestExtension, load_extension
 def extension() -> NativeTestExtension:
     selected = load_extension()
     required = (
-        "_encoded_structural_fixture_v1",
-        "_encoded_structural_columns_v1",
+        "_encoded_structural_fixture_v2",
+        "_encoded_structural_columns_v2",
     )
     if any(not hasattr(selected, name) for name in required):
         pytest.skip("selected native artifact lacks the WP17 direct-column hooks")
@@ -128,7 +128,7 @@ class _NativeViewProxy:
 
 
 def _proxy(extension: NativeTestExtension) -> tuple[_NativeViewProxy, object]:
-    raw_owner = cast(Any, extension)._encoded_structural_fixture_v1()
+    raw_owner = cast(Any, extension)._encoded_structural_fixture_v2()
     return _NativeViewProxy(raw_owner), raw_owner
 
 
@@ -139,10 +139,10 @@ def test_public_view_uses_native_direct_columns_without_scalar_callbacks(
     assert isinstance(owner, OntologyView)
     before = cast(Any, raw_owner)._publication_counters_v2()
 
-    closure = owner.view(EncodedStructuralViewV1)
-    root = owner.view(EncodedStructuralViewV1, scope=AxiomScope.ROOT)
+    closure = owner.view(EncodedStructuralViewV2)
+    root = owner.view(EncodedStructuralViewV2, scope=AxiomScope.ROOT)
     document = owner.view(
-        EncodedStructuralViewV1,
+        EncodedStructuralViewV2,
         scope=AxiomScope.DOCUMENT,
         document_key="d1:test",
     )
@@ -174,7 +174,7 @@ def test_direct_column_validation_never_decodes_structural_roots(
 
     monkeypatch.setattr(native_views_module, "decode_canonical", unexpected)
 
-    encoded = owner.view(EncodedStructuralViewV1)
+    encoded = owner.view(EncodedStructuralViewV2)
 
     assert encoded.owner is owner
     assert owner.scalar_calls == 0
@@ -187,7 +187,7 @@ def test_public_native_direct_limits_and_cancellation_fail_without_fallback(
     limited_before = cast(Any, limited_raw)._publication_counters_v2()
     with pytest.raises(ResourceLimitError) as limited:
         limited_owner.view(
-            EncodedStructuralViewV1,
+            EncodedStructuralViewV2,
             limits=ParseLimits(max_index_bytes=1),
         )
     assert limited.value.code == "NATIVE_WIRE_LIMIT"
@@ -203,7 +203,7 @@ def test_public_native_direct_limits_and_cancellation_fail_without_fallback(
     cancelled_before = cast(Any, cancelled_raw)._publication_counters_v2()
     with pytest.raises(OperationCancelledError, match="direct view cancelled"):
         cancelled_owner.view(
-            EncodedStructuralViewV1,
+            EncodedStructuralViewV2,
             cancellation_token=source.token,
         )
     assert cancelled_owner.scalar_calls == 0

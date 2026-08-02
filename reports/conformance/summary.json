@@ -38,7 +38,7 @@
   },
   "differential": {
     "axioms": 4,
-    "document_fingerprint": "55291b5bd2afd97fed64e8cc75edc6c42a75cebe6b9fd57584c7c58443aee703",
+    "document_fingerprint": "9bd8664a480418c0de76a2acb6ca3aae067b016c485e0b73b0912e65dd6e6512",
     "formats": [
       "functional",
       "owlxml",
@@ -57,7 +57,7 @@
     "lock_sha256": "ea1778af43a43407921e8365702e09e0c4cf6a4af309817232599a22666fdefe",
     "normal_lane_requires_external_oracle": false
   },
-  "model_schema": 1,
+  "model_schema": 2,
   "python": [
     "3.10",
     "3.12"

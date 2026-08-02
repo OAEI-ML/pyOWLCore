@@ -45,7 +45,6 @@ from pyowl_core.backends.native_handoff import (
     _canonical_schema_value,
     _diagnostics_manifest_sha256,
     _fail,
-    _load_options_bytes_v1,
     _report_bytes_v1,
     _sequence_bytes,
     _validate_publication_alignment,
@@ -74,6 +73,35 @@ from pyowl_core.model import (
 )
 from pyowl_core.model.axioms import AxiomNode
 from pyowl_core.model.swrl import SWRLRule
+
+NATIVE_LOAD_OPTION_FIELDS_V2: Final = (
+    *NATIVE_LOAD_OPTION_FIELDS_V1,
+    "allow_partial_rdf_mapping",
+)
+NATIVE_ACTIVE_API_VERSION_V2: Final = (0, 2)
+NATIVE_ACTIVE_MODEL_SCHEMA_V2: Final = 2
+
+
+def _load_options_bytes_v2(options: LoadOptions) -> bytes:
+    if tuple(item.name for item in fields(LoadOptions)) != NATIVE_LOAD_OPTION_FIELDS_V2:
+        _fail("LoadOptions V2 field ledger changed", "NATIVE_ATTESTATION_OPTIONS")
+    if tuple(item.name for item in fields(ParseLimits)) != NATIVE_PARSE_LIMIT_FIELDS_V1:
+        _fail("ParseLimits field ledger changed", "NATIVE_ATTESTATION_OPTIONS")
+    if type(options.allow_partial_rdf_mapping) is not bool:
+        _fail(
+            "allow_partial_rdf_mapping must be an exact bool",
+            "NATIVE_ATTESTATION_OPTIONS",
+        )
+    option_values: list[object] = []
+    for name in NATIVE_LOAD_OPTION_FIELDS_V2:
+        value = getattr(options, name)
+        if name == "limits":
+            option_values.append(
+                tuple(getattr(value, limit_name) for limit_name in NATIVE_PARSE_LIMIT_FIELDS_V1)
+            )
+        else:
+            option_values.append(value)
+    return b"pyowl-core:native-load-options:v2\x00" + _sequence_bytes(option_values)
 
 
 def _require_nonnegative_u64(name: str, value: object) -> None:
@@ -301,6 +329,10 @@ def _validate_exact_provenance_v2(value: object) -> None:
         _require_digest("provenance.expected_sha256", provenance.expected_sha256)
     _require_api_version("provenance.api_version", provenance.api_version)
     _require_nonnegative_u32("provenance.model_schema", provenance.model_schema)
+    if provenance.api_version != NATIVE_ACTIVE_API_VERSION_V2:
+        raise ValueError("provenance API version must be (0, 2)")
+    if provenance.model_schema != NATIVE_ACTIVE_MODEL_SCHEMA_V2:
+        raise ValueError("provenance model schema must be 2")
 
 
 def _validate_exact_document_v2(value: object) -> None:
@@ -492,6 +524,10 @@ def _validate_exact_report_v2(value: object) -> None:
         raise ValueError("report.backend must be 'native'")
     _require_api_version("report.api_version", report.api_version)
     _require_nonnegative_u32("report.model_schema", report.model_schema)
+    if report.api_version != NATIVE_ACTIVE_API_VERSION_V2:
+        raise ValueError("report API version must be (0, 2)")
+    if report.model_schema != NATIVE_ACTIVE_MODEL_SCHEMA_V2:
+        raise ValueError("report model schema must be 2")
     for name in (
         "document_count",
         "total_source_bytes",
@@ -953,8 +989,8 @@ NATIVE_OWL2_DL_ISSUE_ROW_FIELDS_V2: Final = (
     (3, "constructor", "str|None", "optional"),
 )
 NATIVE_OWL2_DL_ROLE_EDGE_ROW_FIELDS_V2: Final = (
-    (0, "sub_property", "model-canonical-v1-bytes", "one"),
-    (1, "super_property", "model-canonical-v1-bytes", "one"),
+    (0, "sub_property", "model-canonical-v2-bytes", "one"),
+    (1, "super_property", "model-canonical-v2-bytes", "one"),
 )
 NATIVE_DIAGNOSTIC_REFERENCE_KINDS_FIELDS_V2: Final = (
     (0, "document_reference_kind", "NativeDiagnosticReferenceKindV2|None", "optional"),
@@ -1082,7 +1118,7 @@ def native_facade_access_schema_semantics_v2() -> dict[str, object]:
             {
                 "name": item.value,
                 "row_codec": (
-                    "model-canonical-v1" if item in _STRUCTURAL_COLLECTIONS else item.value + "-v2"
+                    "model-canonical-v2" if item in _STRUCTURAL_COLLECTIONS else item.value + "-v2"
                 ),
                 "scopes": (
                     ["document"]
@@ -1122,7 +1158,7 @@ def native_facade_access_schema_semantics_v2() -> dict[str, object]:
         "oversized_first_row": (
             "one-sole-row-may-exceed-max_bytes-up-to-attestation.max_facade_row_bytes"
         ),
-        "contains": "axioms-only+exact-canonical-model-v1-bytes+bound-ParseLimits",
+        "contains": "axioms-only+exact-canonical-model-v2-bytes+bound-ParseLimits",
         "ordering": {
             "structural": "canonical-ascending-unique-within-and-across-pages",
             "source-map-entries": (
@@ -1298,7 +1334,7 @@ def native_content_manifest_schema_semantics_v2() -> dict[str, object]:
             "optional": "0x00-absent|0x01+payload-present",
         },
         "document_order": "document-key-strict-utf8-ascending-unique",
-        "structural_rows": "model-canonical-v1-bytes-ascending-unique",
+        "structural_rows": "model-canonical-v2-bytes-ascending-unique",
         "auxiliary_rows": "exact-v2-codec-bytes-in-collection-order",
         "root_table": {
             "manifest_domain": NATIVE_ROOT_TABLE_MANIFEST_DOMAIN_V2,
@@ -1340,10 +1376,10 @@ def native_content_manifest_schema_semantics_v2() -> dict[str, object]:
                 "u32(fingerprint_schema)+sha256(authoritative-preimage)"
             ),
             "authoritative_domains": {
-                "document": "pyowl-core:document-fingerprint:v1",
-                "structural": "pyowl-core:snapshot-structural:v1",
-                "logical": "pyowl-core:snapshot-logical:v1",
-                "signature": "pyowl-core:snapshot-signature:v1",
+                "document": "pyowl-core:document-fingerprint:v2",
+                "structural": "pyowl-core:snapshot-structural:v2",
+                "logical": "pyowl-core:snapshot-logical:v2",
+                "signature": "pyowl-core:snapshot-signature:v2",
             },
             "digest_rule": (
                 "evidence-digest-equals-authoritative-preimage-and-published-fingerprint"
@@ -2030,7 +2066,7 @@ class NativeOWL2DLRoleEdgeRowV2:
             try:
                 value = decode_canonical(row, limits=_validation_limits)
             except Exception as error:
-                raise ValueError(f"OWL2-DL role edge {name} is not canonical-model-v1") from error
+                raise ValueError(f"OWL2-DL role edge {name} is not canonical-model-v2") from error
             if not isinstance(value, (ObjectProperty, ObjectInverseOf)):
                 raise ValueError(f"OWL2-DL role edge {name} has the wrong structural type")
             if canonical_bytes(value, limits=_validation_limits) != row:
@@ -3457,7 +3493,7 @@ def decode_native_auxiliary_row_v2(
     if type(collection) is not NativeFacadeCollectionV2:
         raise TypeError("collection must be an exact NativeFacadeCollectionV2")
     if collection in _STRUCTURAL_COLLECTIONS:
-        raise ValueError("structural collections use canonical-model-v1, not an auxiliary codec")
+        raise ValueError("structural collections use canonical-model-v2, not an auxiliary codec")
     if type(row) is not bytes or not row:
         raise TypeError("auxiliary row must be nonempty exact bytes")
     _require_positive_u64_v2("max_row_bytes", max_row_bytes)
@@ -3965,7 +4001,7 @@ def _validate_page_rows_v2(
             try:
                 value = decode_canonical(row, limits=limits)
             except Exception as error:
-                raise ValueError("structural facade row is not canonical-model-v1") from error
+                raise ValueError("structural facade row is not canonical-model-v2") from error
             if canonical_bytes(value, limits=limits) != row:
                 raise ValueError("structural facade row is not in canonical form")
             if collection is NativeFacadeCollectionV2.ONTOLOGY_ANNOTATIONS:
@@ -4556,6 +4592,10 @@ class NativeSnapshotAttestationV2:
             _require_nonnegative_u64(f"attestation.{name}", getattr(self, name))
         _require_api_version("attestation.api_version", self.api_version)
         _require_nonnegative_u32("attestation.model_schema", self.model_schema)
+        if self.api_version != NATIVE_ACTIVE_API_VERSION_V2:
+            raise ValueError("attestation API version must be (0, 2)")
+        if self.model_schema != NATIVE_ACTIVE_MODEL_SCHEMA_V2:
+            raise ValueError("attestation model schema must be 2")
         _require_exact_text_v2("attestation.backend", self.backend)
         if self.backend != "native":
             raise ValueError("attestation backend must be native")
@@ -6252,7 +6292,7 @@ def native_snapshot_publication_attestation_v2(
         ),
         diagnostic_reference_kinds_sha256=diagnostic_reference_kinds_sha256,
         facade_cardinality_summary_sha256=facade_cardinality_summary_sha256,
-        load_options_sha256=hashlib.sha256(_load_options_bytes_v1(load_options)).digest(),
+        load_options_sha256=hashlib.sha256(_load_options_bytes_v2(load_options)).digest(),
         report_sha256=hashlib.sha256(_report_bytes_v1(report)).digest(),
         max_facade_row_bytes=max_facade_row_bytes,
         document_count=len(documents),
@@ -6342,7 +6382,7 @@ def _metadata_manifest_sha256_v2(
         document_values,
         manifest_values,
         root_document_key,
-        hashlib.sha256(_load_options_bytes_v1(options)).digest(),
+        hashlib.sha256(_load_options_bytes_v2(options)).digest(),
         diagnostics,
         _diagnostic_reference_sidecar_values_v2(diagnostic_reference_sidecars),
         _facade_cardinality_summary_values_v2(facade_cardinality_summary),
@@ -6525,6 +6565,7 @@ __all__ = [
     "NATIVE_FACADE_PAGE_REQUEST_FIELDS_V2",
     "NATIVE_FINGERPRINT_EVIDENCE_FIELDS_V2",
     "NATIVE_FINGERPRINT_INPUTS_MANIFEST_DOMAIN_V2",
+    "NATIVE_LOAD_OPTION_FIELDS_V2",
     "NATIVE_ORIGIN_ROW_FIELDS_V2",
     "NATIVE_OWL2_DL_ISSUE_ROW_FIELDS_V2",
     "NATIVE_OWL2_DL_REPORT_DOMAIN_V2",
@@ -6583,6 +6624,7 @@ __all__ = [
     "NativeSnapshotPublicationV2",
     "NativeSourceMapRowV2",
     "NativeSourcePrefixRowV2",
+    "_load_options_bytes_v2",
     "decode_native_auxiliary_row_v2",
     "encode_native_auxiliary_row_v2",
     "freeze_native_snapshot_publication_v2",

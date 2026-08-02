@@ -4,6 +4,38 @@ All notable user-visible changes are recorded here. The project follows
 Semantic Versioning for the package/API independently of its model, wire, and
 adapter protocol versions.
 
+## 0.2.0 — Unreleased
+
+### Added
+
+- Added bounded, component-scoped anonymous-individual canonicalization with
+  multiplicity-preserving component occurrence slots and structured
+  phase/work/accounted-allocation telemetry.
+- Added bounded RDF mapping and reification evidence to strict errors, including
+  stable object kinds, reason codes, counts, and sanitized examples.
+- Added the opt-in `LoadOptions.allow_partial_rdf_mapping` diagnostic mode for
+  one explicitly selected RDF/XML or Turtle document. Snapshot, cache, wire,
+  and reasoner routes continue to reject nonconformant documents.
+- Added encoded structural schema 2, its independent descriptor/decoder
+  evidence, and the optional wire section needed to transport it.
+
+### Changed
+
+- Package/API is now `0.2.0` / `(0,2)`, model schema is `2`, wire is `(1,2)`,
+  and encoded structural schema is `2`. Adapter protocol remains `1`.
+- Anonymous scopes, keys, canonical graph domains, and dependent fingerprints
+  now use the v2 component scheme. Model-schema-1 caches and encoded-schema-1
+  publications are never reinterpreted as schema 2.
+- Named resource-limit failures expose uniform structured `limit`, `observed`,
+  and `allowed` fields; message text remains non-contractual.
+
+### Release status
+
+- The `0.2.0` source and version ledger are frozen, but publication remains
+  blocked until the final pinned-corpus, forced-native, consumer, hosted-wheel,
+  and checksum-bound release evidence is recorded. Historical `0.1.x`
+  performance and consumer runs are not relabelled as `0.2.0` evidence.
+
 ## 0.1.1 — 2026-07-30
 
 ### Fixed

@@ -18,7 +18,7 @@ from pyowl_core import (
     compose_views,
     load_snapshot,
 )
-from pyowl_core.backends.native_views import EncodedStructuralViewV1
+from pyowl_core.backends.native_views import EncodedStructuralViewV2
 
 from ._independent import decode_segmented_root_canonical_bytes
 from ._support import scalar_root_bytes
@@ -35,7 +35,7 @@ def _snapshot(identity: str, *body: str):  # type: ignore[no-untyped-def]
     )
 
 
-def _decoded_pairs(view: EncodedStructuralViewV1) -> tuple[tuple[int, bytes], ...]:
+def _decoded_pairs(view: EncodedStructuralViewV2) -> tuple[tuple[int, bytes], ...]:
     decoded = decode_segmented_root_canonical_bytes(
         view,
         expected_owner=view.owner,
@@ -64,8 +64,8 @@ def test_public_overlay_references_anchor_columns_and_publishes_only_cumulative_
             remove_axioms=CanonicalSet((Declaration(Class(IRI("urn:segments#A"))),)),
         ),
     )
-    base_view = base.view(EncodedStructuralViewV1)
-    encoded = overlay.view(EncodedStructuralViewV1)
+    base_view = base.view(EncodedStructuralViewV2)
+    encoded = overlay.view(EncodedStructuralViewV2)
 
     assert tuple(segment.role for segment in encoded.segments) == (2, 3)
     assert encoded.segments[0].posting_mode == 2
@@ -92,8 +92,8 @@ def test_public_composite_reuses_member_columns_with_postings_and_local_bridge()
         Class(IRI("urn:segments#B")),
         Class(IRI("urn:segments#D")),
     )
-    left_view = left.view(EncodedStructuralViewV1)
-    right_view = right.view(EncodedStructuralViewV1)
+    left_view = left.view(EncodedStructuralViewV2)
+    right_view = right.view(EncodedStructuralViewV2)
     composite = compose_views(
         left,
         right,
@@ -102,7 +102,7 @@ def test_public_composite_reuses_member_columns_with_postings_and_local_bridge()
             remove_axioms=CanonicalSet((removed,)),
         ),
     )
-    encoded = composite.view(EncodedStructuralViewV1)
+    encoded = composite.view(EncodedStructuralViewV2)
 
     assert tuple(segment.role for segment in encoded.segments) == (4, 4, 5)
     members = encoded.segments[:2]
@@ -129,7 +129,7 @@ def test_public_composite_publishes_explicit_anonymous_scope_maps() -> None:
     left = _snapshot("anonymous", "ClassAssertion(:A _:x)")
     right = _snapshot("anonymous", "ClassAssertion(:A _:x)")
     composite = compose_views(left, right)
-    encoded = composite.view(EncodedStructuralViewV1)
+    encoded = composite.view(EncodedStructuralViewV2)
 
     assert tuple(segment.role for segment in encoded.segments) == (4, 4)
     assert all(len(segment.anonymous_scope_map) == 64 for segment in encoded.segments)
@@ -150,7 +150,7 @@ def test_overlay_root_and_document_selections_reference_base_without_delta_rows(
         (AxiomScope.DOCUMENT, base.root_document_key),
     ):
         encoded = overlay.view(
-            EncodedStructuralViewV1,
+            EncodedStructuralViewV2,
             scope=scope,
             document_key=document_key,
         )
@@ -169,15 +169,15 @@ def test_materialized_segments_is_explicit_and_never_changes_the_segmented_defau
     right = _snapshot("materialized-right", "Declaration(Class(:B))")
     composite = compose_views(left, right)
 
-    segmented = composite.view(EncodedStructuralViewV1)
+    segmented = composite.view(EncodedStructuralViewV2)
     materialized = composite.view(
-        EncodedStructuralViewV1,
+        EncodedStructuralViewV2,
         materialize_segments=True,
     )
 
-    assert segmented is composite.view(EncodedStructuralViewV1)
+    assert segmented is composite.view(EncodedStructuralViewV2)
     assert materialized is composite.view(
-        EncodedStructuralViewV1,
+        EncodedStructuralViewV2,
         materialize_segments=True,
     )
     assert segmented is not materialized
@@ -188,4 +188,4 @@ def test_materialized_segments_is_explicit_and_never_changes_the_segmented_defau
     assert _decoded_pairs(segmented) == scalar_root_bytes(composite)
     assert _decoded_pairs(materialized) == scalar_root_bytes(composite)
     with pytest.raises(TypeError, match="materialize_segments must be bool"):
-        composite.view(EncodedStructuralViewV1, materialize_segments=1)
+        composite.view(EncodedStructuralViewV2, materialize_segments=1)

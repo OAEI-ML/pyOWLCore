@@ -15,7 +15,7 @@ import pytest
 
 import pyowl_core
 from pyowl_core import IRI, AxiomScope, Class, Declaration
-from pyowl_core.backends.native_views import EncodedStructuralViewV1
+from pyowl_core.backends.native_views import EncodedStructuralViewV2
 from pyowl_core.exceptions import ClosedSnapshotError, SnapshotInUseError
 from pyowl_core.model import canonical_bytes
 from tests.native.encoded_views._independent import decode_root_canonical_bytes
@@ -31,8 +31,8 @@ from tests.native.foundation._support import NativeTestExtension, load_extension
 def extension() -> NativeTestExtension:
     selected = load_extension()
     required = (
-        "_encoded_structural_fixture_v1",
-        "_encoded_structural_columns_v1",
+        "_encoded_structural_fixture_v2",
+        "_encoded_structural_columns_v2",
     )
     if any(not hasattr(selected, name) for name in required):
         pytest.skip("selected native artifact lacks the WP17 direct-column hooks")
@@ -74,7 +74,7 @@ def _publish_close_race(
     def publish() -> tuple[tuple[int, bytes], ...] | ClosedSnapshotError:
         barrier.wait()
         try:
-            encoded = cast(EncodedStructuralViewV1, owner.view(EncodedStructuralViewV1))
+            encoded = cast(EncodedStructuralViewV2, owner.view(EncodedStructuralViewV2))
         except ClosedSnapshotError as error:
             return error
         return cast(
@@ -98,7 +98,7 @@ def test_direct_native_buffers_survive_concurrent_reads_and_owner_close(
     extension: NativeTestExtension,
 ) -> None:
     owner, raw_owner = _proxy(extension)
-    encoded = owner.view(EncodedStructuralViewV1)
+    encoded = owner.view(EncodedStructuralViewV2)
     expected = (
         (2, canonical_bytes(Declaration(Class(IRI("urn:encoded-view:fixture"))))),
     )
@@ -119,7 +119,7 @@ def test_direct_native_buffers_survive_concurrent_reads_and_owner_close(
     cast(Any, raw_owner)._publication_close_v2()
     assert decode_root_canonical_bytes(encoded.buffers) == expected
     with pytest.raises(ClosedSnapshotError):
-        owner.view(EncodedStructuralViewV1, scope=AxiomScope.ROOT)
+        owner.view(EncodedStructuralViewV2, scope=AxiomScope.ROOT)
 
 
 def test_direct_native_publication_and_close_are_linearized(
@@ -140,7 +140,7 @@ def test_direct_native_view_and_fresh_request_are_safe_after_fork(
     extension: NativeTestExtension,
 ) -> None:
     owner, raw_owner = _proxy(extension)
-    encoded = owner.view(EncodedStructuralViewV1)
+    encoded = owner.view(EncodedStructuralViewV2)
     expected = (
         (2, canonical_bytes(Declaration(Class(IRI("urn:encoded-view:fixture"))))),
     )
@@ -153,7 +153,7 @@ def test_direct_native_view_and_fresh_request_are_safe_after_fork(
 
         def child_operation() -> None:
             assert decode_root_canonical_bytes(encoded.buffers) == expected
-            fresh = owner.view(EncodedStructuralViewV1, scope=AxiomScope.ROOT)
+            fresh = owner.view(EncodedStructuralViewV2, scope=AxiomScope.ROOT)
             assert decode_root_canonical_bytes(fresh.buffers) == expected
             counters = cast(Any, raw_owner)._publication_counters_v2()
             assert counters.fork_reinitializations == 1

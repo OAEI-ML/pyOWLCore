@@ -33,6 +33,9 @@ const SWRL: &str = "http://www.w3.org/2003/11/swrl#";
 // NUL cannot occur in an XML NCName, so generated identities cannot collide
 // with an explicit rdf:nodeID spelling.
 const GENERATED_BLANK_PREFIX: &str = "\0";
+const MAX_RDF_EVIDENCE_BYTES: usize = 4_096;
+const MAX_RDF_REIFICATION_PAYLOAD_BYTES: usize = 32 * 1_024;
+const RDF_REIFICATION_PAYLOAD_HEADER_BYTES: usize = 8 + 8 + 4;
 
 const RDF_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#RDF";
 const RDF_DESCRIPTION: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Description";
@@ -854,7 +857,8 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     .ok_or_else(|| NativeError::limit("native XML prefix counter overflow"))?;
                 enforce_u64(
                     self.prefix_declarations,
-                    self.session.limits().value(LimitKey::MaxPrefixes),
+                    self.session,
+                    LimitKey::MaxPrefixes,
                     "native XML namespace declarations exceed max_prefixes",
                 )?;
                 self.retain_source_prefix(prefix, &attribute.value)?;
@@ -1003,10 +1007,12 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             self.frames.len().checked_add(1).ok_or_else(|| {
                 NativeError::limit("native RDF/XML nesting depth counter overflow")
             })?;
-        if u64::try_from(depth).map_or(true, |value| {
-            value > self.session.limits().value(LimitKey::MaxNestingDepth)
-        }) {
-            return Err(NativeError::limit(
+        let depth_u64 = u64::try_from(depth)
+            .map_err(|_| NativeError::limit("native RDF/XML nesting depth exceeds u64"))?;
+        if depth_u64 > self.session.limits().value(LimitKey::MaxNestingDepth) {
+            return Err(self.session.limits().resource_limit(
+                LimitKey::MaxNestingDepth,
+                depth_u64,
                 "native RDF/XML nesting exceeds max_nesting_depth",
             ));
         }
@@ -1167,7 +1173,8 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             } else {
                 enforce_usize(
                     attribute.value.len(),
-                    self.session.limits().value(LimitKey::MaxLiteralBytes),
+                    self.session,
+                    LimitKey::MaxLiteralBytes,
                     "native RDF/XML property attribute exceeds max_literal_bytes",
                 )?;
                 let lexical = owned_text(&attribute.value, self.session)?;
@@ -1439,7 +1446,8 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             .ok_or_else(|| NativeError::limit("native RDF list length overflow"))?;
         enforce_u64(
             following,
-            self.session.limits().value(LimitKey::MaxRdfListLength),
+            self.session,
+            LimitKey::MaxRdfListLength,
             "native RDF list exceeds max_rdf_list_length",
         )
     }
@@ -1468,7 +1476,8 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             .ok_or_else(|| NativeError::limit("native RDF list length overflow"))?;
         enforce_u64(
             following,
-            self.session.limits().value(LimitKey::MaxRdfListLength),
+            self.session,
+            LimitKey::MaxRdfListLength,
             "native RDF list exceeds max_rdf_list_length",
         )?;
         let cell = self.fresh_blank()?;
@@ -1598,7 +1607,8 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
                     .ok_or_else(|| NativeError::limit("native XML literal size overflow"))?;
                 enforce_usize(
                     next,
-                    self.session.limits().value(LimitKey::MaxLiteralBytes),
+                    self.session,
+                    LimitKey::MaxLiteralBytes,
                     "native XML literal exceeds max_literal_bytes",
                 )?;
                 self.session.reserve_bytes(value.len())?;
@@ -2072,7 +2082,8 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             .ok_or_else(|| NativeError::limit("native XML literal size overflow"))?;
         enforce_usize(
             next,
-            self.session.limits().value(LimitKey::MaxLiteralBytes),
+            self.session,
+            LimitKey::MaxLiteralBytes,
             "native XML literal exceeds max_literal_bytes",
         )?;
         self.session.reserve_bytes(value.len())?;
@@ -2236,7 +2247,8 @@ impl<'text, 'session, 'guard> GraphParser<'text, 'session, 'guard> {
             .ok_or_else(|| NativeError::limit("native RDF triple count overflow"))?;
         enforce_usize(
             next,
-            self.session.limits().value(LimitKey::MaxTriples),
+            self.session,
+            LimitKey::MaxTriples,
             "native RDF graph exceeds max_triples",
         )?;
         reserve_hash_item(&mut self.triples, self.session)?;
@@ -2330,10 +2342,12 @@ fn encode_graph_observation(
     const MAGIC: &[u8; 8] = b"PYRXGRF1";
 
     let size = graph_observation_size(triples)?;
-    if u64::try_from(size).map_or(true, |size| {
-        size > session.limits().value(LimitKey::MaxTemporaryBytes)
-    }) {
-        return Err(NativeError::limit(
+    let size_u64 = u64::try_from(size)
+        .map_err(|_| NativeError::limit("native RDF/XML graph observation size exceeds u64"))?;
+    if size_u64 > session.limits().value(LimitKey::MaxTemporaryBytes) {
+        return Err(session.limits().resource_limit(
+            LimitKey::MaxTemporaryBytes,
+            size_u64,
             "native RDF/XML graph observation exceeds max_temporary_bytes",
         ));
     }
@@ -3093,9 +3107,19 @@ pub(super) fn map_graph(
     )?;
     consume_detached_data_enumerations(&list_graph, &mut consumed, &mut expressions, session)?;
     consume_detached_owl1_data_enumerations(&list_graph, &mut consumed, &mut expressions, session)?;
-    if axiom_annotations.has_unclaimed() {
-        return Err(rdf_axiom_reification(
+    if let Some(main_index) = axiom_annotations.first_unclaimed_main_index() {
+        let main = triples.get(main_index).ok_or_else(|| {
+            NativeError::protocol("native unclaimed reification main index exceeds graph")
+        })?;
+        return Err(rdf_axiom_reification_evidence(
             "native owl:Axiom reification targets an unsupported axiom mapping",
+            "UNCLAIMED_MAIN_TRIPLE",
+            None,
+            Some(main),
+            None,
+            None,
+            None,
+            Some(true),
         ));
     }
     let occurrence_count = u64::try_from(axioms.len())
@@ -3132,39 +3156,20 @@ pub(super) fn map_graph(
     extensions.dedup();
     enforce_usize(
         ontology_annotations.len(),
-        session.limits().value(LimitKey::MaxAnnotations),
+        session,
+        LimitKey::MaxAnnotations,
         "native RDF mapping exceeds max_annotations",
     )?;
     enforce_usize(
         axioms.len(),
-        session.limits().value(LimitKey::MaxAxioms),
+        session,
+        LimitKey::MaxAxioms,
         "native RDF mapping exceeds max_axioms",
     )?;
-    let mut consumed_triples = 0_usize;
-    for retained in &consumed {
-        session.step(1)?;
-        if *retained {
-            consumed_triples = consumed_triples
-                .checked_add(1)
-                .ok_or_else(|| NativeError::limit("native RDF consumed count overflow"))?;
-        }
-    }
+    let (consumed_triples, unconsumed) = mapping_evidence(&triples, &consumed, session)?;
     if consumed_triples != triples.len() && !allow_partial_rdf_mapping {
         return Err(mapping_incomplete());
     }
-    let unconsumed = if consumed_triples == triples.len() {
-        Vec::new()
-    } else {
-        partial_mapping_evidence(
-            &triples,
-            &consumed,
-            triples
-                .len()
-                .checked_sub(consumed_triples)
-                .ok_or_else(|| NativeError::protocol("native RDF consumed count exceeds total"))?,
-            session,
-        )?
-    };
     Ok(CanonicalDocument {
         document_iri: None,
         ontology_iri,
@@ -3287,7 +3292,8 @@ impl<'graph> AxiomAnnotationLedger<'graph> {
         }
         enforce_usize(
             annotations.len(),
-            session.limits().value(LimitKey::MaxAnnotations),
+            session,
+            LimitKey::MaxAnnotations,
             "native RDF axiom annotations exceed max_annotations",
         )?;
         canonical_set(annotations, 0, None)
@@ -3321,9 +3327,18 @@ impl<'graph> AxiomAnnotationLedger<'graph> {
         )
     }
 
-    fn has_unclaimed(&self) -> bool {
-        self.records.iter().any(|record| !record.claimed)
-            || self.nested_records.iter().any(|record| !record.claimed)
+    fn first_unclaimed_main_index(&self) -> Option<usize> {
+        self.records
+            .iter()
+            .filter(|record| !record.claimed)
+            .map(|record| record.main_index)
+            .chain(
+                self.nested_records
+                    .iter()
+                    .filter(|record| !record.claimed)
+                    .map(|record| record.main_index),
+            )
+            .min()
     }
 }
 
@@ -3705,12 +3720,14 @@ fn established_named_list<'graph>(
             .ok_or_else(|| NativeError::limit("native detached named list length overflow"))?;
         enforce_usize(
             next_length,
-            session.limits().value(LimitKey::MaxRdfListLength),
+            session,
+            LimitKey::MaxRdfListLength,
             "native detached named list exceeds max_rdf_list_length",
         )?;
         enforce_usize(
             next_length,
-            session.limits().value(LimitKey::MaxSequenceArity),
+            session,
+            LimitKey::MaxSequenceArity,
             "native detached named list exceeds max_sequence_arity",
         )?;
         session
@@ -4010,12 +4027,14 @@ fn established_facet_list<'graph>(
             .ok_or_else(|| NativeError::limit("native detached facet list length overflow"))?;
         enforce_usize(
             next_length,
-            session.limits().value(LimitKey::MaxRdfListLength),
+            session,
+            LimitKey::MaxRdfListLength,
             "native detached facet list exceeds max_rdf_list_length",
         )?;
         enforce_usize(
             next_length,
-            session.limits().value(LimitKey::MaxSequenceArity),
+            session,
+            LimitKey::MaxSequenceArity,
             "native detached facet list exceeds max_sequence_arity",
         )?;
         session
@@ -4385,7 +4404,8 @@ fn map_swrl_rules<'view, 'graph>(
             decode_swrl_atom_set(&head.items, triples, consumed, expressions, session)?;
         enforce_usize(
             body_atoms.len().max(head_atoms.len()),
-            session.limits().value(LimitKey::MaxRuleAtoms),
+            session,
+            LimitKey::MaxRuleAtoms,
             "native SWRL rule exceeds max_rule_atoms",
         )?;
         let annotations = annotations_on_structural_node(
@@ -4934,7 +4954,8 @@ fn annotations_on_structural_node<'view, 'graph>(
         let annotation = annotation_node(index, triple, expressions, nested, session)?;
         enforce_usize(
             annotations.len().saturating_add(1),
-            session.limits().value(LimitKey::MaxAnnotations),
+            session,
+            LimitKey::MaxAnnotations,
             "native RDF structural-node annotations exceed max_annotations",
         )?;
         reserve_vec_item(&mut annotations, session)?;
@@ -5638,7 +5659,8 @@ fn component_annotations<'graph>(
         for annotation in edge_annotations {
             enforce_usize(
                 annotations.len().saturating_add(1),
-                session.limits().value(LimitKey::MaxAnnotations),
+                session,
+                LimitKey::MaxAnnotations,
                 "native RDF component annotations exceed max_annotations",
             )?;
             reserve_vec_item(&mut annotations, session)?;
@@ -6341,6 +6363,256 @@ fn individual_edge<'graph>(
     ))
 }
 
+#[derive(Clone, Copy)]
+struct ReificationErrorRecord<'graph> {
+    message: &'static str,
+    reason: &'static str,
+    reification: Option<&'graph Resource>,
+    main: Option<&'graph Triple>,
+    source: Option<&'graph Term>,
+    property: Option<&'graph str>,
+    target: Option<&'graph Term>,
+    main_triple_present: Option<bool>,
+}
+
+fn preflight_reification_issues<'graph>(
+    triples: &'graph [Triple],
+    graph_index: &RdfGraphIndex<'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<()> {
+    let maximum =
+        usize::try_from(session.limits().value(LimitKey::MaxDiagnostics)).unwrap_or(usize::MAX);
+    let mut retained = Vec::new();
+    let mut retained_payload_bytes = RDF_REIFICATION_PAYLOAD_HEADER_BYTES;
+    let mut issue_count = 0_u64;
+    let mut previous: Option<&Resource> = None;
+    for type_triple in triples {
+        session.step(1)?;
+        if type_triple.predicate != RDF_TYPE
+            || !matches!(
+                &type_triple.object,
+                Term::Iri(value) if value == OWL_AXIOM || value == OWL_ANNOTATION
+            )
+        {
+            continue;
+        }
+        let reification = &type_triple.subject;
+        if previous.is_some_and(|value| value == reification) {
+            continue;
+        }
+        previous = Some(reification);
+        let Some(issue) = inspect_reification_issue(reification, triples, graph_index, session)?
+        else {
+            continue;
+        };
+        issue_count = issue_count
+            .checked_add(1)
+            .ok_or_else(|| NativeError::limit("native reification issue count overflow"))?;
+        let issue_bytes = reification_record_payload_size(&issue)?;
+        let Some(next_payload_bytes) = retained_payload_bytes.checked_add(issue_bytes) else {
+            continue;
+        };
+        if retained.len() < maximum && next_payload_bytes <= MAX_RDF_REIFICATION_PAYLOAD_BYTES {
+            reserve_vec_item(&mut retained, session)?;
+            retained.push(issue);
+            retained_payload_bytes = next_payload_bytes;
+        }
+    }
+    if issue_count == 0 {
+        return Ok(());
+    }
+    let message = retained
+        .first()
+        .map_or("native RDF reification is malformed", |issue| issue.message);
+    Err(rdf_axiom_reification_records(
+        message,
+        &retained,
+        issue_count,
+    ))
+}
+
+fn inspect_reification_issue<'graph>(
+    reification: &'graph Resource,
+    triples: &'graph [Triple],
+    graph_index: &RdfGraphIndex<'graph>,
+    session: &mut Session<'_>,
+) -> NativeResult<Option<ReificationErrorRecord<'graph>>> {
+    let mut is_axiom = false;
+    let mut is_annotation = false;
+    let mut source: Option<&Term> = None;
+    let mut property: Option<&Term> = None;
+    let mut target: Option<&Term> = None;
+    let mut source_count = 0_usize;
+    let mut property_count = 0_usize;
+    let mut target_count = 0_usize;
+    for index in graph_index.subject_indexes(reification) {
+        session.step(1)?;
+        let triple = triples
+            .get(*index)
+            .ok_or_else(|| NativeError::protocol("native RDF subject index exceeds graph"))?;
+        match triple.predicate.as_str() {
+            RDF_TYPE => match &triple.object {
+                Term::Iri(value) if value == OWL_AXIOM => is_axiom = true,
+                Term::Iri(value) if value == OWL_ANNOTATION => is_annotation = true,
+                _ => {}
+            },
+            OWL_ANNOTATED_SOURCE => {
+                source_count = source_count
+                    .checked_add(1)
+                    .ok_or_else(|| NativeError::limit("native annotatedSource count overflow"))?;
+                source.get_or_insert(&triple.object);
+            }
+            OWL_ANNOTATED_PROPERTY => {
+                property_count = property_count
+                    .checked_add(1)
+                    .ok_or_else(|| NativeError::limit("native annotatedProperty count overflow"))?;
+                property.get_or_insert(&triple.object);
+            }
+            OWL_ANNOTATED_TARGET => {
+                target_count = target_count
+                    .checked_add(1)
+                    .ok_or_else(|| NativeError::limit("native annotatedTarget count overflow"))?;
+                target.get_or_insert(&triple.object);
+            }
+            _ => {}
+        }
+    }
+    if is_axiom && is_annotation {
+        return Ok(Some(ReificationErrorRecord {
+            message: "native RDF reification node cannot be both owl:Annotation and owl:Axiom",
+            reason: "NODE_KIND_CONFLICT",
+            reification: Some(reification),
+            main: None,
+            source: None,
+            property: None,
+            target: None,
+            main_triple_present: None,
+        }));
+    }
+    let label = if is_axiom {
+        "owl:Axiom"
+    } else {
+        "owl:Annotation"
+    };
+    if (source_count, property_count, target_count) != (1, 1, 1) {
+        let reason = if source_count == 0 || property_count == 0 || target_count == 0 {
+            "METADATA_INCOMPLETE"
+        } else {
+            "METADATA_AMBIGUOUS"
+        };
+        let message = if label == "owl:Axiom" {
+            "native owl:Axiom reification metadata is incomplete or ambiguous"
+        } else {
+            "native owl:Annotation reification metadata is incomplete or ambiguous"
+        };
+        return Ok(Some(ReificationErrorRecord {
+            message,
+            reason,
+            reification: Some(reification),
+            main: None,
+            source: None,
+            property: None,
+            target: None,
+            main_triple_present: None,
+        }));
+    }
+    let source = source.ok_or_else(|| {
+        NativeError::protocol("native reification source count diverges from value")
+    })?;
+    let property_term = property.ok_or_else(|| {
+        NativeError::protocol("native reification property count diverges from value")
+    })?;
+    let target = target.ok_or_else(|| {
+        NativeError::protocol("native reification target count diverges from value")
+    })?;
+    if !matches!(source, Term::Iri(_) | Term::Blank(_)) || !matches!(property_term, Term::Iri(_)) {
+        let message = if label == "owl:Axiom" {
+            "native owl:Axiom reification has invalid source/property"
+        } else {
+            "native owl:Annotation reification has invalid source/property"
+        };
+        return Ok(Some(ReificationErrorRecord {
+            message,
+            reason: "METADATA_TYPE_INVALID",
+            reification: Some(reification),
+            main: None,
+            source: None,
+            property: None,
+            target: None,
+            main_triple_present: None,
+        }));
+    }
+    let Term::Iri(property) = property_term else {
+        return Err(NativeError::protocol(
+            "native reification property type changed during inspection",
+        ));
+    };
+    if graph_index.exact_index(source, property, target).is_some() {
+        return Ok(None);
+    }
+    let message = if label == "owl:Axiom" {
+        "native owl:Axiom reification main triple is absent"
+    } else {
+        "native owl:Annotation reification main triple is absent"
+    };
+    Ok(Some(ReificationErrorRecord {
+        message,
+        reason: "MAIN_TRIPLE_ABSENT",
+        reification: Some(reification),
+        main: None,
+        source: Some(source),
+        property: Some(property),
+        target: Some(target),
+        main_triple_present: Some(false),
+    }))
+}
+
+fn reification_record_payload_size(record: &ReificationErrorRecord<'_>) -> NativeResult<usize> {
+    let mut size = 1_usize;
+    for value in reification_record_texts(record) {
+        size = size
+            .checked_add(5)
+            .and_then(|value_size| {
+                value_size.checked_add(value.map_or(0, str::len).min(MAX_RDF_EVIDENCE_BYTES))
+            })
+            .ok_or_else(|| NativeError::limit("native reification evidence size overflow"))?;
+    }
+    Ok(size)
+}
+
+fn reification_record_texts<'graph>(
+    record: &ReificationErrorRecord<'graph>,
+) -> [Option<&'graph str>; 5] {
+    let reification = record.reification.map(|value| match value {
+        Resource::Iri(value) | Resource::Blank(value) => value.as_str(),
+    });
+    let (source, property, target) = if let Some(main) = record.main {
+        (
+            Some(match &main.subject {
+                Resource::Iri(value) | Resource::Blank(value) => value.as_str(),
+            }),
+            Some(main.predicate.as_str()),
+            Some(match &main.object {
+                Term::Iri(value) | Term::Blank(value) => value.as_str(),
+                Term::Literal { lexical, .. } => lexical.as_str(),
+            }),
+        )
+    } else {
+        (
+            record.source.map(|value| match value {
+                Term::Iri(value) | Term::Blank(value) => value.as_str(),
+                Term::Literal { lexical, .. } => lexical.as_str(),
+            }),
+            record.property,
+            record.target.map(|value| match value {
+                Term::Iri(value) | Term::Blank(value) => value.as_str(),
+                Term::Literal { lexical, .. } => lexical.as_str(),
+            }),
+        )
+    };
+    [Some(record.reason), reification, source, property, target]
+}
+
 fn collect_axiom_annotations<'view, 'graph>(
     triples: &'graph [Triple],
     consumed: &mut [bool],
@@ -6348,6 +6620,7 @@ fn collect_axiom_annotations<'view, 'graph>(
     session: &mut Session<'_>,
 ) -> NativeResult<AxiomAnnotationLedger<'graph>> {
     let graph_index = RdfGraphIndex::build(triples, session)?;
+    preflight_reification_issues(triples, &graph_index, session)?;
     let nested_records =
         collect_nested_annotation_records(triples, &graph_index, consumed, session)?;
     validate_nested_annotation_records(&nested_records, triples, &graph_index, session)?;
@@ -6406,7 +6679,8 @@ fn collect_axiom_annotations<'view, 'graph>(
             )?;
             enforce_usize(
                 annotations.len().saturating_add(1),
-                session.limits().value(LimitKey::MaxAnnotations),
+                session,
+                LimitKey::MaxAnnotations,
                 "native RDF axiom annotations exceed max_annotations",
             )?;
             session.reserve_bytes(annotation.as_bytes().len())?;
@@ -6457,8 +6731,15 @@ fn collect_nested_annotation_records<'graph>(
             }
         }
         if is_axiom {
-            return Err(rdf_axiom_reification(
+            return Err(rdf_axiom_reification_evidence(
                 "native RDF reification node cannot be both owl:Annotation and owl:Axiom",
+                "NODE_KIND_CONFLICT",
+                Some(reification),
+                None,
+                None,
+                None,
+                None,
+                None,
             ));
         }
         let main_index = reification_main_index(reification, triples, graph_index, session)?;
@@ -6525,8 +6806,19 @@ fn validate_nested_annotation_main<'graph>(
         return Ok(());
     }
     if stack.contains(&main_index) {
-        return Err(rdf_axiom_reification(
+        let evidence_index = reification_cycle_evidence_index(main_index, stack, triples)?;
+        let main = triples.get(evidence_index).ok_or_else(|| {
+            NativeError::protocol("native nested annotation main index exceeds graph")
+        })?;
+        return Err(rdf_axiom_reification_evidence(
             "native RDF annotation reification contains a cycle",
+            "ANNOTATION_CYCLE",
+            None,
+            Some(main),
+            None,
+            None,
+            None,
+            Some(true),
         ));
     }
     let matching = nested_record_range(records, main_index, session)?;
@@ -6537,7 +6829,8 @@ fn validate_nested_annotation_main<'graph>(
     }
     enforce_usize(
         stack.len().saturating_add(1),
-        session.limits().value(LimitKey::MaxNestingDepth),
+        session,
+        LimitKey::MaxNestingDepth,
         "native RDF annotation nesting exceeds max_nesting_depth",
     )?;
     reserve_vec_item(stack, session)?;
@@ -6600,13 +6893,25 @@ fn nested_annotations<'view, 'graph>(
         return Ok(Vec::new());
     }
     if stack.contains(&main_index) {
-        return Err(rdf_axiom_reification(
+        let evidence_index = reification_cycle_evidence_index(main_index, stack, triples)?;
+        let main = triples.get(evidence_index).ok_or_else(|| {
+            NativeError::protocol("native nested annotation main index exceeds graph")
+        })?;
+        return Err(rdf_axiom_reification_evidence(
             "native RDF annotation reification contains a cycle",
+            "ANNOTATION_CYCLE",
+            None,
+            Some(main),
+            None,
+            None,
+            None,
+            Some(true),
         ));
     }
     enforce_usize(
         stack.len().saturating_add(1),
-        session.limits().value(LimitKey::MaxNestingDepth),
+        session,
+        LimitKey::MaxNestingDepth,
         "native RDF annotation nesting exceeds max_nesting_depth",
     )?;
     reserve_vec_item(stack, session)?;
@@ -6655,7 +6960,8 @@ fn nested_annotations<'view, 'graph>(
             )?;
             enforce_usize(
                 annotations.len().saturating_add(1),
-                session.limits().value(LimitKey::MaxAnnotations),
+                session,
+                LimitKey::MaxAnnotations,
                 "native RDF nested annotations exceed max_annotations",
             )?;
             reserve_vec_item(&mut annotations, session)?;
@@ -6666,6 +6972,27 @@ fn nested_annotations<'view, 'graph>(
         .pop()
         .ok_or_else(|| NativeError::protocol("native RDF annotation recursion stack is empty"))?;
     canonical_set(annotations, 0, None)
+}
+
+fn reification_cycle_evidence_index(
+    main_index: usize,
+    stack: &[usize],
+    triples: &[Triple],
+) -> NativeResult<usize> {
+    let mut selected = main_index;
+    let mut selected_triple = triples
+        .get(selected)
+        .ok_or_else(|| NativeError::protocol("native reification cycle index exceeds graph"))?;
+    for candidate in stack {
+        let candidate_triple = triples.get(*candidate).ok_or_else(|| {
+            NativeError::protocol("native reification cycle stack index exceeds graph")
+        })?;
+        if python_triple_cmp(candidate_triple, selected_triple) == Ordering::Less {
+            selected = *candidate;
+            selected_triple = candidate_triple;
+        }
+    }
+    Ok(selected)
 }
 
 fn reification_main_index<'graph>(
@@ -6696,19 +7023,44 @@ fn reification_main_index<'graph>(
         session,
     )?;
     if !matches!(source, Term::Iri(_) | Term::Blank(_)) {
-        return Err(rdf_axiom_reification(
+        return Err(rdf_axiom_reification_evidence(
             "native RDF annotatedSource must be an IRI or blank node",
+            "METADATA_TYPE_INVALID",
+            Some(reification),
+            None,
+            None,
+            None,
+            None,
+            None,
         ));
     }
     let Term::Iri(property) = property else {
-        return Err(rdf_axiom_reification(
+        return Err(rdf_axiom_reification_evidence(
             "native RDF annotatedProperty must be an IRI",
+            "METADATA_TYPE_INVALID",
+            Some(reification),
+            None,
+            None,
+            None,
+            None,
+            None,
         ));
     };
     session.step(1)?;
     graph_index
         .exact_index(source, property, target)
-        .ok_or_else(|| rdf_axiom_reification("native RDF reification main triple is absent"))
+        .ok_or_else(|| {
+            rdf_axiom_reification_evidence(
+                "native RDF reification main triple is absent",
+                "MAIN_TRIPLE_ABSENT",
+                Some(reification),
+                None,
+                Some(source),
+                Some(property),
+                Some(target),
+                Some(false),
+            )
+        })
 }
 
 fn consume_reification_node<'graph>(
@@ -6744,14 +7096,28 @@ fn unique_reification_term<'graph>(
             continue;
         }
         if value.replace((*index, &triple.object)).is_some() {
-            return Err(rdf_axiom_reification(
+            return Err(rdf_axiom_reification_evidence(
                 "native RDF reification metadata must have cardinality one",
+                "METADATA_AMBIGUOUS",
+                Some(reification),
+                None,
+                None,
+                None,
+                None,
+                None,
             ));
         }
     }
     value.ok_or_else(|| {
-        rdf_axiom_reification(
+        rdf_axiom_reification_evidence(
             "native RDF reification requires source, property, and target metadata",
+            "METADATA_INCOMPLETE",
+            Some(reification),
+            None,
+            None,
+            None,
+            None,
+            None,
         )
     })
 }
@@ -7668,12 +8034,11 @@ fn python_term_cmp(left: &Term, right: &Term) -> Ordering {
     }
 }
 
-fn partial_mapping_evidence(
+fn mapping_evidence(
     triples: &[Triple],
     consumed: &[bool],
-    unconsumed_count: usize,
     session: &mut Session<'_>,
-) -> NativeResult<Vec<RdfTripleEvidence>> {
+) -> NativeResult<(usize, Vec<RdfTripleEvidence>)> {
     if triples.len() != consumed.len() {
         return Err(NativeError::protocol(
             "native RDF partial-mapping ledger diverges from graph",
@@ -7681,10 +8046,8 @@ fn partial_mapping_evidence(
     }
     let maximum =
         usize::try_from(session.limits().value(LimitKey::MaxDiagnostics)).unwrap_or(usize::MAX);
-    let mut selected = BinaryHeap::from(reserved_temporary_vec(
-        unconsumed_count.min(maximum),
-        session,
-    )?);
+    let mut selected =
+        BinaryHeap::from(reserved_temporary_vec(triples.len().min(maximum), session)?);
     let mut observed_unconsumed = 0_usize;
     for (triple, retained) in triples.iter().zip(consumed) {
         session.step(1)?;
@@ -7694,11 +8057,6 @@ fn partial_mapping_evidence(
         observed_unconsumed = observed_unconsumed
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("native RDF unconsumed count overflow"))?;
-        if observed_unconsumed > unconsumed_count {
-            return Err(NativeError::protocol(
-                "native RDF unconsumed count diverges from its ledger",
-            ));
-        }
         if selected.len() < maximum {
             selected.push(PythonOrderedTriple(triple));
         } else if selected
@@ -7709,23 +8067,23 @@ fn partial_mapping_evidence(
             selected.push(PythonOrderedTriple(triple));
         }
     }
-    if observed_unconsumed != unconsumed_count {
-        return Err(NativeError::protocol(
-            "native RDF unconsumed count diverges from its ledger",
-        ));
-    }
-
     let mut result = reserved_vec(selected.len(), session)?;
     for PythonOrderedTriple(triple) in selected.into_sorted_vec() {
-        let (object, object_requires_repr) = rdf_term_evidence(&triple.object, session)?;
+        let (object, object_kind, object_requires_repr) =
+            rdf_term_evidence(&triple.object, session)?;
         result.push(RdfTripleEvidence {
             subject: rdf_resource_evidence(&triple.subject, session)?,
-            predicate: owned_text(&triple.predicate, session)?,
+            predicate: prefixed_rdf_evidence("", &triple.predicate, session)?,
             object,
+            object_kind,
             object_requires_repr,
         });
     }
-    Ok(result)
+    let consumed_count = triples
+        .len()
+        .checked_sub(observed_unconsumed)
+        .ok_or_else(|| NativeError::protocol("native RDF unconsumed count exceeds total"))?;
+    Ok((consumed_count, result))
 }
 
 fn rdf_resource_evidence(value: &Resource, session: &mut Session<'_>) -> NativeResult<String> {
@@ -7735,13 +8093,17 @@ fn rdf_resource_evidence(value: &Resource, session: &mut Session<'_>) -> NativeR
     }
 }
 
-fn rdf_term_evidence(value: &Term, session: &mut Session<'_>) -> NativeResult<(String, bool)> {
+fn rdf_term_evidence(
+    value: &Term,
+    session: &mut Session<'_>,
+) -> NativeResult<(String, &'static str, bool)> {
     match value {
-        Term::Iri(value) => Ok((framed_rdf_evidence('<', value, '>', session)?, false)),
-        Term::Blank(value) => Ok((prefixed_rdf_evidence("_:", value, session)?, false)),
+        Term::Iri(value) => Ok((framed_rdf_evidence('<', value, '>', session)?, "iri", false)),
+        Term::Blank(value) => Ok((prefixed_rdf_evidence("_:", value, session)?, "blank", false)),
         Term::Literal { lexical, .. } => {
-            reserve_python_repr_capacity(lexical, session)?;
-            Ok((owned_text(lexical, session)?, true))
+            let bounded = bounded_rdf_evidence_value(lexical);
+            reserve_python_repr_capacity(bounded, session)?;
+            Ok((owned_text(bounded, session)?, "literal", true))
         }
     }
 }
@@ -7752,19 +8114,33 @@ fn framed_rdf_evidence(
     suffix: char,
     session: &mut Session<'_>,
 ) -> NativeResult<String> {
-    let capacity = value
+    let full_length = value
         .len()
         .checked_add(prefix.len_utf8())
         .and_then(|size| size.checked_add(suffix.len_utf8()))
         .ok_or_else(|| NativeError::limit("native RDF evidence text size overflow"))?;
+    let truncated = full_length > MAX_RDF_EVIDENCE_BYTES;
+    let value = if truncated {
+        bounded_rdf_evidence_value(value)
+    } else {
+        value
+    };
+    let capacity = full_length.min(MAX_RDF_EVIDENCE_BYTES);
     session.reserve_bytes(capacity)?;
     let mut output = String::new();
     output
         .try_reserve_exact(capacity)
         .map_err(|_| NativeError::limit("native RDF evidence text allocation failed"))?;
     output.push(prefix);
-    output.push_str(value);
-    output.push(suffix);
+    push_sanitized_rdf_evidence(&mut output, value);
+    if truncated {
+        while output.len() > MAX_RDF_EVIDENCE_BYTES - 3 {
+            output.pop();
+        }
+        output.push_str("...");
+    } else {
+        output.push(suffix);
+    }
     Ok(output)
 }
 
@@ -7773,18 +8149,52 @@ fn prefixed_rdf_evidence(
     value: &str,
     session: &mut Session<'_>,
 ) -> NativeResult<String> {
-    let capacity = value
+    let full_length = value
         .len()
         .checked_add(prefix.len())
         .ok_or_else(|| NativeError::limit("native RDF evidence text size overflow"))?;
+    let truncated = full_length > MAX_RDF_EVIDENCE_BYTES;
+    let value = if truncated {
+        bounded_rdf_evidence_value(value)
+    } else {
+        value
+    };
+    let capacity = full_length.min(MAX_RDF_EVIDENCE_BYTES);
     session.reserve_bytes(capacity)?;
     let mut output = String::new();
     output
         .try_reserve_exact(capacity)
         .map_err(|_| NativeError::limit("native RDF evidence text allocation failed"))?;
     output.push_str(prefix);
-    output.push_str(value);
+    push_sanitized_rdf_evidence(&mut output, value);
+    if truncated {
+        while output.len() > MAX_RDF_EVIDENCE_BYTES - 3 {
+            output.pop();
+        }
+        output.push_str("...");
+    }
     Ok(output)
+}
+
+fn bounded_rdf_evidence_value(value: &str) -> &str {
+    if value.len() <= MAX_RDF_EVIDENCE_BYTES {
+        return value;
+    }
+    let mut end = MAX_RDF_EVIDENCE_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn push_sanitized_rdf_evidence(output: &mut String, value: &str) {
+    for character in value.chars() {
+        output.push(if character.is_control() {
+            '?'
+        } else {
+            character
+        });
+    }
 }
 
 fn reserve_python_repr_capacity(value: &str, session: &mut Session<'_>) -> NativeResult<()> {
@@ -8135,10 +8545,12 @@ fn serialize_iri(
 }
 
 fn enforce_resolved_iri_size(size: usize, session: &Session<'_>) -> NativeResult<()> {
-    if u64::try_from(size).map_or(true, |size| {
-        size > session.limits().value(LimitKey::MaxIriBytes)
-    }) {
-        Err(NativeError::limit(
+    let observed = u64::try_from(size)
+        .map_err(|_| NativeError::limit("native RDF/XML resolved IRI size exceeds u64"))?;
+    if observed > session.limits().value(LimitKey::MaxIriBytes) {
+        Err(session.limits().resource_limit(
+            LimitKey::MaxIriBytes,
+            observed,
             "native RDF/XML resolved IRI exceeds max_iri_bytes",
         ))
     } else {
@@ -8567,7 +8979,8 @@ fn rdf_membership_property(value: u64, session: &mut Session<'_>) -> NativeResul
         .ok_or_else(|| NativeError::limit("native RDF membership IRI size overflow"))?;
     enforce_usize(
         size,
-        session.limits().value(LimitKey::MaxIriBytes),
+        session,
+        LimitKey::MaxIriBytes,
         "native RDF membership IRI exceeds max_iri_bytes",
     )?;
     session.reserve_bytes(size)?;
@@ -8747,17 +9160,29 @@ fn reserve_temporary_vec_item<T>(
     Ok(())
 }
 
-fn enforce_usize(value: usize, maximum: u64, message: &'static str) -> NativeResult<()> {
+fn enforce_usize(
+    value: usize,
+    session: &Session<'_>,
+    key: LimitKey,
+    message: &'static str,
+) -> NativeResult<()> {
     enforce_u64(
-        u64::try_from(value).map_err(|_| NativeError::limit(message))?,
-        maximum,
+        u64::try_from(value)
+            .map_err(|_| NativeError::limit("native RDF observation exceeds u64"))?,
+        session,
+        key,
         message,
     )
 }
 
-fn enforce_u64(value: u64, maximum: u64, message: &'static str) -> NativeResult<()> {
-    if value > maximum {
-        Err(NativeError::limit(message))
+fn enforce_u64(
+    value: u64,
+    session: &Session<'_>,
+    key: LimitKey,
+    message: &'static str,
+) -> NativeResult<()> {
+    if value > session.limits().value(key) {
+        Err(session.limits().resource_limit(key, value, message))
     } else {
         Ok(())
     }
@@ -8821,6 +9246,115 @@ fn rdf_mapping_canonical_set(
 
 fn rdf_axiom_reification(message: &'static str) -> NativeError {
     NativeError::new("NATIVE_RDF_AXIOM_REIFICATION", message)
+}
+
+const RDF_REIFICATION_ERROR_MAGIC: &[u8; 8] = b"PYNRFE2\0";
+
+fn rdf_axiom_reification_evidence(
+    message: &'static str,
+    reason: &'static str,
+    reification: Option<&Resource>,
+    main: Option<&Triple>,
+    source: Option<&Term>,
+    property: Option<&str>,
+    target: Option<&Term>,
+    main_triple_present: Option<bool>,
+) -> NativeError {
+    let record = ReificationErrorRecord {
+        message,
+        reason,
+        reification,
+        main,
+        source,
+        property,
+        target,
+        main_triple_present,
+    };
+    rdf_axiom_reification_records(message, &[record], 1)
+}
+
+fn rdf_axiom_reification_records(
+    message: &'static str,
+    records: &[ReificationErrorRecord<'_>],
+    issue_count: u64,
+) -> NativeError {
+    let Some(capacity) =
+        records
+            .iter()
+            .try_fold(RDF_REIFICATION_PAYLOAD_HEADER_BYTES, |size, record| {
+                let record_size = reification_record_payload_size(record).ok()?;
+                size.checked_add(record_size)
+            })
+    else {
+        return rdf_axiom_reification(message);
+    };
+    if capacity > MAX_RDF_REIFICATION_PAYLOAD_BYTES {
+        return rdf_axiom_reification(message);
+    }
+    let Ok(retained_count) = u32::try_from(records.len()) else {
+        return rdf_axiom_reification(message);
+    };
+    let mut payload = Vec::new();
+    if payload.try_reserve_exact(capacity).is_err() {
+        return rdf_axiom_reification(message);
+    }
+    payload.extend_from_slice(RDF_REIFICATION_ERROR_MAGIC);
+    payload.extend_from_slice(&issue_count.to_le_bytes());
+    payload.extend_from_slice(&retained_count.to_le_bytes());
+    for record in records {
+        encode_reification_error_record(&mut payload, record);
+    }
+    NativeError::new("NATIVE_RDF_AXIOM_REIFICATION", message)
+        .with_opaque_payload("rdf_reification_v2", payload)
+}
+
+fn encode_reification_error_record(payload: &mut Vec<u8>, record: &ReificationErrorRecord<'_>) {
+    payload.push(match record.main_triple_present {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    });
+    encode_reification_error_text(payload, 4, Some(record.reason));
+    encode_reification_error_resource(payload, record.reification);
+    if let Some(main) = record.main {
+        encode_reification_error_resource(payload, Some(&main.subject));
+        encode_reification_error_text(payload, 4, Some(&main.predicate));
+        encode_reification_error_term(payload, Some(&main.object));
+    } else {
+        encode_reification_error_term(payload, record.source);
+        encode_reification_error_text(payload, 4, record.property);
+        encode_reification_error_term(payload, record.target);
+    }
+}
+
+fn encode_reification_error_resource(output: &mut Vec<u8>, value: Option<&Resource>) {
+    match value {
+        None => encode_reification_error_text(output, 0, None),
+        Some(Resource::Iri(value)) => encode_reification_error_text(output, 1, Some(value)),
+        Some(Resource::Blank(value)) => encode_reification_error_text(output, 2, Some(value)),
+    }
+}
+
+fn encode_reification_error_term(output: &mut Vec<u8>, value: Option<&Term>) {
+    match value {
+        None => encode_reification_error_text(output, 0, None),
+        Some(Term::Iri(value)) => encode_reification_error_text(output, 1, Some(value)),
+        Some(Term::Blank(value)) => encode_reification_error_text(output, 2, Some(value)),
+        Some(Term::Literal { lexical, .. }) => {
+            encode_reification_error_text(output, 3, Some(lexical));
+        }
+    }
+}
+
+fn encode_reification_error_text(output: &mut Vec<u8>, kind: u8, value: Option<&str>) {
+    output.push(if value.is_some() { kind } else { 0 });
+    let bytes = value.map_or(&[][..], str::as_bytes);
+    let mut end = bytes.len().min(MAX_RDF_EVIDENCE_BYTES);
+    while end > 0 && std::str::from_utf8(&bytes[..end]).is_err() {
+        end -= 1;
+    }
+    output.extend_from_slice(&(end as u32).to_le_bytes());
+    output.extend_from_slice(&bytes[..end]);
 }
 
 #[cfg(test)]
@@ -14939,6 +15473,7 @@ mod tests {
                 subject: "<urn:s>".to_owned(),
                 predicate: "urn:example:p".to_owned(),
                 object: "quote'\"\\é\u{a0}😀".to_owned(),
+                object_kind: "literal",
                 object_requires_repr: true,
             }],
         );
@@ -14962,7 +15497,7 @@ mod tests {
             limits.cancellation_stride,
         );
         let mut session = Session::new(&mut guard, &limits, 0).expect("session");
-        let error = partial_mapping_evidence(&triples, &consumed, 1, &mut session)
+        let error = mapping_evidence(&triples, &consumed, &mut session)
             .expect_err("consumed-prefix scan must exhaust the work budget");
         assert_eq!(error.code, "NATIVE_WIRE_LIMIT");
         assert_eq!(error.message, "native operation exceeds max_canonical_work",);

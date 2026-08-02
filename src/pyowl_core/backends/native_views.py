@@ -51,11 +51,15 @@ if TYPE_CHECKING:
 ENCODED_STRUCTURAL_SCHEMA_NAME_V1: Final = "pyowl-core/structural-columns"
 ENCODED_STRUCTURAL_SCHEMA_VERSION_V1: Final = 1
 ENCODED_STRUCTURAL_MODEL_SCHEMA_V1: Final = 1
+ENCODED_STRUCTURAL_SCHEMA_NAME_V2: Final = "pyowl-core/structural-columns"
+ENCODED_STRUCTURAL_SCHEMA_VERSION_V2: Final = 2
+ENCODED_STRUCTURAL_MODEL_SCHEMA_V2: Final = 2
 
 _ROOT_ONTOLOGY_ANNOTATION = 1
 _ROOT_AXIOM = 2
 _ROOT_EXTENSION = 3
 _ROOT_DIGEST_DOMAIN: Final = b"pyowl-core:encoded-structural-roots:v1\x00"
+_ROOT_DIGEST_DOMAIN_V2: Final = b"pyowl-core:encoded-structural-roots:v2\x00"
 
 _SEGMENT_DIRECT = 1
 _SEGMENT_OVERLAY_BASE = 2
@@ -105,7 +109,7 @@ _CONSTRUCTOR_BY_TAG: Final = MappingProxyType(
     {spec.tag: (spec.tag_name, spec.category, spec.fields) for spec in CONSTRUCTOR_SPECS}
 )
 
-_DESCRIPTOR_TREE: Final = {
+_DESCRIPTOR_TREE_V1: Final = {
     "buffers": [
         {"item_width": width, "name": name, "scalar": scalar}
         for name, width, scalar in _BUFFER_SPECS
@@ -187,7 +191,7 @@ _DESCRIPTOR_TREE: Final = {
     "schema_version": ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
 }
 ENCODED_STRUCTURAL_DESCRIPTOR_V1: Final = json.dumps(
-    _DESCRIPTOR_TREE,
+    _DESCRIPTOR_TREE_V1,
     ensure_ascii=True,
     separators=(",", ":"),
     sort_keys=True,
@@ -202,6 +206,41 @@ if ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1 != _FROZEN_DESCRIPTOR_SHA256_V1:
     raise RuntimeError(
         "encoded structural descriptor v1 drifted without a version decision: "
         f"{ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1.hex()}"
+    )
+
+_DESCRIPTOR_TREE_V2 = json.loads(ENCODED_STRUCTURAL_DESCRIPTOR_V1)
+if not isinstance(_DESCRIPTOR_TREE_V2, dict):  # pragma: no cover - frozen v1 invariant
+    raise RuntimeError("encoded structural descriptor v1 is not an object")
+_DESCRIPTOR_TREE_V2["dense_id_order"] = "ascending canonical-model-v2 bytes; zero is reserved"
+_DESCRIPTOR_TREE_V2["model_schema"] = ENCODED_STRUCTURAL_MODEL_SCHEMA_V2
+_DESCRIPTOR_TREE_V2["root_order"] = "root kind then ascending canonical-model-v2 bytes"
+_DESCRIPTOR_TREE_V2["schema_version"] = ENCODED_STRUCTURAL_SCHEMA_VERSION_V2
+segment_fields_v2 = _DESCRIPTOR_TREE_V2.get("segment_fields")
+if not isinstance(segment_fields_v2, list):  # pragma: no cover - frozen v1 invariant
+    raise RuntimeError("encoded structural descriptor v1 segment fields are invalid")
+for field_v2 in segment_fields_v2:
+    if isinstance(field_v2, dict) and field_v2.get("name") == "source":
+        field_v2["type"] = "EncodedStructuralViewV2-or-local"
+        break
+else:  # pragma: no cover - frozen v1 invariant
+    raise RuntimeError("encoded structural descriptor v1 source field is missing")
+_DESCRIPTOR_TREE_V2["schema_name"] = ENCODED_STRUCTURAL_SCHEMA_NAME_V2
+ENCODED_STRUCTURAL_DESCRIPTOR_V2: Final = json.dumps(
+    _DESCRIPTOR_TREE_V2,
+    ensure_ascii=True,
+    separators=(",", ":"),
+    sort_keys=True,
+).encode("ascii")
+ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2: Final = hashlib.sha256(
+    ENCODED_STRUCTURAL_DESCRIPTOR_V2
+).digest()
+_FROZEN_DESCRIPTOR_SHA256_V2: Final = bytes.fromhex(
+    "c51d0eb7ecf6f29ad3495fe7c40a2ea6741cf03a7cf194d51417bb810df90f51"
+)
+if ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2 != _FROZEN_DESCRIPTOR_SHA256_V2:
+    raise RuntimeError(
+        "encoded structural descriptor v2 drifted without a version decision: "
+        f"{ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2.hex()}"
     )
 
 _TRUSTED_ZERO_COPY = object()
@@ -310,10 +349,11 @@ class EncodedStructuralSegmentV1:
 
 @dataclass(frozen=True, eq=False)
 class EncodedStructuralViewV1:
-    """One validated, owner-retaining encoded structural column set."""
+    """Frozen model-schema-1 request spelling; unavailable in this runtime."""
 
     SCHEMA_NAME: ClassVar[str] = ENCODED_STRUCTURAL_SCHEMA_NAME_V1
     SCHEMA_VERSION: ClassVar[int] = ENCODED_STRUCTURAL_SCHEMA_VERSION_V1
+    MODEL_SCHEMA: ClassVar[int] = ENCODED_STRUCTURAL_MODEL_SCHEMA_V1
     DESCRIPTOR_SHA256: ClassVar[bytes] = ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1
     OPTIONS_TYPE: ClassVar[type[object]] = EncodedStructuralOptionsV1
     DEPENDENCIES: ClassVar[tuple[type[object], ...]] = ()
@@ -340,13 +380,127 @@ class EncodedStructuralViewV1:
         cancellation_token: CancellationToken | None,
         started: float,
     ) -> EncodedStructuralViewV1:
-        del started
-        if not isinstance(options, EncodedStructuralOptionsV1):
-            raise TypeError("options must be EncodedStructuralOptionsV1")
+        del cls, ontology, options, budget, cancellation_token, started
+        raise BackendProtocolError(
+            "encoded structural schema 1 cannot publish model-schema-2 values",
+            code="ENCODED_VIEW_MODEL_SCHEMA",
+        )
+
+
+class EncodedStructuralPublicationV2(Protocol):
+    """Structural surface accepted from a registered schema-2 producer."""
+
+    schema_name: str
+    schema_version: int
+    model_schema: int
+    owner: OntologyView
+    buffers: Mapping[str, memoryview]
+    descriptor: bytes
+    structural_fingerprint: Fingerprint
+    segments: tuple[object, ...]
+    scope: AxiomScope
+    document_key: str | None
+
+
+class EncodedStructuralSegmentPublicationV2(Protocol):
+    """Object-level schema-2 segment metadata accepted at the hostile boundary."""
+
+    role: int
+    owner: OntologyView
+    source: EncodedStructuralViewV2 | None
+    posting_mode: int
+    root_ids: memoryview
+    anonymous_scope_map: memoryview
+    member_token: bytes | None
+
+
+@dataclass(frozen=True, slots=True)
+class EncodedStructuralOptionsV2:
+    """Canonical request options for structural-column schema 2."""
+
+    schema_version: int = ENCODED_STRUCTURAL_SCHEMA_VERSION_V2
+    scope: AxiomScope = AxiomScope.CLOSURE
+    document_key: str | None = None
+    limits: ParseLimits | None = None
+    materialize_segments: bool = False
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, int)
+            or self.schema_version != ENCODED_STRUCTURAL_SCHEMA_VERSION_V2
+        ):
+            raise ValueError("schema_version must select encoded structural schema version 2")
+        scope = self.scope
+        if isinstance(scope, str) and not isinstance(scope, AxiomScope):
+            try:
+                scope = AxiomScope(scope)
+            except ValueError as error:
+                raise ValueError("scope must be a valid AxiomScope") from error
+            object.__setattr__(self, "scope", scope)
+        elif not isinstance(scope, AxiomScope):
+            raise TypeError("scope must be AxiomScope")
+        _validate_selection(scope, self.document_key)
+        if self.limits is not None and not isinstance(self.limits, ParseLimits):
+            raise TypeError("limits must be ParseLimits or None")
+        if type(self.materialize_segments) is not bool:
+            raise TypeError("materialize_segments must be bool")
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class EncodedStructuralSegmentV2:
+    """One local or referenced segment in an encoded structural schema-2 view."""
+
+    role: int
+    owner: OntologyView
+    source: EncodedStructuralViewV2 | None
+    posting_mode: int
+    root_ids: memoryview
+    anonymous_scope_map: memoryview
+    member_token: bytes | None
+    _retained_source: object
+
+
+@dataclass(frozen=True, eq=False)
+class EncodedStructuralViewV2:
+    """One validated, owner-retaining model-schema-2 structural column set."""
+
+    SCHEMA_NAME: ClassVar[str] = ENCODED_STRUCTURAL_SCHEMA_NAME_V2
+    SCHEMA_VERSION: ClassVar[int] = ENCODED_STRUCTURAL_SCHEMA_VERSION_V2
+    MODEL_SCHEMA: ClassVar[int] = ENCODED_STRUCTURAL_MODEL_SCHEMA_V2
+    DESCRIPTOR_SHA256: ClassVar[bytes] = ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2
+    OPTIONS_TYPE: ClassVar[type[object]] = EncodedStructuralOptionsV2
+    DEPENDENCIES: ClassVar[tuple[type[object], ...]] = ()
+
+    schema_name: str
+    schema_version: int
+    model_schema: int
+    owner: OntologyView
+    buffers: Mapping[str, memoryview]
+    descriptor: bytes
+    structural_fingerprint: Fingerprint
+    segments: tuple[EncodedStructuralSegmentV2, ...]
+    scope: AxiomScope
+    document_key: str | None
+    _retained_source: object
+    _seal: object
+
+    @classmethod
+    def _build(
+        cls,
+        ontology: object,
+        options: object,
+        budget: IndexBuildBudget,
+        cancellation_token: CancellationToken | None,
+        started: float,
+    ) -> EncodedStructuralViewV2:
+        del cls, started
+        if not isinstance(options, EncodedStructuralOptionsV2):
+            raise TypeError("options must be EncodedStructuralOptionsV2")
         if not _is_ontology_view(ontology):
             raise TypeError("ontology must implement OntologyView")
         budget.check()
-        created = produce_encoded_structural_view_v1(
+        created = produce_encoded_structural_view_v2(
             ontology,
             scope=options.scope,
             document_key=options.document_key,
@@ -359,9 +513,103 @@ class EncodedStructuralViewV1:
         return created
 
 
-# Stable public request type; the V1 spelling remains available for callers
-# that explicitly pin the publication schema.
-EncodedStructuralView = EncodedStructuralViewV1
+# The generic request always selects the current model-compatible schema.
+# V1 remains importable only so explicit stale requests fail closed.
+EncodedStructuralView = EncodedStructuralViewV2
+
+
+def _encoded_v1_unavailable() -> NoReturn:
+    raise BackendProtocolError(
+        "encoded structural schema 1 cannot represent model-schema-2 values",
+        code="ENCODED_VIEW_MODEL_SCHEMA",
+    )
+
+
+def produce_encoded_structural_view_v1(
+    owner: OntologyView,
+    *,
+    scope: AxiomScope = AxiomScope.CLOSURE,
+    document_key: str | None = None,
+    limits: ParseLimits | None = None,
+    materialize_segments: bool = False,
+    _budget: IndexBuildBudget | None = None,
+    _cancellation_token: CancellationToken | None = None,
+) -> NoReturn:
+    """Fail closed: this model-schema-2 runtime cannot publish schema 1."""
+
+    del (
+        owner,
+        scope,
+        document_key,
+        limits,
+        materialize_segments,
+        _budget,
+        _cancellation_token,
+    )
+    _encoded_v1_unavailable()
+
+
+def validate_encoded_structural_view_v1(
+    candidate: object,
+    *,
+    expected_owner: OntologyView,
+    expected_scope: AxiomScope,
+    expected_document_key: str | None,
+    limits: ParseLimits | None = None,
+) -> NoReturn:
+    """Fail closed before interpreting schema-1 columns as model-schema-2 rows."""
+
+    del candidate, expected_owner, expected_scope, expected_document_key, limits
+    _encoded_v1_unavailable()
+
+
+@dataclass(frozen=True, slots=True)
+class _EncodedStructuralWireRowsV1:
+    """Frozen wire helper spelling retained only for fail-closed imports."""
+
+    nodes: tuple[tuple[int, str, bytes], ...]
+    roots: tuple[tuple[int, bytes], ...]
+    scalar_strings: tuple[bytes, ...]
+    sequences: tuple[bytes, ...]
+
+
+def _produce_native_direct_view_v1(*args: object, **kwargs: object) -> NoReturn:
+    del args, kwargs
+    _encoded_v1_unavailable()
+
+
+def _produce_native_raw_document_view_v1(*args: object, **kwargs: object) -> NoReturn:
+    del args, kwargs
+    _encoded_v1_unavailable()
+
+
+def _anonymous_document_scopes_from_encoded_view_v1(
+    view: EncodedStructuralViewV1,
+) -> NoReturn:
+    del view
+    _encoded_v1_unavailable()
+
+
+def _encoded_structural_root_digest_v1(
+    buffers: Mapping[str, memoryview], limits: ParseLimits
+) -> NoReturn:
+    del buffers, limits
+    _encoded_v1_unavailable()
+
+
+def _encoded_structural_wire_rows_v1(
+    publication: EncodedStructuralViewV1,
+    limits: ParseLimits,
+) -> NoReturn:
+    del publication, limits
+    _encoded_v1_unavailable()
+
+
+def _encoded_structural_rows_digest_v1(
+    rows: Iterable[tuple[int, bytes | memoryview]],
+) -> NoReturn:
+    del rows
+    _encoded_v1_unavailable()
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,7 +660,7 @@ class _Columns:
 
 
 @dataclass(frozen=True, slots=True)
-class _EncodedStructuralWireRowsV1:
+class _EncodedStructuralWireRowsV2:
     """Canonical rows needed by wire without traversing Python model objects."""
 
     nodes: tuple[tuple[int, str, bytes], ...]
@@ -438,7 +686,7 @@ def require_view_binding(capability: str) -> NativeViewExtension:
     return cast(NativeViewExtension, extension)
 
 
-def produce_encoded_structural_view_v1(
+def produce_encoded_structural_view_v2(
     owner: OntologyView,
     *,
     scope: AxiomScope = AxiomScope.CLOSURE,
@@ -447,8 +695,8 @@ def produce_encoded_structural_view_v1(
     materialize_segments: bool = False,
     _budget: IndexBuildBudget | None = None,
     _cancellation_token: CancellationToken | None = None,
-) -> EncodedStructuralViewV1:
-    """Publish deterministic v1 columns without flattening retained owners."""
+) -> EncodedStructuralViewV2:
+    """Publish deterministic v2 columns without flattening retained owners."""
 
     _validate_selection(scope, document_key)
     if not _is_ontology_view(owner):
@@ -460,7 +708,7 @@ def produce_encoded_structural_view_v1(
         _budget.check()
 
     if not materialize_segments:
-        segmented = _produce_segmented_view_v1(
+        segmented = _produce_segmented_view_v2(
             owner,
             scope=scope,
             document_key=document_key,
@@ -470,7 +718,7 @@ def produce_encoded_structural_view_v1(
         )
         if segmented is not None:
             return segmented
-    direct = _produce_mapped_direct_view_v1(
+    direct = _produce_mapped_direct_view_v2(
         owner,
         scope=scope,
         document_key=document_key,
@@ -479,7 +727,7 @@ def produce_encoded_structural_view_v1(
     )
     if direct is not None:
         return direct
-    direct = _produce_native_direct_view_v1(
+    direct = _produce_native_direct_view_v2(
         owner,
         scope=scope,
         document_key=document_key,
@@ -489,7 +737,7 @@ def produce_encoded_structural_view_v1(
     )
     if direct is not None:
         return direct
-    return _produce_local_encoded_structural_view_v1(
+    return _produce_local_encoded_structural_view_v2(
         owner,
         scope=scope,
         document_key=document_key,
@@ -498,7 +746,7 @@ def produce_encoded_structural_view_v1(
     )
 
 
-def _produce_segmented_view_v1(
+def _produce_segmented_view_v2(
     owner: OntologyView,
     *,
     scope: AxiomScope,
@@ -506,7 +754,7 @@ def _produce_segmented_view_v1(
     limits: ParseLimits,
     budget: IndexBuildBudget | None,
     cancellation_token: CancellationToken | None,
-) -> EncodedStructuralViewV1 | None:
+) -> EncodedStructuralViewV2 | None:
     """Return a retained segmented publication when the owner supports one."""
 
     # Imports stay local so the public view module does not make overlay and
@@ -517,7 +765,7 @@ def _produce_segmented_view_v1(
     if cancellation_token is not None:
         cancellation_token.check()
     if isinstance(owner, OntologyOverlay):
-        return _produce_overlay_view_v1(
+        return _produce_overlay_view_v2(
             owner,
             scope=scope,
             document_key=document_key,
@@ -526,7 +774,7 @@ def _produce_segmented_view_v1(
             cancellation_token=cancellation_token,
         )
     if isinstance(owner, OntologyComposite):
-        return _produce_composite_view_v1(
+        return _produce_composite_view_v2(
             owner,
             scope=scope,
             document_key=document_key,
@@ -537,7 +785,7 @@ def _produce_segmented_view_v1(
     return None
 
 
-def _produce_overlay_view_v1(
+def _produce_overlay_view_v2(
     owner: OntologyView,
     *,
     scope: AxiomScope,
@@ -545,7 +793,7 @@ def _produce_overlay_view_v1(
     limits: ParseLimits,
     budget: IndexBuildBudget | None,
     cancellation_token: CancellationToken | None,
-) -> EncodedStructuralViewV1 | None:
+) -> EncodedStructuralViewV2 | None:
     from pyowl_core.document.delta import OntologyDelta
     from pyowl_core.document.overlay import OntologyOverlay
 
@@ -557,7 +805,7 @@ def _produce_overlay_view_v1(
         # Root/document selections delegate through every overlay layer.
         base_owner = overlay._anchor
         delta = OntologyDelta()
-    source = _request_encoded_source_v1(
+    source = _request_encoded_source_v2(
         base_owner,
         scope=scope,
         document_key=document_key,
@@ -566,7 +814,7 @@ def _produce_overlay_view_v1(
     )
     removal_keys = _delta_removal_keys(delta, limits)
     if removal_keys and not _is_direct_encoded_view(source):
-        # V1 postings address roots local to the referenced view.  An inherited
+        # V2 postings address roots local to the referenced view.  An inherited
         # root cannot be excluded without flattening or changing its locator.
         return None
     excluded, found = _matching_local_root_ids(
@@ -577,7 +825,7 @@ def _produce_overlay_view_v1(
     )
     if found != removal_keys:
         return None
-    base_segment = EncodedStructuralSegmentV1(
+    base_segment = EncodedStructuralSegmentV2(
         _SEGMENT_OVERLAY_BASE,
         source.owner,
         source,
@@ -588,10 +836,10 @@ def _produce_overlay_view_v1(
         source,
     )
     local_roots = _delta_addition_roots(delta)
-    segments: tuple[EncodedStructuralSegmentV1, ...] = (base_segment,)
+    segments: tuple[EncodedStructuralSegmentV2, ...] = (base_segment,)
     if local_roots:
         segments += (
-            EncodedStructuralSegmentV1(
+            EncodedStructuralSegmentV2(
                 _SEGMENT_OVERLAY_DELTA,
                 overlay,
                 None,
@@ -603,7 +851,7 @@ def _produce_overlay_view_v1(
             ),
         )
     _reserve_referenced_rows(budget, (source,))
-    return _produce_local_encoded_structural_view_v1(
+    return _produce_local_encoded_structural_view_v2(
         overlay,
         scope=scope,
         document_key=document_key,
@@ -614,7 +862,7 @@ def _produce_overlay_view_v1(
     )
 
 
-def _produce_composite_view_v1(
+def _produce_composite_view_v2(
     owner: OntologyView,
     *,
     scope: AxiomScope,
@@ -622,7 +870,7 @@ def _produce_composite_view_v1(
     limits: ParseLimits,
     budget: IndexBuildBudget | None,
     cancellation_token: CancellationToken | None,
-) -> EncodedStructuralViewV1 | None:
+) -> EncodedStructuralViewV2 | None:
     from pyowl_core.document.composite import OntologyComposite
 
     composite = cast(OntologyComposite, owner)
@@ -632,7 +880,7 @@ def _produce_composite_view_v1(
         # unknown anonymous lineage must use the complete scalar fallback.
         return None
     sources = tuple(
-        _request_encoded_source_v1(
+        _request_encoded_source_v2(
             source_owner,
             scope=scope,
             document_key=document_key,
@@ -646,7 +894,7 @@ def _produce_composite_view_v1(
         return None
     found: set[tuple[int, bytes]] = set()
     member_rows: list[
-        tuple[bytes, EncodedStructuralViewV1, tuple[int, ...], Mapping[bytes, bytes]]
+        tuple[bytes, EncodedStructuralViewV2, tuple[int, ...], Mapping[bytes, bytes]]
     ] = []
     tokens = composite._source_tokens()
     for index, (token, source, mapping) in enumerate(
@@ -672,7 +920,7 @@ def _produce_composite_view_v1(
         return None
     member_rows.sort(key=lambda row: row[0])
     segments = tuple(
-        EncodedStructuralSegmentV1(
+        EncodedStructuralSegmentV2(
             _SEGMENT_COMPOSITE_MEMBER,
             source.owner,
             source,
@@ -687,7 +935,7 @@ def _produce_composite_view_v1(
     local_roots = _delta_addition_roots(composite.delta)
     if local_roots:
         segments += (
-            EncodedStructuralSegmentV1(
+            EncodedStructuralSegmentV2(
                 _SEGMENT_COMPOSITE_BRIDGE,
                 composite,
                 None,
@@ -699,7 +947,7 @@ def _produce_composite_view_v1(
             ),
         )
     _reserve_referenced_rows(budget, sources)
-    return _produce_local_encoded_structural_view_v1(
+    return _produce_local_encoded_structural_view_v2(
         composite,
         scope=scope,
         document_key=document_key,
@@ -710,24 +958,24 @@ def _produce_composite_view_v1(
     )
 
 
-def _request_encoded_source_v1(
+def _request_encoded_source_v2(
     owner: OntologyView,
     *,
     scope: AxiomScope,
     document_key: str | None,
     limits: ParseLimits,
     cancellation_token: CancellationToken | None,
-) -> EncodedStructuralViewV1:
+) -> EncodedStructuralViewV2:
     options: dict[str, object] = {
-        "schema_version": ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
+        "schema_version": ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
         "scope": scope,
     }
     if document_key is not None:
         options["document_key"] = document_key
     if cancellation_token is not None:
         options["cancellation_token"] = cancellation_token
-    result = owner.view(EncodedStructuralViewV1, **options)
-    if type(result) is not EncodedStructuralViewV1 or result._seal is not _VALIDATED_VIEW_SEAL:
+    result = owner.view(EncodedStructuralViewV2, **options)
+    if type(result) is not EncodedStructuralViewV2 or result._seal is not _VALIDATED_VIEW_SEAL:
         _fail("referenced owner returned an invalid encoded view", "ENCODED_VIEW_SEGMENTS")
     trusted_zero_copy = _trusted_buffer_mode(result.buffers)
     if trusted_zero_copy is None:
@@ -735,7 +983,7 @@ def _request_encoded_source_v1(
         # approved exporter. Force the immutable-exporter check so mutation of
         # a sealed view fails at the buffer boundary instead of being copied.
         trusted_zero_copy = _TRUSTED_ZERO_COPY
-    return _freeze_encoded_structural_view_v1(
+    return _freeze_encoded_structural_view_v2(
         result,
         expected_owner=owner,
         expected_scope=scope,
@@ -781,7 +1029,7 @@ def _delta_removal_keys(delta: object, limits: ParseLimits) -> frozenset[tuple[i
 
 
 def _matching_local_root_ids(
-    source: EncodedStructuralViewV1,
+    source: EncodedStructuralViewV2,
     targets: frozenset[tuple[int, bytes]],
     *,
     limits: ParseLimits,
@@ -835,12 +1083,12 @@ def _columns_from_buffers(buffers: Mapping[str, memoryview]) -> _Columns:
     )
 
 
-def _anonymous_document_scopes_from_encoded_view_v1(
-    view: EncodedStructuralViewV1,
+def _anonymous_document_scopes_from_encoded_view_v2(
+    view: EncodedStructuralViewV2,
 ) -> frozenset[bytes]:
     """Read document scopes from already-validated columns without model rows."""
 
-    if type(view) is not EncodedStructuralViewV1 or view._seal is not _VALIDATED_VIEW_SEAL:
+    if type(view) is not EncodedStructuralViewV2 or view._seal is not _VALIDATED_VIEW_SEAL:
         _fail("anonymous scopes require a validated encoded view", "ENCODED_VIEW_STRUCTURE")
     columns = _columns_from_buffers(view.buffers)
     scopes: set[bytes] = set()
@@ -868,7 +1116,7 @@ def _anonymous_document_scopes_from_encoded_view_v1(
     return frozenset(scopes)
 
 
-def _is_direct_encoded_view(source: EncodedStructuralViewV1) -> bool:
+def _is_direct_encoded_view(source: EncodedStructuralViewV2) -> bool:
     return tuple(segment.role for segment in source.segments) == (_SEGMENT_DIRECT,)
 
 
@@ -898,21 +1146,21 @@ def _empty_bytes_view() -> memoryview:
 
 def _reserve_referenced_rows(
     budget: IndexBuildBudget | None,
-    sources: Sequence[EncodedStructuralViewV1],
+    sources: Sequence[EncodedStructuralViewV2],
 ) -> None:
     if budget is None:
         return
     budget.add_shared_rows(sum(len(source.buffers["root_ids"]) // 4 for source in sources))
 
 
-def _produce_mapped_direct_view_v1(
+def _produce_mapped_direct_view_v2(
     owner: OntologyView,
     *,
     scope: AxiomScope,
     document_key: str | None,
     limits: ParseLimits,
     budget: IndexBuildBudget | None,
-) -> EncodedStructuralViewV1 | None:
+) -> EncodedStructuralViewV2 | None:
     """Return closure columns borrowed from a validated PYOCORE mapping."""
 
     # Keep the dependency local: wire mapping imports the public encoded view
@@ -921,7 +1169,7 @@ def _produce_mapped_direct_view_v1(
 
     if type(owner) is not MappedOntologySnapshot:
         return None
-    acquire = getattr(owner, "_encoded_structural_columns_v1", None)
+    acquire = getattr(owner, "_encoded_structural_columns_v2", None)
     if not callable(acquire):
         return None
     result = acquire(scope, document_key, limits)
@@ -944,7 +1192,7 @@ def _produce_mapped_direct_view_v1(
         )
         budget.add("encoded_mapped_metadata", rows=0, bytes_=256)
     retained = (owner, lease)
-    segment = EncodedStructuralSegmentV1(
+    segment = EncodedStructuralSegmentV2(
         _SEGMENT_DIRECT,
         owner,
         None,
@@ -955,13 +1203,13 @@ def _produce_mapped_direct_view_v1(
         retained,
     )
     segments = (segment,)
-    candidate = EncodedStructuralViewV1(
-        ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
-        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
-        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
+    candidate = EncodedStructuralViewV2(
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V2,
         owner,
         buffers,
-        ENCODED_STRUCTURAL_DESCRIPTOR_V1,
+        ENCODED_STRUCTURAL_DESCRIPTOR_V2,
         _fingerprint(buffers, segments),
         segments,
         scope,
@@ -971,7 +1219,7 @@ def _produce_mapped_direct_view_v1(
     )
     trusted_zero_copy = _trusted_buffer_mode(buffers)
     if trusted_zero_copy is _TRUSTED_MAPPED_ZERO_COPY:
-        return _freeze_encoded_structural_view_v1(
+        return _freeze_encoded_structural_view_v2(
             candidate,
             expected_owner=owner,
             expected_scope=scope,
@@ -981,7 +1229,7 @@ def _produce_mapped_direct_view_v1(
             active_views=frozenset(),
         )
     try:
-        return _freeze_encoded_structural_view_v1(
+        return _freeze_encoded_structural_view_v2(
             candidate,
             expected_owner=owner,
             expected_scope=scope,
@@ -996,7 +1244,7 @@ def _produce_mapped_direct_view_v1(
         lease.release()
 
 
-def _produce_native_direct_view_v1(
+def _produce_native_direct_view_v2(
     owner: OntologyView,
     *,
     scope: AxiomScope,
@@ -1004,7 +1252,7 @@ def _produce_native_direct_view_v1(
     limits: ParseLimits,
     budget: IndexBuildBudget | None,
     cancellation_token: CancellationToken | None,
-) -> EncodedStructuralViewV1 | None:
+) -> EncodedStructuralViewV2 | None:
     """Return retained native columns when the installed backend exposes them."""
 
     state = getattr(owner, "_native_snapshot_state", None)
@@ -1020,7 +1268,7 @@ def _produce_native_direct_view_v1(
         extension = importlib.import_module(type(raw_owner).__module__)
     except (ImportError, ValueError):
         return None
-    raw_operation = getattr(extension, "_encoded_structural_columns_v1", None)
+    raw_operation = getattr(extension, "_encoded_structural_columns_v2", None)
     if not callable(raw_operation):
         return None
     native_scope = getattr(owner, "_native_scope", None)
@@ -1032,14 +1280,14 @@ def _produce_native_direct_view_v1(
         _fail("native owner returned an invalid encoded-view scope", "NATIVE_VIEW_SCOPE")
 
     operation = cast(Callable[..., object], raw_operation)
-    result = _invoke_native_column_operation_v1(
+    result = _invoke_native_column_operation_v2(
         extension,
         operation,
         (raw_owner, scope_value, document_ordinal),
         limits,
         cancellation_token,
     )
-    return _native_direct_view_from_result_v1(
+    return _native_direct_view_from_result_v2(
         owner,
         scope=scope,
         document_key=document_key,
@@ -1050,14 +1298,14 @@ def _produce_native_direct_view_v1(
     )
 
 
-def _produce_native_raw_document_view_v1(
+def _produce_native_raw_document_view_v2(
     owner: OntologyView,
     *,
     document_key: str,
     limits: ParseLimits,
     budget: IndexBuildBudget | None,
     cancellation_token: CancellationToken | None,
-) -> EncodedStructuralViewV1 | None:
+) -> EncodedStructuralViewV2 | None:
     """Return raw retained document columns for internal wire publication."""
 
     document_reader = getattr(owner, "document", None)
@@ -1077,18 +1325,18 @@ def _produce_native_raw_document_view_v1(
         extension = importlib.import_module(type(raw_owner).__module__)
     except (ImportError, ValueError):
         return None
-    raw_operation = getattr(extension, "_encoded_structural_document_columns_v1", None)
+    raw_operation = getattr(extension, "_encoded_structural_document_columns_v2", None)
     if not callable(raw_operation):
         return None
     operation = cast(Callable[..., object], raw_operation)
-    result = _invoke_native_column_operation_v1(
+    result = _invoke_native_column_operation_v2(
         extension,
         operation,
         (raw_owner,),
         limits,
         cancellation_token,
     )
-    return _native_direct_view_from_result_v1(
+    return _native_direct_view_from_result_v2(
         owner,
         scope=AxiomScope.DOCUMENT,
         document_key=document_key,
@@ -1099,7 +1347,7 @@ def _produce_native_raw_document_view_v1(
     )
 
 
-def _invoke_native_column_operation_v1(
+def _invoke_native_column_operation_v2(
     extension: object,
     operation: Callable[..., object],
     arguments: tuple[object, ...],
@@ -1126,10 +1374,14 @@ def _invoke_native_column_operation_v1(
         message_reader = cast(Callable[[Exception], str], native._private_error_message)
         code = code_reader(extension, error)
         message = message_reader(error)
-        if code in {"NATIVE_CANCELLED", "NATIVE_DEADLINE"}:
+        if code == "NATIVE_CANCELLED":
             raise OperationCancelledError(message, code=code) from error
-        if code == "NATIVE_WIRE_LIMIT":
-            raise ResourceLimitError(message, code=code) from error
+        if code in {"NATIVE_DEADLINE", "NATIVE_WIRE_LIMIT"}:
+            limit_reader = cast(
+                Callable[[object, Exception, str, str], ResourceLimitError],
+                native._native_resource_limit_error,
+            )
+            raise limit_reader(extension, error, message, code) from error
         if code is None:
             raise BackendProtocolError(
                 "native encoded-view producer raised an unrecognized exception",
@@ -1138,7 +1390,7 @@ def _invoke_native_column_operation_v1(
         raise BackendProtocolError(message, code=code) from error
 
 
-def _native_direct_view_from_result_v1(
+def _native_direct_view_from_result_v2(
     owner: OntologyView,
     *,
     scope: AxiomScope,
@@ -1147,7 +1399,7 @@ def _native_direct_view_from_result_v1(
     limits: ParseLimits,
     budget: IndexBuildBudget | None,
     retained_source: object,
-) -> EncodedStructuralViewV1:
+) -> EncodedStructuralViewV2:
     if type(result) is not tuple or len(result) != 2:
         _fail("native encoded-view result has invalid framing", "NATIVE_VIEW_RESULT")
     raw_buffers, raw_counters = result
@@ -1170,7 +1422,7 @@ def _native_direct_view_from_result_v1(
             ),
             bytes_=counters["retained_buffer_bytes"] + 128,
         )
-    segment = EncodedStructuralSegmentV1(
+    segment = EncodedStructuralSegmentV2(
         _SEGMENT_DIRECT,
         owner,
         None,
@@ -1181,13 +1433,13 @@ def _native_direct_view_from_result_v1(
         retained_source,
     )
     segments = (segment,)
-    candidate = EncodedStructuralViewV1(
-        ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
-        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
-        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
+    candidate = EncodedStructuralViewV2(
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V2,
         owner,
         buffers,
-        ENCODED_STRUCTURAL_DESCRIPTOR_V1,
+        ENCODED_STRUCTURAL_DESCRIPTOR_V2,
         _fingerprint(buffers, segments),
         segments,
         scope,
@@ -1195,7 +1447,7 @@ def _native_direct_view_from_result_v1(
         retained_source,
         None,
     )
-    return _freeze_encoded_structural_view_v1(
+    return _freeze_encoded_structural_view_v2(
         candidate,
         expected_owner=owner,
         expected_scope=scope,
@@ -1248,7 +1500,7 @@ def _validate_native_column_counters(
     return MappingProxyType(counters)
 
 
-def _produce_local_encoded_structural_view_v1(
+def _produce_local_encoded_structural_view_v2(
     owner: OntologyView,
     *,
     scope: AxiomScope,
@@ -1256,8 +1508,8 @@ def _produce_local_encoded_structural_view_v1(
     limits: ParseLimits,
     budget: IndexBuildBudget | None,
     root_values: tuple[tuple[int, StructuralNode], ...] | None = None,
-    segments: tuple[EncodedStructuralSegmentV1, ...] | None = None,
-) -> EncodedStructuralViewV1:
+    segments: tuple[EncodedStructuralSegmentV2, ...] | None = None,
+) -> EncodedStructuralViewV2:
     """Build only the local buffers owned by one direct or segmented view."""
 
     selected_limits = limits
@@ -1456,7 +1708,7 @@ def _produce_local_encoded_structural_view_v1(
     for _key, node in node_rows:
         spec = constructor_spec(node)
         if spec.tag > 0xFFFF:
-            _fail("model tag does not fit encoded-view v1 u16", "ENCODED_VIEW_UNSUPPORTED_TAG")
+            _fail("model tag does not fit encoded-view v2 u16", "ENCODED_VIEW_UNSUPPORTED_TAG")
         node_tags.append(spec.tag)
         for field_name in spec.fields:
             append_field(getattr(node, field_name))
@@ -1482,7 +1734,7 @@ def _produce_local_encoded_structural_view_v1(
         selected_limits.enforce("max_memory_bytes", total_bytes)
     buffers = MappingProxyType({name: memoryview(payloads[name]) for name in _BUFFER_NAMES})
     if segments is None:
-        direct_segment = EncodedStructuralSegmentV1(
+        direct_segment = EncodedStructuralSegmentV2(
             _SEGMENT_DIRECT,
             owner,
             None,
@@ -1494,13 +1746,13 @@ def _produce_local_encoded_structural_view_v1(
         )
         segments = (direct_segment,)
     fingerprint = _fingerprint(buffers, segments)
-    candidate = EncodedStructuralViewV1(
-        ENCODED_STRUCTURAL_SCHEMA_NAME_V1,
-        ENCODED_STRUCTURAL_SCHEMA_VERSION_V1,
-        ENCODED_STRUCTURAL_MODEL_SCHEMA_V1,
+    candidate = EncodedStructuralViewV2(
+        ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
+        ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
+        ENCODED_STRUCTURAL_MODEL_SCHEMA_V2,
         owner,
         buffers,
-        ENCODED_STRUCTURAL_DESCRIPTOR_V1,
+        ENCODED_STRUCTURAL_DESCRIPTOR_V2,
         fingerprint,
         segments,
         scope,
@@ -1508,7 +1760,7 @@ def _produce_local_encoded_structural_view_v1(
         owner,
         None,
     )
-    return _freeze_encoded_structural_view_v1(
+    return _freeze_encoded_structural_view_v2(
         candidate,
         expected_owner=owner,
         expected_scope=scope,
@@ -1519,17 +1771,17 @@ def _produce_local_encoded_structural_view_v1(
     )
 
 
-def validate_encoded_structural_view_v1(
+def validate_encoded_structural_view_v2(
     candidate: object,
     *,
     expected_owner: OntologyView,
     expected_scope: AxiomScope,
     expected_document_key: str | None,
     limits: ParseLimits | None = None,
-) -> EncodedStructuralViewV1:
+) -> EncodedStructuralViewV2:
     """Validate an untrusted publication, copying exporters to immutable bytes."""
 
-    return _freeze_encoded_structural_view_v1(
+    return _freeze_encoded_structural_view_v2(
         candidate,
         expected_owner=expected_owner,
         expected_scope=expected_scope,
@@ -1540,7 +1792,7 @@ def validate_encoded_structural_view_v1(
     )
 
 
-def _freeze_encoded_structural_view_v1(
+def _freeze_encoded_structural_view_v2(
     candidate: object,
     *,
     expected_owner: OntologyView,
@@ -1549,7 +1801,7 @@ def _freeze_encoded_structural_view_v1(
     limits: ParseLimits | None,
     trusted_zero_copy: object | None,
     active_views: frozenset[int],
-) -> EncodedStructuralViewV1:
+) -> EncodedStructuralViewV2:
     """Shared validator; zero-copy is restricted to module-owned producers."""
 
     _validate_selection(expected_scope, expected_document_key)
@@ -1561,7 +1813,7 @@ def _freeze_encoded_structural_view_v1(
         _fail("encoded structural segment graph is cyclic", "ENCODED_VIEW_SEGMENTS")
     selected_limits.enforce("max_overlay_depth", len(active_views) + 1)
     active_views = active_views | {candidate_identity}
-    publication = cast(EncodedStructuralPublicationV1, candidate)
+    publication = cast(EncodedStructuralPublicationV2, candidate)
     try:
         schema_name = publication.schema_name
         schema_version = publication.schema_version
@@ -1579,15 +1831,15 @@ def _freeze_encoded_structural_view_v1(
             code="ENCODED_VIEW_DESCRIPTOR",
         ) from error
 
-    if type(schema_name) is not str or schema_name != ENCODED_STRUCTURAL_SCHEMA_NAME_V1:
-        _fail("encoded structural schema name does not match v1", "ENCODED_VIEW_DESCRIPTOR")
-    if type(schema_version) is not int or schema_version != ENCODED_STRUCTURAL_SCHEMA_VERSION_V1:
-        _fail("encoded structural schema version does not match v1", "ENCODED_VIEW_DESCRIPTOR")
-    if type(model_schema) is not int or model_schema != ENCODED_STRUCTURAL_MODEL_SCHEMA_V1:
-        _fail("encoded structural model schema does not match v1", "ENCODED_VIEW_DESCRIPTOR")
-    if type(descriptor) is not bytes or descriptor != ENCODED_STRUCTURAL_DESCRIPTOR_V1:
+    if type(schema_name) is not str or schema_name != ENCODED_STRUCTURAL_SCHEMA_NAME_V2:
+        _fail("encoded structural schema name does not match v2", "ENCODED_VIEW_DESCRIPTOR")
+    if type(schema_version) is not int or schema_version != ENCODED_STRUCTURAL_SCHEMA_VERSION_V2:
+        _fail("encoded structural schema version does not match v2", "ENCODED_VIEW_DESCRIPTOR")
+    if type(model_schema) is not int or model_schema != ENCODED_STRUCTURAL_MODEL_SCHEMA_V2:
+        _fail("encoded structural model schema does not match v2", "ENCODED_VIEW_DESCRIPTOR")
+    if type(descriptor) is not bytes or descriptor != ENCODED_STRUCTURAL_DESCRIPTOR_V2:
         _fail(
-            "encoded structural descriptor is not the frozen v1 descriptor",
+            "encoded structural descriptor is not the frozen v2 descriptor",
             "ENCODED_VIEW_DESCRIPTOR",
         )
     if owner is not expected_owner:
@@ -1658,7 +1910,7 @@ def _freeze_encoded_structural_view_v1(
             code="ENCODED_VIEW_BUFFERS",
         ) from error
     if set(frozen) != set(_BUFFER_NAMES):
-        _fail("encoded structural buffer set does not match v1", "ENCODED_VIEW_BUFFERS")
+        _fail("encoded structural buffer set does not match v2", "ENCODED_VIEW_BUFFERS")
     for name, width, _scalar in _BUFFER_SPECS:
         if name != "scalar_bytes" and len(frozen[name]) % width:
             _fail("encoded structural column has a partial scalar", "ENCODED_VIEW_BUFFERS")
@@ -1711,7 +1963,7 @@ def _freeze_encoded_structural_view_v1(
             "encoded structural fingerprint does not cover the buffers", "ENCODED_VIEW_FINGERPRINT"
         )
     retained_source = candidate if trusted else expected_owner
-    return EncodedStructuralViewV1(
+    return EncodedStructuralViewV2(
         schema_name,
         schema_version,
         model_schema,
@@ -1736,17 +1988,17 @@ def _freeze_segments(
     limits: ParseLimits,
     trusted_zero_copy: object | None,
     active_views: frozenset[int],
-) -> tuple[EncodedStructuralSegmentV1, ...]:
+) -> tuple[EncodedStructuralSegmentV2, ...]:
     trusted = trusted_zero_copy in {_TRUSTED_ZERO_COPY, _TRUSTED_MAPPED_ZERO_COPY}
     if not raw_segments:
         _fail("encoded structural segment table must not be empty", "ENCODED_VIEW_SEGMENTS")
     limits.enforce("max_index_rows", len(raw_segments))
     limits.enforce("max_composite_members", max(0, len(raw_segments) - 1))
-    frozen: list[EncodedStructuralSegmentV1] = []
+    frozen: list[EncodedStructuralSegmentV2] = []
     posting_bytes = 0
     posting_rows = 0
     for raw_segment in raw_segments:
-        publication = cast(EncodedStructuralSegmentPublicationV1, raw_segment)
+        publication = cast(EncodedStructuralSegmentPublicationV2, raw_segment)
         try:
             role = publication.role
             owner = publication.owner
@@ -1850,7 +2102,7 @@ def _freeze_segments(
             root_ids = memoryview(bytes(raw_root_ids))
             anonymous_scope_map = memoryview(bytes(raw_scope_map))
 
-        frozen_source: EncodedStructuralViewV1 | None = None
+        frozen_source: EncodedStructuralViewV2 | None = None
         if source is None:
             if owner is not top_owner:
                 _fail(
@@ -1859,7 +2111,7 @@ def _freeze_segments(
                 )
             referenced_root_count = local_root_count
         else:
-            source_publication = cast(EncodedStructuralPublicationV1, source)
+            source_publication = cast(EncodedStructuralPublicationV2, source)
             try:
                 source_scope = source_publication.scope
                 source_document_key = source_publication.document_key
@@ -1876,13 +2128,13 @@ def _freeze_segments(
                     code="ENCODED_VIEW_SEGMENTS",
                 ) from error
             source_trust: object | None = None
-            if type(source) is EncodedStructuralViewV1 and source._seal is _VALIDATED_VIEW_SEAL:
+            if type(source) is EncodedStructuralViewV2 and source._seal is _VALIDATED_VIEW_SEAL:
                 # Recheck the exporter invariant so object.__setattr__ cannot
                 # turn the validation seal into a zero-copy bypass.
                 source_trust = _trusted_buffer_mode(source.buffers)
                 if source_trust is None:
                     source_trust = _TRUSTED_ZERO_COPY
-            frozen_source = _freeze_encoded_structural_view_v1(
+            frozen_source = _freeze_encoded_structural_view_v2(
                 source,
                 expected_owner=owner,
                 expected_scope=source_scope,
@@ -1929,7 +2181,7 @@ def _freeze_segments(
             _fail("only composite member segments have tokens", "ENCODED_VIEW_SEGMENTS")
         retained_source = raw_segment if trusted else (owner, frozen_source)
         frozen.append(
-            EncodedStructuralSegmentV1(
+            EncodedStructuralSegmentV2(
                 role,
                 owner,
                 frozen_source,
@@ -1953,7 +2205,7 @@ def _freeze_segments(
 
 
 def _validate_segment_family(
-    segments: tuple[EncodedStructuralSegmentV1, ...],
+    segments: tuple[EncodedStructuralSegmentV2, ...],
     top_owner: OntologyView,
     local_root_count: int,
 ) -> None:
@@ -2152,7 +2404,7 @@ def _validate_columns(buffers: Mapping[str, memoryview], limits: ParseLimits) ->
 
     reached: set[int] = set()
     previous_root: tuple[int, bytes] | None = None
-    root_hasher = hashlib.sha256(_ROOT_DIGEST_DOMAIN)
+    root_hasher = hashlib.sha256(_ROOT_DIGEST_DOMAIN_V2)
     for root_index in range(len(columns.roots_kind)):
         root_kind = columns.roots_kind[root_index]
         root_id = columns.roots_id[root_index]
@@ -2177,7 +2429,7 @@ def _validate_columns(buffers: Mapping[str, memoryview], limits: ParseLimits) ->
     return root_hasher.digest()
 
 
-def _encoded_structural_root_digest_v1(
+def _encoded_structural_root_digest_v2(
     buffers: Mapping[str, memoryview], limits: ParseLimits
 ) -> bytes:
     """Validate one column set and return its canonical effective-root digest."""
@@ -2185,10 +2437,10 @@ def _encoded_structural_root_digest_v1(
     return _validate_columns(buffers, limits)
 
 
-def _encoded_structural_wire_rows_v1(
-    publication: EncodedStructuralViewV1,
+def _encoded_structural_wire_rows_v2(
+    publication: EncodedStructuralViewV2,
     limits: ParseLimits,
-) -> _EncodedStructuralWireRowsV1:
+) -> _EncodedStructuralWireRowsV2:
     """Reconstruct canonical rows from one already validated direct publication.
 
     This is deliberately private wire plumbing. It accepts only a sealed
@@ -2198,7 +2450,7 @@ def _encoded_structural_wire_rows_v1(
     """
 
     if (
-        type(publication) is not EncodedStructuralViewV1
+        type(publication) is not EncodedStructuralViewV2
         or publication._seal is not _VALIDATED_VIEW_SEAL
         or len(publication.segments) != 1
         or publication.segments[0].role != _SEGMENT_DIRECT
@@ -2246,10 +2498,10 @@ def _encoded_structural_wire_rows_v1(
                 scalar_strings.add(bytes(columns.scalar_bytes[value : value + length]))
             elif kind == _ENUM and tag == 2:
                 # EntityKind is a ``str`` enum, so scalar traversal interns its
-                # value in STRINGS even though canonical-model-v1 tags it ENUM.
+                # value in STRINGS even though canonical-model-v2 tags it ENUM.
                 scalar_strings.add(bytes(columns.scalar_bytes[value : value + length]))
             elif kind in {_SET, _SEQUENCE}:
-                descriptor = _encoded_sequence_descriptor_v1(
+                descriptor = _encoded_sequence_descriptor_v2(
                     columns,
                     kind,
                     value,
@@ -2267,7 +2519,7 @@ def _encoded_structural_wire_rows_v1(
         )
         for index in range(len(columns.roots_id))
     )
-    return _EncodedStructuralWireRowsV1(
+    return _EncodedStructuralWireRowsV2(
         tuple(nodes),
         roots,
         tuple(sorted(scalar_strings)),
@@ -2275,7 +2527,7 @@ def _encoded_structural_wire_rows_v1(
     )
 
 
-def _encoded_sequence_descriptor_v1(
+def _encoded_sequence_descriptor_v2(
     columns: _Columns,
     kind: int,
     start: int,
@@ -2292,7 +2544,7 @@ def _encoded_sequence_descriptor_v1(
         if item_kind == _NODE:
             payload = _canonical_node(columns, item_value, memo, set(), None, limits)
         else:
-            payload = _encoded_sequence_scalar_repr_v1(
+            payload = _encoded_sequence_scalar_repr_v2(
                 columns,
                 item_kind,
                 item_value,
@@ -2302,7 +2554,7 @@ def _encoded_sequence_descriptor_v1(
     return bytes(output)
 
 
-def _encoded_sequence_scalar_repr_v1(
+def _encoded_sequence_scalar_repr_v2(
     columns: _Columns,
     kind: int,
     start: int,
@@ -2317,7 +2569,7 @@ def _encoded_sequence_scalar_repr_v1(
         return repr(payload).encode("utf-8")
     if kind == _INTEGER:
         return repr(int.from_bytes(payload, "little")).encode("utf-8")
-    # Schema v1 currently has no constructor whose ordered sequence contains
+    # Schema v2 currently has no constructor whose ordered sequence contains
     # enum scalars.  Enum repr also includes its Python class name, so guessing
     # from the payload would make the supposedly language-neutral route unsafe.
     _fail(
@@ -2326,12 +2578,12 @@ def _encoded_sequence_scalar_repr_v1(
     )
 
 
-def _encoded_structural_rows_digest_v1(
+def _encoded_structural_rows_digest_v2(
     rows: Iterable[tuple[int, bytes | memoryview]],
 ) -> bytes:
     """Digest canonical model rows using the encoded-view root ordering."""
 
-    hasher = hashlib.sha256(_ROOT_DIGEST_DOMAIN)
+    hasher = hashlib.sha256(_ROOT_DIGEST_DOMAIN_V2)
     for kind, encoded in rows:
         hasher.update(kind.to_bytes(1, "little"))
         hasher.update(len(encoded).to_bytes(8, "little"))
@@ -2593,11 +2845,11 @@ def _validate_root_tag(kind: int, tag: int) -> None:
 
 def _fingerprint(
     buffers: Mapping[str, memoryview],
-    segments: tuple[EncodedStructuralSegmentV1, ...],
+    segments: tuple[EncodedStructuralSegmentV2, ...],
 ) -> Fingerprint:
     hasher = hashlib.sha256()
-    hasher.update(b"pyowl-core:encoded-structural-view:v1\x00")
-    hasher.update(_frame(ENCODED_STRUCTURAL_DESCRIPTOR_V1))
+    hasher.update(b"pyowl-core:encoded-structural-view:v2\x00")
+    hasher.update(_frame(ENCODED_STRUCTURAL_DESCRIPTOR_V2))
     for name in _BUFFER_NAMES:
         hasher.update(_frame(name.encode("ascii")))
         value = buffers[name]
@@ -2621,7 +2873,7 @@ def _fingerprint(
         hasher.update(segment.root_ids)
         hasher.update(len(segment.anonymous_scope_map).to_bytes(8, "little"))
         hasher.update(segment.anonymous_scope_map)
-    return Fingerprint("sha256", 1, hasher.digest())
+    return Fingerprint("sha256", 2, hasher.digest())
 
 
 def _pack_unsigned(values: Sequence[int], width: int) -> bytes:
@@ -2663,18 +2915,30 @@ def _fail(message: str, code: str) -> NoReturn:
 
 __all__ = [
     "ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1",
+    "ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2",
     "ENCODED_STRUCTURAL_DESCRIPTOR_V1",
+    "ENCODED_STRUCTURAL_DESCRIPTOR_V2",
     "ENCODED_STRUCTURAL_MODEL_SCHEMA_V1",
+    "ENCODED_STRUCTURAL_MODEL_SCHEMA_V2",
     "ENCODED_STRUCTURAL_SCHEMA_NAME_V1",
+    "ENCODED_STRUCTURAL_SCHEMA_NAME_V2",
     "ENCODED_STRUCTURAL_SCHEMA_VERSION_V1",
+    "ENCODED_STRUCTURAL_SCHEMA_VERSION_V2",
     "EncodedStructuralOptionsV1",
+    "EncodedStructuralOptionsV2",
     "EncodedStructuralPublicationV1",
+    "EncodedStructuralPublicationV2",
     "EncodedStructuralSegmentPublicationV1",
+    "EncodedStructuralSegmentPublicationV2",
     "EncodedStructuralSegmentV1",
+    "EncodedStructuralSegmentV2",
     "EncodedStructuralView",
     "EncodedStructuralViewV1",
+    "EncodedStructuralViewV2",
     "NativeViewExtension",
     "produce_encoded_structural_view_v1",
+    "produce_encoded_structural_view_v2",
     "require_view_binding",
     "validate_encoded_structural_view_v1",
+    "validate_encoded_structural_view_v2",
 ]

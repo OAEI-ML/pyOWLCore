@@ -460,12 +460,14 @@ fn validate_publication(draft: &PublicationDraftV1) -> NativeResult<Aggregates> 
         draft.documents.len(),
         MAX_DOCUMENTS,
         &draft.load_options.limits.max_documents,
+        "max_documents",
         "native publication document count exceeds limits",
     )?;
     check_count(
         draft.import_manifest.edges.len(),
         MAX_IMPORT_EDGES,
         &draft.load_options.limits.max_axioms,
+        "max_axioms",
         "native publication import edge count exceeds limits",
     )?;
     if draft.documents.len() != draft.document_members.len()
@@ -627,14 +629,20 @@ fn validate_publication(draft: &PublicationDraftV1) -> NativeResult<Aggregates> 
             ));
         }
     }
-    if !draft
-        .load_options
-        .limits
-        .max_diagnostics
-        .allows(aggregates.diagnostics)
-        || aggregates.diagnostics > MAX_TOTAL_DIAGNOSTICS
-    {
-        return Err(NativeError::limit(
+    let configured_diagnostics = &draft.load_options.limits.max_diagnostics;
+    let allowed_diagnostics = if configured_diagnostics.allows(MAX_TOTAL_DIAGNOSTICS) {
+        MAX_TOTAL_DIAGNOSTICS
+    } else {
+        configured_diagnostics
+            .decimal()
+            .parse::<u64>()
+            .map_err(|_| NativeError::protocol("native diagnostic limit exceeds u64"))?
+    };
+    if aggregates.diagnostics > allowed_diagnostics {
+        return Err(NativeError::resource_limit(
+            "max_diagnostics",
+            aggregates.diagnostics,
+            allowed_diagnostics,
             "native publication diagnostic count exceeds limits",
         ));
     }
@@ -1067,11 +1075,23 @@ fn check_count(
     value: usize,
     hard: usize,
     configured: &PositiveIntegerV1,
+    limit: &'static str,
     message: &'static str,
 ) -> NativeResult<()> {
     let value_u64 = usize_u64(value)?;
-    if value > hard || !configured.allows(value_u64) {
-        return Err(NativeError::limit(message));
+    let hard_u64 = usize_u64(hard)?;
+    let allowed = if configured.allows(hard_u64) {
+        hard_u64
+    } else {
+        configured
+            .decimal()
+            .parse::<u64>()
+            .map_err(|_| NativeError::protocol("native publication limit exceeds u64"))?
+    };
+    if value_u64 > allowed {
+        return Err(NativeError::resource_limit(
+            limit, value_u64, allowed, message,
+        ));
     }
     Ok(())
 }

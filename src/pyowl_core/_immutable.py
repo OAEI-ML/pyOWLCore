@@ -9,6 +9,13 @@ _K = TypeVar("_K")
 _V = TypeVar("_V")
 
 
+def _deterministic_key(value: object) -> tuple[str, str]:
+    """Order byte keys by their bytes while retaining a total generic fallback."""
+
+    encoded = value.hex() if isinstance(value, bytes) else repr(value)
+    return type(value).__qualname__, encoded
+
+
 class FrozenMap(Mapping[_K, _V], Generic[_K, _V]):
     """A deterministic, recursively caller-isolated read-only mapping.
 
@@ -26,7 +33,7 @@ class FrozenMap(Mapping[_K, _V], Generic[_K, _V]):
         items = tuple(
             sorted(
                 data.items(),
-                key=lambda item: (type(item[0]).__qualname__, repr(item[0])),
+                key=lambda item: _deterministic_key(item[0]),
             )
         )
         self._data = data

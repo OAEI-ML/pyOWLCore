@@ -61,7 +61,7 @@ final class CommonContractTest {
                         "a68176678f9e39941cd6258b3b7181355afbbf751c89e43cc69e516aed82d24c"));
 
         assertEquals(
-                "c6d135da81058b44cf4f3a550568b4e4ee8ecd35352548bf2ebd629996ab860b",
+                "2486deb9aa5a1ef9d4a7053ba6901755a69222ca645ca2e78425b2068c5edded",
                 built.contract.get("contract_sha256"));
     }
 
@@ -87,7 +87,7 @@ final class CommonContractTest {
                         "6ad540e139870561dc6d37919e52c6534a494441e40a80fad8ab0f2e7a0f169b"));
 
         assertEquals(
-                "ac8bf5e2bd26f22ba4989bd376189f3fcfca44e03d99bfe8321c967bc02f56e7",
+                "99bf45bc2717b0181e3439b62983987008bde4d4d355bcf1b6fff13292d1e1bf",
                 built.contract.get("contract_sha256"));
     }
 
@@ -117,7 +117,7 @@ final class CommonContractTest {
                         "6ad540e139870561dc6d37919e52c6534a494441e40a80fad8ab0f2e7a0f169b"));
 
         assertEquals(
-                "3373ab19c1a1ad7f231f7560937c8e1581dde37f491f7359508cfc54afa49489",
+                "ca7fc20a27393eae8bb6bc335bd14538e758f195aff3be027bc97f65439dc3fb",
                 built.contract.get("contract_sha256"));
     }
 

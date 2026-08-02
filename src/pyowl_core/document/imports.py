@@ -299,6 +299,11 @@ class ParsedDocumentCache:
     def publish(self, key: tuple[object, ...], document: OntologyDocument) -> OntologyDocument:
         if not isinstance(document, OntologyDocument):
             raise TypeError("document must be OntologyDocument")
+        if document.rdf_mapping_report is not None and not document.rdf_mapping_report.conformant:
+            raise OptionConflictError(
+                "a nonconformant RDF diagnostic document cannot enter the parsed-document cache",
+                code="PARTIAL_RDF_MAPPING_SNAPSHOT_FORBIDDEN",
+            )
         with self._lock:
             retained = self._documents.setdefault(key, document)
         return retained
@@ -376,6 +381,11 @@ class SnapshotLoader:
         selected = LoadOptions() if options is None else options
         if not isinstance(selected, LoadOptions):
             raise TypeError("options must be LoadOptions or None")
+        if selected.allow_partial_rdf_mapping:
+            raise OptionConflictError(
+                "partial RDF mapping is diagnostic-only and cannot create a snapshot",
+                code="PARTIAL_RDF_MAPPING_SNAPSHOT_FORBIDDEN",
+            )
         if resolver is not None and not isinstance(resolver, ImportResolver):
             raise TypeError("resolver must implement ImportResolver or be None")
         if cancellation_token is not None and not isinstance(cancellation_token, CancellationToken):
@@ -386,6 +396,15 @@ class SnapshotLoader:
             raise OptionConflictError(
                 "document_iri applies only to an unparsed root source",
                 code="DOCUMENT_IRI_SOURCE_CONFLICT",
+            )
+        if (
+            isinstance(source, OntologyDocument)
+            and source.rdf_mapping_report is not None
+            and not source.rdf_mapping_report.conformant
+        ):
+            raise OptionConflictError(
+                "a nonconformant RDF diagnostic document cannot create a snapshot",
+                code="PARTIAL_RDF_MAPPING_SNAPSHOT_FORBIDDEN",
             )
         if isinstance(source, OntologyDocument) and selected.backend is BackendPreference.NATIVE:
             raise BackendUnavailableError(
@@ -921,8 +940,8 @@ def _document_key(document: OntologyDocument, *, import_iri: IRI | None = None) 
             payload += _frame(canonical_bytes(import_iri))
     else:
         payload = b"named" + b"".join(_frame(item.encode("utf-8")) for item in identity)
-    digest = hashlib.sha256(b"pyowl-core:document-key:v1\x00" + payload).hexdigest()
-    return f"d1:{digest}"
+    digest = hashlib.sha256(b"pyowl-core:document-key:v2\x00" + payload).hexdigest()
+    return f"d2:{digest}"
 
 
 def _identity_claim(document: OntologyDocument) -> tuple[str, ...] | None:
