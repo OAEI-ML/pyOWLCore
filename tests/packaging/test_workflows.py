@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 WHEELS = (WORKFLOWS / "wheels.yml").read_text(encoding="utf-8")
@@ -179,7 +181,6 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         "tools.packaging.import_probe",
         "tools.packaging.supply_chain",
         "tools.packaging.release_report",
-        "--require-ready",
         "tools.packaging.platform_audit audit",
         "tools.packaging.platform_audit verify-set",
         "cargo audit --deny warnings",
@@ -219,6 +220,7 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
     assert "Visual Studio\\2022" not in WHEELS
     assert "abi3" not in WHEELS.casefold()
     assert "free-thread" not in WHEELS.casefold()
+    assert "--require-ready" not in WHEELS
     for command in (
         '("auditwheel", "show"',
         '("delocate-listdeps", "--all"',
@@ -228,6 +230,68 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         '("dumpbin", "/DEPENDENTS"',
     ):
         assert command in PLATFORM_AUDIT
+
+
+def test_wheel_workflow_allows_only_the_four_downstream_staged_gates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snippets = tuple(
+        snippet for snippet in _inline_python(WHEELS) if "expected_blockers" in snippet
+    )
+    assert len(snippets) == 1
+    snippet = compile(snippets[0], "wheels-staged-gates.py", "exec")
+    staged = {
+        "reference_performance",
+        "signatures",
+        "source_tag_verified",
+        "testpypi_rehearsal",
+    }
+    all_gates = staged | {
+        "advisory_scan",
+        "consumer_matrix",
+        "legal_review",
+        "name_control",
+        "platform_artifact_audit",
+        "project_urls",
+        "release_owner_approval",
+        "trusted_publishing",
+    }
+
+    def report(*, extra_blocked: set[str] | None = None) -> dict[str, object]:
+        blocked = staged | (extra_blocked or set())
+        gates = {
+            name: {
+                "status": "blocked" if name in blocked else "passed",
+                "evidence": f"evidence for {name}",
+            }
+            for name in all_gates
+        }
+        return {
+            "release_ready": False,
+            "gates": gates,
+            "artifacts": [
+                {"inspection_ok": True, "errors": [], "release_blockers": []}
+            ],
+            "blockers": sorted(
+                f"release gate {name} is blocked: {gates[name]['evidence']}"
+                for name in blocked
+            ),
+        }
+
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    report_path = candidate / "release-report.json"
+    monkeypatch.chdir(tmp_path)
+    report_path.write_text(json.dumps(report()), encoding="utf-8")
+    exec(snippet, {})
+
+    report_path.write_text(
+        json.dumps(report(extra_blocked={"consumer_matrix"})),
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError):
+        exec(snippet, {})
 
 
 def test_release_consumes_verified_artifacts_and_never_rebuilds() -> None:
@@ -253,6 +317,7 @@ def test_release_consumes_verified_artifacts_and_never_rebuilds() -> None:
     assert 'report["release_ready"] is True' in RELEASE
     assert "sha256sum --check" in RELEASE
     assert "python -m build" not in RELEASE
+    assert "--require-ready" in RELEASE
     assert re.search(r"\b0\.1\.\d+\b", RELEASE) is None
     assert "packages-dir: candidate/dist/" in RELEASE
     performance_verification = RELEASE.index(
