@@ -17,7 +17,7 @@ use crate::publication::{
     TypedFacadeBuilderV2, TypedFacadeCollectionV2, TypedFacadeCoordinateV2,
     TypedFacadePageRequestV2, TypedFacadeScopeV2, TypedFacadeStorageV2, TypedFacadeTableV2,
 };
-use crate::wire::Validation;
+use crate::wire::{Validation, MODEL_SCHEMA};
 
 const WIRE_HEADER_BYTES: usize = 96;
 const WIRE_DIRECTORY_BYTES: usize = 72;
@@ -969,7 +969,7 @@ impl WireValidationFixture {
         bytes[12..16].copy_from_slice(&(WIRE_HEADER_BYTES as u32).to_le_bytes());
         bytes[16..20].copy_from_slice(&0_u32.to_le_bytes());
         bytes[20..24].copy_from_slice(&(WIRE_SECTION_COUNT as u32).to_le_bytes());
-        bytes[24..28].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[24..28].copy_from_slice(&MODEL_SCHEMA.to_le_bytes());
         bytes[28..32].copy_from_slice(&1_u32.to_le_bytes());
         bytes[32..40].copy_from_slice(&(WIRE_FIXTURE_BYTES as u64).to_le_bytes());
         bytes[40..48].copy_from_slice(&(WIRE_HEADER_BYTES as u64).to_le_bytes());
