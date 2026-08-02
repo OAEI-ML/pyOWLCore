@@ -82,6 +82,17 @@ def _limit(limits: object | None, name: str, default: int) -> int:
     return value
 
 
+def _enforce_canonical_row_size(size: int, limits: object | None) -> None:
+    maximum = _limit(limits, "max_canonical_work", 1_000_000_000)
+    if size > maximum:
+        raise ResourceLimitError(
+            "resource limit max_canonical_work exceeded",
+            limit="max_canonical_work",
+            observed=size,
+            allowed=maximum,
+        )
+
+
 def encode_varint(value: int) -> bytes:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError("varint value must be an integer")
@@ -103,7 +114,9 @@ def _framed(payload: bytes) -> bytes:
 def canonical_bytes(value: StructuralNode, *, limits: object | None = None) -> bytes:
     if not isinstance(value, StructuralNode):
         raise TypeError("value must be a StructuralNode")
-    return _encode_node(value, _Budget.from_limits(limits), 0, set())
+    encoded = _encode_node(value, _Budget.from_limits(limits), 0, set())
+    _enforce_canonical_row_size(len(encoded), limits)
+    return encoded
 
 
 def _encode_node(
@@ -181,6 +194,7 @@ def structural_hexdigest(value: StructuralNode, *, limits: object | None = None)
 def decode_canonical(data: bytes, *, limits: object | None = None) -> StructuralNode:
     if not isinstance(data, bytes):
         raise TypeError("canonical data must be bytes")
+    _enforce_canonical_row_size(len(data), limits)
     budget = _Budget.from_limits(limits)
     value, offset = _decode_node(data, 0, budget, 0)
     if offset != len(data):

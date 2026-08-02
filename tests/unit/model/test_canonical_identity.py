@@ -35,9 +35,7 @@ class CanonicalIdentityTests(unittest.TestCase):
             "f707f6da3af9c5229ebe815213055808a62990ccebab2d3885ebdfa851249b74",
         )
         self.assertEqual(
-            hashlib.sha256(
-                b"pyowl-core:structural-value:v1\x00\x01" + expected
-            ).hexdigest(),
+            hashlib.sha256(b"pyowl-core:structural-value:v1\x00\x01" + expected).hexdigest(),
             "a552215a1bbdd4fc7e477d2af737482fe35ca0b5af0f19986b859656278ecf8f",
         )
 
@@ -185,6 +183,35 @@ class CanonicalIdentityTests(unittest.TestCase):
         chain = m.ObjectPropertyChain((p, p, p))
         with self.assertRaises(ResourceLimitError):
             m.canonical_bytes(chain, limits=ParseLimits(max_sequence_arity=2))
+
+    def test_canonical_work_bounds_each_model_row_without_summing_rows(self) -> None:
+        rows = (m.IRI("https://example.org/A"), m.IRI("https://example.org/B"))
+        encoded_rows = tuple(m.canonical_bytes(row) for row in rows)
+        row_limit = max(map(len, encoded_rows))
+        limits = ParseLimits(max_canonical_work=row_limit)
+
+        self.assertGreater(sum(map(len, encoded_rows)), row_limit)
+        for row, encoded in zip(rows, encoded_rows, strict=True):
+            self.assertEqual(m.canonical_bytes(row, limits=limits), encoded)
+            self.assertEqual(m.decode_canonical(encoded, limits=limits), row)
+
+        too_small = ParseLimits(max_canonical_work=row_limit - 1)
+        operations = (
+            lambda: m.canonical_bytes(rows[0], limits=too_small),
+            lambda: m.decode_canonical(encoded_rows[0], limits=too_small),
+        )
+        for operation in operations:
+            with (
+                self.subTest(operation=operation),
+                self.assertRaises(ResourceLimitError) as captured,
+            ):
+                operation()
+            error = captured.exception
+            self.assertEqual(
+                (error.limit, error.observed, error.allowed),
+                ("max_canonical_work", row_limit, row_limit - 1),
+            )
+            self.assertEqual(dict(error.details), {})
 
     def test_default_depth_boundary_succeeds_then_fails_without_recursion_error(self) -> None:
         near_limit: m.ClassExpression = _class("A")

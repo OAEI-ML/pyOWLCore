@@ -211,3 +211,44 @@ def test_public_native_direct_limits_and_cancellation_fail_without_fallback(
         cast(Any, cancelled_raw)._publication_counters_v2().encoded_view_requests
         == cancelled_before.encoded_view_requests
     )
+
+
+def test_public_native_direct_canonical_work_is_per_row_and_tightens_at_publication(
+    extension: NativeTestExtension,
+) -> None:
+    owner, raw_owner = _proxy(extension)
+    expected = canonical_bytes(Declaration(Class(IRI("urn:encoded-view:fixture"))))
+    row_limit = len(expected)
+    before = cast(Any, raw_owner)._publication_counters_v2()
+
+    encoded = owner.view(
+        EncodedStructuralViewV2,
+        limits=ParseLimits(max_canonical_work=row_limit),
+    )
+    after_success = cast(Any, raw_owner)._publication_counters_v2()
+
+    assert decode_root_canonical_bytes(encoded.buffers) == ((2, expected),)
+    assert sum(len(value) for value in encoded.buffers.values()) > row_limit
+    assert after_success.encoded_view_requests == before.encoded_view_requests + 1
+    assert owner.scalar_calls == 0
+
+    with pytest.raises(ResourceLimitError) as limited:
+        owner.view(
+            EncodedStructuralViewV2,
+            limits=ParseLimits(max_canonical_work=row_limit - 1),
+        )
+
+    error = limited.value
+    assert (error.code, error.limit, error.observed, error.allowed) == (
+        "NATIVE_WIRE_LIMIT",
+        "max_canonical_work",
+        row_limit,
+        row_limit - 1,
+    )
+    assert dict(error.details) == {}
+    assert owner.scalar_calls == 0
+    assert (
+        cast(Any, raw_owner)._publication_counters_v2().encoded_view_requests
+        == after_success.encoded_view_requests
+    )
+    cast(Any, raw_owner)._publication_close_v2()

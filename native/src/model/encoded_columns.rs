@@ -3154,18 +3154,28 @@ mod tests {
 
         let mut row_limited = work_limited;
         row_limited.max_canonical_work -= 1;
+        let row_error = build_encoded_structural_columns_v1(
+            &arena,
+            &roots,
+            &row_limited,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect_err("one oversized canonical row remains bounded");
+        assert_eq!(row_error.code, "NATIVE_WIRE_LIMIT");
+        let crate::error::NativeErrorPayload::ResourceLimit(payload) = row_error.payload else {
+            panic!("configured canonical-row failure omitted its typed payload");
+        };
+        assert_eq!(payload.limit, "max_canonical_work");
         assert_eq!(
-            build_encoded_structural_columns_v1(
-                &arena,
-                &roots,
-                &row_limited,
-                Cancellation::with_duration(None),
-                None,
-            )
-            .expect_err("one oversized canonical row remains bounded")
-            .code,
-            "NATIVE_WIRE_LIMIT"
+            payload.observed,
+            crate::error::NativeNumber::Integer(work_limited.max_canonical_work)
         );
+        assert_eq!(
+            payload.allowed,
+            crate::error::NativeNumber::Integer(row_limited.max_canonical_work)
+        );
+        assert_eq!(payload.details, crate::error::NativeLimitDetails::default());
 
         let mut depth_limited = limits;
         depth_limited.max_nesting_depth = 0;
