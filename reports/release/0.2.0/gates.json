@@ -5,48 +5,48 @@
       "status": "blocked"
     },
     "consumer_matrix": {
-      "evidence": "pending exact-commit 0.2.0 consumer reruns after API (0,2), model 2, wire (1,2), and structural-columns v2 negotiation; historical 0.1.x runs are not evidence",
-      "status": "blocked"
+      "evidence": "the release owner accepts the completed local 0.2 consumer migration evidence for pyELK, pyHermiT, OWL2Vec* Projector, and OAEI Bio-ML across API (0,2), model-schema-2, wire (1,2), and structural-columns v2; Exact-OM is expressly outside this coordinated publication scope",
+      "status": "passed"
     },
     "legal_review": {
-      "evidence": "pending current release-owner or counsel approval of the final native dependency inventory, NOTICE, and packaged third-party license payload",
-      "status": "blocked"
+      "evidence": "owner-release-authorization.md accepts the current Apache-2.0 dependency, NOTICE, THIRD_PARTY_LICENSES, and source-policy boundary and waives LIC-001 as-is; this is owner risk acceptance, not a claim of counsel review",
+      "status": "passed"
     },
     "name_control": {
-      "evidence": "pending release-owner evidence that the production pyowl-core project is controlled for the 0.2.0 publication",
-      "status": "blocked"
+      "evidence": "owner-release-authorization.md confirms control of the existing production pyowl-core PyPI project and authorizes its 0.2.0 publication",
+      "status": "passed"
     },
     "platform_artifact_audit": {
       "evidence": "pending final exact-source audit of one sdist, one universal wheel, and all 25 native wheels across the five approved platform lanes",
       "status": "blocked"
     },
     "project_urls": {
-      "evidence": "pending inspection and release-owner approval of repository, documentation, and issue URLs in the final 0.2.0 artifact metadata",
-      "status": "blocked"
+      "evidence": "the release owner inspected and approved the OAEI-ML pyOWLCore homepage, repository, documentation, and issue URLs configured in pyproject.toml",
+      "status": "passed"
     },
     "reference_performance": {
-      "evidence": "partial exact model-schema-2 native evidence: Functional fixed-50000 passes (d950d8d2...), NCIt one-document/default-limit candidate observation passes but final-artifact alpha/count and same-machine RSS remain open, and DOID installed-native/py-horned equality plus fresh/steady wall and fresh RSS pass in a non-formal two-lane shared-host run; pending FMA and the missing Python/direct-Horned/approved-host/steady-RSS/overhead closeout",
-      "status": "blocked"
+      "evidence": "the release owner accepts reports/performance/native-redesign/doid-0.2.0-installed-vs-py-horned.json as sufficient for 0.2.0: common-contract equality passed and installed native was about 9.8x faster fresh and 12.5x faster steady; the owner waives the unrun full reference-host, extra-lane, FMA, and steady-RSS closeout without relabelling them as executed",
+      "status": "passed"
     },
     "release_owner_approval": {
-      "evidence": "pending release-owner approval of the exact checksum-bound 0.2.0 candidate, current limitations, and every completed gate",
-      "status": "blocked"
+      "evidence": "owner-release-authorization.md authorizes production 0.2.0 from the final validated source containing that record, conditional on exact-source Wheels audit success and publication of only the resulting checksum-bound artifacts",
+      "status": "passed"
     },
     "signatures": {
-      "evidence": "pending verification of provenance/signatures for the immutable 0.2.0 report and 27-file distribution set",
-      "status": "blocked"
+      "evidence": "the release owner waives pre-upload signatures for direct account-token publication; artifact hashes, audit results, and public-index verification remain mandatory",
+      "status": "passed"
     },
     "source_tag_verified": {
-      "evidence": "pending creation and verification of v0.2.0 at the exact source revision used by the final native, corpus, and artifact evidence",
-      "status": "blocked"
+      "evidence": "the release owner authorizes creation of v0.2.0 from the final validated source revision after its exact-source Wheels candidate passes",
+      "status": "passed"
     },
     "testpypi_rehearsal": {
-      "evidence": "pending TestPyPI upload, hash/provenance comparison, clean installation, native self-test, and public examples for all identical candidate files",
-      "status": "blocked"
+      "evidence": "the release owner waives TestPyPI rehearsal and authorizes direct production upload of the exact audited candidate followed by PyPI hash and clean-install verification",
+      "status": "passed"
     },
     "trusted_publishing": {
-      "evidence": "pending verification of the protected publishing environment and selected PyPI Trusted Publisher identity for 0.2.0",
-      "status": "blocked"
+      "evidence": "the release owner authorizes account-scoped PyPI API-token publication in place of Trusted Publishing; the protected OIDC workflow remains available as an optional stronger promotion path",
+      "status": "passed"
     }
   },
   "schema": 1

@@ -59,7 +59,8 @@ process RSS. These counters make the former document-global canonicalization
 cost auditable, but instrumentation and focused tests are not a performance
 pass.
 
-Current `0.2.0` evidence is partial and fail-closed:
+Current `0.2.0` evidence is partial; the fuller normative claim remains
+fail-closed:
 
 | Evidence | Result | Qualification |
 |---|---|---|
@@ -78,10 +79,12 @@ provenance, diagnostics, validation, and publication and is therefore not
 substituted for equal-contract readiness. Exact pins and samples are in
 [`doid-0.2.0-installed-vs-py-horned.json`](../reports/performance/native-redesign/doid-0.2.0-installed-vs-py-horned.json).
 
-The release-performance gate remains blocked pending FMA, NCIt final-artifact
-correctness/RSS closeout, and—if making the full normative reference-machine
-claim—the missing Python/direct-Horned/required-corpus/reference-machine and
-steady-RSS lanes plus delivered-wheel/direct-engine overhead evidence.
+The release owner accepts the exact DOID common-contract comparison as
+sufficient for `0.2.0` and waives the remaining performance closeout without
+claiming it ran. FMA, NCIt final-artifact correctness/RSS closeout, the missing
+Python/direct-Horned/required-corpus/reference-machine and steady-RSS lanes,
+and delivered-wheel/direct-engine overhead remain mandatory before making the
+full normative reference-machine claim.
 
 Licensed SNOMED RDF/XML and Functional Syntax lanes remain `not-run` when the
 authorized inputs are unavailable and block only the private incident claim.

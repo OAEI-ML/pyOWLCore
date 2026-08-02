@@ -194,7 +194,8 @@ jobs:
               "testpypi_rehearsal",
           }
           assert all(
-              report["gates"][name]["status"] == "blocked" for name in staged
+              report["gates"][name]["status"] in {"blocked", "passed"}
+              for name in staged
           )
           assert all(
               gate["status"] == "passed"

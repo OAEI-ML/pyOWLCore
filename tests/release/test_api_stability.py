@@ -57,9 +57,11 @@ def test_release_checklist_is_fail_closed_and_preserves_historical_override() ->
     checklist = (ROOT / "docs" / "release-checklist.md").read_text(encoding="utf-8")
     assert "corrective `0.1.1` owner override" in checklist
     assert "reports/release/0.2.0/gates.json" in checklist
-    assert "- [ ] `consumer_matrix`" in checklist
+    assert "owner-release-authorization.md" in checklist
+    assert "- [x] `consumer_matrix`" in checklist
+    assert "- [ ] `advisory_scan`" in checklist
     assert "- [ ] `platform_artifact_audit`" in checklist
-    assert "- [ ] `reference_performance`" in checklist
+    assert "- [x] `reference_performance`" in checklist
     assert "not promoted into the `0.2.0` gate ledger" in checklist
 
 
@@ -72,5 +74,6 @@ def test_docs_disclose_release_status_and_unsupported_performance_claims() -> No
     assert "No 2x parser claim" in " ".join(performance.split())
     assert "shared-host" in performance
     assert "reference" in performance
-    assert "Current `0.2.0` evidence is partial and fail-closed" in performance
+    assert "Current `0.2.0` evidence is partial" in performance
+    assert "fuller normative claim remains" in performance
     assert "no portable performance claim" in performance

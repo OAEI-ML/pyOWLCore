@@ -6,9 +6,12 @@ version and implementation checkpoint, not evidence that the release has been
 published or that an unexecuted gate passed.
 
 The machine-readable authority is
-[`reports/release/0.2.0/gates.json`](../reports/release/0.2.0/gates.json). Every
-entry is fail-closed until evidence from the final source revision replaces its
-blocked description.
+[`reports/release/0.2.0/gates.json`](../reports/release/0.2.0/gates.json).
+The release-owner decision is recorded in
+[`owner-release-authorization.md`](../reports/release/0.2.0/owner-release-authorization.md).
+Only the exact-source advisory and platform entries remain fail-closed; the
+Wheels aggregate must replace both before it can publish a release-ready
+candidate.
 
 ## Implemented checkpoint
 
@@ -30,27 +33,33 @@ release gates below.
 ## Required 0.2.0 gates
 
 - [ ] `advisory_scan`: attach the final exact-source RustSec result.
-- [ ] `consumer_matrix`: rerun the exact supported consumers after they widen
-      their ranges and negotiate API `(0,2)` / encoded schema 2.
-- [ ] `legal_review`: record current release-owner or counsel approval for the
-      final native dependency and packaged notice inventory.
-- [ ] `name_control`: record control of the production `pyowl-core` project for
-      this release.
+- [x] `consumer_matrix`: the owner accepts the completed local 0.2 migrations
+      for pyELK, pyHermiT, Projector, and OAEI; Exact-OM is outside this
+      coordinated publication scope.
+- [x] `legal_review`: the owner accepts the current dependency, notice, licence,
+      and source-policy boundary and waives `LIC-001` as-is without claiming
+      counsel review.
+- [x] `name_control`: the owner confirms control of the production
+      `pyowl-core` project for this release.
 - [ ] `platform_artifact_audit`: build and audit the complete 25-native-wheel,
       one-pure-wheel, one-sdist candidate from one revision.
-- [ ] `project_urls`: inspect the final artifacts and approve their repository,
+- [x] `project_urls`: the owner approves the configured OAEI-ML repository,
       documentation, and issue URLs.
-- [ ] `reference_performance`: attach the required pinned-corpus one-pass,
-      memory, correctness, component-scaling, and Horned comparison evidence.
-- [ ] `release_owner_approval`: approve the exact checksum-bound candidate and
-      its documented limitations.
-- [ ] `signatures`: verify provenance/signatures for the immutable candidate.
-- [ ] `source_tag_verified`: create and verify `v0.2.0` at the exact tested
-      source revision.
-- [ ] `testpypi_rehearsal`: install and verify every identical candidate file
-      from TestPyPI.
-- [ ] `trusted_publishing`: verify the selected publishing identity and
-      protected-environment configuration.
+- [x] `reference_performance`: the owner accepts the exact installed-native
+      versus py-horned DOID common-contract result for 0.2.0 and waives the
+      disclosed fuller reference-host closeout without calling it executed.
+- [x] `release_owner_approval`: the owner authorizes the final validated source
+      and only the exact candidate that passes the two remaining automated
+      gates.
+- [x] `signatures`: pre-upload signatures are waived for account-token
+      publication; artifact hashes and post-upload verification remain
+      mandatory.
+- [x] `source_tag_verified`: the owner authorizes `v0.2.0` creation from the
+      final validated source after its Wheels candidate passes.
+- [x] `testpypi_rehearsal`: TestPyPI is waived in favor of direct publication
+      followed by public-index verification.
+- [x] `trusted_publishing`: direct account-scoped PyPI API-token publication is
+      authorized; protected OIDC remains an optional stronger path.
 
 ## Final corpus and native closeout
 
@@ -63,13 +72,13 @@ also passed equality plus fresh/steady common-ready wall and fresh RSS gates.
 It remains non-formal because the Python/direct-Horned lanes, approved required
 corpus/reference machine, and evaluable steady RSS were outside that run.
 
-Accordingly `reference_performance` remains blocked until the remaining
-NCIt/FMA closeout and, for the complete normative claim, the missing comparator,
-reference-host, and delivered-wheel/direct-engine overhead evidence are bound
-to one final revision. Counts, fingerprints, alpha-equivalence where defined,
-phase telemetry, peak RSS, raw paired samples, and exact input/tool hashes must
-accompany each result. Licensed SNOMED lanes are reported as `not-run` when
-unavailable and do not become synthetic passes.
+The release owner accepts the scoped DOID result as sufficient for `0.2.0`, so
+`reference_performance` is closed by an explicit release decision rather than
+by pretending the fuller matrix ran. NCIt/FMA closeout, the additional
+comparators, approved reference host, delivered-wheel/direct-engine overhead,
+and evaluable steady RSS remain requirements for any later complete normative
+claim. Licensed SNOMED lanes remain `not-run` when unavailable and do not
+become synthetic passes.
 
 The final native extension must also rerun the WP19-WP22 structured-limit,
 strict mapping, reification-evidence, and diagnostic-partial parity selections.

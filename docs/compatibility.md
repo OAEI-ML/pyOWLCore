@@ -19,11 +19,13 @@ section requires wire minor 2.
 
 ## Current 0.2.0 consumer status
 
-The `0.2.0` consumer gate is pending. Every consumer must explicitly widen its
-package/API range, negotiate `pyowl-core/structural-columns` v2, clear semantic
-caches, and rerun its exact-commit zero-reparse and semantic matrix. Until that
-evidence is attached to `reports/release/0.2.0/gates.json`, the historical
-`>=0.1,<0.2` results below do not establish `0.2.0` compatibility.
+The release owner accepts the completed local `0.2.0` migration evidence for
+pyELK, pyHermiT, OWL2Vec* Projector, and OAEI Bio-ML. Those consumers widen
+their package/API ranges, negotiate `pyowl-core/structural-columns` v2, and
+clear schema-1 semantic caches. Exact-OM is expressly outside this coordinated
+publication scope. Dependency-order final package installation remains an
+operational check; the owner decision does not relabel the historical
+`>=0.1,<0.2` results below as schema-2 evidence.
 
 ## Historical 0.1.x workspace evidence
 

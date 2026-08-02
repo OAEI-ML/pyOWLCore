@@ -232,7 +232,7 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         assert command in PLATFORM_AUDIT
 
 
-def test_wheel_workflow_allows_only_the_four_downstream_staged_gates(
+def test_wheel_workflow_requires_an_owner_authorized_zero_blocker_candidate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -241,25 +241,23 @@ def test_wheel_workflow_allows_only_the_four_downstream_staged_gates(
     )
     assert len(snippets) == 1
     snippet = compile(snippets[0], "wheels-staged-gates.py", "exec")
-    staged = {
-        "reference_performance",
-        "signatures",
-        "source_tag_verified",
-        "testpypi_rehearsal",
-    }
-    all_gates = staged | {
+    all_gates = {
         "advisory_scan",
         "consumer_matrix",
         "legal_review",
         "name_control",
         "platform_artifact_audit",
         "project_urls",
+        "reference_performance",
         "release_owner_approval",
+        "signatures",
+        "source_tag_verified",
+        "testpypi_rehearsal",
         "trusted_publishing",
     }
 
     def report(*, extra_blocked: set[str] | None = None) -> dict[str, object]:
-        blocked = staged | (extra_blocked or set())
+        blocked = extra_blocked or set()
         gates = {
             name: {
                 "status": "blocked" if name in blocked else "passed",
@@ -268,7 +266,7 @@ def test_wheel_workflow_allows_only_the_four_downstream_staged_gates(
             for name in all_gates
         }
         return {
-            "release_ready": False,
+            "release_ready": not blocked,
             "gates": gates,
             "artifacts": [
                 {"inspection_ok": True, "errors": [], "release_blockers": []}
@@ -380,6 +378,7 @@ def test_native_performance_is_guarded_complete_and_fail_closed() -> None:
         "--seed 180643",
         'report["contract_valid"] is True',
         'report["comparative_complete"] is True',
+        'report["gates"][name]["status"] in {"blocked", "passed"}',
         'completion["passed"] is True',
         'ratio_gates["configured"] is True',
         'ratio_gates["passed"] is True',
@@ -492,7 +491,27 @@ def test_checked_0_2_0_gate_manifest_is_fail_closed() -> None:
         "testpypi_rehearsal",
         "trusted_publishing",
     }
-    assert all(gate["status"] == "blocked" for gate in gates.values())
+    staged = {"advisory_scan", "platform_artifact_audit"}
+    assert {
+        name for name, gate in gates.items() if gate["status"] == "blocked"
+    } == staged
+    assert all(
+        gate["status"] == "passed"
+        for name, gate in gates.items()
+        if name not in staged
+    )
     evidence = " ".join(gate["evidence"] for gate in gates.values())
     for phrase in ("0.2.0", "model-schema-2", "native", "consumer", "wheel"):
         assert phrase in evidence
+    authorization = (
+        path.parent / "owner-release-authorization.md"
+    ).read_text(encoding="utf-8")
+    for phrase in (
+        "waives `LIC-001` as-is",
+        "py-horned DOID common-contract result",
+        "waives TestPyPI rehearsal and pre-upload signature requirements",
+        "account-scoped PyPI API-token publication",
+        "creation of `v0.2.0`",
+        "Exact-OM remains outside",
+    ):
+        assert phrase in authorization
