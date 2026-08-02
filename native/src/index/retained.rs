@@ -256,7 +256,7 @@ pub(crate) fn build_retained_axiom_type_index_v1(
     let mut previous = None;
     let mut previous_category = None;
     for identifier in roots {
-        step(&mut guard, &mut work, limits)?;
+        step(&mut guard, &mut work)?;
         if arena.category(*identifier)? != Category::Axiom {
             return Err(NativeError::protocol(
                 "retained axiom-type index received a non-axiom root",
@@ -311,14 +311,6 @@ pub(crate) fn build_retained_axiom_type_index_v1(
                 .map_err(|_| NativeError::limit("retained axiom-type bytes exceed u64"))?,
         )
         .ok_or_else(|| NativeError::limit("retained axiom-type work overflow"))?;
-    if work > limits.max_canonical_work {
-        return Err(limits.resource_limit(
-            LimitKey::MaxCanonicalWork,
-            work,
-            "retained axiom-type build exceeds max_canonical_work",
-        ));
-    }
-
     let mut tags = Vec::new();
     tags.try_reserve_exact(groups)
         .map_err(|_| NativeError::limit("retained axiom-type tag allocation failed"))?;
@@ -366,19 +358,12 @@ pub(crate) fn build_retained_axiom_type_index_v1(
                 .map_err(|_| NativeError::limit("retained axiom-type slack exceeds u64"))?,
         )
         .ok_or_else(|| NativeError::limit("retained axiom-type work overflow"))?;
-    if work > limits.max_canonical_work {
-        return Err(limits.resource_limit(
-            LimitKey::MaxCanonicalWork,
-            work,
-            "retained axiom-type build exceeds max_canonical_work",
-        ));
-    }
     offsets.push(0);
     category_offsets.push(0);
     previous = None;
     previous_category = None;
     for (ordinal, identifier) in roots.iter().copied().enumerate() {
-        step(&mut guard, &mut work, limits)?;
+        step(&mut guard, &mut work)?;
         canonical_sizes.push(
             u64::try_from(
                 arena.encoded_len(
@@ -485,17 +470,10 @@ pub(crate) fn build_retained_axiom_type_index_v1(
     })
 }
 
-fn step(guard: &mut Guard, work: &mut u64, limits: &Limits) -> NativeResult<()> {
+fn step(guard: &mut Guard, work: &mut u64) -> NativeResult<()> {
     *work = work
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("retained axiom-type work overflow"))?;
-    if *work > limits.max_canonical_work {
-        return Err(limits.resource_limit(
-            LimitKey::MaxCanonicalWork,
-            *work,
-            "retained axiom-type build exceeds max_canonical_work",
-        ));
-    }
     guard.check(*work, false)
 }
 
@@ -845,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_index_enforces_order_memory_work_and_cancellation() {
+    fn retained_index_enforces_order_memory_and_cancellation() {
         let rows = vec![declaration("urn:a"), subclass("urn:a", "urn:b")];
         let (arena, roots) = arena(&rows);
         let baseline = build_retained_axiom_type_index_v1(
@@ -874,21 +852,39 @@ mod tests {
             "NATIVE_WIRE_LIMIT"
         );
 
-        let mut work = Limits::default();
-        work.max_canonical_work = 1;
+        let mut count = Limits::default();
+        count.max_axioms = 1;
         assert_eq!(
             build_retained_axiom_type_index_v1(
                 &arena,
                 &roots,
-                &work,
+                &count,
                 Cancellation::with_duration(None),
                 None,
                 0,
             )
-            .unwrap_err()
+            .expect_err("retained index row counts remain bounded")
             .code,
             "NATIVE_WIRE_LIMIT"
         );
+
+        let mut progress = Limits::default();
+        progress.max_canonical_work = baseline
+            .canonical_sizes()
+            .iter()
+            .copied()
+            .max()
+            .expect("canonical row size");
+        let progress_index = build_retained_axiom_type_index_v1(
+            &arena,
+            &roots,
+            &progress,
+            Cancellation::with_duration(None),
+            None,
+            0,
+        )
+        .expect("whole-index traversal is progress, not per-row canonical work");
+        assert!(progress_index.counters().canonical_work > progress.max_canonical_work);
         assert_eq!(
             build_retained_axiom_type_index_v1(
                 &arena,

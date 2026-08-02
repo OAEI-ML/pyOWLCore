@@ -301,21 +301,18 @@ impl TypedFacadeBuilderV2 {
                     document.roots[0].as_slice(),
                     &mut resolve_guard,
                     &mut resolve_work,
-                    &self.limits,
                 )?,
                 resolve_roots(
                     &frozen,
                     document.roots[1].as_slice(),
                     &mut resolve_guard,
                     &mut resolve_work,
-                    &self.limits,
                 )?,
                 resolve_roots(
                     &frozen,
                     document.roots[2].as_slice(),
                     &mut resolve_guard,
                     &mut resolve_work,
-                    &self.limits,
                 )?,
             ];
             let effective_roots = match document.effective_roots {
@@ -325,21 +322,18 @@ impl TypedFacadeBuilderV2 {
                         values[0].as_slice(),
                         &mut resolve_guard,
                         &mut resolve_work,
-                        &self.limits,
                     )?),
                     Some(resolve_roots(
                         &frozen,
                         values[1].as_slice(),
                         &mut resolve_guard,
                         &mut resolve_work,
-                        &self.limits,
                     )?),
                     Some(resolve_roots(
                         &frozen,
                         values[2].as_slice(),
                         &mut resolve_guard,
                         &mut resolve_work,
-                        &self.limits,
                     )?),
                 ],
                 None => Default::default(),
@@ -935,7 +929,6 @@ fn rescope_flat_documents(
                 &roots,
                 &mut resolve_guard,
                 &mut resolve_work,
-                limits,
             )?);
         }
     }
@@ -1019,7 +1012,6 @@ fn resolve_roots(
     pending: &[PendingComponentId],
     guard: &mut Guard,
     work: &mut u64,
-    limits: &Limits,
 ) -> NativeResult<Vec<ComponentId>> {
     let mut result = Vec::new();
     result
@@ -1029,13 +1021,6 @@ fn resolve_roots(
         *work = work
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("typed V2 root resolution work overflow"))?;
-        if *work > limits.max_canonical_work {
-            return Err(limits.resource_limit(
-                LimitKey::MaxCanonicalWork,
-                *work,
-                "typed V2 root resolution exceeds max_canonical_work",
-            ));
-        }
         guard.check(*work, false)?;
         result.push(frozen.resolve(*identifier)?);
     }
@@ -1232,7 +1217,7 @@ fn collect_signature<'a>(
                 .map_err(|_| NativeError::limit("typed V2 signature stack allocation failed"))?;
             stack.push(*root);
             while let Some(identifier) = stack.pop() {
-                signature_step(&mut guard, &mut work, limits)?;
+                signature_step(&mut guard, &mut work)?;
                 if arena.category(identifier)? == Category::Entity {
                     reserve_hash_item(&mut entities)?;
                     entities.insert(identifier);
@@ -1246,7 +1231,6 @@ fn collect_signature<'a>(
                         &mut visited,
                         &mut guard,
                         &mut work,
-                        limits,
                     )?;
                 }
             }
@@ -1275,9 +1259,8 @@ fn collect_field_nodes(
     visited: &mut HashSet<ComponentId>,
     guard: &mut Guard,
     work: &mut u64,
-    limits: &Limits,
 ) -> NativeResult<()> {
-    signature_step(guard, work, limits)?;
+    signature_step(guard, work)?;
     match field {
         ComponentFieldRef::Node(identifier) => {
             reserve_hash_item(visited)?;
@@ -1291,7 +1274,7 @@ fn collect_field_nodes(
         ComponentFieldRef::CanonicalSet(sequence)
         | ComponentFieldRef::OrderedSequence(sequence) => {
             for index in 0..sequence.len() {
-                collect_field_nodes(sequence.item(index)?, stack, visited, guard, work, limits)?;
+                collect_field_nodes(sequence.item(index)?, stack, visited, guard, work)?;
             }
         }
         ComponentFieldRef::None
@@ -1303,17 +1286,10 @@ fn collect_field_nodes(
     Ok(())
 }
 
-fn signature_step(guard: &mut Guard, work: &mut u64, limits: &Limits) -> NativeResult<()> {
+fn signature_step(guard: &mut Guard, work: &mut u64) -> NativeResult<()> {
     *work = work
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("typed V2 signature work overflow"))?;
-    if *work > limits.max_canonical_work {
-        return Err(limits.resource_limit(
-            LimitKey::MaxCanonicalWork,
-            *work,
-            "typed V2 signature exceeds max_canonical_work",
-        ));
-    }
     guard.check(*work, false)
 }
 
@@ -2029,6 +2005,51 @@ mod tests {
         assert_eq!(counters.canonical_input_rows, 4);
         assert_eq!(counters.publication_structural_rows_copied, 0);
         assert_eq!(counters.publication_structural_bytes_copied, 0);
+    }
+
+    #[test]
+    fn builder_treats_document_linear_work_as_progress_and_keeps_count_limit() {
+        let rows = sorted(
+            (0..512)
+                .map(|index| declaration("class", &format!("urn:builder:progress:{index:04}")))
+                .collect(),
+        );
+        let per_row_work = rows
+            .iter()
+            .map(Vec::len)
+            .max()
+            .and_then(|value| u64::try_from(value).ok())
+            .expect("canonical row size");
+        assert!(u64::try_from(rows.len()).expect("row count") > per_row_work);
+
+        let mut progress_limits = Limits::default();
+        progress_limits.max_canonical_work = per_row_work;
+        let mut builder =
+            TypedFacadeBuilderV2::new(progress_limits, Cancellation::with_duration(None), None, 0)
+                .expect("progress-bounded builder");
+        builder
+            .add_document(&[], &rows, &[])
+            .expect("rows fit the per-row canonical-work limit");
+        let storage = builder
+            .freeze(&[vec![0]], &[0])
+            .expect("whole-document resolution and signature traversal are progress");
+        assert_eq!(
+            storage.structural_counts().expect("counts").stored_axioms,
+            u64::try_from(rows.len()).expect("row count")
+        );
+
+        let mut count_limits = progress_limits;
+        count_limits.max_axioms = 1;
+        let mut count_builder =
+            TypedFacadeBuilderV2::new(count_limits, Cancellation::with_duration(None), None, 0)
+                .expect("count-bounded builder");
+        assert_eq!(
+            count_builder
+                .add_document(&[], &rows, &[])
+                .expect_err("document row counts remain bounded")
+                .code,
+            "NATIVE_WIRE_LIMIT"
+        );
     }
 
     #[test]

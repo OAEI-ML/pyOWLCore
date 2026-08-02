@@ -10,6 +10,7 @@ from pyowl_core.backends.native_views import (
     ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2,
     ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
     produce_encoded_structural_view_v2,
+    validate_encoded_structural_view_v2,
 )
 from pyowl_core.document.snapshot import AxiomScope
 from pyowl_core.exceptions import ResourceLimitError
@@ -148,3 +149,39 @@ def test_producer_uses_owner_limits_and_only_allows_tightening() -> None:
     with pytest.raises(ResourceLimitError) as limited:
         produce_encoded_structural_view_v2(snapshot, limits=tight_limits)
     assert limited.value.limit == "max_index_bytes"
+
+
+def test_canonical_work_bounds_each_row_not_the_complete_publication() -> None:
+    snapshot = complete_constructor_snapshot()
+    row_limit = max(len(payload) for _kind, payload in scalar_root_bytes(snapshot))
+    limits = replace(snapshot.load_options.limits, max_canonical_work=row_limit)
+
+    produced = produce_encoded_structural_view_v2(snapshot, limits=limits)
+    assert sum(len(value) for value in produced.buffers.values()) > row_limit
+
+    validated = validate_encoded_structural_view_v2(
+        produced,
+        expected_owner=snapshot,
+        expected_scope=AxiomScope.CLOSURE,
+        expected_document_key=None,
+        limits=limits,
+    )
+    assert decode_root_canonical_bytes(validated.buffers) == scalar_root_bytes(snapshot)
+
+    too_small = replace(limits, max_canonical_work=row_limit - 1)
+    with pytest.raises(ResourceLimitError) as limited:
+        validate_encoded_structural_view_v2(
+            produced,
+            expected_owner=snapshot,
+            expected_scope=AxiomScope.CLOSURE,
+            expected_document_key=None,
+            limits=too_small,
+        )
+    assert limited.value.limit == "max_canonical_work"
+
+    with pytest.raises(ResourceLimitError) as limited:
+        produce_encoded_structural_view_v2(
+            snapshot,
+            limits=too_small,
+        )
+    assert limited.value.limit == "max_canonical_work"

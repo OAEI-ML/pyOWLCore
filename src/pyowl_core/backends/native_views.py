@@ -1041,7 +1041,6 @@ def _matching_local_root_ids(
     columns = _columns_from_buffers(source.buffers)
     matched: list[int] = []
     found: set[tuple[int, bytes]] = set()
-    canonical_work = 0
     for root_index in range(len(columns.roots_id)):
         if cancellation_token is not None and root_index % limits.cancellation_check_interval == 0:
             cancellation_token.check()
@@ -1053,13 +1052,9 @@ def _matching_local_root_ids(
             None,
             limits,
         )
-        canonical_work += len(encoded)
-        limits.enforce("max_canonical_work", canonical_work)
         if transform is not None:
             value = decode_canonical(encoded, limits=limits)
             encoded = canonical_bytes(transform(value), limits=limits)
-            canonical_work += len(encoded)
-            limits.enforce("max_canonical_work", canonical_work)
         key = (columns.roots_kind[root_index], encoded)
         if key in targets:
             matched.append(root_index + 1)
@@ -1583,12 +1578,9 @@ def _produce_local_encoded_structural_view_v2(
 
     nodes_by_key: dict[bytes, StructuralNode] = {}
     keys_by_identity: dict[int, bytes] = {}
-    walked_nodes = 0
     try:
         for _kind, root, _key in roots:
             for node in walk(root):
-                walked_nodes += 1
-                selected_limits.enforce("max_canonical_work", walked_nodes)
                 key = canonical_bytes(node, limits=selected_limits)
                 if key not in nodes_by_key:
                     selected_limits.enforce("max_terms", len(nodes_by_key) + 1)
@@ -1647,7 +1639,6 @@ def _produce_local_encoded_structural_view_v2(
             payload = value.to_bytes(width, "little")
         offset = len(scalar_bytes)
         selected_limits.enforce("max_index_bytes", offset + len(payload))
-        selected_limits.enforce("max_canonical_work", walked_nodes + offset + len(payload))
         reserve("encoded_scalar_bytes", len(payload))
         scalar_bytes.extend(payload)
         return kind, offset, len(payload)
@@ -1729,7 +1720,6 @@ def _produce_local_encoded_structural_view_v2(
     }
     total_bytes = sum(len(payload) for payload in payloads.values())
     selected_limits.enforce("max_index_bytes", total_bytes)
-    selected_limits.enforce("max_canonical_work", total_bytes)
     if selected_limits.max_memory_bytes is not None:
         selected_limits.enforce("max_memory_bytes", total_bytes)
     buffers = MappingProxyType({name: memoryview(payloads[name]) for name in _BUFFER_NAMES})
@@ -1916,7 +1906,6 @@ def _freeze_encoded_structural_view_v2(
             _fail("encoded structural column has a partial scalar", "ENCODED_VIEW_BUFFERS")
     total_bytes = sum(len(value) for value in frozen.values())
     selected_limits.enforce("max_index_bytes", total_bytes)
-    selected_limits.enforce("max_canonical_work", total_bytes)
     selected_limits.enforce("max_terms", len(frozen["node_tags"]) // 2)
     selected_limits.enforce(
         "max_index_rows",
@@ -2076,7 +2065,6 @@ def _freeze_segments(
         posting_rows += len(raw_root_ids) // 4 + len(raw_scope_map) // 64
         limits.enforce("max_index_rows", posting_rows)
         limits.enforce("max_index_bytes", local_buffer_bytes + posting_bytes)
-        limits.enforce("max_canonical_work", local_buffer_bytes + posting_bytes)
         if trusted:
             allowed_exporters = (
                 (bytes,)
@@ -2199,7 +2187,6 @@ def _freeze_segments(
         sum(segment.role == _SEGMENT_COMPOSITE_MEMBER for segment in frozen),
     )
     limits.enforce("max_index_bytes", local_buffer_bytes + posting_bytes + metadata_bytes)
-    limits.enforce("max_canonical_work", posting_bytes + metadata_bytes)
     _validate_segment_family(tuple(frozen), top_owner, local_root_count)
     return tuple(frozen)
 
@@ -2311,7 +2298,6 @@ def _validate_columns(buffers: Mapping[str, memoryview], limits: ParseLimits) ->
     root_count = len(columns.roots_kind)
     limits.enforce("max_terms", node_count)
     limits.enforce("max_index_rows", max(root_count, node_count, field_count, item_count))
-    limits.enforce("max_canonical_work", node_count + field_count + item_count)
     limits.enforce(
         "max_axioms",
         sum(columns.roots_kind[index] == _ROOT_AXIOM for index in range(root_count)),
@@ -2671,6 +2657,11 @@ def _canonical_node(
                 )
             )
         encoded = bytes(output)
+        # Canonical work is a bound on one structural row, not on the sum of
+        # otherwise bounded rows in an encoded document.  Whole-publication
+        # traversal is governed by the index, memory, deadline, and
+        # cancellation limits above this decoder.
+        limits.enforce("max_canonical_work", len(encoded))
         memo[node_id] = encoded
         return encoded
     finally:

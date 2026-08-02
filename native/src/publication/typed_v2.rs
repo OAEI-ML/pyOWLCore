@@ -1602,7 +1602,6 @@ fn attach_axiom_indexes(
                 if component_roots_equal(
                     &previous[source].roots,
                     &table.roots,
-                    limits,
                     &mut guard,
                     &mut comparison_work,
                 )? {
@@ -1641,20 +1640,12 @@ fn attach_axiom_indexes(
 fn component_roots_equal(
     left: &[ComponentId],
     right: &[ComponentId],
-    limits: &Limits,
     guard: &mut Guard,
     work: &mut u64,
 ) -> NativeResult<bool> {
     *work = work
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("typed V2 axiom index sharing work overflow"))?;
-    if *work > limits.max_canonical_work {
-        return Err(limits.resource_limit(
-            LimitKey::MaxCanonicalWork,
-            *work,
-            "typed V2 axiom index sharing exceeds max_canonical_work",
-        ));
-    }
     guard.check(*work, false)?;
     if left.len() != right.len() {
         return Ok(false);
@@ -1663,13 +1654,6 @@ fn component_roots_equal(
         *work = work
             .checked_add(1)
             .ok_or_else(|| NativeError::limit("typed V2 axiom index sharing work overflow"))?;
-        if *work > limits.max_canonical_work {
-            return Err(limits.resource_limit(
-                LimitKey::MaxCanonicalWork,
-                *work,
-                "typed V2 axiom index sharing exceeds max_canonical_work",
-            ));
-        }
         guard.check(*work, false)?;
         if left != right {
             return Ok(false);
@@ -2082,18 +2066,15 @@ mod tests {
             bounded.cancellation_stride,
         );
         let mut work = 0_u64;
-        assert_eq!(
-            component_roots_equal(&roots, &roots, &bounded, &mut guard, &mut work)
-                .expect_err("root comparison must be work-bounded")
-                .code,
-            "NATIVE_WIRE_LIMIT"
-        );
+        assert!(component_roots_equal(&roots, &roots, &mut guard, &mut work)
+            .expect("whole root-table comparison is progress, not per-row canonical work"));
+        assert!(work > bounded.max_canonical_work);
 
         let cancelled = Cancellation::with_duration(Some(Duration::ZERO));
         let mut guard = Guard::new(cancelled, None, 1);
         let mut work = 0_u64;
         assert_eq!(
-            component_roots_equal(&roots, &roots, &Limits::default(), &mut guard, &mut work,)
+            component_roots_equal(&roots, &roots, &mut guard, &mut work)
                 .expect_err("root comparison must poll cancellation")
                 .code,
             "NATIVE_DEADLINE"

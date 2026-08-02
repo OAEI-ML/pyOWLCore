@@ -157,7 +157,7 @@ pub(crate) struct EncodedColumnCountersV1 {
 struct ColumnWork {
     guard: Guard,
     used: u64,
-    maximum: u64,
+    max_canonical_bytes: u64,
     #[cfg(feature = "test-hooks")]
     allocation_probe: Option<ColumnAllocationProbe>,
 }
@@ -223,7 +223,7 @@ impl ColumnWork {
         Ok(Self {
             guard,
             used: 0,
-            maximum: limits.max_canonical_work,
+            max_canonical_bytes: limits.max_canonical_work,
             #[cfg(feature = "test-hooks")]
             allocation_probe: None,
         })
@@ -299,14 +299,9 @@ impl ColumnWork {
             .used
             .checked_add(amount)
             .ok_or_else(|| NativeError::limit("native encoded-column work counter overflow"))?;
-        if self.used > self.maximum {
-            return Err(NativeError::resource_limit(
-                "max_canonical_work",
-                self.used,
-                self.maximum,
-                "native encoded-column build exceeds max_canonical_work",
-            ));
-        }
+        // Column construction traverses the complete bounded document. This
+        // counter polls cancellation/deadline only; it must not aggregate the
+        // per-row/per-anonymous-component canonical-work allowance.
         self.guard.check(self.used, false)
     }
 
@@ -1299,6 +1294,16 @@ fn canonical_node_len(
     if !visiting.remove(&component) {
         return Err(NativeError::protocol(
             "native canonical-length stack is inconsistent",
+        ));
+    }
+    let observed = u64::try_from(length)
+        .map_err(|_| NativeError::limit("native canonical node length exceeds u64"))?;
+    if observed > work.max_canonical_bytes {
+        return Err(NativeError::resource_limit(
+            "max_canonical_work",
+            observed,
+            work.max_canonical_bytes,
+            "native encoded-column row exceeds max_canonical_work",
         ));
     }
     if memo.insert(component, length).is_some() {
@@ -3106,14 +3111,24 @@ mod tests {
     }
 
     #[test]
-    fn declaration_seam_enforces_work_memory_and_cancellation() {
+    fn declaration_seam_keeps_document_progress_separate_from_component_work() {
         let limits = Limits::default();
-        let (arena, identifiers) = declaration_arena(&["urn:bounded"]);
-        let root = EncodedRootV1::new(EncodedRootKindV1::Axiom, identifiers[0]);
-        assert_eq!(root.kind(), EncodedRootKindV1::Axiom);
+        let names = (0..64)
+            .map(|index| format!("urn:bounded:{index:04}"))
+            .collect::<Vec<_>>();
+        let borrowed = names.iter().map(String::as_str).collect::<Vec<_>>();
+        let (arena, identifiers) = declaration_arena(&borrowed);
+        let roots = identifiers
+            .iter()
+            .copied()
+            .map(|identifier| EncodedRootV1::new(EncodedRootKindV1::Axiom, identifier))
+            .collect::<Vec<_>>();
+        assert!(roots
+            .iter()
+            .all(|root| root.kind() == EncodedRootKindV1::Axiom));
         let baseline = build_encoded_structural_columns_v1(
             &arena,
-            &[root],
+            &roots,
             &limits,
             Cancellation::with_duration(None),
             None,
@@ -3121,16 +3136,33 @@ mod tests {
         .expect("baseline");
 
         let mut work_limited = limits;
-        work_limited.max_canonical_work = 1;
+        work_limited.max_canonical_work = names
+            .iter()
+            .map(|value| declaration(value).len())
+            .max()
+            .and_then(|value| u64::try_from(value).ok())
+            .expect("canonical row size");
+        let progress = build_encoded_structural_columns_v1(
+            &arena,
+            &roots,
+            &work_limited,
+            Cancellation::with_duration(None),
+            None,
+        )
+        .expect("column traversal is not aggregate component canonical work");
+        assert!(progress.counters().canonical_work > work_limited.max_canonical_work);
+
+        let mut row_limited = work_limited;
+        row_limited.max_canonical_work -= 1;
         assert_eq!(
             build_encoded_structural_columns_v1(
                 &arena,
-                &[root],
-                &work_limited,
+                &roots,
+                &row_limited,
                 Cancellation::with_duration(None),
                 None,
             )
-            .unwrap_err()
+            .expect_err("one oversized canonical row remains bounded")
             .code,
             "NATIVE_WIRE_LIMIT"
         );
@@ -3140,7 +3172,7 @@ mod tests {
         assert_eq!(
             build_encoded_structural_columns_v1(
                 &arena,
-                &[root],
+                &roots,
                 &depth_limited,
                 Cancellation::with_duration(None),
                 None,
@@ -3155,7 +3187,7 @@ mod tests {
         assert_eq!(
             build_encoded_structural_columns_v1(
                 &arena,
-                &[root],
+                &roots,
                 &memory_limited,
                 Cancellation::with_duration(None),
                 None,
@@ -3168,7 +3200,7 @@ mod tests {
         assert_eq!(
             build_encoded_structural_columns_v1(
                 &arena,
-                &[root],
+                &roots,
                 &limits,
                 Cancellation::with_duration(Some(std::time::Duration::ZERO)),
                 None,

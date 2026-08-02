@@ -127,7 +127,7 @@ pub(crate) fn build_retained_signature_index_v1(
         .map_err(|_| NativeError::limit("retained signature ordinal allocation failed"))?;
     let mut work = 0_u64;
     for (ordinal, identifier) in entities.iter().copied().enumerate() {
-        step(&mut guard, &mut work, limits)?;
+        step(&mut guard, &mut work)?;
         if arena.category(identifier)? != Category::Entity
             || ordinals.insert(identifier, ordinal).is_some()
         {
@@ -335,7 +335,7 @@ fn increment_root_entities(
         .map_err(|_| NativeError::limit("retained signature stack allocation failed"))?;
     stack.push(root);
     while let Some(identifier) = stack.pop() {
-        step(guard, work, limits)?;
+        step(guard, work)?;
         let category = arena.category(identifier)?;
         if !include_annotations && category == Category::Annotation {
             continue;
@@ -356,7 +356,7 @@ fn increment_root_entities(
         }
         let record = arena.record(identifier)?;
         for index in 0..record.field_count() {
-            push_field_nodes(record.field(index)?, stack, guard, work, limits)?;
+            push_field_nodes(record.field(index)?, stack, guard, work)?;
         }
         check_workspace(
             arena,
@@ -408,9 +408,8 @@ fn push_field_nodes(
     stack: &mut Vec<ComponentId>,
     guard: &mut Guard,
     work: &mut u64,
-    limits: &Limits,
 ) -> NativeResult<()> {
-    step(guard, work, limits)?;
+    step(guard, work)?;
     match field {
         ComponentFieldRef::Node(identifier) => {
             stack
@@ -421,7 +420,7 @@ fn push_field_nodes(
         ComponentFieldRef::CanonicalSet(sequence)
         | ComponentFieldRef::OrderedSequence(sequence) => {
             for index in 0..sequence.len() {
-                push_field_nodes(sequence.item(index)?, stack, guard, work, limits)?;
+                push_field_nodes(sequence.item(index)?, stack, guard, work)?;
             }
         }
         ComponentFieldRef::None
@@ -460,17 +459,10 @@ fn sum_counts(values: &[u64]) -> NativeResult<u64> {
     })
 }
 
-fn step(guard: &mut Guard, work: &mut u64, limits: &Limits) -> NativeResult<()> {
+fn step(guard: &mut Guard, work: &mut u64) -> NativeResult<()> {
     *work = work
         .checked_add(1)
         .ok_or_else(|| NativeError::limit("retained signature work overflow"))?;
-    if *work > limits.max_canonical_work {
-        return Err(limits.resource_limit(
-            LimitKey::MaxCanonicalWork,
-            *work,
-            "retained signature build exceeds max_canonical_work",
-        ));
-    }
     guard.check(*work, false)
 }
 
@@ -660,10 +652,26 @@ mod tests {
     }
 
     #[test]
-    fn retained_signature_enforces_work_limit() {
+    fn retained_signature_treats_linear_work_as_progress() {
         let (arena, entities, axioms) = fixture();
-        let mut work_limit = Limits::default();
-        work_limit.max_canonical_work = 1;
+        let mut progress_limit = Limits::default();
+        progress_limit.max_canonical_work = 1;
+        let index = build_retained_signature_index_v1(
+            &arena,
+            &entities,
+            &[],
+            &axioms,
+            &[],
+            &progress_limit,
+            Cancellation::with_duration(None),
+            None,
+            0,
+        )
+        .expect("whole-signature traversal is progress, not per-row canonical work");
+        assert!(index.counters().canonical_work > progress_limit.max_canonical_work);
+
+        let mut memory_limit = progress_limit;
+        memory_limit.max_memory_bytes = Some(index.counters().peak_owned_bytes - 1);
         assert_eq!(
             build_retained_signature_index_v1(
                 &arena,
@@ -671,14 +679,31 @@ mod tests {
                 &[],
                 &axioms,
                 &[],
-                &work_limit,
+                &memory_limit,
                 Cancellation::with_duration(None),
                 None,
                 0,
             )
-            .unwrap_err()
+            .expect_err("retained signature memory remains bounded")
             .code,
             "NATIVE_WIRE_LIMIT"
+        );
+
+        assert_eq!(
+            build_retained_signature_index_v1(
+                &arena,
+                &entities,
+                &[],
+                &axioms,
+                &[],
+                &progress_limit,
+                Cancellation::with_duration(Some(std::time::Duration::ZERO)),
+                None,
+                0,
+            )
+            .expect_err("retained signature traversal must poll cancellation")
+            .code,
+            "NATIVE_DEADLINE"
         );
     }
 }

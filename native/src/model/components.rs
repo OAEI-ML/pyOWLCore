@@ -139,7 +139,7 @@ struct FrozenComponentSequence {
 struct ComponentWork {
     guard: Guard,
     used: u64,
-    maximum: u64,
+    max_canonical_bytes: u64,
     max_memory_bytes: Option<u64>,
     max_nesting_depth: u32,
     external_bytes: u64,
@@ -182,7 +182,7 @@ impl ComponentWork {
         Ok(Self {
             guard,
             used: 0,
-            maximum: limits.max_canonical_work,
+            max_canonical_bytes: limits.max_canonical_work,
             max_memory_bytes: limits.max_memory_bytes,
             max_nesting_depth: limits.max_nesting_depth,
             external_bytes,
@@ -201,14 +201,10 @@ impl ComponentWork {
             .used
             .checked_add(amount)
             .ok_or_else(|| NativeError::limit("native component work counter overflow"))?;
-        if self.used > self.maximum {
-            return Err(NativeError::resource_limit(
-                "max_canonical_work",
-                self.used,
-                self.maximum,
-                "native component work exceeds max_canonical_work",
-            ));
-        }
+        // `used` is document-operation progress for cancellation/deadline
+        // polling. Canonical work is not accumulated across independent model
+        // rows; the row-size checks below and anonymous-component refinement
+        // own that limit.
         self.guard.check(self.used, false)
     }
 
@@ -366,11 +362,12 @@ impl ComponentTables {
     ) -> NativeResult<usize> {
         work.checkpoint(true)?;
         let encoded_len = self.encoded_node_len(identifier, 0, work)?;
-        if encoded_len > self.max_encoded_bytes {
+        let maximum = self.max_encoded_bytes.min(work.max_canonical_bytes);
+        if encoded_len > maximum {
             return Err(NativeError::resource_limit(
                 "max_canonical_work",
                 encoded_len,
-                self.max_encoded_bytes,
+                maximum,
                 "native component encoding exceeds max_canonical_work",
             ));
         }
@@ -393,11 +390,12 @@ impl ComponentTables {
         for value in &component.fields {
             length = checked_add_u64(length, self.encoded_value_len(*value, depth, work)?)?;
         }
-        if length > self.max_encoded_bytes {
+        let maximum = self.max_encoded_bytes.min(work.max_canonical_bytes);
+        if length > maximum {
             return Err(NativeError::resource_limit(
                 "max_canonical_work",
                 length,
-                self.max_encoded_bytes,
+                maximum,
                 "native component encoding exceeds max_canonical_work",
             ));
         }
@@ -4991,33 +4989,23 @@ mod tests {
     }
 
     #[test]
-    fn collision_and_freeze_work_are_globally_bounded() {
-        let limits = Limits::default();
+    fn collision_and_freeze_progress_are_not_document_canonical_work() {
+        let first = declaration("urn:first");
+        let second = declaration("urn:second");
+        let mut limits = Limits::default();
+        limits.max_canonical_work =
+            u64::try_from(first.len().max(second.len())).expect("row length");
         let mut collision = NativeComponentBuilder::with_bucket_transform(&limits, constant_bucket)
             .expect("collision builder");
-        collision
-            .intern_canonical(&declaration("urn:first"))
-            .expect("first");
-        let used = collision.work.as_ref().expect("work").used;
-        collision.work.as_mut().expect("work").maximum = used + 1;
-        let failure = collision
-            .intern_canonical(&declaration("urn:second"))
-            .expect_err("bounded collision scan");
-        assert_eq!(failure.code, "NATIVE_WIRE_LIMIT");
-
-        let mut freeze = component_builder(&limits);
-        freeze
-            .intern_canonical(&declaration("urn:a"))
-            .expect("first");
-        freeze
-            .intern_canonical(&declaration("urn:z"))
-            .expect("second");
-        let used = freeze.work.as_ref().expect("work").used;
-        freeze.work.as_mut().expect("work").maximum = used;
-        assert_eq!(
-            freeze.freeze().expect_err("bounded freeze").code,
-            "NATIVE_WIRE_LIMIT"
+        collision.intern_canonical(&first).expect("first");
+        collision.intern_canonical(&second).expect("second");
+        assert!(
+            collision.work.as_ref().expect("work").used > limits.max_canonical_work,
+            "independent rows must be allowed to exceed the per-row limit in aggregate"
         );
+        collision
+            .freeze()
+            .expect("document-wide freeze progress is bounded by terms, memory, and deadline");
     }
 
     #[test]

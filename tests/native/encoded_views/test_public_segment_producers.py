@@ -12,13 +12,17 @@ from pyowl_core import (
     ImportPolicy,
     LoadOptions,
     OntologyDelta,
+    ParseLimits,
     SubClassOf,
     apply_delta,
     canonical_bytes,
     compose_views,
     load_snapshot,
 )
-from pyowl_core.backends.native_views import EncodedStructuralViewV2
+from pyowl_core.backends.native_views import (
+    EncodedStructuralViewV2,
+    produce_encoded_structural_view_v2,
+)
 
 from ._independent import decode_segmented_root_canonical_bytes
 from ._support import scalar_root_bytes
@@ -77,6 +81,29 @@ def test_public_overlay_references_anchor_columns_and_publishes_only_cumulative_
         for name in base_view.buffers
     )
     assert len(encoded.buffers["root_ids"]) // 4 == 2
+    assert _decoded_pairs(encoded) == scalar_root_bytes(overlay)
+
+
+def test_segment_matching_does_not_sum_independently_bounded_canonical_rows() -> None:
+    base = _snapshot(
+        "overlay-row-work",
+        *(f"Declaration(Class(:C{index}))" for index in range(12)),
+    )
+    removed = Declaration(Class(IRI("urn:segments#C11")))
+    overlay = apply_delta(
+        base,
+        OntologyDelta(remove_axioms=CanonicalSet((removed,))),
+    )
+    base_rows = scalar_root_bytes(base)
+    row_limit = max(len(payload) for _kind, payload in base_rows)
+
+    encoded = produce_encoded_structural_view_v2(
+        overlay,
+        limits=ParseLimits(max_canonical_work=row_limit),
+    )
+
+    assert sum(len(payload) for _kind, payload in base_rows) > row_limit
+    assert tuple(segment.role for segment in encoded.segments) == (2,)
     assert _decoded_pairs(encoded) == scalar_root_bytes(overlay)
 
 
