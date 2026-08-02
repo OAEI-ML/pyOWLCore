@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, NoReturn, cast
+from unittest.mock import patch
 
 import pytest
 
@@ -13,6 +14,7 @@ from pyowl_core import (
     CancellationSource,
     Class,
     Declaration,
+    DocumentFormat,
     ImportPolicy,
     LoadOptions,
     OntologyView,
@@ -252,3 +254,81 @@ def test_public_native_direct_canonical_work_is_per_row_and_tightens_at_publicat
         == after_success.encoded_view_requests
     )
     cast(Any, raw_owner)._publication_close_v2()
+
+
+@pytest.mark.parametrize(
+    "axiom_rows",
+    (
+        (
+            "Declaration(Class(<urn:encoded-view:parity:A>))",
+            "SubClassOf(<urn:encoded-view:parity:A> <urn:encoded-view:parity:B>)",
+        ),
+        (
+            "SubClassOf(<urn:encoded-view:parity:A> <urn:encoded-view:parity:B>)",
+            "Declaration(Class(<urn:encoded-view:parity:A>))",
+        ),
+    ),
+)
+def test_public_native_direct_canonical_work_selects_the_same_first_row_as_python(
+    extension: NativeTestExtension,
+    axiom_rows: tuple[str, str],
+) -> None:
+    source = f"Ontology(<urn:encoded-view:parity> {' '.join(axiom_rows)})".encode()
+    python = load_snapshot(
+        source,
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            backend=BackendPreference.PYTHON,
+            imports=ImportPolicy.IGNORE,
+        ),
+    )
+    selected = load_snapshot(
+        source,
+        options=LoadOptions(
+            format=DocumentFormat.FUNCTIONAL,
+            backend=BackendPreference.NATIVE,
+            imports=ImportPolicy.IGNORE,
+        ),
+    )
+    canonical_rows = tuple(canonical_bytes(value) for value in python.iter_axioms())
+    expected_first = canonical_bytes(Declaration(Class(IRI("urn:encoded-view:parity:A"))))
+    assert len(canonical_rows) == 2
+    assert canonical_rows[0] == expected_first
+    assert len(canonical_rows[0]) != len(canonical_rows[1])
+    allowed = min(len(value) for value in canonical_rows) - 1
+    assert all(len(value) > allowed for value in canonical_rows)
+
+    limits = ParseLimits(max_canonical_work=allowed)
+    with pytest.raises(ResourceLimitError) as python_limited:
+        python.view(EncodedStructuralViewV2, limits=limits)
+
+    handle = cast(Any, selected)._native_snapshot_state.owner.handle
+    raw_owner = object.__getattribute__(handle, "_owner_v2")
+    before = cast(Any, raw_owner)._publication_counters_v2()
+    scalar_error = AssertionError("native direct publication crossed scalar traversal")
+    with (
+        patch.object(type(selected), "iter_axioms", side_effect=scalar_error),
+        patch.object(type(selected), "iter_extensions", side_effect=scalar_error),
+        patch.object(type(selected), "ontology_annotations", side_effect=scalar_error),
+        patch.object(type(selected), "contains", side_effect=scalar_error),
+        patch.object(type(selected), "signature", side_effect=scalar_error),
+        pytest.raises(ResourceLimitError) as native_limited,
+    ):
+        selected.view(EncodedStructuralViewV2, limits=limits)
+
+    expected = ("max_canonical_work", len(canonical_rows[0]), allowed)
+    assert (
+        python_limited.value.limit,
+        python_limited.value.observed,
+        python_limited.value.allowed,
+    ) == expected
+    assert (
+        native_limited.value.limit,
+        native_limited.value.observed,
+        native_limited.value.allowed,
+    ) == expected
+    assert dict(python_limited.value.details) == dict(native_limited.value.details) == {}
+    assert selected.capabilities.backend == "native"
+    assert python_limited.value.code == "RESOURCE_LIMIT"
+    assert native_limited.value.code == "NATIVE_WIRE_LIMIT"
+    assert cast(Any, raw_owner)._publication_counters_v2() == before

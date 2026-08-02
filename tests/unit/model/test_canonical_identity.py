@@ -6,6 +6,7 @@ import subprocess
 import sys
 import unittest
 from dataclasses import FrozenInstanceError
+from unittest.mock import patch
 
 import pyowl_core.model as m
 from pyowl_core import (
@@ -212,6 +213,30 @@ class CanonicalIdentityTests(unittest.TestCase):
                 ("max_canonical_work", row_limit, row_limit - 1),
             )
             self.assertEqual(dict(error.details), {})
+
+    def test_canonical_work_preflights_full_row_before_encoding(self) -> None:
+        iri = m.IRI("https://example.org/" + "\N{SNOWMAN}" * 64)
+        value = m.Declaration(m.Class(iri))
+        iri_size = len(m.canonical_bytes(iri))
+        row_size = len(m.canonical_bytes(value))
+        self.assertLess(iri_size, row_size)
+
+        limits = ParseLimits(max_canonical_work=row_size - 1)
+        with (
+            patch(
+                "pyowl_core.model.canonical._encode_node",
+                side_effect=AssertionError("oversized row reached allocating encoder"),
+            ),
+            self.assertRaises(ResourceLimitError) as captured,
+        ):
+            m.canonical_bytes(value, limits=limits)
+
+        error = captured.exception
+        self.assertEqual(
+            (error.limit, error.observed, error.allowed),
+            ("max_canonical_work", row_size, row_size - 1),
+        )
+        self.assertEqual(dict(error.details), {})
 
     def test_default_depth_boundary_succeeds_then_fails_without_recursion_error(self) -> None:
         near_limit: m.ClassExpression = _class("A")

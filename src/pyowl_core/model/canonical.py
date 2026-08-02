@@ -82,8 +82,11 @@ def _limit(limits: object | None, name: str, default: int) -> int:
     return value
 
 
-def _enforce_canonical_row_size(size: int, limits: object | None) -> None:
-    maximum = _limit(limits, "max_canonical_work", 1_000_000_000)
+def _canonical_work_limit(limits: object | None) -> int:
+    return _limit(limits, "max_canonical_work", 1_000_000_000)
+
+
+def _enforce_canonical_row_size(size: int, maximum: int) -> None:
     if size > maximum:
         raise ResourceLimitError(
             "resource limit max_canonical_work exceeded",
@@ -114,9 +117,139 @@ def _framed(payload: bytes) -> bytes:
 def canonical_bytes(value: StructuralNode, *, limits: object | None = None) -> bytes:
     if not isinstance(value, StructuralNode):
         raise TypeError("value must be a StructuralNode")
+    maximum = _canonical_work_limit(limits)
+    measured = _canonical_node_size(value, _Budget.from_limits(limits), 0, set())
+    _enforce_canonical_row_size(measured, maximum)
     encoded = _encode_node(value, _Budget.from_limits(limits), 0, set())
-    _enforce_canonical_row_size(len(encoded), limits)
+    if len(encoded) != measured:
+        raise AssertionError("canonical row length preflight disagrees with encoder")
     return encoded
+
+
+def _canonical_node_size(
+    value: StructuralNode,
+    budget: _Budget,
+    depth: int,
+    active: set[int],
+) -> int:
+    """Measure one row before allocating its canonical byte representation."""
+
+    budget.enter(depth)
+    identity = id(value)
+    if identity in active:
+        raise StructuralConstraintError("cyclic structural value graph")
+    active.add(identity)
+    try:
+        spec = constructor_spec(value)
+        size = _varint_size(spec.tag)
+        for field in spec.fields:
+            component = getattr(value, field)
+            child_depth = depth + 1
+            if isinstance(component, StructuralNode):
+                child_size = _canonical_node_size(
+                    component,
+                    budget,
+                    child_depth,
+                    active,
+                )
+                size += 1 + _framed_size(child_size)
+            elif isinstance(component, CanonicalSet):
+                budget.collection(len(component))
+                size += 1 + _varint_size(len(component))
+                for item in component:
+                    child_size = _canonical_node_size(
+                        item,
+                        budget,
+                        child_depth,
+                        active,
+                    )
+                    size += _framed_size(child_size)
+            elif isinstance(component, tuple):
+                budget.collection(len(component))
+                size += 1 + _varint_size(len(component))
+                for item in component:
+                    if isinstance(item, StructuralNode):
+                        child_size = _canonical_node_size(
+                            item,
+                            budget,
+                            child_depth,
+                            active,
+                        )
+                        size += 1 + _framed_size(child_size)
+                    else:
+                        size += _scalar_component_size(item)
+            else:
+                size += _scalar_component_size(component)
+        return size
+    finally:
+        active.remove(identity)
+
+
+def _varint_size(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("varint value must be an integer")
+    if value < 0:
+        raise StructuralConstraintError("canonical integers must be nonnegative")
+    return max(1, (value.bit_length() + 6) // 7)
+
+
+def _framed_size(payload_size: int) -> int:
+    return _varint_size(payload_size) + payload_size
+
+
+def _text_size(value: str, encoding: str) -> int:
+    if encoding == "ascii":
+        for index, character in enumerate(value):
+            if ord(character) > 0x7F:
+                raise UnicodeEncodeError(
+                    "ascii",
+                    value,
+                    index,
+                    index + 1,
+                    "ordinal not in range(128)",
+                )
+        return len(value)
+
+    size = 0
+    for index, character in enumerate(value):
+        codepoint = ord(character)
+        if codepoint <= 0x7F:
+            size += 1
+        elif codepoint <= 0x7FF:
+            size += 2
+        elif 0xD800 <= codepoint <= 0xDFFF:
+            raise UnicodeEncodeError(
+                "utf-8",
+                value,
+                index,
+                index + 1,
+                "surrogates not allowed",
+            )
+        elif codepoint <= 0xFFFF:
+            size += 3
+        else:
+            size += 4
+    return size
+
+
+def _scalar_component_size(value: object) -> int:
+    if value is None:
+        return 1
+    if isinstance(value, Enum):
+        if not isinstance(value.value, str):
+            raise TypeError("canonical enum values must be strings")
+        payload_size = _text_size(value.value, "ascii")
+        return 1 + _framed_size(payload_size)
+    if isinstance(value, str):
+        payload_size = _text_size(value, "utf-8")
+        return 1 + _framed_size(payload_size)
+    if isinstance(value, bytes):
+        return 1 + _framed_size(len(value))
+    if isinstance(value, bool):
+        raise TypeError("booleans are not canonical model integers")
+    if isinstance(value, int):
+        return 1 + _varint_size(value)
+    raise TypeError(f"unsupported canonical field value: {type(value).__name__}")
 
 
 def _encode_node(
@@ -194,7 +327,7 @@ def structural_hexdigest(value: StructuralNode, *, limits: object | None = None)
 def decode_canonical(data: bytes, *, limits: object | None = None) -> StructuralNode:
     if not isinstance(data, bytes):
         raise TypeError("canonical data must be bytes")
-    _enforce_canonical_row_size(len(data), limits)
+    _enforce_canonical_row_size(len(data), _canonical_work_limit(limits))
     budget = _Budget.from_limits(limits)
     value, offset = _decode_node(data, 0, budget, 0)
     if offset != len(data):
