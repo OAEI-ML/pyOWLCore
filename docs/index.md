@@ -1,8 +1,8 @@
 # pyowl-core documentation
 
-This documentation describes the production 0.1 release line and the
-compatibility boundary reserved for a future 1.0. Normative behavior remains
-defined by the files under `specs/`; examples never override those contracts.
+This documentation describes the 0.2 release line and the compatibility
+boundary reserved for a future 1.0. Normative behavior remains defined by the
+files under `specs/`; examples never override those contracts.
 
 ## Install
 
@@ -16,8 +16,9 @@ optional accelerators with the same public values and semantics.
 
 ## Start here
 
-- New users: run [`examples/parse_once.py`](examples/parse_once.py), then read
-  the [API guide](api.md).
+- New users: work through [getting started](getting-started.md), run
+  [`examples/parse_once.py`](examples/parse_once.py), then read the
+  [API guide](api.md).
 - Applications sharing ontologies across components: read
   [consumer handoff](consumer-handoff.md).
 - Applications resolving imports or handling untrusted inputs: read
@@ -27,6 +28,7 @@ optional accelerators with the same public values and semantics.
 
 ## Reference
 
+- [Getting started](getting-started.md)
 - [API guide](api.md)
 - [View and ownership architecture](views-and-architecture.md)
 - [Consumer handoff](consumer-handoff.md)
@@ -34,6 +36,7 @@ optional accelerators with the same public values and semantics.
 - [Troubleshooting](troubleshooting.md)
 - [Performance](performance.md)
 - [Compatibility](compatibility.md)
+- [Migration guide](../MIGRATION.md)
 - [Specification traceability](spec-traceability.md)
 - [Release checklist](release-checklist.md)
 - [Release, yank, and security rollback](releasing.md)

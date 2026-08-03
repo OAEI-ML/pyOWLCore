@@ -1,13 +1,14 @@
 # Security policy
 
 Do not open a public issue for a suspected vulnerability. Until a private
-security contact is published with the eventual repository URL, contact the
-maintainers through the private channel used to grant repository access and
-include affected revision, impact, reproduction, and any proposed mitigation.
-This temporary routing must be replaced before public release.
+security contact is published for the repository, contact the maintainers
+through the private channel used to grant repository access and include
+affected revision, impact, reproduction, and any proposed mitigation.
 
-Supported security fixes currently target the unreleased `0.1.x` development
-line. No release is claimed secure or production-ready yet.
+Supported security fixes currently target the published `0.1.x` line and the
+`0.2.0` release candidate. A defective release is yanked and replaced by a new
+immutable version rather than modified in place; the full incident procedure
+is in [docs/releasing.md](docs/releasing.md).
 
 Ontology documents, IRIs, imports, caches, source maps, plugin metadata, and
 wire input are untrusted. Contributions must apply `ParseLimits`, preserve the

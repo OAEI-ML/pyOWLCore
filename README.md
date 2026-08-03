@@ -90,6 +90,7 @@ production status of the 0.2 line.
 ## Documentation
 
 - [Documentation index](docs/index.md)
+- [Getting started: verified task-oriented examples](docs/getting-started.md)
 - [API guide](docs/api.md)
 - [Documents, snapshots, views, overlays, and composites](docs/views-and-architecture.md)
 - [Parse-once consumer handoff](docs/consumer-handoff.md)

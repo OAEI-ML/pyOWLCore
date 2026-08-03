@@ -4,7 +4,8 @@
 families remain available through `pyowl_core.model`; structural index types
 remain available through `pyowl_core.index`; consumer negotiation lives in
 `pyowl_core.adapters`. Private native, parser, arena, and wire-layout modules
-are not public contracts.
+are not public contracts. For task-oriented, runnable introductions to this
+surface, start with [getting started](getting-started.md).
 
 ## Versions
 
@@ -40,6 +41,44 @@ identity, not RDF node identity, a reasoner ID, or object address.
 - `DocumentFormat`, `ImportPolicy`, `BackendPreference`, `LoadOptions`, and
   `ParseLimits` make all policy and resource choices explicit.
 
+The exact entry-point signatures are:
+
+```python
+def parse_document(
+    source: DocumentSource,
+    *,
+    format: DocumentFormat | str | None = None,
+    document_iri: IRI | str | None = None,
+    options: LoadOptions | None = None,
+) -> OntologyDocument: ...
+
+def load_snapshot(
+    source: DocumentInput,
+    *,
+    document_iri: IRI | str | None = None,
+    options: LoadOptions | None = None,
+    resolver: ImportResolver | None = None,
+    cancellation_token: CancellationToken | None = None,
+) -> OntologySnapshot: ...
+
+def coerce_snapshot(
+    source: OntologyInput,  # DocumentInput | OntologyView | SnapshotProvider
+    *,
+    document_iri: IRI | str | None = None,
+    options: LoadOptions | None = None,
+    resolver: ImportResolver | None = None,
+    cancellation_token: CancellationToken | None = None,
+) -> OntologyView: ...
+```
+
+`document_iri` supplies the base/identity of an unparsed root source; it is
+required for streams and rejected for an existing document or view.
+`LoadOptions` fields and their defaults: `format=None` (autodetect),
+`imports=ImportPolicy.RESOLVE_LOCAL`, `backend=BackendPreference.AUTO`,
+`limits=ParseLimits()`, `offline=True`, `preserve_source_map=False`,
+`collect_provenance=True`, `validate_owl2_dl=False`, `deterministic=True`,
+and `allow_partial_rdf_mapping=False`.
+
 `DocumentSource`, `DocumentInput`, and `OntologyInput` are typing aliases, not
 runtime base classes. A plain string is a path, never ontology text or a URL.
 
@@ -53,7 +92,14 @@ diagnostic document cannot enter snapshot, cache, wire, or reasoner routes.
 
 ## Views and changes
 
-- `OntologyView` is the read-only consumer protocol.
+- `OntologyView` is the read-only consumer protocol. It promises
+  `iter_axioms()`, `iter_extensions()`, `contains(axiom)`, `signature`,
+  `ontology_annotations`, `is_complete`, `capabilities`, `report`,
+  `origin_index`, the `structural_fingerprint` / `logical_fingerprint` /
+  `signature_fingerprint` properties, and `view(IndexType, **options)`.
+  `OntologySnapshot` additionally exposes the concrete closure: `root`,
+  `documents`, `iter_documents()`, `import_manifest`, `diagnostics`,
+  `load_options`, `resolution_attempts`, `timings`, and `owl2_dl_report`.
 - `OntologyDelta` is a canonical immutable change set.
 - `apply_delta` creates a persistent `OntologyOverlay` without copying its base.
 - `compose_views` creates an `OntologyComposite` retaining member identity and
@@ -65,11 +111,15 @@ See [view architecture](views-and-architecture.md) before using concrete fields.
 ## Structural indexes
 
 `view.view(IndexType, **options)` builds or reuses a lazy structural index.
-Public index families cover signatures, declarations, annotations, axiom
-types, entity references, expression occurrences, asserted class/property
-hierarchies, domains/ranges, inverse/property chains, and ontology identities.
-They expose asserted structure only; inferred taxonomy and realization remain
-reasoner-owned.
+The public index families and their request types are `SignatureView`,
+`DeclarationIndex`, `AnnotationAssertionIndex`, `AxiomTypeIndex`,
+`EntityReferenceIndex`, `ExpressionOccurrenceIndex`,
+`AssertedClassHierarchyView`, `AssertedPropertyHierarchyView`,
+`PropertyDomainRangeView` (with domains/ranges, inverses, and property
+chains), and `OntologyIdentityIndex`; each accepts a matching `...Options`
+type, and cache behavior is controlled through `configure_index_cache`,
+`index_cache_report`, and `clear_index_cache`. They expose asserted structure
+only; inferred taxonomy and realization remain reasoner-owned.
 
 ## Bulk structural handoff
 
@@ -89,9 +139,17 @@ instead of reinterpreting those columns.
 
 ## Wire and caches
 
-- `encode_snapshot` and `decode_snapshot` provide validated in-memory transport.
-- `write_snapshot` and `open_snapshot` provide durable and mmap-backed handoff.
-- `WireCache` manages versioned entries under explicit durability/retention.
+- `encode_snapshot(view, *, limits=None, cancellation_token=None) -> bytes`
+  and `decode_snapshot(data, *, limits=None, verify=True,
+  cancellation_token=None) -> OntologySnapshot` provide validated in-memory
+  transport.
+- `write_snapshot(view, path, *, atomic=True, durability=DurabilityPolicy.DATA,
+  ...) -> Fingerprint` and `open_snapshot(path, *, mmap=True, verify=True, ...)
+  -> OntologySnapshot` provide durable and mmap-backed handoff.
+- `WireCache(root, *, limits=None, durability=...)` manages versioned entries
+  under explicit durability/retention: `publish`, `open`, `get_or_publish`
+  (returns a closeable, context-managed `MappedOntologySnapshot`), and
+  `collect`.
 
 Unknown required features or incompatible schemas fail closed. Pickle is not a
 supported interchange format.
