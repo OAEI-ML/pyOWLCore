@@ -200,7 +200,7 @@ def test_imported_scope_selection_keeps_native_annotation_identity(tmp_path: Any
     )
     root = tmp_path / "root.ofn"
     root.write_text(
-        f'Ontology(<urn:root> Import(<{imported.as_uri()}>) '
+        f"Ontology(<urn:root> Import(<{imported.as_uri()}>) "
         'AnnotationAssertion(<urn:label> <urn:A> "root"))'
     )
     source = load_snapshot(
@@ -217,3 +217,63 @@ def test_imported_scope_selection_keeps_native_annotation_identity(tmp_path: Any
         "root",
         "imported",
     }
+
+
+def test_native_overlay_add_remove_and_layers_without_base_traversal(monkeypatch: Any) -> None:
+    from pyowl_core import CanonicalSet, OntologyDelta, apply_delta
+
+    source = owner()
+    removed = next(source.iter_axioms(AnnotationAssertion))
+    added = AnnotationAssertion(AnnotationProperty(IRI("urn:label")), IRI("urn:C"), IRI("urn:new"))
+    first = apply_delta(
+        source,
+        OntologyDelta(add_axioms=CanonicalSet((added,)), remove_axioms=CanonicalSet((removed,))),
+    )
+    second = apply_delta(
+        first,
+        OntologyDelta(add_axioms=CanonicalSet((removed,)), remove_axioms=CanonicalSet((added,))),
+    )
+    expected = sorted(canonical_bytes(row) for row in first.iter_axioms(AnnotationAssertion))
+    original = sorted(canonical_bytes(row) for row in source.iter_axioms(AnnotationAssertion))
+    monkeypatch.setattr(type(source), "iter_axioms", forbidden)
+    monkeypatch.setattr(type(first), "iter_axioms", forbidden)
+    monkeypatch.setattr(type(first), "materialize", forbidden)
+    index = strict(first)
+    assert index._ontology is first
+    assert [
+        row for page in index.iter_columns(max_rows=1) for row in page.canonical_assertion_bytes
+    ] == expected
+    assert [
+        row for page in strict(second).iter_columns() for row in page.canonical_assertion_bytes
+    ] == original
+    assert [
+        row
+        for page in strict(first, scope=AxiomScope.ROOT).iter_columns()
+        for row in page.canonical_assertion_bytes
+    ] == original
+    origins = first.view(AnnotationAssertionIndex, require_native_pipeline=True).iter_columns(
+        subjects=[IRI("urn:C")]
+    )
+    assert next(origins).origins == (first.origins_for(added),)
+
+
+def test_selected_query_work_ignores_unrelated_annotation_rows() -> None:
+    for unrelated in (0, 1000):
+        rows = " ".join(
+            f'AnnotationAssertion(<urn:other> <urn:U{i}> "unrelated")' for i in range(unrelated)
+        )
+        source = load_snapshot(
+            (
+                'Ontology(<urn:scale> AnnotationAssertion(<urn:selected> <urn:A> "chosen") '
+                + rows
+                + ")"
+            ).encode(),
+            options=LoadOptions(backend=BackendPreference.NATIVE, imports=ImportPolicy.IGNORE),
+        )
+        index = strict(source)
+        for _ in range(3):
+            pages = list(index.iter_columns(properties=[AnnotationProperty(IRI("urn:selected"))]))
+            assert len(pages) == 1
+            assert pages[0].report["scanned_annotation_rows"] == 1
+            assert pages[0].report["published_rows"] == 1
+            assert pages[0].report["index_build_scanned_roots"] == unrelated + 1

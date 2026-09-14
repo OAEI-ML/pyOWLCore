@@ -8,12 +8,13 @@ from types import MappingProxyType
 from typing import Any, cast
 
 from pyowl_core.cancellation import CancellationToken
-from pyowl_core.document import OntologyView
+from pyowl_core.document import AxiomScope, OntologyOverlay, OntologyView
 from pyowl_core.document.provenance import OriginOccurrence
 from pyowl_core.exceptions import BackendProtocolError
 from pyowl_core.index.cache import IndexBuildBudget
 from pyowl_core.model import (
     IRI,
+    AnnotationAssertion,
     AnnotationProperty,
     AnnotationSubject,
     AnnotationValue,
@@ -49,6 +50,8 @@ class AnnotationAssertionColumns:
 def supports_native_columns(ontology: object, *, include_nested: bool = False) -> bool:
     if include_nested:
         return False
+    if isinstance(ontology, OntologyOverlay):
+        return supports_native_columns(ontology.base, include_nested=include_nested)
     selected = _native_owner(cast(OntologyView, ontology))
     return (
         selected is not None
@@ -67,6 +70,53 @@ def build_native_columns(
             "native annotation columns unavailable for this owner/options",
             code="NATIVE_VIEW_REQUIRED",
         )
+    if isinstance(ontology, OntologyOverlay):
+        from pyowl_core.index.annotations import AnnotationAssertionIndex
+
+        inherited = ontology.base.view(
+            AnnotationAssertionIndex,
+            scope=options.scope,
+            document_key=options.document_key,
+            include_origins=options.include_origins,
+            include_nested=False,
+            require_native_pipeline=True,
+            cancellation_token=cancellation_token,
+        )
+        additions = removals = []
+        if options.scope is AxiomScope.CLOSURE:
+            # Only explicit delta rows cross the boundary, never base axioms.
+            additions = [
+                canonical_bytes(row)
+                for row in ontology.delta.add_axioms
+                if isinstance(row, AnnotationAssertion)
+            ]
+            removals = [
+                canonical_bytes(row)
+                for row in ontology.delta.remove_axioms
+                if isinstance(row, AnnotationAssertion)
+            ]
+        if not additions and not removals:
+            budget.add_shared_rows(inherited.report.total_row_count)
+            return inherited._native_columns
+        base = ontology.base
+        while isinstance(base, OntologyOverlay):
+            base = base.base
+        selected_base = _native_owner(base)
+        assert selected_base is not None
+        result = _invoke_native_column_operation_v2(
+            selected_base[1],
+            cast(Any, inherited._native_columns)._patch_v1,
+            (additions, removals),
+            _selected_limits(ontology, None),
+            cancellation_token,
+        )
+        report = cast(Any, result)._report_v1()
+        budget.add(
+            "native_annotation_roots",
+            rows=report["annotation_rows"],
+            bytes_=report["retained_bytes"],
+        )
+        return result
     selected = _native_owner(ontology)
     assert selected is not None
     raw, extension = selected
@@ -99,7 +149,10 @@ def iter_native_columns(
             raise ValueError(f"{name} must be a positive integer")
     ontology = index._ontology
     cast(Any, ontology)._check_open()
-    selected = _native_owner(ontology)
+    base = ontology
+    while isinstance(base, OntologyOverlay):
+        base = base.base
+    selected = _native_owner(base)
     if selected is None or index._native_columns is None:
         raise BackendProtocolError(
             "index was not created with require_native_pipeline=True", code="NATIVE_VIEW_REQUIRED"
@@ -150,7 +203,9 @@ def iter_native_columns(
             )
         digests = tuple(row[4] for row in rows)
         origins = (
-            tuple(ontology.origin_index.entries.get(digest, ()) for digest in digests)
+            tuple(ontology.origins_for(decode_canonical(row[3])) for row in rows)
+            if index.options.include_origins and isinstance(ontology, OntologyOverlay)
+            else tuple(ontology.origin_index.entries.get(digest, ()) for digest in digests)
             if index.options.include_origins
             else tuple(() for _ in rows)
         )
