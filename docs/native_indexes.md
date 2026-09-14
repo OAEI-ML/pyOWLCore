@@ -32,6 +32,8 @@ annotation queries there fail explicitly and can use `AnnotationAssertionIndex`.
 Other transformed/decoded/mmap owners and logical typed-index deltas are currently
 unsupported; strict mode raises before scalar construction.
 
+`AxiomTypeIndex.native_report` is public on the view type; default-mode indexes
+raise `BackendProtocolError` rather than claim strict native diagnostics.
 `native_report` records actual construction and requested-query counters, with
 conservative allocation charges rather than claimed allocator measurements. The
 native typed report's `has_object_data_property_punning` checks the entire selected

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from itertools import islice
@@ -119,6 +119,13 @@ class AxiomTypeIndex:
     SCHEMA_VERSION = 1
     OPTIONS_TYPE = AxiomTypeOptions
     DEPENDENCIES: tuple[type[object], ...] = ()
+
+    @property
+    def native_report(self) -> Mapping[str, object]:
+        """Native construction/query diagnostics for an explicitly strict index."""
+        raise BackendProtocolError(
+            "native report requires require_native_pipeline=True", code="NATIVE_VIEW_REQUIRED"
+        )
 
     @staticmethod
     def supports_native() -> bool:

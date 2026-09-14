@@ -196,11 +196,13 @@ def test_imported_scope_and_declaration_only_property_punning(tmp_path: Any) -> 
 
     imported = tmp_path / "import.ofn"
     imported.write_text(
-        "Ontology(<urn:imported> ClassAssertion(<urn:B> <urn:i>) Declaration(DataProperty(<urn:pun>)))"
+        "Ontology(<urn:imported> ClassAssertion(<urn:B> <urn:i>) "
+        "Declaration(DataProperty(<urn:pun>)))"
     )
     root = tmp_path / "root.ofn"
     root.write_text(
-        f"Ontology(<urn:root> Import(<{imported.as_uri()}>) ClassAssertion(<urn:A> <urn:i>) Declaration(ObjectProperty(<urn:pun>)))"
+        f"Ontology(<urn:root> Import(<{imported.as_uri()}>) "
+        "ClassAssertion(<urn:A> <urn:i>) Declaration(ObjectProperty(<urn:pun>)))"
     )
     source = load_snapshot(
         root,
@@ -252,3 +254,10 @@ def test_logical_overlay_and_native_memory_budget_fail_closed(monkeypatch: Any) 
             ParseLimits(max_memory_bytes=1),
             None,
         )
+
+
+def test_default_index_does_not_claim_strict_native_diagnostics() -> None:
+    index = owner(BackendPreference.PYTHON).view(AxiomTypeIndex)
+    with pytest.raises(BackendProtocolError, match="require_native_pipeline=True"):
+        _ = index.native_report
+    assert index.count(ClassAssertion) == 3
