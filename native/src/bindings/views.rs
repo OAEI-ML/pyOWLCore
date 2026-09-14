@@ -1265,7 +1265,7 @@ fn _encoded_structural_workspace_allocation_probe_v2<'py>(
     Ok((buffers, counters, allocation_count))
 }
 
-fn encoded_selection(
+pub(super) fn encoded_selection(
     scope: &str,
     document_ordinal: Option<u64>,
 ) -> Result<TypedFacadeScopeV2, &'static str> {
@@ -1277,7 +1277,7 @@ fn encoded_selection(
     }
 }
 
-fn encoded_columns_to_python(
+pub(super) fn encoded_columns_to_python(
     py: Python<'_>,
     storage: &PublicationStorageV2,
     scope: TypedFacadeScopeV2,

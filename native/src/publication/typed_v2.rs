@@ -830,6 +830,31 @@ impl TypedFacadeStorageV2 {
         })
     }
 
+    /// Prove identical effective selections without compiling any columns.
+    pub(crate) fn encoded_scopes_equivalent(
+        &self,
+        left: TypedFacadeScopeV2,
+        left_ordinal: Option<u64>,
+        right: TypedFacadeScopeV2,
+        right_ordinal: Option<u64>,
+    ) -> NativeResult<bool> {
+        if self.document_count != 1 {
+            return Ok(false);
+        }
+        for collection in [
+            TypedFacadeCollectionV2::OntologyAnnotations,
+            TypedFacadeCollectionV2::Axioms,
+            TypedFacadeCollectionV2::Extensions,
+        ] {
+            if self.structural_roots(collection, left, left_ordinal, false)?
+                != self.structural_roots(collection, right, right_ordinal, false)?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Build direct structural columns by borrowing the retained root tables.
     /// The encoded owner keeps the shared component arena alive but does not
     /// retain or construct a second root-identifier table.

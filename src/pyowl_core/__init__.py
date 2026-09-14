@@ -18,6 +18,7 @@ from .api import (
     parse_document,
     write_snapshot,
 )
+from .backends.native_validation import encoded_scopes_equivalent, native_validation_report
 from .backends.native_views import (
     ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
     ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2,
@@ -361,6 +362,8 @@ __all__ = [
     "snapshot_structural_fingerprint",
     "validate_encoded_structural_view_v1",
     "validate_encoded_structural_view_v2",
+    "encoded_scopes_equivalent",
+    "native_validation_report",
     "write_document",
     "write_snapshot",
     "resolver_configuration_fingerprint",

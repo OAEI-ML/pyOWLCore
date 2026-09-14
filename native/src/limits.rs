@@ -230,6 +230,15 @@ impl Default for Limits {
 }
 
 impl Limits {
+    /// Resource bounds on immutable structure, independent of a request deadline.
+    pub(crate) fn same_structural_budget(&self, other: &Self) -> bool {
+        self.values
+            .iter()
+            .zip(other.values)
+            .enumerate()
+            .all(|(index, (left, right))| index == 14 || *left == right)
+    }
+
     pub(crate) fn decode(data: &[u8]) -> NativeResult<Self> {
         if data.is_empty() {
             return Ok(Self::default());

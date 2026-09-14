@@ -1054,6 +1054,23 @@ impl PublicationStorageV2 {
         Ok(record.call((), Some(&kwargs))?.unbind())
     }
 
+    pub(crate) fn encoded_scopes_equivalent(
+        &self,
+        left: TypedFacadeScopeV2,
+        left_ordinal: Option<u64>,
+        right: TypedFacadeScopeV2,
+        right_ordinal: Option<u64>,
+    ) -> NativeResult<bool> {
+        // Import edges can be unresolved/self-referential without adding documents.
+        if self.attestation.import_edge_count != 0 {
+            return Ok(false);
+        }
+        let Some(typed) = self.typed_structural.as_deref() else {
+            return Ok(false);
+        };
+        typed.encoded_scopes_equivalent(left, left_ordinal, right, right_ordinal)
+    }
+
     pub(crate) fn encoded_structural_columns(
         &self,
         scope: TypedFacadeScopeV2,

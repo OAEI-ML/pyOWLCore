@@ -1,6 +1,7 @@
 //! Stable, disjoint registration seams for successor native capabilities.
 
 pub(crate) mod ingestion;
+mod validated_views;
 pub(crate) mod views;
 
 use std::collections::HashSet;
@@ -37,6 +38,7 @@ impl BindingFeatures {
 pub(crate) fn register(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<BindingFeatures> {
     ingestion::register(py, module)?;
     views::register(py, module)?;
+    validated_views::register(module)?;
     let features = BindingFeatures {
         ingestion: ingestion::FEATURES,
         views: views::FEATURES,

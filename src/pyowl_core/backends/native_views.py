@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NoReturn, Protocol, cast
 
 from pyowl_core.document.document import Fingerprint
 from pyowl_core.document.overlay import view_limits
@@ -423,6 +423,7 @@ class EncodedStructuralOptionsV2:
     document_key: str | None = None
     limits: ParseLimits | None = None
     materialize_segments: bool = False
+    require_native_validation: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -443,6 +444,8 @@ class EncodedStructuralOptionsV2:
         _validate_selection(scope, self.document_key)
         if self.limits is not None and not isinstance(self.limits, ParseLimits):
             raise TypeError("limits must be ParseLimits or None")
+        if type(self.require_native_validation) is not bool:
+            raise TypeError("require_native_validation must be bool")
         if type(self.materialize_segments) is not bool:
             raise TypeError("materialize_segments must be bool")
 
@@ -484,6 +487,8 @@ class EncodedStructuralViewV2:
     document_key: str | None
     _retained_source: object
     _seal: object
+    _native_receipt: object | None = None
+    _native_limits: ParseLimits | None = None
 
     @classmethod
     def _build(
@@ -508,6 +513,7 @@ class EncodedStructuralViewV2:
             _budget=budget,
             _cancellation_token=cancellation_token,
             materialize_segments=options.materialize_segments,
+            require_native_validation=options.require_native_validation,
         )
         budget.check()
         return created
@@ -693,6 +699,7 @@ def produce_encoded_structural_view_v2(
     document_key: str | None = None,
     limits: ParseLimits | None = None,
     materialize_segments: bool = False,
+    require_native_validation: bool = False,
     _budget: IndexBuildBudget | None = None,
     _cancellation_token: CancellationToken | None = None,
 ) -> EncodedStructuralViewV2:
@@ -703,7 +710,22 @@ def produce_encoded_structural_view_v2(
         raise TypeError("owner must implement OntologyView")
     if type(materialize_segments) is not bool:
         raise TypeError("materialize_segments must be bool")
+    if type(require_native_validation) is not bool:
+        raise TypeError("require_native_validation must be bool")
     selected_limits = _selected_limits(owner, limits)
+    if require_native_validation:
+        direct = _produce_native_direct_view_v2(
+            owner,
+            scope=scope,
+            document_key=document_key,
+            limits=selected_limits,
+            budget=_budget,
+            cancellation_token=_cancellation_token,
+            require_native_validation=True,
+        )
+        if direct is None:
+            _fail("owner lacks native column validation", "NATIVE_VIEW_REQUIRED")
+        return direct
     if _budget is not None:
         _budget.check()
 
@@ -1247,6 +1269,7 @@ def _produce_native_direct_view_v2(
     limits: ParseLimits,
     budget: IndexBuildBudget | None,
     cancellation_token: CancellationToken | None,
+    require_native_validation: bool = False,
 ) -> EncodedStructuralViewV2 | None:
     """Return retained native columns when the installed backend exposes them."""
 
@@ -1263,7 +1286,20 @@ def _produce_native_direct_view_v2(
         extension = importlib.import_module(type(raw_owner).__module__)
     except (ImportError, ValueError):
         return None
-    raw_operation = getattr(extension, "_encoded_structural_columns_v2", None)
+    from .native_validation import _native_owner
+
+    validated = (
+        getattr(extension, "_validated_encoded_structural_columns_v2", None)
+        if _native_owner(owner) is not None
+        else None
+    )
+    if require_native_validation and not callable(validated):
+        _fail("native extension lacks column validation receipts", "NATIVE_VIEW_REQUIRED")
+    raw_operation = (
+        validated
+        if callable(validated)
+        else getattr(extension, "_encoded_structural_columns_v2", None)
+    )
     if not callable(raw_operation):
         return None
     native_scope = getattr(owner, "_native_scope", None)
@@ -1278,7 +1314,11 @@ def _produce_native_direct_view_v2(
     result = _invoke_native_column_operation_v2(
         extension,
         operation,
-        (raw_owner, scope_value, document_ordinal),
+        (
+            (raw_owner, owner, scope_value, document_ordinal)
+            if callable(validated)
+            else (raw_owner, scope_value, document_ordinal)
+        ),
         limits,
         cancellation_token,
     )
@@ -1395,9 +1435,10 @@ def _native_direct_view_from_result_v2(
     budget: IndexBuildBudget | None,
     retained_source: object,
 ) -> EncodedStructuralViewV2:
-    if type(result) is not tuple or len(result) != 2:
+    if type(result) is not tuple or len(result) not in {2, 3}:
         _fail("native encoded-view result has invalid framing", "NATIVE_VIEW_RESULT")
-    raw_buffers, raw_counters = result
+    raw_buffers, raw_counters = result[:2]
+    receipt = result[2] if len(result) == 3 else None
     if not isinstance(raw_buffers, Mapping) or not isinstance(raw_counters, Mapping):
         _fail("native encoded-view result has invalid tables", "NATIVE_VIEW_RESULT")
     if set(raw_buffers) != set(_BUFFER_NAMES):
@@ -1435,13 +1476,29 @@ def _native_direct_view_from_result_v2(
         owner,
         buffers,
         ENCODED_STRUCTURAL_DESCRIPTOR_V2,
-        _fingerprint(buffers, segments),
+        (
+            Fingerprint("sha256", 2, cast(Any, receipt)._fingerprint_v1())
+            if receipt is not None
+            else _fingerprint(buffers, segments)
+        ),
         segments,
         scope,
         document_key,
         retained_source,
-        None,
+        _VALIDATED_VIEW_SEAL if receipt is not None else None,
+        _native_receipt=receipt,
+        _native_limits=limits if receipt is not None else None,
     )
+    if receipt is not None:
+        from .native_validation import validate_native_columns
+
+        return validate_native_columns(
+            candidate,
+            expected_owner=owner,
+            expected_scope=scope,
+            expected_document_key=document_key,
+            limits=limits,
+        )
     return _freeze_encoded_structural_view_v2(
         candidate,
         expected_owner=owner,
@@ -1768,9 +1825,24 @@ def validate_encoded_structural_view_v2(
     expected_scope: AxiomScope,
     expected_document_key: str | None,
     limits: ParseLimits | None = None,
+    require_native_validation: bool = False,
 ) -> EncodedStructuralViewV2:
     """Validate an untrusted publication, copying exporters to immutable bytes."""
 
+    if type(require_native_validation) is not bool:
+        raise TypeError("require_native_validation must be bool")
+    if require_native_validation or (
+        type(candidate) is EncodedStructuralViewV2 and candidate._native_receipt is not None
+    ):
+        from .native_validation import validate_native_columns
+
+        return validate_native_columns(
+            candidate,
+            expected_owner=expected_owner,
+            expected_scope=expected_scope,
+            expected_document_key=expected_document_key,
+            limits=limits,
+        )
     return _freeze_encoded_structural_view_v2(
         candidate,
         expected_owner=expected_owner,
