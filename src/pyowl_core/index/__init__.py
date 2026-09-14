@@ -25,6 +25,7 @@ from .cache import (
     configure_index_cache,
     index_cache_report,
 )
+from .class_features import ClassFeatureOptions, ClassFeatureView
 from .common import (
     FIELD_ROLE_TABLE,
     ConstructorPath,
@@ -98,6 +99,8 @@ __all__ = [
     "CacheRetention",
     "ClassComponent",
     "ClassEquivalenceRecord",
+    "ClassFeatureOptions",
+    "ClassFeatureView",
     "ClassHierarchyEdge",
     "ClassHierarchyNode",
     "ClassHierarchyOptions",
