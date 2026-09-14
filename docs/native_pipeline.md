@@ -51,8 +51,9 @@ for page in index.iter_columns(properties=[AnnotationProperty(IRI(property_iri))
         consume(subject, value)
 ```
 
-The native index retains constructor-selected root IDs and filters before Python
-wraps the requested scalar results. Each immutable `AnnotationAssertionColumns`
+The native index retains constructor-selected root IDs and native property/subject
+postings. It visits the smaller requested posting before Python wraps the selected
+scalar results. Each immutable `AnnotationAssertionColumns`
 page contains `subjects`, `properties`, `values`, `canonical_assertion_bytes`,
 `assertion_digests`, `origins`, and an actual-operation `report`. Rows follow the
 selected ontology's canonical assertion order. Nested annotations remain in the
@@ -67,9 +68,15 @@ limits additionally account for retained and temporary storage. Cancellation is
 checked natively. Published pages remain readable after source closure, while new
 requests follow the owner's close contract.
 
-Strict pages support direct retained snapshots and `include_nested=False` only.
+Strict pages support direct retained snapshots and native-backed explicit overlay
+deltas, with `include_nested=False`. Overlays retain original component arenas;
+only delta annotations cross the input boundary, and ROOT/DOCUMENT selection is
+unchanged.
 `iter_subject`, `assertions`, `values` and literal selection can use the selected
 native pages. Strict subject/reverse enumeration and nested occurrence queries are
 not implemented and fail explicitly. Ordinary index behavior is unchanged, except
 that constructing an index without nested results no longer traverses unrelated
 roots. Application-specific exclusion rules remain in the application.
+
+See [strict native structural indexes](native_indexes.md) for the class/property
+hierarchy and compact typed/entity index contracts and current owner limits.
