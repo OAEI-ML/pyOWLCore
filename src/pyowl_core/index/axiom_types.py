@@ -16,7 +16,7 @@ from pyowl_core.document.overlay import OntologyOverlay
 from pyowl_core.document.provenance import OriginOccurrence
 from pyowl_core.document.snapshot import AxiomScope, OntologyView
 from pyowl_core.exceptions import BackendProtocolError
-from pyowl_core.model import canonical_bytes
+from pyowl_core.model import Entity, canonical_bytes, walk
 from pyowl_core.model.axioms import (
     ANNOTATION_AXIOM_TYPES,
     AXIOM_TYPES,
@@ -98,7 +98,12 @@ if set(_REGISTRY_AXIOM_TAGS.values()) != set(AXIOM_TYPES):
 
 @dataclass(frozen=True, slots=True)
 class AxiomTypeOptions(ScopedIndexOptions):
-    pass
+    require_native_pipeline: bool = False
+
+    def __post_init__(self) -> None:
+        ScopedIndexOptions.__post_init__(self)
+        if type(self.require_native_pipeline) is not bool:
+            raise TypeError("require_native_pipeline must be bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +119,22 @@ class AxiomTypeIndex:
     SCHEMA_VERSION = 1
     OPTIONS_TYPE = AxiomTypeOptions
     DEPENDENCIES: tuple[type[object], ...] = ()
+
+    @staticmethod
+    def supports_native() -> bool:
+        """Probe the installed binary without publishing a view."""
+        import importlib
+
+        try:
+            extension = importlib.import_module("pyowl_core._native")
+        except (ImportError, OSError):
+            return False
+        version = getattr(extension, "NATIVE_AXIOM_INDEX_API_VERSION", None)
+        return (
+            type(version) is int
+            and version == 1
+            and callable(getattr(extension, "_axiom_index_v1", None))
+        )
 
     def __init__(
         self,
@@ -154,6 +175,10 @@ class AxiomTypeIndex:
 
         if not _is_ontology_view(ontology):
             raise TypeError("ontology must implement OntologyView")
+        if options.require_native_pipeline:
+            from pyowl_core.backends.axiom_index import build_native_axiom_index
+
+            return build_native_axiom_index(ontology, options, budget, cancellation_token, started)
         if isinstance(ontology, OntologyOverlay):
             base_options = options
             source = ontology.base.view(
@@ -325,8 +350,20 @@ class AxiomTypeIndex:
             build_report(cls, ViewBuildStrategy.FULL_BUILD, budget, started),
         )
 
-    def iter(self, axiom_type: type[A], *, limit: int | None = None) -> Iterator[A]:
+    def iter(
+        self, axiom_type: type[A], *, referencing: Entity | None = None, limit: int | None = None
+    ) -> Iterator[A]:
         constructor = validate_axiom_type(axiom_type)
+        if referencing is not None:
+            if not isinstance(referencing, Entity):
+                raise TypeError("referencing must be an Entity or None")
+            rows = (
+                row
+                for row in self.iter(axiom_type)
+                if any(node == referencing for node in walk(row))
+            )
+            yield from bounded(rows, limit)
+            return
         if limit is not None and (
             isinstance(limit, bool) or not isinstance(limit, int) or limit < 0
         ):
@@ -383,7 +420,9 @@ class AxiomTypeIndex:
             limit,
         )
 
-    def count(self, axiom_type: type[A]) -> int:
+    def count(self, axiom_type: type[A], *, referencing: Entity | None = None) -> int:
+        if referencing is not None:
+            return sum(1 for _ in self.iter(axiom_type, referencing=referencing))
         constructor = validate_axiom_type(axiom_type)
         if (
             self._native_partition is not None
@@ -421,10 +460,12 @@ class AxiomTypeIndex:
             )
         return sum(1 for _ in self.iter_category(category))
 
-    def tuple(self, axiom_type: type[A], *, limit: int | None = None) -> tuple[A, ...]:
+    def tuple(
+        self, axiom_type: type[A], *, referencing: Entity | None = None, limit: int | None = None
+    ) -> tuple[A, ...]:
         """Allocate a convenience tuple; scalar iteration remains the default."""
 
-        return tuple(self.iter(axiom_type, limit=limit))
+        return tuple(self.iter(axiom_type, referencing=referencing, limit=limit))
 
     def posting(self, axiom: AxiomNode) -> AxiomPosting | None:
         if not isinstance(axiom, AxiomNode):
