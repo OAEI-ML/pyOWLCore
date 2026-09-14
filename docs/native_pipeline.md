@@ -15,6 +15,10 @@ view = validate_encoded_structural_view_v2(
 report = native_validation_report(view)
 ```
 
+`native_validation_available()` probes the actual loaded binary capability without
+constructing an ontology, allowing consumers to reject mixed or old installations
+early. A positive probe never substitutes for receipt admission.
+
 Admission checks a native-issued receipt bound to the retained owner/storage,
 original immutable buffers, scope and construction budgets. The checked native
 builder supplies the structural validation; the schema fingerprint is computed

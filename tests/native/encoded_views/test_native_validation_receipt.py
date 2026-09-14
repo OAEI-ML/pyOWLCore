@@ -155,3 +155,16 @@ def test_receipt_owner_cycle_is_collectible() -> None:
     del owner, view
     gc.collect()
     assert retained() is None
+
+
+def test_binary_probe_rejects_mixed_or_missing_native_capability(monkeypatch: Any) -> None:
+    from types import SimpleNamespace
+
+    from pyowl_core import native_validation_available
+    from pyowl_core.backends import native_validation
+
+    assert native_validation_available()
+    monkeypatch.setattr(
+        native_validation.importlib, "import_module", lambda _name: SimpleNamespace()
+    )
+    assert not native_validation_available()

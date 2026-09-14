@@ -26,6 +26,24 @@ if TYPE_CHECKING:
     from .native_views import EncodedStructuralViewV2
 
 
+def native_validation_available() -> bool:
+    """Probe the installed binary capability without loading an ontology.
+
+    A positive probe never substitutes for owner-bound receipt admission.
+    """
+    try:
+        extension = importlib.import_module("pyowl_core._native")
+    except (ImportError, OSError):
+        return False
+    version = getattr(extension, "NATIVE_VALIDATED_COLUMNS_API_VERSION", None)
+    return (
+        type(version) is int
+        and version == 1
+        and isinstance(getattr(extension, "NativeColumnValidationReceiptV1", None), type)
+        and callable(getattr(extension, "_validated_encoded_structural_columns_v2", None))
+    )
+
+
 def _native_owner(owner: OntologyView) -> tuple[Any, Any] | None:
     from pyowl_core.document.native_storage import _NativeOntologySnapshot
 

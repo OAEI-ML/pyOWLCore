@@ -19,7 +19,11 @@ from .api import (
     write_snapshot,
 )
 from .backends.annotation_columns import AnnotationAssertionColumns
-from .backends.native_validation import encoded_scopes_equivalent, native_validation_report
+from .backends.native_validation import (
+    encoded_scopes_equivalent,
+    native_validation_available,
+    native_validation_report,
+)
 from .backends.native_views import (
     ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V1,
     ENCODED_STRUCTURAL_DESCRIPTOR_SHA256_V2,
@@ -365,6 +369,7 @@ __all__ = [
     "validate_encoded_structural_view_v2",
     "encoded_scopes_equivalent",
     "native_validation_report",
+    "native_validation_available",
     "AnnotationAssertionColumns",
     "write_document",
     "write_snapshot",
