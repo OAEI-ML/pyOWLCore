@@ -25,7 +25,12 @@ A positive capability probe does not make an unsupported owner valid.
   and all-root iteration keep canonical root order. Paging merges native postings
   by root cursor; Python receives requested full axiom wrappers only.
 
-Hierarchy views can reuse an overlay's base index only when its explicit delta
+- `PropertyDomainRangeView` indexes all six object/data/annotation domain/range
+  constructors, preserving inverse expressions, punning, complex values, annotations,
+  and named-only filtered counts. Construction encodes only property keys; native
+  property/count queries and forward-only pages decode requested axiom wrappers.
+
+Hierarchy and domain/range views can reuse an overlay's base index only when its explicit delta
 contains no relevant changed constructor (ROOT/DOCUMENT selection is unchanged).
 Strict typed indexes permit nonannotation queries on annotation-only overlays;
 annotation queries there fail explicitly and can use `AnnotationAssertionIndex`.
@@ -47,7 +52,8 @@ existing owner close contract. Optional origins use selected axiom identities;
 overlay provenance requests never construct its full Python origin index.
 
 Bounded differential tests are in `tests/native/encoded_views/test_native_*index.py`,
-`test_native_annotation_columns.py`, and the native hierarchy tests. Operation
+`test_native_annotation_columns.py`, `test_native_property_domains.py`, and the
+native hierarchy tests. Operation
 counts distinguish one-time native root scans from selected query visits. These
 fixtures establish semantics and scaling structure, not a full-ontology latency
 or memory-speedup claim.

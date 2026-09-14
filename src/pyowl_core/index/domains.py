@@ -55,7 +55,12 @@ class DomainRangeKind(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class PropertyDomainRangeOptions(ScopedIndexOptions):
-    pass
+    require_native_pipeline: bool = False
+
+    def __post_init__(self) -> None:
+        ScopedIndexOptions.__post_init__(self)
+        if type(self.require_native_pipeline) is not bool:
+            raise TypeError("require_native_pipeline must be bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +102,22 @@ class PropertyDomainRangeView:
     OPTIONS_TYPE = PropertyDomainRangeOptions
     DEPENDENCIES: tuple[type[object], ...] = ()
 
+    @staticmethod
+    def supports_native() -> bool:
+        """Probe the actual binary without loading an ontology."""
+        import importlib
+
+        try:
+            extension = importlib.import_module("pyowl_core._native")
+        except (ImportError, OSError):
+            return False
+        version = getattr(extension, "NATIVE_PROPERTY_DOMAINS_API_VERSION", None)
+        return (
+            type(version) is int
+            and version == 1
+            and callable(getattr(extension, "_property_domains_v1", None))
+        )
+
     def __init__(
         self,
         ontology: OntologyView,
@@ -130,6 +151,12 @@ class PropertyDomainRangeView:
             raise TypeError("options must be PropertyDomainRangeOptions")
         if not _is_ontology_view(ontology):
             raise TypeError("ontology must implement OntologyView")
+        if options.require_native_pipeline:
+            from pyowl_core.backends.property_domains import build_native_property_domains
+
+            return build_native_property_domains(
+                ontology, options, budget, cancellation_token, started
+            )
         view = ontology
         if isinstance(ontology, OntologyOverlay):
             source = ontology.base.view(

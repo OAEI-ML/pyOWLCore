@@ -5,6 +5,7 @@ mod axiom_index;
 mod class_features;
 mod class_hierarchy;
 pub(crate) mod ingestion;
+mod property_domains;
 mod validated_views;
 pub(crate) mod views;
 
@@ -46,6 +47,7 @@ pub(crate) fn register(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult
     annotation_columns::register(module)?;
     axiom_index::register(module)?;
     class_hierarchy::register(module)?;
+    property_domains::register(module)?;
     class_features::register(module)?;
     let features = BindingFeatures {
         ingestion: ingestion::FEATURES,
