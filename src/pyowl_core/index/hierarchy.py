@@ -53,6 +53,7 @@ class EquivalenceHandling(str, Enum):
 class ClassHierarchyOptions(ScopedIndexOptions):
     equivalence_handling: EquivalenceHandling = EquivalenceHandling.PRESERVE
     include_disjoint_union: bool = False
+    require_native_pipeline: bool = False
 
     def __post_init__(self) -> None:
         ScopedIndexOptions.__post_init__(self)
@@ -65,6 +66,8 @@ class ClassHierarchyOptions(ScopedIndexOptions):
             object.__setattr__(self, "equivalence_handling", handling)
         elif not isinstance(handling, EquivalenceHandling):
             raise TypeError("equivalence_handling must be EquivalenceHandling")
+        if type(self.require_native_pipeline) is not bool:
+            raise TypeError("require_native_pipeline must be bool")
         if not isinstance(self.include_disjoint_union, bool):
             raise TypeError("include_disjoint_union must be bool")
 
@@ -167,6 +170,14 @@ class AssertedClassHierarchyView:
         cancellation_token: CancellationToken | None,
         started: float,
     ) -> AssertedClassHierarchyView:
+        if isinstance(options, ClassHierarchyOptions) and options.require_native_pipeline:
+            from pyowl_core.backends.class_hierarchy import build_native_class_hierarchy
+
+            if not _is_ontology_view(ontology):
+                raise TypeError("ontology must implement OntologyView")
+            return build_native_class_hierarchy(
+                ontology, options, budget, cancellation_token, started
+            )
         return cast(
             AssertedClassHierarchyView,
             _build_hierarchy(

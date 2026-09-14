@@ -1,6 +1,7 @@
 //! Stable, disjoint registration seams for successor native capabilities.
 
 mod annotation_columns;
+mod class_hierarchy;
 pub(crate) mod ingestion;
 mod validated_views;
 pub(crate) mod views;
@@ -41,6 +42,7 @@ pub(crate) fn register(py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult
     views::register(py, module)?;
     validated_views::register(module)?;
     annotation_columns::register(module)?;
+    class_hierarchy::register(module)?;
     let features = BindingFeatures {
         ingestion: ingestion::FEATURES,
         views: views::FEATURES,
