@@ -163,11 +163,10 @@ class _NativeClassHierarchyView(AssertedClassHierarchyView):
                 return
 
     def _origins(self, digest: bytes) -> Any:
-        return (
-            self._ontology.origin_index.entries.get(digest, ())
-            if self.options.include_origins
-            else ()
-        )
+        owner = self._ontology
+        while isinstance(owner, OntologyOverlay):
+            owner = owner.base
+        return owner.origin_index.entries.get(digest, ()) if self.options.include_origins else ()
 
     def iter_edges(self, *, limit: int | None = None) -> Iterator[ClassHierarchyEdge]:
         for child, parent, axiom, digest in self._records("edges", limit):

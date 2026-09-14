@@ -112,6 +112,22 @@ class AssertedClassHierarchyView:
     OPTIONS_TYPE = ClassHierarchyOptions
     DEPENDENCIES: tuple[type[object], ...] = ()
 
+    @staticmethod
+    def supports_native() -> bool:
+        """Check the installed native binary before any ontology is loaded."""
+        import importlib
+
+        try:
+            extension = importlib.import_module("pyowl_core._native")
+        except (ImportError, OSError):
+            return False
+        version = getattr(extension, "NATIVE_CLASS_HIERARCHY_API_VERSION", None)
+        return (
+            type(version) is int
+            and version == 1
+            and callable(getattr(extension, "_class_hierarchy_v1", None))
+        )
+
     def __init__(
         self,
         ontology: OntologyView,
@@ -433,9 +449,12 @@ class AssertedClassHierarchyView:
 @dataclass(frozen=True, slots=True)
 class PropertyHierarchyOptions(ScopedIndexOptions):
     equivalence_handling: EquivalenceHandling = EquivalenceHandling.PRESERVE
+    require_native_pipeline: bool = False
 
     def __post_init__(self) -> None:
         ScopedIndexOptions.__post_init__(self)
+        if type(self.require_native_pipeline) is not bool:
+            raise TypeError("require_native_pipeline must be bool")
         handling = self.equivalence_handling
         if isinstance(handling, str) and not isinstance(handling, EquivalenceHandling):
             try:
@@ -511,6 +530,22 @@ class AssertedPropertyHierarchyView:
     OPTIONS_TYPE = PropertyHierarchyOptions
     DEPENDENCIES: tuple[type[object], ...] = ()
 
+    @staticmethod
+    def supports_native() -> bool:
+        """Check the installed native binary before any ontology is loaded."""
+        import importlib
+
+        try:
+            extension = importlib.import_module("pyowl_core._native")
+        except (ImportError, OSError):
+            return False
+        version = getattr(extension, "NATIVE_PROPERTY_HIERARCHY_API_VERSION", None)
+        return (
+            type(version) is int
+            and version == 1
+            and callable(getattr(extension, "_class_hierarchy_v1", None))
+        )
+
     def __init__(
         self,
         ontology: OntologyView,
@@ -540,6 +575,14 @@ class AssertedPropertyHierarchyView:
         cancellation_token: CancellationToken | None,
         started: float,
     ) -> AssertedPropertyHierarchyView:
+        if isinstance(options, PropertyHierarchyOptions) and options.require_native_pipeline:
+            if not _is_ontology_view(ontology):
+                raise TypeError("ontology must implement OntologyView")
+            from pyowl_core.backends.property_hierarchy import build_native_property_hierarchy
+
+            return build_native_property_hierarchy(
+                ontology, options, budget, cancellation_token, started
+            )
         return cast(
             AssertedPropertyHierarchyView,
             _build_hierarchy(
@@ -677,6 +720,43 @@ class AssertedPropertyHierarchyView:
                 selected.update(record.properties)
         selected.discard(value)
         yield from sorted(selected, key=canonical_bytes)
+
+    def component(self, value: ObjectProperty | DataProperty) -> PropertyComponent:
+        if not isinstance(value, (ObjectProperty, DataProperty)):
+            raise TypeError("value must be a named object/data property")
+        return self._component_map().get(value, PropertyComponent((value,)))
+
+    def _direct_node(self, value: PropertyHierarchyNode) -> PropertyHierarchyNode:
+        _validate_property_node(value)
+        if self.options.equivalence_handling is not EquivalenceHandling.COMPONENT:
+            raise ValueError("direct hierarchy queries require component mode")
+        return (
+            self._component_map().get(value, value)
+            if not isinstance(value, PropertyComponent)
+            else value
+        )
+
+    def direct_parents(self, value: PropertyHierarchyNode) -> Iterator[PropertyHierarchyNode]:
+        """Asserted component parents after removing paths through another parent."""
+        candidates = set(self.asserted_parents(self._direct_node(value)))
+        redundant = set()
+        for other in candidates:
+            pending = list(self.asserted_parents(other))
+            visited = set()
+            while pending:
+                current = pending.pop()
+                if current != other and current in candidates:
+                    redundant.add(current)
+                if current not in visited:
+                    visited.add(current)
+                    pending.extend(self.asserted_parents(current))
+        yield from sorted(candidates - redundant, key=_property_node_key)
+
+    def direct_children(self, value: PropertyHierarchyNode) -> Iterator[PropertyHierarchyNode]:
+        node = self._direct_node(value)
+        yield from (
+            child for child in self.asserted_children(node) if node in self.direct_parents(child)
+        )
 
     @property
     def non_named_endpoint_count(self) -> int:

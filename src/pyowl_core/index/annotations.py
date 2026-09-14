@@ -70,6 +70,22 @@ class AnnotationAssertionIndex:
     OPTIONS_TYPE = AnnotationAssertionOptions
     DEPENDENCIES: tuple[type[object], ...] = ()
 
+    @staticmethod
+    def supports_native() -> bool:
+        """Check the installed native binary before any ontology is loaded."""
+        import importlib
+
+        try:
+            extension = importlib.import_module("pyowl_core._native")
+        except (ImportError, OSError):
+            return False
+        version = getattr(extension, "NATIVE_ANNOTATION_COLUMNS_API_VERSION", None)
+        return (
+            type(version) is int
+            and version == 1
+            and callable(getattr(extension, "_annotation_columns_v1", None))
+        )
+
     def __init__(
         self,
         ontology: OntologyView,

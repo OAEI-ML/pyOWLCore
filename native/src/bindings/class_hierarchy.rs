@@ -1,4 +1,4 @@
-//! Asserted named-class indexes over retained components; no Python graph build.
+//! Asserted named-class/property indexes over retained components; no Python graph build.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -26,6 +26,8 @@ struct NativeClassHierarchyV1 {
     equivalences: Vec<(Vec<usize>, usize)>,
     equivalences_by_class: BTreeMap<usize, Vec<usize>>,
     edges: Vec<(Node, Node, usize)>,
+    inverses: Vec<usize>,
+    chains: Vec<usize>,
     parents: BTreeMap<Node, BTreeSet<Node>>,
     children: BTreeMap<Node, BTreeSet<Node>>,
     component_mode: bool,
@@ -74,9 +76,17 @@ impl Budget<'_> {
     }
 }
 
-fn named(arena: &NativeComponentArena, id: ComponentId) -> NativeResult<bool> {
+fn named(arena: &NativeComponentArena, id: ComponentId, properties: bool) -> NativeResult<bool> {
     let row = arena.record(id)?;
-    Ok(row.tag() == 2 && matches!(row.field(0)?, ComponentFieldRef::Enum(b"class")))
+    Ok(row.tag() == 2
+        && if properties {
+            matches!(
+                row.field(0)?,
+                ComponentFieldRef::Enum(b"object_property" | b"data_property")
+            )
+        } else {
+            matches!(row.field(0)?, ComponentFieldRef::Enum(b"class"))
+        })
 }
 fn child(arena: &NativeComponentArena, id: ComponentId, field: usize) -> NativeResult<ComponentId> {
     match arena.record(id)?.field(field)? {
@@ -95,6 +105,46 @@ fn find(parents: &mut [usize], mut id: usize) -> usize {
 }
 
 impl NativeClassHierarchyV1 {
+    fn direct_parent_nodes(
+        &self,
+        node: Node,
+        budget: &mut Budget<'_>,
+        guard: &mut Guard,
+    ) -> NativeResult<BTreeSet<Node>> {
+        let mut candidates = BTreeSet::new();
+        for parent in self.parents.get(&node).into_iter().flatten() {
+            guard.check(budget.rows as u64, false)?;
+            budget.charge(1, 64)?;
+            candidates.insert(*parent);
+        }
+        let mut redundant = BTreeSet::new();
+        for other in &candidates {
+            let mut visited = BTreeSet::new();
+            let mut pending = Vec::new();
+            for parent in self.parents.get(other).into_iter().flatten() {
+                budget.charge(1, 32)?;
+                pending.push(*parent);
+            }
+            while let Some(current) = pending.pop() {
+                self.neighbor_rows_visited.fetch_add(1, Ordering::Relaxed);
+                guard.check(budget.rows as u64, false)?;
+                if current != *other && candidates.contains(&current) {
+                    redundant.insert(current);
+                }
+                if visited.insert(current) {
+                    budget.charge(1, 64)?;
+                    for parent in self.parents.get(&current).into_iter().flatten() {
+                        if !visited.contains(parent) {
+                            budget.charge(1, 32)?;
+                            pending.push(*parent);
+                        }
+                    }
+                }
+            }
+        }
+        candidates.retain(|candidate| !redundant.contains(candidate));
+        Ok(candidates)
+    }
     fn members(&self, node: Node) -> Vec<usize> {
         if node.0 {
             self.components[node.1].clone()
@@ -184,7 +234,7 @@ impl NativeClassHierarchyV1 {
                 interrupt,
             );
             guard.check(0, true)?;
-            let Some(node) = self.selected_node(&members, component) else {
+            let Some(mut node) = self.selected_node(&members, component) else {
                 return Ok(BTreeSet::new());
             };
             let typed = self.storage.typed_structural()?;
@@ -197,6 +247,36 @@ impl NativeClassHierarchyV1 {
                 rows: 0,
                 bytes: 0,
                 base,
+            };
+            let direct = match kind {
+                "direct_parents" | "direct_children" => {
+                    if !self.component_mode {
+                        return Err(NativeError::protocol(
+                            "direct hierarchy queries require component mode",
+                        ));
+                    }
+                    if !node.0 {
+                        if let Some(group) = self.membership.get(&node.1) {
+                            node = Node(true, *group);
+                        }
+                    }
+                    if kind == "direct_parents" {
+                        Some(self.direct_parent_nodes(node, &mut budget, &mut guard)?)
+                    } else {
+                        let mut result = BTreeSet::new();
+                        for child in self.children.get(&node).into_iter().flatten() {
+                            if self
+                                .direct_parent_nodes(*child, &mut budget, &mut guard)?
+                                .contains(&node)
+                            {
+                                budget.charge(1, 64)?;
+                                result.insert(*child);
+                            }
+                        }
+                        Some(result)
+                    }
+                }
+                _ => None,
             };
             let mut result = BTreeSet::new();
             let mut insert = |value| -> NativeResult<()> {
@@ -214,6 +294,11 @@ impl NativeClassHierarchyV1 {
                 Ok(())
             };
             match kind {
+                "direct_parents" | "direct_children" => {
+                    for value in direct.into_iter().flatten() {
+                        insert(value)?;
+                    }
+                }
                 "parents" => {
                     for value in self.parents.get(&node).into_iter().flatten() {
                         insert(*value)?;
@@ -283,6 +368,8 @@ impl NativeClassHierarchyV1 {
         let total = match kind {
             "edges" => self.edges.len(),
             "equivalences" => self.equivalences.len(),
+            "inverses" => self.inverses.len(),
+            "chains" => self.chains.len(),
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "unknown hierarchy records",
@@ -302,8 +389,12 @@ impl NativeClassHierarchyV1 {
             for ordinal in start..stop {
                 let root = if kind == "edges" {
                     self.edges[ordinal].2
-                } else {
+                } else if kind == "equivalences" {
                     self.equivalences[ordinal].1
+                } else if kind == "inverses" {
+                    self.inverses[ordinal]
+                } else {
+                    self.chains[ordinal]
                 };
                 let bytes = typed.arena().encode(
                     self.roots[root],
@@ -335,7 +426,7 @@ impl NativeClassHierarchyV1 {
                         digest.into_any().unbind(),
                     ],
                 )?
-            } else {
+            } else if kind == "equivalences" {
                 let members = PyTuple::new(
                     py,
                     self.equivalences[ordinal]
@@ -347,6 +438,8 @@ impl NativeClassHierarchyV1 {
                     py,
                     [members.into_any(), axiom.into_any(), digest.into_any()],
                 )?
+            } else {
+                PyTuple::new(py, [axiom.into_any(), digest.into_any()])?
             };
             output.append(row)?;
         }
@@ -355,7 +448,7 @@ impl NativeClassHierarchyV1 {
 }
 
 #[pyfunction]
-#[pyo3(signature = (handle, scope, document_ordinal, handling, include_disjoint_union, config, cancel=None))]
+#[pyo3(signature = (handle, scope, document_ordinal, handling, include_disjoint_union, config, cancel=None, *, property_mode=false))]
 #[allow(clippy::too_many_arguments)]
 fn _class_hierarchy_v1(
     py: Python<'_>,
@@ -366,6 +459,7 @@ fn _class_hierarchy_v1(
     include_disjoint_union: bool,
     config: &Bound<'_, PyBytes>,
     cancel: Option<PyRef<'_, Cancellation>>,
+    property_mode: bool,
 ) -> PyResult<NativeClassHierarchyV1> {
     if !matches!(handling, "preserve" | "bidirectional" | "component") {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -402,17 +496,24 @@ fn _class_hierarchy_v1(
         let mut raw_edges = Vec::new();
         let mut raw_groups = Vec::new();
         let mut ignored = 0;
+        let mut inverses = Vec::new();
+        let mut chains = Vec::new();
         for (ordinal, root) in source.iter().enumerate() {
             guard.check(ordinal as u64, ordinal == 0)?;
             let record = arena.record(*root)?;
-            if !matches!(record.tag(), 61 | 62 | 64) {
+            let selected = if property_mode {
+                matches!(record.tag(), 70 | 71 | 73 | 90 | 91)
+            } else {
+                matches!(record.tag(), 61 | 62 | 64)
+            };
+            if !selected {
                 continue;
             }
             budget.charge(1, 64)?;
             let position = roots.len();
             roots.push(*root);
             let mut admit = |id| -> NativeResult<bool> {
-                if !named(arena, id)? {
+                if !named(arena, id, property_mode)? {
                     ignored += 1;
                     return Ok(false);
                 }
@@ -430,16 +531,27 @@ fn _class_hierarchy_v1(
                 }
                 Ok(true)
             };
-            if record.tag() == 61 {
+            if property_mode && record.tag() == 73 {
+                inverses.push(position);
+                continue;
+            }
+            if matches!(record.tag(), 61 | 70 | 90) {
                 let left = child(arena, *root, 0)?;
                 let right = child(arena, *root, 1)?;
+                if property_mode && record.tag() == 70 && arena.tag(left)? == 11 {
+                    chains.push(position);
+                }
                 let left_named = admit(left)?;
                 let right_named = admit(right)?;
                 if left_named && right_named {
                     raw_edges.push((left, right, position));
                 }
             } else {
-                let field = if record.tag() == 62 { 0 } else { 1 };
+                let field = if matches!(record.tag(), 62 | 71 | 91) {
+                    0
+                } else {
+                    1
+                };
                 let ComponentFieldRef::CanonicalSet(expressions) = record.field(field)? else {
                     return Err(NativeError::protocol(
                         "hierarchy expressions are not a canonical set",
@@ -454,7 +566,7 @@ fn _class_hierarchy_v1(
                         members.push(id);
                     }
                 }
-                if record.tag() == 62 {
+                if matches!(record.tag(), 62 | 71 | 91) {
                     if members.len() >= 2 {
                         raw_groups.push((members, position));
                     }
@@ -556,7 +668,7 @@ fn _class_hierarchy_v1(
             budget.charge(1, 240)?;
             let left = node(left);
             let right = node(right);
-            if left != right || handling != "component" {
+            if left != right || (!property_mode && handling != "component") {
                 parents.entry(left).or_default().insert(right);
                 children.entry(right).or_default().insert(left);
             }
@@ -568,6 +680,8 @@ fn _class_hierarchy_v1(
         Ok(NativeClassHierarchyV1 {
             storage: Arc::clone(&storage),
             roots,
+            inverses,
+            chains,
             classes,
             class_ids,
             components,
@@ -589,6 +703,7 @@ fn _class_hierarchy_v1(
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("NATIVE_CLASS_HIERARCHY_API_VERSION", 1)?;
+    module.add("NATIVE_PROPERTY_HIERARCHY_API_VERSION", 1)?;
     module.add_class::<NativeClassHierarchyV1>()?;
     module.add_function(wrap_pyfunction!(_class_hierarchy_v1, module)?)?;
     Ok(())
