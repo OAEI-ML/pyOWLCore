@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from pyowl_core._immutable import FrozenMap, freeze_mapping
 from pyowl_core.cancellation import CancellationToken
@@ -25,6 +25,10 @@ from pyowl_core.model import (
 )
 from pyowl_core.model.axioms import AnnotationAssertion
 
+if TYPE_CHECKING:
+    from pyowl_core.backends.annotation_columns import AnnotationAssertionColumns
+
+
 from .cache import (
     IndexBuildBudget,
     ViewBuildReport,
@@ -37,9 +41,12 @@ from .common import ScopedIndexOptions, bounded, canonical_merge, origins_for
 @dataclass(frozen=True, slots=True)
 class AnnotationAssertionOptions(ScopedIndexOptions):
     include_nested: bool = False
+    require_native_pipeline: bool = False
 
     def __post_init__(self) -> None:
         ScopedIndexOptions.__post_init__(self)
+        if type(self.require_native_pipeline) is not bool:
+            raise TypeError("require_native_pipeline must be bool")
         if not isinstance(self.include_nested, bool):
             raise TypeError("include_nested must be bool")
 
@@ -74,7 +81,9 @@ class AnnotationAssertionIndex:
         removals: frozenset[AnnotationAssertion],
         nested: tuple[NestedAnnotationOccurrence, ...],
         report: ViewBuildReport,
+        native_columns: object | None = None,
     ) -> None:
+        self._native_columns = native_columns
         self._ontology = ontology
         self.options = options
         self._postings = postings
@@ -99,6 +108,22 @@ class AnnotationAssertionIndex:
         if not _is_ontology_view(ontology):
             raise TypeError("ontology must implement OntologyView")
         view = ontology
+        if options.require_native_pipeline:
+            from pyowl_core.backends.annotation_columns import build_native_columns
+
+            columns = build_native_columns(view, options, budget, cancellation_token)
+            return cls(
+                view,
+                options,
+                FrozenMap(),
+                (),
+                (),
+                FrozenMap(),
+                frozenset(),
+                (),
+                build_report(cls, ViewBuildStrategy.FULL_BUILD, budget, started),
+                columns,
+            )
         if isinstance(ontology, OntologyOverlay):
             source = ontology.base.view(
                 cls,
@@ -218,19 +243,17 @@ class AnnotationAssertionIndex:
             )
         )
         postings = _freeze(_assertions(axioms, budget, "assertions"))
-        roots: tuple[StructuralNode, ...] = (
-            *view.ontology_annotations(scope=options.scope, document_key=options.document_key),
-            *cast(
-                Iterable[StructuralNode],
-                view.iter_axioms(scope=options.scope, document_key=options.document_key),
-            ),
-            *view.iter_extensions(scope=options.scope, document_key=options.document_key),
-        )
-        nested = (
-            _nested_occurrences(view, roots, options, budget, "nested_annotations")
-            if options.include_nested
-            else ()
-        )
+        nested = ()
+        if options.include_nested:
+            roots: tuple[StructuralNode, ...] = (
+                *view.ontology_annotations(scope=options.scope, document_key=options.document_key),
+                *cast(
+                    Iterable[StructuralNode],
+                    view.iter_axioms(scope=options.scope, document_key=options.document_key),
+                ),
+                *view.iter_extensions(scope=options.scope, document_key=options.document_key),
+            )
+            nested = _nested_occurrences(view, roots, options, budget, "nested_annotations")
         return cls(
             view,
             options,
@@ -243,6 +266,38 @@ class AnnotationAssertionIndex:
             build_report(cls, ViewBuildStrategy.FULL_BUILD, budget, started),
         )
 
+    @staticmethod
+    def supports_native_columns(ontology: object, *, include_nested: bool = False) -> bool:
+        from pyowl_core.backends.annotation_columns import supports_native_columns
+
+        return supports_native_columns(ontology, include_nested=include_nested)
+
+    def iter_columns(
+        self,
+        *,
+        subjects: Iterable[AnnotationSubject] | None = None,
+        properties: Iterable[AnnotationProperty] | None = None,
+        max_rows: int = 1024,
+        max_bytes: int = 8 * 1024 * 1024,
+        cancellation_token: CancellationToken | None = None,
+    ) -> Iterator[AnnotationAssertionColumns]:
+        """Yield immutable native-selected columns in canonical assertion order.
+
+        Requires an index created with require_native_pipeline=True. None selects
+        all identities; an empty filter selects none. Oversized individual rows
+        raise ResourceLimitError without truncating or omitting assertions.
+        """
+        from pyowl_core.backends.annotation_columns import iter_native_columns
+
+        yield from iter_native_columns(
+            self,
+            subjects=subjects,
+            properties=properties,
+            max_rows=max_rows,
+            max_bytes=max_bytes,
+            cancellation_token=cancellation_token,
+        )
+
     def iter_subject(
         self,
         subject: AnnotationSubject,
@@ -250,6 +305,20 @@ class AnnotationAssertionIndex:
         property: AnnotationProperty | None = None,
         limit: int | None = None,
     ) -> Iterator[AnnotationAssertionPosting]:
+        if self._native_columns is not None:
+            from pyowl_core.model import decode_canonical
+
+            selected = (
+                AnnotationAssertionPosting(
+                    cast(AnnotationAssertion, decode_canonical(row)), origins
+                )
+                for page in self.iter_columns(
+                    subjects=(subject,), properties=None if property is None else (property,)
+                )
+                for row, origins in zip(page.canonical_assertion_bytes, page.origins, strict=True)
+            )
+            yield from bounded(selected, limit)
+            return
         _validate_subject(subject)
         if property is not None and not isinstance(property, AnnotationProperty):
             raise TypeError("property must be AnnotationProperty or None")
@@ -341,6 +410,13 @@ class AnnotationAssertionIndex:
         )
 
     def subjects(self, *, limit: int | None = None) -> Iterator[AnnotationSubject]:
+        if self._native_columns is not None:
+            from pyowl_core.exceptions import BackendProtocolError
+
+            raise BackendProtocolError(
+                "use iter_columns for strict native subject enumeration",
+                code="NATIVE_VIEW_REQUIRED",
+            )
         iterables: list[Iterable[AnnotationSubject]] = [self._postings, self._additions]
         for ordinal, source in enumerate(self._sources):
             member_index = self._source_indexes[ordinal]

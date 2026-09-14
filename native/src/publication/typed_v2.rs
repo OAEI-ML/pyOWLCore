@@ -831,6 +831,23 @@ impl TypedFacadeStorageV2 {
     }
 
     /// Prove identical effective selections without compiling any columns.
+    pub(crate) const fn external_retained_bytes(&self) -> usize {
+        self.external_retained_bytes
+    }
+
+    pub(crate) fn selected_axioms(
+        &self,
+        scope: TypedFacadeScopeV2,
+        document_ordinal: Option<u64>,
+    ) -> NativeResult<&[ComponentId]> {
+        self.structural_roots(
+            TypedFacadeCollectionV2::Axioms,
+            scope,
+            document_ordinal,
+            false,
+        )
+    }
+
     pub(crate) fn encoded_scopes_equivalent(
         &self,
         left: TypedFacadeScopeV2,

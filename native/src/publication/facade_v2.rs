@@ -1054,6 +1054,12 @@ impl PublicationStorageV2 {
         Ok(record.call((), Some(&kwargs))?.unbind())
     }
 
+    pub(crate) fn typed_structural(&self) -> NativeResult<&TypedFacadeStorageV2> {
+        self.typed_structural
+            .as_deref()
+            .ok_or_else(|| NativeError::protocol("native publication has no typed owner"))
+    }
+
     pub(crate) fn encoded_scopes_equivalent(
         &self,
         left: TypedFacadeScopeV2,
