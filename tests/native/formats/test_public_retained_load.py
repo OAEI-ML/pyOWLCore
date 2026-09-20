@@ -854,6 +854,7 @@ def test_attested_wire_source_fails_closed_without_direct_columns(
     before_native = cast(Any, raw_owner)._publication_counters_v2()
     before_python = cast(Any, selected)._native_python_counters()
     monkeypatch.setattr(cast(Any, extension), "_encoded_structural_columns_v2", None)
+    monkeypatch.setattr(cast(Any, extension), "_validated_encoded_structural_columns_v2", None)
 
     scalar_error = AssertionError("failed wire source crossed scalar traversal")
     with (

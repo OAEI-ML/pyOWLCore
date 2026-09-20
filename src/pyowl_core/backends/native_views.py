@@ -1854,6 +1854,27 @@ def validate_encoded_structural_view_v2(
     )
 
 
+def _validate_descriptor_v2(
+    schema_name: object,
+    schema_version: object,
+    model_schema: object,
+    descriptor: object,
+) -> None:
+    """Keep descriptor diagnostics identical for scalar and receipt validation."""
+
+    if type(schema_name) is not str or schema_name != ENCODED_STRUCTURAL_SCHEMA_NAME_V2:
+        _fail("encoded structural schema name does not match v2", "ENCODED_VIEW_DESCRIPTOR")
+    if type(schema_version) is not int or schema_version != ENCODED_STRUCTURAL_SCHEMA_VERSION_V2:
+        _fail("encoded structural schema version does not match v2", "ENCODED_VIEW_DESCRIPTOR")
+    if type(model_schema) is not int or model_schema != ENCODED_STRUCTURAL_MODEL_SCHEMA_V2:
+        _fail("encoded structural model schema does not match v2", "ENCODED_VIEW_DESCRIPTOR")
+    if type(descriptor) is not bytes or descriptor != ENCODED_STRUCTURAL_DESCRIPTOR_V2:
+        _fail(
+            "encoded structural descriptor is not the frozen v2 descriptor",
+            "ENCODED_VIEW_DESCRIPTOR",
+        )
+
+
 def _freeze_encoded_structural_view_v2(
     candidate: object,
     *,
@@ -1893,17 +1914,7 @@ def _freeze_encoded_structural_view_v2(
             code="ENCODED_VIEW_DESCRIPTOR",
         ) from error
 
-    if type(schema_name) is not str or schema_name != ENCODED_STRUCTURAL_SCHEMA_NAME_V2:
-        _fail("encoded structural schema name does not match v2", "ENCODED_VIEW_DESCRIPTOR")
-    if type(schema_version) is not int or schema_version != ENCODED_STRUCTURAL_SCHEMA_VERSION_V2:
-        _fail("encoded structural schema version does not match v2", "ENCODED_VIEW_DESCRIPTOR")
-    if type(model_schema) is not int or model_schema != ENCODED_STRUCTURAL_MODEL_SCHEMA_V2:
-        _fail("encoded structural model schema does not match v2", "ENCODED_VIEW_DESCRIPTOR")
-    if type(descriptor) is not bytes or descriptor != ENCODED_STRUCTURAL_DESCRIPTOR_V2:
-        _fail(
-            "encoded structural descriptor is not the frozen v2 descriptor",
-            "ENCODED_VIEW_DESCRIPTOR",
-        )
+    _validate_descriptor_v2(schema_name, schema_version, model_schema, descriptor)
     if owner is not expected_owner:
         _fail("encoded structural publication did not retain the exact owner", "ENCODED_VIEW_OWNER")
     if scope is not expected_scope or document_key != expected_document_key:

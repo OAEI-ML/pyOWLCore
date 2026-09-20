@@ -168,3 +168,31 @@ def test_binary_probe_rejects_mixed_or_missing_native_capability(monkeypatch: An
         native_validation.importlib, "import_module", lambda _name: SimpleNamespace()
     )
     assert not native_validation_available()
+
+
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("schema_name", "foreign"),
+        ("schema_version", 2.0),
+        ("model_schema", 2.0),
+        ("descriptor", b"hostile"),
+    ],
+)
+def test_receipt_preserves_public_descriptor_errors(
+    field: str, value: object, strict: bool, monkeypatch: Any
+) -> None:
+    owner = snapshot()
+    view = owner.view(EncodedStructuralViewV2, require_native_validation=True)
+    monkeypatch.setattr(native_views, "_validate_columns", forbidden)
+    monkeypatch.setattr(type(owner), "iter_axioms", forbidden)
+    with pytest.raises(BackendProtocolError) as raised:
+        validate_encoded_structural_view_v2(
+            replace(view, **{field: value}),
+            expected_owner=owner,
+            expected_scope=view.scope,
+            expected_document_key=view.document_key,
+            require_native_validation=strict,
+        )
+    assert raised.value.code == "ENCODED_VIEW_DESCRIPTOR"

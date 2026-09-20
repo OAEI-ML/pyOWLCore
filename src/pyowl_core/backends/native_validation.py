@@ -94,12 +94,9 @@ def validate_native_columns(
     from .native_views import (
         _POSTINGS_ALL,
         _SEGMENT_DIRECT,
-        ENCODED_STRUCTURAL_DESCRIPTOR_V2,
-        ENCODED_STRUCTURAL_MODEL_SCHEMA_V2,
-        ENCODED_STRUCTURAL_SCHEMA_NAME_V2,
-        ENCODED_STRUCTURAL_SCHEMA_VERSION_V2,
         EncodedStructuralViewV2,
         _selected_limits,
+        _validate_descriptor_v2,
         _validate_selection,
         produce_encoded_structural_view_v2,
     )
@@ -114,6 +111,12 @@ def validate_native_columns(
     _validate_selection(expected_scope, expected_document_key)
     if type(candidate) is not EncodedStructuralViewV2:
         return reject()
+    _validate_descriptor_v2(
+        candidate.schema_name,
+        candidate.schema_version,
+        candidate.model_schema,
+        candidate.descriptor,
+    )
     selected = _native_owner(expected_owner)
     if selected is None:
         return reject()
@@ -126,10 +129,6 @@ def validate_native_columns(
         candidate.owner is not expected_owner
         or candidate.scope is not expected_scope
         or candidate.document_key != expected_document_key
-        or candidate.schema_name != ENCODED_STRUCTURAL_SCHEMA_NAME_V2
-        or candidate.schema_version != ENCODED_STRUCTURAL_SCHEMA_VERSION_V2
-        or candidate.model_schema != ENCODED_STRUCTURAL_MODEL_SCHEMA_V2
-        or candidate.descriptor != ENCODED_STRUCTURAL_DESCRIPTOR_V2
         or len(candidate.segments) != 1
     ):
         return reject()
