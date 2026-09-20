@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       promote_to_pypi:
-        description: Continue from the protected TestPyPI rehearsal to PyPI
+        description: Publish the verified and attested candidate directly to PyPI
         required: true
         default: false
         type: boolean
@@ -193,7 +193,6 @@ jobs:
               "reference_performance",
               "signatures",
               "source_tag_verified",
-              "testpypi_rehearsal",
           }
           gates = report["gates"]
           assert all(
@@ -447,7 +446,7 @@ jobs:
           import json
 
           report = json.loads(Path("candidate/release-report.json").read_text(encoding="utf-8"))
-          staged = {"signatures", "testpypi_rehearsal"}
+          staged = {"signatures"}
           gates = report["gates"]
           assert all(gates[name]["status"] in {"blocked", "passed"} for name in staged)
           assert all(
@@ -470,13 +469,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  testpypi:
-    name: Publish and rehearse on TestPyPI
+  attest:
+    name: Rehearse and attest the immutable candidate
     needs: verify
     runs-on: ubuntu-24.04
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/pyowl-core
     permissions:
       actions: read
       attestations: write
@@ -494,142 +490,39 @@ jobs:
         with:
           name: verified-distributions-${{ github.run_id }}
           path: candidate
-      - name: Publish the already-verified files to TestPyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+      - name: Rehearse installation from the immutable candidate
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          (
+            cd candidate
+            sha256sum --check SHA256SUMS
+          )
+          python -m venv candidate-env
+          candidate-env/bin/pip install --no-index --no-deps --only-binary=:all: --find-links candidate/dist "pyowl-core==$VERSION"
+          candidate-env/bin/python -c "import pyowl_core._native as n; n.self_test()"
+          PYOWL_CORE_DOCS_BACKEND=native candidate-env/bin/python docs/examples/parse_once.py
+          PYOWL_CORE_DOCS_BACKEND=native candidate-env/bin/python docs/examples/secure_local_import.py
+      - name: Attest the immutable distributions and checksums
+        id: attest_distributions
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          packages-dir: candidate/dist/
-          repository-url: https://test.pypi.org/legacy/
-          attestations: true
-          verbose: true
-      - name: Rehearse resolver install and native behavior
+          subject-path: |
+            candidate/SHA256SUMS
+            candidate/dist/*
+      - name: Cryptographically verify the distribution attestations
         env:
-          SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-          VERSION: ${{ needs.verify.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          SIGNER_WORKFLOW: ${{ github.repository }}/.github/workflows/release.yml
         run: |
-          python -m venv testpypi-env
-          for attempt in 1 2 3 4 5 6; do
-            if testpypi-env/bin/pip install --no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/ "pyowl-core==$VERSION"; then
-              break
-            fi
-            test "$attempt" -lt 6
-            sleep 10
+          mkdir -p candidate/github-attestation-verification
+          for subject in candidate/SHA256SUMS candidate/dist/*; do
+            gh attestation verify "$subject" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW" --format json > "candidate/github-attestation-verification/$(basename "$subject").json"
           done
-          testpypi-env/bin/python -c "import pyowl_core._native as n; n.self_test()"
-          PYOWL_CORE_DOCS_BACKEND=native testpypi-env/bin/python docs/examples/parse_once.py
-          PYOWL_CORE_DOCS_BACKEND=native testpypi-env/bin/python docs/examples/secure_local_import.py
-          python - <<'PY'
-          from pathlib import Path
-          import json
-          import os
-
-          rehearsal = Path("candidate/testpypi-rehearsal.json")
-          rehearsal.write_text(
-              json.dumps(
-                  {
-                      "schema": 1,
-                      "version": os.environ["VERSION"],
-                      "source_revision": os.environ["SOURCE_SHA"],
-                      "status": "passed",
-                      "index": "TestPyPI",
-                  },
-                  indent=2,
-                  sort_keys=True,
-              )
-              + "\n",
-              encoding="utf-8",
-          )
-          PY
-      - name: Verify every TestPyPI file hash and PEP 740 attestation
-        env:
-          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
-        run: |
-          python -m pip install pypi-attestations==0.0.29
-          python - <<'PY'
-          from pathlib import Path
-          from urllib.parse import urljoin, urlparse
-          from urllib.request import Request, urlopen
-          import hashlib
-          import json
-          import time
-
-          artifacts = {
-              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-              for path in Path("candidate/dist").iterdir()
-              if path.suffix == ".whl" or path.name.endswith(".tar.gz")
-          }
-          index_url = "https://test.pypi.org/simple/pyowl-core/"
-          rows = {}
-          for attempt in range(1, 7):
-              request = Request(
-                  index_url,
-                  headers={"Accept": "application/vnd.pypi.simple.v1+json"},
-              )
-              with urlopen(request, timeout=30) as response:
-                  index = json.load(response)
-              rows = {
-                  row["filename"]: row
-                  for row in index["files"]
-                  if row["filename"] in artifacts
-              }
-              ready = set(rows) == set(artifacts) and all(
-                  isinstance(row.get("provenance"), str)
-                  for row in rows.values()
-              )
-              if ready:
-                  break
-              if attempt == 6:
-                  missing = set(artifacts) - set(rows)
-                  unavailable = {
-                      name
-                      for name, row in rows.items()
-                      if not isinstance(row.get("provenance"), str)
-                  }
-                  raise AssertionError(
-                      f"TestPyPI evidence did not converge: "
-                      f"missing={sorted(missing)}, provenance={sorted(unavailable)}"
-                  )
-              time.sleep(10)
-          output = Path("candidate/testpypi-provenance")
-          output.mkdir()
-          evidence = []
-          for filename, expected_hash in sorted(artifacts.items()):
-              row = rows[filename]
-              assert row["hashes"]["sha256"] == expected_hash
-              artifact_url = urljoin(index_url, row["url"])
-              provenance_url = urljoin(index_url, row["provenance"])
-              assert urlparse(artifact_url).scheme == "https"
-              assert urlparse(provenance_url).scheme == "https"
-              with urlopen(artifact_url, timeout=60) as response:
-                  published = response.read()
-              assert hashlib.sha256(published).hexdigest() == expected_hash
-              with urlopen(provenance_url, timeout=30) as response:
-                  provenance = response.read()
-              provenance_path = output / f"{filename}.provenance"
-              provenance_path.write_bytes(provenance)
-              evidence.append(
-                  {
-                      "filename": filename,
-                      "sha256": expected_hash,
-                      "url": artifact_url,
-                      "provenance": provenance_url,
-                  }
-              )
-          Path("candidate/testpypi-files.json").write_text(
-              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          PY
-          for artifact in candidate/dist/*; do
-            name="$(basename "$artifact")"
-            pypi-attestations verify pypi \
-              --repository "$REPOSITORY_URL" \
-              --provenance-file "candidate/testpypi-provenance/${name}.provenance" \
-              "$artifact"
-          done | tee candidate/testpypi-attestation-verification.txt
-      - name: Close the rehearsal/signature gates and generate the final report
+          cp "${{ steps.attest_distributions.outputs.bundle-path }}" candidate/distribution-attestation.sigstore.json
+      - name: Close the verified signature gate and generate the final report
         env:
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-          VERSION: ${{ needs.verify.outputs.version }}
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -643,19 +536,12 @@ jobs:
               f"{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
               f"{os.environ['GITHUB_RUN_ID']}"
           )
-          gates["gates"]["testpypi_rehearsal"] = {
-              "status": "passed",
-              "evidence": (
-                  f"{run_url}: installed pyowl-core=={os.environ['VERSION']} "
-                  "and hash/PEP 740 verified all 27 TestPyPI files"
-              ),
-          }
           gates["gates"]["signatures"] = {
               "status": "passed",
               "evidence": (
-                  f"{run_url}: 27 TestPyPI PEP 740 attestations verified; "
-                  "final report and immutable distribution set must pass the "
-                  "following GitHub/Sigstore attestation step before promotion"
+                  f"{run_url}: GitHub/Sigstore attestations for all 27 distributions "
+                  "and SHA256SUMS were cryptographically verified; final report "
+                  "attestation and verification must complete before promotion"
               ),
           }
           gates_path.write_text(
@@ -664,33 +550,18 @@ jobs:
           )
           PY
           python -m tools.packaging.release_report candidate/dist --source-revision "$SOURCE_SHA" --gate-file candidate/gates.json --output candidate/release-report.json --require-ready
-      - name: Sign the final report and immutable distribution set
-        id: attest
+      - name: Sign the final release report
+        id: attest_report
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: |
-            candidate/release-report.json
-            candidate/SHA256SUMS
-            candidate/dist/*
-      - name: Cryptographically verify the signed report and distributions
+          subject-path: candidate/release-report.json
+      - name: Cryptographically verify the final report
         env:
           GH_TOKEN: ${{ github.token }}
           SIGNER_WORKFLOW: ${{ github.repository }}/.github/workflows/release.yml
         run: |
-          mkdir -p candidate/github-attestation-verification
-          for subject in candidate/release-report.json candidate/SHA256SUMS candidate/dist/*; do
-            gh attestation verify "$subject" \
-              --repo "$GITHUB_REPOSITORY" \
-              --signer-workflow "$SIGNER_WORKFLOW" \
-              --format json \
-              > "candidate/github-attestation-verification/$(basename "$subject").json"
-          done
-          cp "${{ steps.attest.outputs.bundle-path }}" candidate/release-attestation.sigstore.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: testpypi-rehearsal-${{ github.run_id }}
-          path: candidate/testpypi-rehearsal.json
-          if-no-files-found: error
+          gh attestation verify candidate/release-report.json --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER_WORKFLOW" --format json > candidate/github-attestation-verification/release-report.json.json
+          cp "${{ steps.attest_report.outputs.bundle-path }}" candidate/release-attestation.sigstore.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: promotion-ready-distributions-${{ github.run_id }}
@@ -701,7 +572,7 @@ jobs:
   pypi:
     name: Promote the same files to PyPI
     if: ${{ inputs.promote_to_pypi }}
-    needs: [verify, testpypi]
+    needs: [verify, attest]
     runs-on: ubuntu-24.04
     environment:
       name: pypi

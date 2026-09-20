@@ -27,9 +27,11 @@ REQUIRED_RELEASE_GATES = (
     "release_owner_approval",
     "signatures",
     "source_tag_verified",
-    "testpypi_rehearsal",
     "trusted_publishing",
 )
+# Older release ledgers remain readable and their supplied gates still apply.
+LEGACY_RELEASE_GATES = ("testpypi_rehearsal",)
+KNOWN_RELEASE_GATES = (*REQUIRED_RELEASE_GATES, *LEGACY_RELEASE_GATES)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +52,7 @@ def parse_gate(value: str) -> tuple[str, ReleaseGate]:
         raise argparse.ArgumentTypeError(
             "gate must use NAME=passed|blocked|failed:EVIDENCE"
         ) from error
-    if name not in REQUIRED_RELEASE_GATES:
+    if name not in KNOWN_RELEASE_GATES:
         raise argparse.ArgumentTypeError(f"unknown release gate {name!r}")
     if status not in {"passed", "blocked", "failed"}:
         raise argparse.ArgumentTypeError(f"invalid gate status {status!r}")
@@ -72,7 +74,7 @@ def load_gate_file(path: Path) -> dict[str, ReleaseGate]:
         raise ValueError("release gate file must use schema 1 and an object of gates")
     rendered: dict[str, ReleaseGate] = {}
     for name, value in payload["gates"].items():
-        if name not in REQUIRED_RELEASE_GATES:
+        if name not in KNOWN_RELEASE_GATES:
             raise ValueError(f"unknown release gate {name!r}")
         if not isinstance(value, dict) or set(value) != {"status", "evidence"}:
             raise ValueError(f"release gate {name!r} must contain status and evidence")
@@ -253,7 +255,10 @@ def build_release_report(
             )
 
     rendered_gates: dict[str, dict[str, str]] = {}
-    for name in REQUIRED_RELEASE_GATES:
+    for name in (
+        *REQUIRED_RELEASE_GATES,
+        *(name for name in LEGACY_RELEASE_GATES if name in gates),
+    ):
         gate = gates.get(name)
         if gate is None:
             blockers.append(f"release gate has no evidence: {name}")

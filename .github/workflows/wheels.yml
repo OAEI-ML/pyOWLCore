@@ -629,7 +629,6 @@ jobs:
               "reference_performance",
               "signatures",
               "source_tag_verified",
-              "testpypi_rehearsal",
               "trusted_publishing",
           }
           gates = report["gates"]

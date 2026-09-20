@@ -242,13 +242,12 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
                 "reference_performance",
                 "signatures",
                 "source_tag_verified",
-                "testpypi_rehearsal",
                 "trusted_publishing",
             },
         ),
-        (RELEASE, {"signatures", "testpypi_rehearsal"}),
+        (RELEASE, {"signatures"}),
     ],
-    ids=["wheels-before-verification", "release-before-testpypi"],
+    ids=["wheels-before-verification", "release-before-attestation"],
 )
 def test_candidate_stages_keep_only_downstream_checks_pending(
     tmp_path: Path,
@@ -272,7 +271,6 @@ def test_candidate_stages_keep_only_downstream_checks_pending(
         "release_owner_approval",
         "signatures",
         "source_tag_verified",
-        "testpypi_rehearsal",
         "trusted_publishing",
     }
 
@@ -435,44 +433,44 @@ def test_native_performance_is_guarded_complete_and_fail_closed() -> None:
     assert "${{ vars.PYOWL_CORE_PY_HORNED_RUNNER }}" not in NATIVE_PERFORMANCE
 
 
-def test_release_uses_protected_oidc_environments_without_tokens() -> None:
-    assert "name: testpypi" in RELEASE
+def test_release_uses_protected_pypi_oidc_without_test_index_or_tokens() -> None:
     assert "name: pypi" in RELEASE
+    assert "testpypi" not in RELEASE.lower()
     assert RELEASE.count("id-token: write") == 2
-    assert RELEASE.count("pypa/gh-action-pypi-publish@") == 2
-    assert "repository-url: https://test.pypi.org/legacy/" in RELEASE
+    assert RELEASE.count("pypa/gh-action-pypi-publish@") == 1
     assert "attestations: true" in RELEASE
     assert "secrets." not in RELEASE
     assert "api-token" not in RELEASE
+    assert "needs: [verify, attest]" in RELEASE
+    assert "--no-index --no-deps --only-binary=:all: --find-links candidate/dist" in RELEASE
 
 
-def test_release_signs_final_report_and_verifies_index_attestations() -> None:
+def test_release_verifies_distribution_signatures_before_closing_gate() -> None:
     for requirement in (
         "pypi-attestations==0.0.29",
         "pypi-attestations verify pypi",
-        "testpypi-provenance",
-        "hash/PEP 740 verified all 27 TestPyPI files",
         "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
         "candidate/release-report.json",
         "gh attestation verify",
         "release-attestation.sigstore.json",
         "urljoin(index_url",
-        "TestPyPI evidence did not converge",
         "PyPI evidence did not converge",
         "candidate/pypi-files.json",
         "candidate/pypi-attestation-verification.txt",
     ):
         assert requirement in RELEASE
+    rehearsal = RELEASE.index("Rehearse installation from the immutable candidate")
+    distribution_signing = RELEASE.index("Attest the immutable distributions and checksums")
+    verification = RELEASE.index("Cryptographically verify the distribution attestations")
     close_gate = RELEASE.index('gates["gates"]["signatures"]')
-    pypi_verification = RELEASE.index("Verify every TestPyPI file hash and PEP 740")
-    final_report = RELEASE.index("Close the rehearsal/signature gates")
-    signing = RELEASE.index("Sign the final report and immutable distribution set")
-    assert pypi_verification < final_report < close_gate < signing
-    assert "signed source tag plus checksum-bound immutable candidate" not in RELEASE
+    report_signing = RELEASE.index("Sign the final release report")
+    report_verification = RELEASE.index("Cryptographically verify the final report")
+    assert rehearsal < distribution_signing < verification < close_gate
+    assert close_gate < report_signing < report_verification
     promotion = RELEASE.index("Reverify promotion-ready report and checksums")
     publish = RELEASE.index("Publish the identical files to PyPI")
     public_index = RELEASE.index("Verify public index hashes, provenance")
-    assert promotion < publish < public_index
+    assert report_verification < promotion < publish < public_index
     promotion_body = RELEASE[promotion:publish]
     assert "assert actual == expected" in promotion_body
     assert "candidate/SHA256SUMS candidate/dist/*" in promotion_body
@@ -593,7 +591,7 @@ def test_release_rejects_missing_or_different_source_ci(
         exec(snippet, {})
 
 
-def test_testpypi_cannot_mark_production_publisher_configured() -> None:
+def test_release_requires_recorded_production_publisher_configuration() -> None:
     assert 'gates["gates"]["trusted_publishing"] =' not in RELEASE
     assert 'payload["gates"]["trusted_publishing"] =' not in RELEASE
     assert "--require-ready" in RELEASE

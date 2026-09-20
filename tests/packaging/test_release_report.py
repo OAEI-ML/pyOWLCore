@@ -142,6 +142,25 @@ def test_all_evidenced_gates_can_close_a_complete_artifact_set(
         assert row["legal_payload_sha256"] == "e" * 64
 
 
+def test_optional_legacy_testpypi_evidence_is_still_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _artifacts(tmp_path, complete=True)
+    _patch_inspection(monkeypatch)
+    gates = {
+        name: ReleaseGate(status="passed", evidence=f"evidence/{name}.json")
+        for name in REQUIRED_RELEASE_GATES
+    }
+    assert "testpypi_rehearsal" not in gates
+    name, legacy_gate = release_report.parse_gate(
+        "testpypi_rehearsal=blocked:historical rehearsal has not run"
+    )
+    gates[name] = legacy_gate
+    report = release_report.build_release_report(tmp_path, source_revision=REVISION, gates=gates)
+    assert not report["release_ready"]
+    assert any("testpypi_rehearsal is blocked" in row for row in report["blockers"])
+
+
 def test_release_report_rejects_missing_supported_native_wheel(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

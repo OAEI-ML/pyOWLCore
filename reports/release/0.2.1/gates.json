@@ -29,7 +29,7 @@
       "status": "passed"
     },
     "release_owner_approval": {
-      "evidence": "owner-release-authorization.md: the owner approved preparation and the scoped 0.2.1 benchmark/workflow changes, retaining technical publication checks. The owner will publish separately.",
+      "evidence": "owner-release-authorization.md: owner authorizes trusted production publication of the verified 0.2.1 candidate after matching CI and all retained technical gates pass, and explicitly removes the TestPyPI prerequisite.",
       "status": "passed"
     },
     "signatures": {
@@ -40,13 +40,9 @@
       "evidence": "Pending current 0.2.1 source_tag_verified evidence; historical 0.2.0 approval/results are not automatically reused.",
       "status": "blocked"
     },
-    "testpypi_rehearsal": {
-      "evidence": "Pending current 0.2.1 testpypi_rehearsal evidence; historical 0.2.0 approval/results are not automatically reused.",
-      "status": "blocked"
-    },
     "trusted_publishing": {
-      "evidence": "Pending current 0.2.1 trusted_publishing evidence; historical 0.2.0 approval/results are not automatically reused.",
-      "status": "blocked"
+      "evidence": "owner-release-authorization.md: owner confirms the production PyPI Trusted Publisher for OAEI-ML/pyOWLCore, release.yml, environment pypi. The release must authenticate with OIDC and verify published PEP 740 provenance; no API-token upload is authorized.",
+      "status": "passed"
     }
   },
   "schema": 1

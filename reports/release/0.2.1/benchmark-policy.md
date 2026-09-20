@@ -47,6 +47,7 @@ Later release-only edits do not change the historical measured source identities
 
 The exception changes only the performance-study prerequisite. It does not waive
 package CI, Native safety, advisory scans, the full portable artifact matrix,
-exact checksums/source identity, signed tags, TestPyPI, OIDC, attestations, or
-public-index verification. Actual technical checks must pass before production
-publication. The owner will perform publication separately.
+exact checksums/source identity, signed tags, OIDC, attestations, or public-index
+verification. The later publication decision in owner-release-authorization.md
+separately removes TestPyPI and authorizes the trusted production workflow.
+Actual technical checks must pass before production publication.
