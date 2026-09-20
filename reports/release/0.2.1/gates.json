@@ -1,0 +1,53 @@
+{
+  "gates": {
+    "advisory_scan": {
+      "evidence": "Pending current 0.2.1 advisory_scan evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    },
+    "consumer_matrix": {
+      "evidence": "Pending current 0.2.1 consumer_matrix evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    },
+    "legal_review": {
+      "evidence": "Pending current 0.2.1 legal_review evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    },
+    "name_control": {
+      "evidence": "Pending current 0.2.1 name_control evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    },
+    "platform_artifact_audit": {
+      "evidence": "Pending current 0.2.1 platform_artifact_audit evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    },
+    "project_urls": {
+      "evidence": "Pending current 0.2.1 project_urls evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    },
+    "reference_performance": {
+      "evidence": "Pending current 0.2.1 reference_performance evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    },
+    "release_owner_approval": {
+      "evidence": "owner-release-authorization.md records the explicit 2026-09-20 request to build, verify CI, and publish the new versions after their gates pass.",
+      "status": "passed"
+    },
+    "signatures": {
+      "evidence": "Pending current 0.2.1 signatures evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    },
+    "source_tag_verified": {
+      "evidence": "Pending current 0.2.1 source_tag_verified evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    },
+    "testpypi_rehearsal": {
+      "evidence": "Pending current 0.2.1 testpypi_rehearsal evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    },
+    "trusted_publishing": {
+      "evidence": "Pending current 0.2.1 trusted_publishing evidence; historical 0.2.0 approval/results are not automatically reused.",
+      "status": "blocked"
+    }
+  },
+  "schema": 1
+}

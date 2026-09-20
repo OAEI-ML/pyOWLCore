@@ -388,3 +388,11 @@ produce_encoded_structural_view_v1
 produce_encoded_structural_view_v2
 validate_encoded_structural_view_v1
 validate_encoded_structural_view_v2
+
+# Native pipeline additions (0.2.1).
+AnnotationAssertionColumns
+ClassFeatureOptions
+ClassFeatureView
+encoded_scopes_equivalent
+native_validation_available
+native_validation_report

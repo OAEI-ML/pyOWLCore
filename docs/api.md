@@ -10,7 +10,7 @@ are not public contracts.
 
 | Name | Current value | Changes when |
 |---|---:|---|
-| `__version__` | `0.2.0` | package/API release changes |
+| `__version__` | `0.2.1` | package/API release changes |
 | `API_VERSION` | `(0, 2)` | public contract line changes |
 | `MODEL_SCHEMA_VERSION` | `2` | equality/canonical/fingerprint semantics change |
 | `WIRE_FORMAT_VERSION` | `(1, 2)` | wire compatibility changes |

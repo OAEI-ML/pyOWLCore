@@ -4,7 +4,7 @@
 
 | Domain | Current | Compatibility rule |
 |---|---:|---|
-| Package/API | `0.2.0`, API `(0,2)` | SemVer and explicit API tuple |
+| Package/API | `0.2.1`, API `(0,2)` | SemVer and explicit API tuple |
 | Model | `2` | equality/fingerprint changes require a new schema |
 | Wire | `(1,2)` | major incompatible; minor only backwards-compatible additions |
 | Adapter | `1` | provider/plugin negotiation must match |

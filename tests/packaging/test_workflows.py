@@ -100,12 +100,12 @@ def test_active_workflows_target_the_0_2_0_contract() -> None:
     assert "0.1.1" not in CI
     assert "0.1.1" not in WHEELS
     assert "0.1.1" not in NATIVE_PERFORMANCE
-    assert "pyowl_core-0.2.0" in WHEELS
-    assert "reports/release/0.2.0/gates.json" in WHEELS
-    assert WHEELS.count("pyowl-core==0.2.0") == 2
+    assert "pyowl_core-0.2.1" in WHEELS
+    assert "reports/release/0.2.1/gates.json" in WHEELS
+    assert WHEELS.count("pyowl-core==0.2.1") == 2
     assert "assert n.WIRE_FORMAT_VERSION == (1, 2)" in WHEELS
-    assert "pyowl_core.__version__ == '0.2.0'" in CI
-    assert 'importlib.metadata.version("pyowl-core") == "0.2.0"' in NATIVE_PERFORMANCE
+    assert "pyowl_core.__version__ == '0.2.1'" in CI
+    assert 'importlib.metadata.version("pyowl-core") == "0.2.1"' in NATIVE_PERFORMANCE
 
 
 def test_native_safety_workflow_is_pinned_bounded_and_fail_closed() -> None:

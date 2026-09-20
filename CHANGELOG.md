@@ -4,7 +4,20 @@ All notable user-visible changes are recorded here. The project follows
 Semantic Versioning for the package/API independently of its model, wire, and
 adapter protocol versions.
 
-## 0.2.0 — Unreleased
+## 0.2.1 — Unreleased
+
+- Add opt-in verified native validation and selection receipts without changing
+  API, model, wire, or encoded structural schema versions.
+- Reuse proven ROOT/closure selections and retain native annotation, typed axiom,
+  named class feature, and property domain/range indexes. Warm queries transfer
+  only selected results to Python.
+- Preserve owner lifetimes and explicit strict-path rejection for unsupported
+  owners; default non-strict behavior remains available.
+- Validate the installed four-package stack and exact NCIT/DOID projection and
+  ordered-feature parity. These bounded observations do not establish general
+  large-ontology reasoner performance.
+
+## 0.2.0 — Historical release checkpoint
 
 ### Added
 

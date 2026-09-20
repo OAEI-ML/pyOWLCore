@@ -96,7 +96,7 @@ def test_generated_schema_and_version_decisions_are_current() -> None:
     assert decision_v2["adapter_protocol"] == pyowl_core.ADAPTER_PROTOCOL_VERSION
     assert decision_v2["model_schema"] == pyowl_core.MODEL_SCHEMA_VERSION
     assert tuple(decision_v2["wire_format"]) == pyowl_core.WIRE_FORMAT_VERSION
-    assert decision_v2["package_version"] == "0.2.0"
+    assert decision_v2["package_version"] == "0.2.1"
 
 
 def test_schema_constructor_and_descriptor_rows_cover_exact_registry() -> None:

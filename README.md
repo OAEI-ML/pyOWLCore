@@ -10,7 +10,7 @@ pyELK, pyHermiT, pyOwl2Vec-Star-projector, and OAEI evaluation code. Consumers
 build their own reasoning or projection IR; they do not reparse paths or own a
 second OWL object model.
 
-Version `0.2.0` is the current release candidate. It introduces API `(0, 2)`,
+Version `0.2.1` is the current release candidate. It preserves API `(0, 2)`,
 model schema `2`, wire `(1, 2)`, and encoded structural schema `2`; adapter
 protocol `1` is unchanged. The portable implementation is the compatibility
 baseline; native wheels are optional accelerators, but every file for one
@@ -80,7 +80,7 @@ edges, repair an ontology, or expose consumer-private IDs. See
 ## Release status
 
 The distribution name is `pyowl-core`; the import package is `pyowl_core`.
-The source tree carries the `0.2.0` production release candidate. Native wheels
+The source tree carries the `0.2.1` production release candidate. Native wheels
 are optional optimizations and must never remove features from the pure
 fallback. Publication remains fail-closed until the current corpus, native,
 consumer, and artifact evidence named in the release ledger is attached. The
@@ -108,7 +108,7 @@ Normative requirements begin at [the master specification](specs/SPEC.md).
 - Distribution: `pyowl-core`
 - Import: `pyowl_core`
 - Python: `>=3.10`
-- Current package candidate: `0.2.0`
+- Current package candidate: `0.2.1`
 - API: `(0, 2)`; model schema: `2`; wire: `(1, 2)`; adapter protocol: `1`
 - Encoded structural view: `pyowl-core/structural-columns` schema `2`
 - Runtime/build: no JDK, JRE, JVM, OWLAPI, JPype, ROBOT, Maven, Gradle, or Java archive

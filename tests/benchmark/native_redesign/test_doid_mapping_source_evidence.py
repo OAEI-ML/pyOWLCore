@@ -25,12 +25,29 @@ EVIDENCE = (
 EVIDENCE_SHA256 = "b0953cd57c8177d02a0a5dbbb7828dad2ed4254c2aca23d5b36eec8e7a7698c3"
 
 
+@pytest.fixture(autouse=True)
+def historical_parser_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Preserve the immutable 0.2.0 measurement. Its seven parser source hashes
+    # must still match; this fixture is not evidence for the current release.
+    monkeypatch.setattr(evidence_module, "__version__", "0.2.0")
+
+
+def test_historical_measurement_is_rejected_for_the_current_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyowl_core import __version__
+
+    monkeypatch.setattr(evidence_module, "__version__", __version__)
+    with pytest.raises(DoidEvidenceError, match="implementation identity is stale"):
+        load_evidence(EVIDENCE)
+
+
 def _mapping(value: object) -> dict[str, Any]:
     assert isinstance(value, dict)
     return cast(dict[str, Any], value)
 
 
-def test_checked_doid_mapping_evidence_is_complete_current_and_nonclaiming() -> None:
+def test_checked_doid_mapping_evidence_is_complete_historical_and_nonclaiming() -> None:
     payload = load_evidence(EVIDENCE)
     assert hashlib.sha256(EVIDENCE.read_bytes()).hexdigest() == EVIDENCE_SHA256
     assert payload["status"] == "pass"

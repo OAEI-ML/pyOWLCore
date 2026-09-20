@@ -188,7 +188,7 @@ from .wire import (
     WireCache,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 API_VERSION = (0, 2)
 MODEL_SCHEMA_VERSION = 2

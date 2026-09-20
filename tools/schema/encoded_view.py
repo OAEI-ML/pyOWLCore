@@ -297,7 +297,7 @@ def _render_version_decision_v2() -> str:
             "api_version = [0, 2]",
             "adapter_protocol = 1",
             "wire_format = [1, 2]",
-            'package_version = "0.2.0"',
+            'package_version = "0.2.1"',
             "capability_advertised = true",
             'promotion_owner = "WP23"',
             "",
