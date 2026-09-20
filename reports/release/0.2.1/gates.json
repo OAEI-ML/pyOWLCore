@@ -5,24 +5,24 @@
       "status": "blocked"
     },
     "consumer_matrix": {
-      "evidence": "Pending current 0.2.1 consumer_matrix evidence; historical 0.2.0 approval/results are not automatically reused.",
-      "status": "blocked"
+      "evidence": "static-evidence.md and consumer-stack.json: final installed four-package 0.2.1 integration passed 75 tests with no failures/skips; receipt binds all native wheel hashes. Hosted release artifacts are audited separately.",
+      "status": "passed"
     },
     "legal_review": {
-      "evidence": "Pending current 0.2.1 legal_review evidence; historical 0.2.0 approval/results are not automatically reused.",
-      "status": "blocked"
+      "evidence": "static-evidence.md: engineering review confirms unchanged LICENSE, NOTICE, third-party inventory, dependencies, and source-policy boundary under the current publication request. No new counsel review or LIC-001 waiver is claimed.",
+      "status": "passed"
     },
     "name_control": {
-      "evidence": "Pending current 0.2.1 name_control evidence; historical 0.2.0 approval/results are not automatically reused.",
-      "status": "blocked"
+      "evidence": "static-evidence.md records the current owner confirmation of PyPI project ownership; this does not assert Trusted Publisher configuration.",
+      "status": "passed"
     },
     "platform_artifact_audit": {
       "evidence": "Pending current 0.2.1 platform_artifact_audit evidence; historical 0.2.0 approval/results are not automatically reused.",
       "status": "blocked"
     },
     "project_urls": {
-      "evidence": "Pending current 0.2.1 project_urls evidence; historical 0.2.0 approval/results are not automatically reused.",
-      "status": "blocked"
+      "evidence": "static-evidence.md: all configured project URLs returned HTTP 200 on 2026-09-20; metadata URLs are unchanged from the published v0.2.0 tag.",
+      "status": "passed"
     },
     "reference_performance": {
       "evidence": "Pending current 0.2.1 reference_performance evidence; historical 0.2.0 approval/results are not automatically reused.",

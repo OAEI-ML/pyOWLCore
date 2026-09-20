@@ -1,0 +1,76 @@
+{
+  "started_at": "2026-09-20T00:46:40.628762+00:00",
+  "environment": "/tmp/native-release-stack-021",
+  "tests": [
+    "tests/ontology_public_handoff_test.py",
+    "tests/ontology_native_projection_test.py",
+    "tests/ontology_native_consumption_test.py",
+    "tests/ontology_typed_hierarchy_test.py",
+    "tests/reasoner_adapters_test.py"
+  ],
+  "packages": {
+    "pyowl-core": {
+      "module_version": "0.2.1",
+      "distribution_version": "0.2.1",
+      "module_path": "/tmp/native-release-stack-021/lib/python3.12/site-packages/pyowl_core/__init__.py",
+      "distribution_path": "/tmp/native-release-stack-021/lib/python3.12/site-packages",
+      "native_extensions": [
+        "/tmp/native-release-stack-021/lib/python3.12/site-packages/pyowl_core/_native.cpython-312-x86_64-linux-gnu.so"
+      ],
+      "wheel": "/tmp/core-release-artifacts-021/native-fixed/pyowl_core-0.2.1-cp312-cp312-linux_x86_64.whl",
+      "wheel_sha256": "990b43bd310abae95d6fd0b4477664316abbeea54765e185de5d040f1034b759"
+    },
+    "pyowl2vec-star-projector": {
+      "module_version": "0.2.1",
+      "distribution_version": "0.2.1",
+      "module_path": "/tmp/native-release-stack-021/lib/python3.12/site-packages/pyowl2vec_star_projector/__init__.py",
+      "distribution_path": "/tmp/native-release-stack-021/lib/python3.12/site-packages",
+      "native_extensions": [
+        "/tmp/native-release-stack-021/lib/python3.12/site-packages/pyowl2vec_star_projector/_native.abi3.so"
+      ],
+      "wheel": "/tmp/projector-release-021/final/native/pyowl2vec_star_projector-0.2.1-cp310-abi3-linux_x86_64.whl",
+      "wheel_sha256": "9cfa14da78125c55cf0aba9de7944806f8c88ff8abf1ebde52a0263198d9321f"
+    },
+    "pyelk-reasoner": {
+      "module_version": null,
+      "distribution_version": "0.2.1",
+      "module_path": "/tmp/native-release-stack-021/lib/python3.12/site-packages/pyelk/__init__.py",
+      "distribution_path": "/tmp/native-release-stack-021/lib/python3.12/site-packages",
+      "native_extensions": [
+        "/tmp/native-release-stack-021/lib/python3.12/site-packages/pyelk/_native.abi3.so"
+      ],
+      "wheel": "/tmp/pyelk-release-artifacts-021/final/native/pyelk_reasoner-0.2.1-cp310-abi3-linux_x86_64.whl",
+      "wheel_sha256": "9c752f3bb6b772cdc4a097a338ac0b9b4ea411dcd4e170d3536b640a96fbe878"
+    },
+    "pyhermit": {
+      "module_version": "0.2.1",
+      "distribution_version": "0.2.1",
+      "module_path": "/tmp/native-release-stack-021/lib/python3.12/site-packages/pyhermit/__init__.py",
+      "distribution_path": "/tmp/native-release-stack-021/lib/python3.12/site-packages",
+      "native_extensions": [
+        "/tmp/native-release-stack-021/lib/python3.12/site-packages/pyhermit/_native.abi3.so"
+      ],
+      "wheel": "/tmp/pyhermit-release-021-final-native/pyhermit-0.2.1-cp310-abi3-linux_x86_64.whl",
+      "wheel_sha256": "2822ebdde970fa8c7065ca2f696ae8f2e27fb456e4fdc3bd1453386d864bcef7"
+    }
+  },
+  "log": "/tmp/native-release-stack-021-tests.log",
+  "constraints": {
+    "cuda_visible_devices": "",
+    "numeric_threads": 2,
+    "network_denied": true,
+    "active_environment_modified": false
+  },
+  "collected": 75,
+  "counts": {
+    "passed": 75,
+    "failed": 0,
+    "skipped": 0,
+    "error": 0,
+    "xfailed": 0,
+    "xpassed": 0
+  },
+  "exit_code": 0,
+  "wall_seconds": 5.847544428004767,
+  "finished_at": "2026-09-20T00:46:46.957591+00:00"
+}
