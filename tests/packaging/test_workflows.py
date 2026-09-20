@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from tools.packaging.release_report import REQUIRED_RELEASE_GATES
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 WHEELS = (WORKFLOWS / "wheels.yml").read_text(encoding="utf-8")
@@ -360,6 +362,29 @@ def test_release_consumes_verified_artifacts_and_never_rebuilds() -> None:
     assert performance_verification < performance_gate < regenerated_report
     assert 'gates[name]["status"] in {"blocked", "passed"}' in RELEASE
     assert "candidate/reference-performance" in RELEASE
+
+
+@pytest.mark.parametrize(
+    "blocked", [set(), {"reference_performance", "signatures", "source_tag_verified"}]
+)
+def test_native_performance_accepts_current_candidate_gates(blocked: set[str]) -> None:
+    snippets = tuple(
+        snippet for snippet in _inline_python(NATIVE_PERFORMANCE) if "staged = {" in snippet
+    )
+    assert len(snippets) == 1
+    source = snippets[0]
+    checks = source[source.index("staged = {") : source.index("wheels = tuple(")]
+    gates = {
+        name: {"status": "blocked" if name in blocked else "passed"}
+        for name in REQUIRED_RELEASE_GATES
+    }
+    assert "testpypi_rehearsal" not in gates
+    report = {
+        "gates": gates,
+        "artifacts": [{"inspection_ok": True, "errors": [], "release_blockers": []}],
+        "blockers": [f"release gate {name} is blocked: pending verification" for name in blocked],
+    }
+    exec(compile(checks, "native-performance-candidate-gates.py", "exec"), {"report": report})
 
 
 def test_native_performance_is_guarded_complete_and_fail_closed() -> None:
