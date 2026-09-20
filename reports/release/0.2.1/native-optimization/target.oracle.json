@@ -1,0 +1,187 @@
+{
+  "candidate_elapsed_seconds": 40.59963971399702,
+  "candidate_feature_sha256": "604fe0d31522ced11945a008c44176427357a018ceea9d07fd6b8360c767978a",
+  "candidate_report": "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/target.json",
+  "candidate_reused": false,
+  "comparison": "exact complete ordered rows, with no list normalization",
+  "constructor_limit_seconds": 1800,
+  "count": 64,
+  "exact_rows_equal": true,
+  "first_mismatches": [],
+  "helper_sha256": {
+    "legacy_annotation_oracle.py": "a466c5c58205170c2260e5693505a432f2ca1e722ec6445cdc68f55571386bda",
+    "legacy_feature_oracle.py": "5ac7274b5244add1739e13da0fe460bda363849f865362bc78719e0e5f2299a7",
+    "projection_checkpoint.py": "547b1ec046a4694dabfd9f2a04704ff07e5ce53876b13d7210fa4f4eb97eda55"
+  },
+  "mismatch_count": 0,
+  "oracle_feature_sha256": "604fe0d31522ced11945a008c44176427357a018ceea9d07fd6b8360c767978a",
+  "oracle_process_peak_rss_bytes": 1517633536,
+  "oracle_wall_seconds": 8.679275880916975,
+  "progress": {
+    "stage": "selected_features"
+  },
+  "shared_verified_inputs": [
+    "native snapshot",
+    "digest-verified canonical projection"
+  ],
+  "source_evidence": {
+    "annotation_helper_sha256": "a466c5c58205170c2260e5693505a432f2ca1e722ec6445cdc68f55571386bda",
+    "annotation_selection": "shared native index; independently decoded raw assertions and pinned normalization",
+    "class_rows": {
+      "DisjointUnion": 0,
+      "EquivalentClasses": 731,
+      "SubClassOf": 32850
+    },
+    "constructor_limit_seconds": 1800,
+    "constructor_seconds": 7.056750594987534,
+    "max_class_rows": 400000,
+    "ontology_loads": 0,
+    "oracle_axiom_reencoding_calls": 0,
+    "projection_calls": 0,
+    "raw_row_identity": "shared retained owner, closure scope, native constructor counts and source fingerprints",
+    "raw_row_order": "native canonical per constructor; no global reordering or axiom re-encoding",
+    "reasoner_selection": {
+      "effective": "asserted",
+      "package_version": "0.2.0",
+      "requested": "asserted"
+    },
+    "same_snapshot": true,
+    "scope": "class feature reference only; process memory cap belongs to caller",
+    "source_commit": "00941f589b0d18f8ad84391bf6179f56b0ebed2d",
+    "source_fingerprints": {
+      "logical": "sha256:2:2303c2eb76983262434590eed256153a76cbe8e706eb42d95f96cd28bfaf3278",
+      "signature": "sha256:2:053b08c1182214dad365d6008f485b0e950f8d4d1543b24fc0aefd005c9457c3",
+      "structural": "sha256:2:dfef44f7d395da038f7093adeeaccf31d9381a9826404d7915b667880a2fcb83"
+    },
+    "source_path": "exact/ontology/store.py",
+    "source_sha256": "dd2a188fa993b5b1e6299924a8dcfc1c71fc1c0d2b7e8a1792dffbb2abeb6d95",
+    "stages": [
+      {
+        "elapsed_seconds": 0.00011768203694373369,
+        "stage": "pinned_algorithms",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 0.06485563702881336,
+        "stage": "pinned_algorithms",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 0.2354553360491991,
+        "stage": "native_typed_index",
+        "status": "running"
+      },
+      {
+        "class_rows": {
+          "DisjointUnion": 0,
+          "EquivalentClasses": 731,
+          "SubClassOf": 32850
+        },
+        "elapsed_seconds": 0.24107031803578138,
+        "stage": "native_typed_index",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 0.24605528207030147,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 1.2335438170703128,
+        "rows": 10000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 2.168099847040139,
+        "rows": 20000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 3.27498191408813,
+        "rows": 30000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 3.514761607046239,
+        "rows": 32850,
+        "stage": "read_SubClassOf",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 3.5198383450042456,
+        "stage": "read_EquivalentClasses",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 3.8143476840341464,
+        "rows": 731,
+        "stage": "read_EquivalentClasses",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 3.8199394380208105,
+        "stage": "read_DisjointUnion",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 3.8245748709887266,
+        "rows": 0,
+        "stage": "read_DisjointUnion",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 3.829380857059732,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 4.525783057091758,
+        "rows": 10000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 5.232750099035911,
+        "rows": 20000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 5.989015544997528,
+        "rows": 30000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 6.28584129398223,
+        "stage": "asserted_endpoints",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 6.290898495004512,
+        "stage": "pinned_class_features",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 7.040996382012963,
+        "stage": "pinned_class_features",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 7.047559770056978,
+        "stage": "annotation_oracle",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 7.052490547997877,
+        "stage": "annotation_oracle",
+        "status": "complete"
+      }
+    ]
+  },
+  "stage": "complete",
+  "status": "passed"
+}

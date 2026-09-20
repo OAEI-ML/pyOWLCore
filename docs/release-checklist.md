@@ -1,4 +1,22 @@
-# 0.2.0 release checklist
+# 0.2.1 release checklist
+
+The current authority is [the 0.2.1 gate ledger](../reports/release/0.2.1/gates.json).
+The owner approved [scoped Linux validation](../reports/release/0.2.1/benchmark-policy.md)
+in place of the legacy reference-host study for this version only. This is an
+explicit release decision, not a claim that the full benchmark was run.
+
+- Completed: final installed four-package integration (75 tests), project
+  ownership/URLs, unchanged dependency/license review, scoped performance decision.
+- Still required: exact final-source CI and Native safety; advisory and complete
+  portable artifact audits; signed source tag; TestPyPI; OIDC and attestations;
+  final all-passed production checks and public-index verification.
+- The release owner will publish separately. Committing this checklist does not
+  upload files or close any unexecuted technical gate.
+
+See [releasing](releasing.md) for the supported workflow sequence. Historical
+0.2.0 decisions below apply only to that version.
+
+# Historical 0.2.0 release checklist
 
 The source tree targets package `0.2.0`, API `(0,2)`, model schema `2`, wire
 `(1,2)`, adapter protocol `1`, and encoded structural schema `2`. This is a

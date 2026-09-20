@@ -233,15 +233,34 @@ def test_wheel_workflow_is_build_once_fail_closed_and_audited() -> None:
         assert command in PLATFORM_AUDIT
 
 
-def test_wheel_workflow_requires_an_owner_authorized_zero_blocker_candidate(
+@pytest.mark.parametrize(
+    ("workflow", "staged"),
+    [
+        (
+            WHEELS,
+            {
+                "reference_performance",
+                "signatures",
+                "source_tag_verified",
+                "testpypi_rehearsal",
+                "trusted_publishing",
+            },
+        ),
+        (RELEASE, {"signatures", "testpypi_rehearsal"}),
+    ],
+    ids=["wheels-before-verification", "release-before-testpypi"],
+)
+def test_candidate_stages_keep_only_downstream_checks_pending(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    workflow: str,
+    staged: set[str],
 ) -> None:
     snippets = tuple(
-        snippet for snippet in _inline_python(WHEELS) if "expected_blockers" in snippet
+        snippet for snippet in _inline_python(workflow) if "expected_blockers" in snippet
     )
     assert len(snippets) == 1
-    snippet = compile(snippets[0], "wheels-staged-gates.py", "exec")
+    snippet = compile(snippets[0], "candidate-staged-gates.py", "exec")
     all_gates = {
         "advisory_scan",
         "consumer_matrix",
@@ -257,8 +276,7 @@ def test_wheel_workflow_requires_an_owner_authorized_zero_blocker_candidate(
         "trusted_publishing",
     }
 
-    def report(*, extra_blocked: set[str] | None = None) -> dict[str, object]:
-        blocked = extra_blocked or set()
+    def report(blocked: set[str]) -> dict:
         gates = {
             name: {
                 "status": "blocked" if name in blocked else "passed",
@@ -269,12 +287,9 @@ def test_wheel_workflow_requires_an_owner_authorized_zero_blocker_candidate(
         return {
             "release_ready": not blocked,
             "gates": gates,
-            "artifacts": [
-                {"inspection_ok": True, "errors": [], "release_blockers": []}
-            ],
+            "artifacts": [{"inspection_ok": True, "errors": [], "release_blockers": []}],
             "blockers": sorted(
-                f"release gate {name} is blocked: {gates[name]['evidence']}"
-                for name in blocked
+                f"release gate {name} is blocked: {gates[name]['evidence']}" for name in blocked
             ),
         }
 
@@ -282,15 +297,34 @@ def test_wheel_workflow_requires_an_owner_authorized_zero_blocker_candidate(
     candidate.mkdir()
     report_path = candidate / "release-report.json"
     monkeypatch.chdir(tmp_path)
-    report_path.write_text(json.dumps(report()), encoding="utf-8")
-    exec(snippet, {})
 
-    report_path.write_text(
-        json.dumps(report(extra_blocked={"consumer_matrix"})),
-        encoding="utf-8",
-    )
-    with pytest.raises(AssertionError):
+    def verify(payload: dict) -> None:
+        report_path.write_text(json.dumps(payload), encoding="utf-8")
         exec(snippet, {})
+
+    verify(report(set()))
+    verify(report(staged))
+    for name in all_gates - staged:
+        with pytest.raises(AssertionError):
+            verify(report(staged | {name}))
+    for name in staged:
+        payload = report(staged)
+        payload["gates"][name]["status"] = "failed"
+        with pytest.raises(AssertionError):
+            verify(payload)
+    payload = report(staged)
+    payload["blockers"].append("artifact matrix is incomplete")
+    with pytest.raises(AssertionError):
+        verify(payload)
+    payload = report(staged)
+    payload["release_ready"] = True
+    with pytest.raises(AssertionError):
+        verify(payload)
+    if workflow == WHEELS:
+        payload = report(staged)
+        payload["artifacts"][0]["inspection_ok"] = False
+        with pytest.raises(AssertionError):
+            verify(payload)
 
 
 def test_release_consumes_verified_artifacts_and_never_rebuilds() -> None:
@@ -319,9 +353,7 @@ def test_release_consumes_verified_artifacts_and_never_rebuilds() -> None:
     assert "--require-ready" in RELEASE
     assert re.search(r"\b0\.1\.\d+\b", RELEASE) is None
     assert "packages-dir: candidate/dist/" in RELEASE
-    performance_verification = RELEASE.index(
-        "Verify authenticated reference-performance evidence"
-    )
+    performance_verification = RELEASE.index("Verify authenticated reference-performance evidence")
     performance_gate = RELEASE.index('payload["gates"]["reference_performance"]')
     regenerated_report = RELEASE.index(
         "python -m tools.packaging.release_report",
@@ -367,7 +399,7 @@ def test_native_performance_is_guarded_complete_and_fail_closed() -> None:
             "PYOWL_CORE_PY_HORNED_RUNNER: ${{ github.workspace }}/"
             "benchmarks/comparators/runners/py_horned_common.py"
         ),
-        'py_horned_runner.is_relative_to(Path.cwd().resolve())',
+        "py_horned_runner.is_relative_to(Path.cwd().resolve())",
         "py_horned_runner.read_bytes()",
         'export PATH="$PY_HORNED_VENV_BIN:$PATH"',
         "--process-mode fresh-process",
@@ -453,9 +485,7 @@ def test_historical_0_1_1_gate_manifest_remains_unchanged() -> None:
     assert payload["schema"] == 1
     gates = payload["gates"]
     assert len(gates) == 12
-    assert {
-        name for name, gate in gates.items() if gate["status"] == "blocked"
-    } == {
+    assert {name for name, gate in gates.items() if gate["status"] == "blocked"} == {
         "advisory_scan",
         "platform_artifact_audit",
     }
@@ -493,20 +523,12 @@ def test_checked_0_2_0_gate_manifest_is_fail_closed() -> None:
         "trusted_publishing",
     }
     staged = {"advisory_scan", "platform_artifact_audit"}
-    assert {
-        name for name, gate in gates.items() if gate["status"] == "blocked"
-    } == staged
-    assert all(
-        gate["status"] == "passed"
-        for name, gate in gates.items()
-        if name not in staged
-    )
+    assert {name for name, gate in gates.items() if gate["status"] == "blocked"} == staged
+    assert all(gate["status"] == "passed" for name, gate in gates.items() if name not in staged)
     evidence = " ".join(gate["evidence"] for gate in gates.values())
     for phrase in ("0.2.0", "model-schema-2", "native", "consumer", "wheel"):
         assert phrase in evidence
-    authorization = (
-        path.parent / "owner-release-authorization.md"
-    ).read_text(encoding="utf-8")
+    authorization = (path.parent / "owner-release-authorization.md").read_text(encoding="utf-8")
     for phrase in (
         "waives `LIC-001` as-is",
         "py-horned DOID common-contract result",
@@ -516,3 +538,65 @@ def test_checked_0_2_0_gate_manifest_is_fail_closed() -> None:
         "Exact-OM remains outside",
     ):
         assert phrase in authorization
+
+
+def test_scoped_performance_requires_verified_policy_and_keeps_full_run_path() -> None:
+    assert RELEASE.count("if: ${{ inputs.performance_run_id != '' }}") == 3
+    assert "if: ${{ inputs.performance_run_id == '' }}" in RELEASE
+    assert "tools.packaging.release_performance" in RELEASE
+    assert "--policy reports/release/0.2.1/performance-policy.json" in RELEASE
+    assert '--version "$VERSION" --source-revision "$SOURCE_SHA"' in RELEASE
+    assert "--candidate-report candidate/release-report.json" in RELEASE
+    scoped_verification = RELEASE.index("Verify the approved version-scoped benchmark policy")
+    gate = RELEASE.index('payload["gates"]["reference_performance"]')
+    assert scoped_verification < gate
+    assert "full comparator study not claimed" in RELEASE
+
+
+def test_release_rejects_missing_or_different_source_ci(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snippet = next(
+        snippet for snippet in _inline_python(RELEASE) if "No successful same-source" in snippet
+    )
+    source = "a" * 40
+    repo = "OAEI-ML/pyOWLCore"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SOURCE_SHA", source)
+    monkeypatch.setenv("GITHUB_REPOSITORY", repo)
+    for workflow, name in (("ci", "CI"), ("native-safety", "Native safety")):
+        (tmp_path / f"{workflow}-runs.json").write_text(
+            json.dumps(
+                {
+                    "workflow_runs": [
+                        {
+                            "name": name,
+                            "path": f".github/workflows/{workflow}.yml",
+                            "event": "push",
+                            "conclusion": "success",
+                            "head_sha": source,
+                            "head_repository": {"full_name": repo},
+                        }
+                    ]
+                }
+            )
+        )
+    exec(snippet, {})
+    path = tmp_path / "native-safety-runs.json"
+    payload = json.loads(path.read_text())
+    payload["workflow_runs"][0]["head_sha"] = "b" * 40
+    path.write_text(json.dumps(payload))
+    with pytest.raises(AssertionError, match="Native safety"):
+        exec(snippet, {})
+    path.write_text(json.dumps({"workflow_runs": []}))
+    with pytest.raises(AssertionError, match="Native safety"):
+        exec(snippet, {})
+
+
+def test_testpypi_cannot_mark_production_publisher_configured() -> None:
+    assert 'gates["gates"]["trusted_publishing"] =' not in RELEASE
+    assert 'payload["gates"]["trusted_publishing"] =' not in RELEASE
+    assert "--require-ready" in RELEASE
+    promotion = RELEASE[RELEASE.index("Reverify promotion-ready report and checksums") :]
+    assert 'report["release_ready"] is True' in promotion
+    assert 'report["blockers"] == []' in promotion

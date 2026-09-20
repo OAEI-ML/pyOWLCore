@@ -25,11 +25,11 @@
       "status": "passed"
     },
     "reference_performance": {
-      "evidence": "Pending current 0.2.1 reference_performance evidence; historical 0.2.0 approval/results are not automatically reused.",
-      "status": "blocked"
+      "evidence": "benchmark-policy.md and performance-policy.json: explicit owner-approved 0.2.1 acceptance of checksum-bound historical NCIT/DOID native validation and the final 75-test installed stack. The full normative comparator study was not run or claimed.",
+      "status": "passed"
     },
     "release_owner_approval": {
-      "evidence": "owner-release-authorization.md records the explicit 2026-09-20 request to build, verify CI, and publish the new versions after their gates pass.",
+      "evidence": "owner-release-authorization.md: the owner approved preparation and the scoped 0.2.1 benchmark/workflow changes, retaining technical publication checks. The owner will publish separately.",
       "status": "passed"
     },
     "signatures": {

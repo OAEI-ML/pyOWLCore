@@ -1,18 +1,27 @@
-# pyowl-core 0.2.1 publication request
+# pyowl-core 0.2.1 release-owner decision
 
 Date: 2026-09-20
 
-The repository owner requested committing and pushing the four native packages,
-building them, verifying their CIs, and publishing the new versions to PyPI.
-This record is publication authorization, not evidence of unexecuted checks
-or a waiver of the existing release gates. Historical 0.2.0 evidence and
-release decisions are preserved separately. The existing Release workflow and
-its required signatures, performance evidence, and index verification remain
-unchanged. Pending entries must be closed with applicable current evidence.
+The owner explicitly approved the prepared 0.2.1 benchmark and workflow proposal:
+"I aproved the proposed becnhmark/ workslow chnages please do that ill publish
+to pypi separatly".
 
-The applicable optimization T1–T4 evidence at source 5fd93c8 is recorded in
-Exact-OM specs/native-optimization/IMPLEMENTATION.md and native-optimization-03
-artifacts: the four installed package candidates passed integration, and NCIT
-and DOID matched the structural baseline plus 128 independently reconstructed
-ordered feature rows. This is not the full normative reference-host study or
-new-version platform-wheel evidence.
+This authorizes committing and pushing the scoped benchmark policy and correcting
+the release-check ordering. The owner will publish separately; the assistant
+must not dispatch publication or upload distributions on the owner's behalf.
+The earlier instruction to prepare and validate all four packages still applies.
+
+For 0.2.1 only, the owner accepts the bounded Linux optimization evidence and
+installed-package integration described in benchmark-policy.md instead of the
+full legacy reference-host comparator study. This closes reference_performance
+by an explicit scoped decision; it does not say that the full study ran.
+
+The approved ordering correction permits only identified downstream checks to
+remain pending until their verifiers execute. All applicable platform audits,
+exact source/checksum checks, signed tags, TestPyPI, OIDC, attestations, and final
+all-passed production checks remain required. The owner did not approve false
+passes or publishing failed candidates. Actual implementation status is recorded
+in the workflow and release handoff, separately from this authorization.
+
+Historical 0.2.0 decisions and results remain unchanged. Other pending gates
+must be closed using applicable evidence, not this authorization alone.

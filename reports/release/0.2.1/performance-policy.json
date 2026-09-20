@@ -1,0 +1,17 @@
+{
+  "approval": "owner-approved-scoped-validation",
+  "evidence": {
+    "benchmark-policy.md": "859662c58d13edace303cc8c08ad96f1026b4fff32dc44cfa85e55039eb9b692",
+    "consumer-stack-tests.log": "50dd980327a5bf76b4c21d03535b2ab8635c1457d887409ce8f67756d878a57d",
+    "consumer-stack.json": "2ef8db2753b88b8c99e36989ebc7256668403c1aa5505036ca93ac630cb191d2",
+    "native-optimization/artifacts.json": "1113bfe1ca275f4eea6acc2eac656f88f572e090a389547e2520357f33349f4a",
+    "native-optimization/completed-summary.json": "696cef0977d61fa84ee9a0bc625cfab492dcc3a297b3963045bbea848b570806",
+    "native-optimization/job.json": "2ba3e4f9bf727744360b4c33c0f84cb7b8e43ae55bfa16f6eef6ef6ff1dffa48",
+    "native-optimization/source.oracle.json": "92054dffbaf437dbeea656f85d748810b04025708d9a8f4923ba1154880f7d72",
+    "native-optimization/target.oracle.json": "56cdcc58cdbd011c1b51ac52b38a86879cea34f22ffeae8673244d45ab069548",
+    "owner-release-authorization.md": "1d741f6a51626dd622605e08ad4162c3e1a908de64edb335f67f14d05636a6d6",
+    "static-evidence.md": "72021e5adf0da94bbe31f32254325f179d5adc663ce06be70fe35a6ac5290f76"
+  },
+  "schema": 1,
+  "version": "0.2.1"
+}

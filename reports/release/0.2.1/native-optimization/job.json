@@ -1,0 +1,199 @@
+{
+  "status": "passed",
+  "started_utc": "2026-09-14T18:57:54.540734+00:00",
+  "launcher_pid": 1189215,
+  "session_name": "exact-native-validation",
+  "memory_address_space_limit_bytes": 50160947200,
+  "minimum_memory_headroom_bytes": 12884901888,
+  "heavy_processes": 1,
+  "blas_threads": 2,
+  "native_import_concurrency_limit": 8,
+  "periodic_stack_sampling": false,
+  "readiness": {
+    "status": "ready",
+    "installed_T3": "passed",
+    "prior_attempt": "native-optimization-02/job.json",
+    "reuse_candidate_source": "native-optimization-02/source.json",
+    "reuse_candidate_features": "native-optimization-02/source.features.jsonl",
+    "candidate_source_elapsed_seconds": 495.4369045329513,
+    "missing_state": [
+      "live native snapshot",
+      "full projection edges",
+      "reference construction"
+    ],
+    "constructor_deadline_seconds": 1800,
+    "source_deadline_seconds": 7200,
+    "target_deadline_seconds": 3600,
+    "long_scientific_campaign": "not started",
+    "resume_smokes": [
+      "smoke-resume",
+      "smoke-cached",
+      "smoke-fresh"
+    ],
+    "oracle_differential_comparisons": 2688,
+    "checkpoint_tests": 7
+  },
+  "sides": {
+    "source": {
+      "status": "complete",
+      "deadline_seconds": 7200,
+      "command": [
+        "timeout",
+        "--signal=TERM",
+        "--kill-after=30s",
+        "7200s",
+        "/tmp/exact-native-candidate/bin/python",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/run_profile.py",
+        "--config",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/g0-validation-04/cold64/run/_inputs/resolved.config.yaml",
+        "--side",
+        "source",
+        "--entity-limit",
+        "64",
+        "--entities",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/source64.txt",
+        "--output",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/source.json",
+        "--profile-stages",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/source.stages.jsonl",
+        "--reuse-candidate",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-02/source.json"
+      ],
+      "candidate_reused": true,
+      "candidate_report": "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-02/source.json",
+      "started_utc": "2026-09-14T18:57:54.549354+00:00",
+      "supervisor_pid": 1189217,
+      "exit_code": 0,
+      "wall_seconds": 512.7247285249177,
+      "restoration": {
+        "status": "complete",
+        "stage": "restored",
+        "candidate_reused": true,
+        "restore_wall_seconds": 396.8509023950901,
+        "candidate_elapsed_seconds": 495.4369045329513,
+        "projection_checkpoint": {
+          "edges": {
+            "count": 630404,
+            "sha256": "370ef2ea5f7c8d4ba53dee63b4e371b27f7d1e6321bf63f14599925242ff6244"
+          },
+          "format": "sorted-unique-three-string-jsonl",
+          "include_literals": true,
+          "method": "owl2vecstar",
+          "path": "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/source.edges.jsonl",
+          "schema": "exact/projection-checkpoint/1",
+          "status": "restored"
+        },
+        "failure": null
+      },
+      "feature_oracle": {
+        "status": "passed",
+        "exact_rows_equal": true,
+        "count": 64,
+        "candidate_feature_sha256": "0e3119b0e7bf0ff55c936c1eda7285a6d0d8e4e837530a3f26f01ff5e6fb557b",
+        "oracle_feature_sha256": "0e3119b0e7bf0ff55c936c1eda7285a6d0d8e4e837530a3f26f01ff5e6fb557b",
+        "oracle_wall_seconds": 99.73776626598556,
+        "failure": null
+      },
+      "historical_feature_digest_matches": false,
+      "historical_feature_digest_status": "Ineligible as a stable golden: reproduced pre-existing hash-seed dependent feature truncation",
+      "candidate_elapsed_seconds": 495.4369045329513,
+      "candidate_process_peak_rss_bytes": 12693520384,
+      "semantic_comparison": {
+        "input": true,
+        "signature": true,
+        "edges": true,
+        "exclusions": true,
+        "labels": true,
+        "entities": true,
+        "effective_axiom_count": true,
+        "complete": true,
+        "features": true
+      },
+      "baseline": "native-preprocessing-03/source.json",
+      "semantic_parity": true
+    },
+    "target": {
+      "status": "complete",
+      "deadline_seconds": 3600,
+      "command": [
+        "timeout",
+        "--signal=TERM",
+        "--kill-after=30s",
+        "3600s",
+        "/tmp/exact-native-candidate/bin/python",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/run_profile.py",
+        "--config",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/g0-validation-04/cold64/run/_inputs/resolved.config.yaml",
+        "--side",
+        "target",
+        "--entity-limit",
+        "64",
+        "--entities",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/target64.txt",
+        "--output",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/target.json",
+        "--profile-stages",
+        "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/target.stages.jsonl"
+      ],
+      "candidate_reused": false,
+      "candidate_report": "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/target.json",
+      "started_utc": "2026-09-14T19:06:27.291451+00:00",
+      "supervisor_pid": 1190783,
+      "exit_code": 0,
+      "wall_seconds": 60.37839289405383,
+      "restoration": {
+        "status": "complete",
+        "stage": "restored",
+        "candidate_reused": false,
+        "restore_wall_seconds": 41.85780875000637,
+        "candidate_elapsed_seconds": 40.59963971399702,
+        "projection_checkpoint": {
+          "edges": {
+            "count": 136803,
+            "sha256": "5a4e724c8059bd43c2863fd41f42bcf927c4f8da3b841add509b593a953b8fbe"
+          },
+          "format": "sorted-unique-three-string-jsonl",
+          "include_literals": true,
+          "method": "owl2vecstar",
+          "path": "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-03/target.edges.jsonl",
+          "schema": "exact/projection-checkpoint/1",
+          "status": "restored"
+        },
+        "failure": null
+      },
+      "feature_oracle": {
+        "status": "passed",
+        "exact_rows_equal": true,
+        "count": 64,
+        "candidate_feature_sha256": "604fe0d31522ced11945a008c44176427357a018ceea9d07fd6b8360c767978a",
+        "oracle_feature_sha256": "604fe0d31522ced11945a008c44176427357a018ceea9d07fd6b8360c767978a",
+        "oracle_wall_seconds": 8.679275880916975,
+        "failure": null
+      },
+      "historical_feature_digest_matches": false,
+      "historical_feature_digest_status": "Ineligible as a stable golden: reproduced pre-existing hash-seed dependent feature truncation",
+      "candidate_elapsed_seconds": 40.59963971399702,
+      "candidate_process_peak_rss_bytes": 1408225280,
+      "semantic_comparison": {
+        "input": true,
+        "signature": true,
+        "edges": true,
+        "exclusions": true,
+        "labels": true,
+        "entities": true,
+        "effective_axiom_count": true,
+        "complete": true,
+        "features": true
+      },
+      "baseline": "native-preprocessing-01/target.json",
+      "semantic_parity": true
+    }
+  },
+  "git_commit": "e2850d6f255deffc2507d1c3ce4485de5f9355b3",
+  "scope": "Resume saved NCIT candidate evidence and missing reference comparison, then DOID; no G0 or scientific campaign",
+  "reference_constructor_deadline_seconds": 1800,
+  "prior_attempt": "native-optimization-02/job.json",
+  "feature_comparison_policy": "Exact ordered legacy/candidate rows under the same deterministic graph fix; historical unstable digest retained separately",
+  "finished_utc": "2026-09-14T19:07:27.695432+00:00",
+  "wall_seconds": 573.1510288999416
+}

@@ -1,0 +1,30 @@
+{
+  "status": "passed",
+  "finished_utc": "2026-09-14T19:07:27.695432+00:00",
+  "validation_wall_seconds": 573.1510288999416,
+  "feature_rows_verified": 128,
+  "G0": "not run or admitted by this gate",
+  "scientific_campaign": "not started",
+  "sides": {
+    "source": {
+      "baseline_elapsed_seconds": 3999.5328884010087,
+      "candidate_elapsed_seconds": 495.4369045329513,
+      "candidate_reused": true,
+      "candidate_projection_seconds": 177.86318606103305,
+      "feature_count": 64,
+      "features_exactly_equal": true,
+      "reference_seconds": 99.73776626598556,
+      "historical_feature_digest_matches": false
+    },
+    "target": {
+      "baseline_elapsed_seconds": 184.28493971796706,
+      "candidate_elapsed_seconds": 40.59963971399702,
+      "candidate_reused": false,
+      "candidate_projection_seconds": 15.47742500610184,
+      "feature_count": 64,
+      "features_exactly_equal": true,
+      "reference_seconds": 8.679275880916975,
+      "historical_feature_digest_matches": false
+    }
+  }
+}

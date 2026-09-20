@@ -625,9 +625,19 @@ jobs:
           report = json.loads(
               Path("candidate/release-report.json").read_text(encoding="utf-8")
           )
-          assert report["release_ready"] is True
+          staged = {
+              "reference_performance",
+              "signatures",
+              "source_tag_verified",
+              "testpypi_rehearsal",
+              "trusted_publishing",
+          }
+          gates = report["gates"]
+          assert all(gates[name]["status"] in {"blocked", "passed"} for name in staged)
           assert all(
-              gate["status"] == "passed" for gate in report["gates"].values()
+              gate["status"] == "passed"
+              for name, gate in gates.items()
+              if name not in staged
           )
           assert all(
               row["inspection_ok"]
@@ -635,8 +645,13 @@ jobs:
               and not row["release_blockers"]
               for row in report["artifacts"]
           )
-          expected_blockers = []
-          assert report["blockers"] == expected_blockers, report["blockers"]
+          expected_blockers = sorted(
+              f"release gate {name} is blocked: {gates[name]['evidence']}"
+              for name in staged
+              if gates[name]["status"] == "blocked"
+          )
+          assert sorted(report["blockers"]) == expected_blockers, report["blockers"]
+          assert report["release_ready"] is (not expected_blockers)
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

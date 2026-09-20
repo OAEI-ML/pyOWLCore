@@ -1,0 +1,29 @@
+{
+  "status": "installed_T3_passed",
+  "packages": {
+    "pyowl-core": {
+      "source_commit": "5fd93c8839318f0ccc1afff4d3ec537509c72e87",
+      "wheel_sha256": "f66c068f3a88d0ae59553103fefef4994c43ecca1282300b4dd2486bcbd905d9",
+      "wheel": "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-01/wheels/5fd93c8/pyowl_core-0.2.0-cp312-cp312-linux_x86_64.whl",
+      "version": "0.2.0"
+    },
+    "pyowl2vec-star-projector": {
+      "source_commit": "a0676012c5f6437c304b4ed04bc2b41b6a083da1",
+      "wheel_sha256": "53c752e345d8c18ac1784000609902118b724d61fd8b59d7a79e5cb693d1e0fd",
+      "wheel": "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-01/wheels/a067601/pyowl2vec_star_projector-0.2.0-cp310-abi3-linux_x86_64.whl",
+      "version": "0.2.0"
+    },
+    "pyelk-reasoner": {
+      "source_commit": "bce95f8552ed8396315c9a9e4ddce184ad95596f",
+      "wheel_sha256": "3ae4a551d2288b0d703c43edc116b9d5a458f663a36812ac19801f1595b4caef",
+      "wheel": "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-01/wheels/bce95f8/pyelk_reasoner-0.2.0-cp310-abi3-linux_x86_64.whl",
+      "version": "0.2.0"
+    },
+    "pyhermit": {
+      "source_commit": "bbf31c26ce7ae03bd092f04bcb8955466b1fe3e0",
+      "wheel_sha256": "0bf0121e856afd9954bc32ef7358c3c28ec9b0de7ca9fe01eaeff8c5331fffa5",
+      "wheel": "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-01/wheels/bbf31c2/pyhermit-0.2.0-cp310-abi3-linux_x86_64.whl",
+      "version": "0.2.0"
+    }
+  }
+}

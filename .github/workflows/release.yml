@@ -8,8 +8,9 @@ on:
         required: true
         type: string
       performance_run_id:
-        description: Successful Native performance run ID bound to the same Wheels candidate
-        required: true
+        description: Native performance run ID (omit only for the approved 0.2.1 evidence policy)
+        required: false
+        default: ""
         type: string
       tag:
         description: Signed v<version> tag whose commit must match the Wheels run
@@ -94,7 +95,34 @@ jobs:
           assert run["head_sha"] == os.environ["SOURCE_SHA"]
           assert run["head_repository"]["full_name"] == os.environ["GITHUB_REPOSITORY"]
           PY
+      - name: Verify same-source CI and Native safety
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.verify.outputs.source_sha }}
+        run: |
+          for workflow in ci native-safety; do
+            gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow.yml/runs" \
+              -f head_sha="$SOURCE_SHA" -f event=push -f per_page=100 > "$workflow-runs.json"
+          done
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+
+          for workflow, name in (("ci", "CI"), ("native-safety", "Native safety")):
+              runs = json.loads(Path(f"{workflow}-runs.json").read_text())["workflow_runs"]
+              assert any(
+                  run["name"] == name
+                  and run["path"] == f".github/workflows/{workflow}.yml"
+                  and run["event"] == "push"
+                  and run["conclusion"] == "success"
+                  and run["head_sha"] == os.environ["SOURCE_SHA"]
+                  and run["head_repository"]["full_name"] == os.environ["GITHUB_REPOSITORY"]
+                  for run in runs
+              ), f"No successful same-source {name} run"
+          PY
       - name: Verify the referenced Native performance run
+        if: ${{ inputs.performance_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.performance_run_id }}
@@ -122,6 +150,7 @@ jobs:
           run-id: ${{ inputs.wheels_run_id }}
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: ${{ inputs.performance_run_id != '' }}
         with:
           name: native-performance-${{ steps.verify.outputs.source_sha }}
           path: performance
@@ -194,6 +223,7 @@ jobs:
           PY
           python -m tools.packaging.artifact_inspector candidate/dist/* --release --output candidate/release-artifact-inspection.json
       - name: Verify authenticated reference-performance evidence
+        if: ${{ inputs.performance_run_id != '' }}
         id: performance
         env:
           PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
@@ -354,9 +384,22 @@ jobs:
           ) as stream:
               stream.write(f"evidence_sha256={evidence_sha256}\n")
           PY
+      - name: Verify the approved version-scoped benchmark policy
+        if: ${{ inputs.performance_run_id == '' }}
+        id: scoped_performance
+        env:
+          SOURCE_SHA: ${{ steps.verify.outputs.source_sha }}
+          VERSION: ${{ steps.verify.outputs.version }}
+        run: |
+          evidence_sha256="$(python -m tools.packaging.release_performance \
+            --policy reports/release/0.2.1/performance-policy.json \
+            --version "$VERSION" --source-revision "$SOURCE_SHA" \
+            --candidate-report candidate/release-report.json \
+            --output candidate/reference-performance/evidence.json)"
+          echo "evidence_sha256=$evidence_sha256" >> "$GITHUB_OUTPUT"
       - name: Bind signed source to the immutable artifact verification
         env:
-          PERFORMANCE_EVIDENCE_SHA256: ${{ steps.performance.outputs.evidence_sha256 }}
+          PERFORMANCE_EVIDENCE_SHA256: ${{ steps.performance.outputs.evidence_sha256 || steps.scoped_performance.outputs.evidence_sha256 }}
           PERFORMANCE_RUN_ID: ${{ inputs.performance_run_id }}
           SOURCE_SHA: ${{ steps.verify.outputs.source_sha }}
           TAG: ${{ inputs.tag }}
@@ -380,11 +423,16 @@ jobs:
                   f"{os.environ['SOURCE_SHA']}"
               ),
           }
+          performance_description = (
+              f"{performance_run_url}: authenticated complete comparator evidence"
+              if os.environ["PERFORMANCE_RUN_ID"]
+              else "Owner-approved 0.2.1 bounded Linux validation; full comparator study not claimed"
+          )
           payload["gates"]["reference_performance"] = {
               "status": "passed",
               "evidence": (
-                  f"{performance_run_url}: authenticated complete comparator evidence "
-                  f"sha256 {os.environ['PERFORMANCE_EVIDENCE_SHA256']} for "
+                  f"{performance_description}; checksum-bound evidence sha256 "
+                  f"{os.environ['PERFORMANCE_EVIDENCE_SHA256']} for "
                   f"{os.environ['SOURCE_SHA']}"
               ),
           }
@@ -399,12 +447,21 @@ jobs:
           import json
 
           report = json.loads(Path("candidate/release-report.json").read_text(encoding="utf-8"))
-          assert report["release_ready"] is True
+          staged = {"signatures", "testpypi_rehearsal"}
+          gates = report["gates"]
+          assert all(gates[name]["status"] in {"blocked", "passed"} for name in staged)
           assert all(
               gate["status"] == "passed"
-              for gate in report["gates"].values()
+              for name, gate in gates.items()
+              if name not in staged
           )
-          assert report["blockers"] == []
+          expected_blockers = sorted(
+              f"release gate {name} is blocked: {gates[name]['evidence']}"
+              for name in staged
+              if gates[name]["status"] == "blocked"
+          )
+          assert sorted(report["blockers"]) == expected_blockers, report["blockers"]
+          assert report["release_ready"] is (not expected_blockers)
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -684,6 +741,7 @@ jobs:
 
           report = json.loads(Path("candidate/release-report.json").read_text(encoding="utf-8"))
           assert report["release_ready"] is True
+          assert report["blockers"] == []
           assert report["source_revision"] == os.environ["SOURCE_SHA"]
           assert all(gate["status"] == "passed" for gate in report["gates"].values())
           expected = {

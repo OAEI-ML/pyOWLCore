@@ -1,0 +1,475 @@
+{
+  "candidate_elapsed_seconds": 495.4369045329513,
+  "candidate_feature_sha256": "0e3119b0e7bf0ff55c936c1eda7285a6d0d8e4e837530a3f26f01ff5e6fb557b",
+  "candidate_report": "/home/pgcotovio/Exact-OM/data/experiments-v2/native-optimization-02/source.json",
+  "candidate_reused": true,
+  "comparison": "exact complete ordered rows, with no list normalization",
+  "constructor_limit_seconds": 1800,
+  "count": 64,
+  "exact_rows_equal": true,
+  "first_mismatches": [],
+  "helper_sha256": {
+    "legacy_annotation_oracle.py": "a466c5c58205170c2260e5693505a432f2ca1e722ec6445cdc68f55571386bda",
+    "legacy_feature_oracle.py": "5ac7274b5244add1739e13da0fe460bda363849f865362bc78719e0e5f2299a7",
+    "projection_checkpoint.py": "547b1ec046a4694dabfd9f2a04704ff07e5ce53876b13d7210fa4f4eb97eda55"
+  },
+  "mismatch_count": 0,
+  "oracle_feature_sha256": "0e3119b0e7bf0ff55c936c1eda7285a6d0d8e4e837530a3f26f01ff5e6fb557b",
+  "oracle_process_peak_rss_bytes": 12693975040,
+  "oracle_wall_seconds": 99.73776626598556,
+  "progress": {
+    "stage": "selected_features"
+  },
+  "shared_verified_inputs": [
+    "native snapshot",
+    "digest-verified canonical projection"
+  ],
+  "source_evidence": {
+    "annotation_helper_sha256": "a466c5c58205170c2260e5693505a432f2ca1e722ec6445cdc68f55571386bda",
+    "annotation_selection": "shared native index; independently decoded raw assertions and pinned normalization",
+    "class_rows": {
+      "DisjointUnion": 0,
+      "EquivalentClasses": 23849,
+      "SubClassOf": 268637
+    },
+    "constructor_limit_seconds": 1800,
+    "constructor_seconds": 93.55208253709134,
+    "max_class_rows": 400000,
+    "ontology_loads": 0,
+    "oracle_axiom_reencoding_calls": 0,
+    "projection_calls": 0,
+    "raw_row_identity": "shared retained owner, closure scope, native constructor counts and source fingerprints",
+    "raw_row_order": "native canonical per constructor; no global reordering or axiom re-encoding",
+    "reasoner_selection": {
+      "effective": "asserted",
+      "package_version": "0.2.0",
+      "requested": "asserted"
+    },
+    "same_snapshot": true,
+    "scope": "class feature reference only; process memory cap belongs to caller",
+    "source_commit": "00941f589b0d18f8ad84391bf6179f56b0ebed2d",
+    "source_fingerprints": {
+      "logical": "sha256:2:f93ba368ffbf82224ae29dbfe308eff4c1483f3f113acb78579fb16b548029f2",
+      "signature": "sha256:2:1f1c8f48ec7c55758e92bad4acf74d8d84c9ba05bae4a2944a08799c87c3db1c",
+      "structural": "sha256:2:38029281024a91a270c7692b91ba7669d98b7d5fdc75e9f782802833c78fdecb"
+    },
+    "source_path": "exact/ontology/store.py",
+    "source_sha256": "dd2a188fa993b5b1e6299924a8dcfc1c71fc1c0d2b7e8a1792dffbb2abeb6d95",
+    "stages": [
+      {
+        "elapsed_seconds": 4.6554021537303925e-05,
+        "stage": "pinned_algorithms",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 0.02639595908112824,
+        "stage": "pinned_algorithms",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 0.030356167000718415,
+        "stage": "native_typed_index",
+        "status": "running"
+      },
+      {
+        "class_rows": {
+          "DisjointUnion": 0,
+          "EquivalentClasses": 23849,
+          "SubClassOf": 268637
+        },
+        "elapsed_seconds": 6.155561267049052,
+        "stage": "native_typed_index",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 6.182438811054453,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 7.384722781018354,
+        "rows": 10000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 8.48421370307915,
+        "rows": 20000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 9.465723348082975,
+        "rows": 30000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 10.468040533014573,
+        "rows": 40000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 11.63321061001625,
+        "rows": 50000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 12.573528547072783,
+        "rows": 60000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 13.475543134030886,
+        "rows": 70000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 14.379412380047143,
+        "rows": 80000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 15.263530409079976,
+        "rows": 90000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 16.169301377027296,
+        "rows": 100000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 17.28612567007076,
+        "rows": 110000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 18.247858441085555,
+        "rows": 120000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 19.213026856072247,
+        "rows": 130000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 20.208100851043127,
+        "rows": 140000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 21.159492370090447,
+        "rows": 150000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 22.074749490013346,
+        "rows": 160000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 22.980891757062636,
+        "rows": 170000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 24.11975158005953,
+        "rows": 180000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 25.02875724900514,
+        "rows": 190000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 25.963456747005694,
+        "rows": 200000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 26.85345774202142,
+        "rows": 210000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 27.772572503075935,
+        "rows": 220000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 28.70974506204948,
+        "rows": 230000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 29.594245739048347,
+        "rows": 240000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 30.514727670000866,
+        "rows": 250000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 31.4251937600784,
+        "rows": 260000,
+        "stage": "read_SubClassOf",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 32.223097844049335,
+        "rows": 268637,
+        "stage": "read_SubClassOf",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 32.23558243003208,
+        "stage": "read_EquivalentClasses",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 43.69858603400644,
+        "rows": 10000,
+        "stage": "read_EquivalentClasses",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 52.691785814007744,
+        "rows": 20000,
+        "stage": "read_EquivalentClasses",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 55.55267809703946,
+        "rows": 23849,
+        "stage": "read_EquivalentClasses",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 55.566958319046535,
+        "stage": "read_DisjointUnion",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 55.57711866800673,
+        "rows": 0,
+        "stage": "read_DisjointUnion",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 55.586648475029506,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 56.25706457905471,
+        "rows": 10000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 56.669800410978496,
+        "rows": 20000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 57.8478836939903,
+        "rows": 30000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 58.53425802697893,
+        "rows": 40000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 59.40007950505242,
+        "rows": 50000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 60.26864144008141,
+        "rows": 60000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 61.2645582780242,
+        "rows": 70000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 62.25738361501135,
+        "rows": 80000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 63.29818632104434,
+        "rows": 90000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 64.28827689704485,
+        "rows": 100000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 65.30954774399288,
+        "rows": 110000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 66.13639979506843,
+        "rows": 120000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 66.95138626405969,
+        "rows": 130000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 67.66729840205517,
+        "rows": 140000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 68.54080898908433,
+        "rows": 150000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 69.50648834405001,
+        "rows": 160000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 70.46850770001765,
+        "rows": 170000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 71.52799835102633,
+        "rows": 180000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 72.5227393170353,
+        "rows": 190000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 73.48453648807481,
+        "rows": 200000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 74.52135256701149,
+        "rows": 210000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 75.50448340608273,
+        "rows": 220000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 76.48069696803577,
+        "rows": 230000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 77.53995838505216,
+        "rows": 240000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 78.480954802013,
+        "rows": 250000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 79.47028794907965,
+        "rows": 260000,
+        "stage": "asserted_endpoints",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 80.32073345105164,
+        "stage": "asserted_endpoints",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 80.33283080207184,
+        "stage": "pinned_class_features",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 89.4140296690166,
+        "stage": "pinned_class_features",
+        "status": "complete"
+      },
+      {
+        "elapsed_seconds": 89.42049569403753,
+        "stage": "annotation_oracle",
+        "status": "running"
+      },
+      {
+        "elapsed_seconds": 93.53915128903463,
+        "stage": "annotation_oracle",
+        "status": "complete"
+      }
+    ]
+  },
+  "stage": "complete",
+  "status": "passed"
+}

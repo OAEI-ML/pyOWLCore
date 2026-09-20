@@ -38,6 +38,40 @@ attestations, regenerating the final report, and signing/verifying that report
 and distribution set with GitHub/Sigstore provenance. PyPI promotion consumes
 only that `--require-ready`, signed candidate.
 
+## Version-scoped 0.2.1 benchmark decision
+
+For 0.2.1 only, the owner approved bounded Linux native optimization validation
+and installed-package integration as sufficient performance-related release
+evidence. This does not claim that the full reference-host comparator study
+ran or passed. Its methodology remains required before making the broader
+comparative performance claims it supports.
+
+`reports/release/0.2.1/performance-policy.json` binds the decision, scope, and
+preserved validation files by SHA-256. Release may omit `performance_run_id`
+only when `tools.packaging.release_performance` verifies that exact approved
+version, every evidence digest, and the candidate's source/version identity.
+The verified original evidence bytes accompany the candidate. Supplying a run
+ID retains the existing full comparator verification; other versions require
+that path. Release also requires successful CI and Native safety runs from the
+same source commit. No package algorithm, measured result, artifact integrity
+check, source-signature check, or publication control changes under this policy.
+
+## Stage order and publisher configuration
+
+A Wheels build may preserve pending downstream verification gates in its
+candidate report; that report remains `release_ready: false`. Release verifies
+the signed source and accepted performance evidence before TestPyPI. At that
+point only `signatures` and `testpypi_rehearsal` may remain pending: the protected
+TestPyPI job executes their actual checks and final attestation before producing
+a promotion-ready report. Failed gates or unexplained blockers stop the stage.
+The production job still requires every gate passed and zero blockers.
+
+`trusted_publishing` is a separate prerequisite. The publishing owner must
+record reviewed PyPI and TestPyPI publisher configuration evidence in the gate
+ledger before Release can upload anything. TestPyPI success does not establish
+production PyPI configuration and never automatically passes this gate.
+An unconfigured publisher therefore remains an explicit release blocker.
+
 ## Candidate sequence
 
 1. Confirm project-name control, approved repository/docs/issues URLs, recovery
@@ -45,12 +79,16 @@ only that `--require-ready`, signed candidate.
 2. Freeze the API/model/wire/adapter versions, changelog, migration guidance,
    consumer ranges, dependency lock, and third-party inventory.
 3. Run `wheels.yml` at the signed commit. Review every failed, blocked, and
-   deferred field; only source-tag verification, distribution/report signatures,
-   and TestPyPI rehearsal may remain staged for the Release workflow. Absence of
-   evidence is not a pass.
-4. Start `release.yml` with the exact Wheels run ID and signed tag. It verifies
-   run identity, tag signature, source commit, every checksum, artifact shape,
-   metadata, and all pre-publication gates without rebuilding.
+   deferred field. Only reference-performance verification, source-tag
+   verification, trusted-publisher configuration, distribution/report signatures,
+   and TestPyPI rehearsal may remain pending in a build candidate. The final
+   tagged source used for Release must already contain reviewed publisher
+   configuration evidence. Absence of evidence is not a pass.
+4. Start `release.yml` with the exact Wheels run ID and signed tag. Supply
+   `performance_run_id` when selecting the full comparator path; it is mandatory
+   outside the approved 0.2.1 policy. Release verifies run identity, tag
+   signature, source commit, every checksum, artifact shape, metadata, and all
+   pre-publication gates without rebuilding.
 5. Approve the `testpypi` environment. Upload the already-built files through
    Trusted Publishing, install the native candidate from TestPyPI, run the
    examples/self-test, verify all file hashes and PEP 740 identities, regenerate
